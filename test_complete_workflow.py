@@ -272,7 +272,7 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
             return final_task_data
         
         # Also check if task is marked as completed
-        if status in ['COMPLETED', 'FAILED']:
+        if status in ['completed', 'failed']:
             print(f"\n{Fore.GREEN}Task marked as {status}. Getting final result...{Style.RESET_ALL}")
             
             # Get the most up-to-date task data
