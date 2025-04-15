@@ -4,6 +4,7 @@ import json
 import datetime
 from colorama import Fore, Style, init
 from tabulate import tabulate
+import pprint
 
 # Initialize colorama
 init()
@@ -43,6 +44,16 @@ def get_task_details(task_id):
         print(f"Error getting task details: {response.status_code}")
         print(response.json())
         return None
+        
+    return response.json()
+
+def get_protocol_tasks(task_id):
+    """Get protocol tasks for a task"""
+    response = requests.get(f"{BASE_URL}/tasks/{task_id}/protocols")
+    
+    if response.status_code != 200:
+        print(f"Error getting protocol tasks: {response.status_code}")
+        return []
         
     return response.json()
 
@@ -100,7 +111,29 @@ def display_step_summary(steps):
         tablefmt="grid"
     ))
 
-def display_step_details(step, step_num):
+def get_protocol_task_for_step(protocol_tasks, step_id):
+    """Find the protocol task for a specific step"""
+    for task in protocol_tasks:
+        if task.get('metadata', {}).get('step_id') == step_id:
+            return task
+    return None
+
+def get_protocol_input(protocol_task):
+    """Extract user input from protocol task"""
+    if not protocol_task or 'history' not in protocol_task:
+        return "No protocol input found"
+    
+    # Find the first user message
+    for message in protocol_task.get('history', []):
+        if message.get('role') == 'user':
+            parts = message.get('parts', [])
+            for part in parts:
+                if part.get('type') == 'text':
+                    return part.get('text', '')
+    
+    return "No user input found in protocol task"
+
+def display_step_details(step, step_num, protocol_tasks=None):
     """Display detailed information about a step"""
     print(f"\n{Fore.CYAN}{'='*80}")
     print(f"STEP {step_num}: {step.get('description', 'No description')}")
@@ -124,8 +157,17 @@ def display_step_details(step, step_num):
     else:
         print(f"Agent: Not assigned")
     
+    # Full Input from Protocol (if available)
+    step_id = step.get('step_id')
+    if protocol_tasks and step_id:
+        protocol_task = get_protocol_task_for_step(protocol_tasks, step_id)
+        if protocol_task:
+            print(f"\n{Fore.BLUE}Complete Agent Input (Protocol):{Style.RESET_ALL}")
+            full_input = get_protocol_input(protocol_task)
+            print(full_input)
+    
     # Input/Output - check all possible field names
-    print(f"\n{Fore.BLUE}Input:{Style.RESET_ALL}")
+    print(f"\n{Fore.BLUE}Input Data:{Style.RESET_ALL}")
     input_content = None
     # Try different possible field names for input
     for field in ['input_data', 'input', 'context']:
@@ -182,13 +224,65 @@ def display_step_details(step, step_num):
         print(f"\n{Fore.RED}Error:{Style.RESET_ALL}")
         print(step['error'])
 
-def display_final_result(task_data):
+def display_protocol_task(protocol_task):
+    """Display details of a protocol task"""
+    print(f"\n{Fore.MAGENTA}{'='*80}")
+    print(f"PROTOCOL TASK: {protocol_task.get('id', 'Unknown')}")
+    print(f"{'='*80}{Style.RESET_ALL}")
+    
+    print(f"State: {protocol_task.get('status', {}).get('state', 'Unknown')}")
+    print(f"Session ID: {protocol_task.get('sessionId', 'Unknown')}")
+    
+    # Display metadata
+    metadata = protocol_task.get('metadata', {})
+    if metadata:
+        print(f"\n{Fore.YELLOW}Metadata:{Style.RESET_ALL}")
+        for key, value in metadata.items():
+            print(f"  {key}: {value}")
+    
+    # Display messages
+    messages = protocol_task.get('history', [])
+    if messages:
+        print(f"\n{Fore.CYAN}Messages:{Style.RESET_ALL}")
+        for i, message in enumerate(messages):
+            role = message.get('role', 'unknown')
+            role_color = Fore.BLUE if role == 'user' else Fore.GREEN
+            print(f"\n  {role_color}{role.upper()}{Style.RESET_ALL} (Message {i+1}):")
+            
+            for part in message.get('parts', []):
+                part_type = part.get('type', 'unknown')
+                if part_type == 'text':
+                    print(f"    {part.get('text', 'No text')}")
+                elif part_type == 'data':
+                    print(f"    Data: {json.dumps(part.get('data', {}), indent=4)}")
+                elif part_type == 'file':
+                    print(f"    File: {part.get('file', {}).get('name', 'Unnamed file')}")
+    
+    # Display artifacts
+    artifacts = protocol_task.get('artifacts', [])
+    if artifacts:
+        print(f"\n{Fore.YELLOW}Artifacts:{Style.RESET_ALL}")
+        for artifact in artifacts:
+            print(f"  Name: {artifact.get('name', 'Unnamed')}")
+            if artifact.get('description'):
+                print(f"  Description: {artifact['description']}")
+            print(f"  Parts: {len(artifact.get('parts', []))}")
+
+def display_final_result(task_data, protocol_tasks=None):
     """Display the final result of the task"""
     print(f"\n{Fore.GREEN}{'='*80}")
     print(f"FINAL RESULT")
     print(f"{'='*80}{Style.RESET_ALL}")
     
+    # Display any evaluation protocol tasks first
+    if protocol_tasks:
+        for task in protocol_tasks:
+            if task.get('metadata', {}).get('task_type') == 'evaluation':
+                print(f"\n{Fore.MAGENTA}Final Evaluation:{Style.RESET_ALL}")
+                display_protocol_task(task)
+    
     if task_data.get('result'):
+        print(f"\n{Fore.GREEN}Task Result:{Style.RESET_ALL}")
         try:
             # Try to parse as JSON for pretty printing
             if isinstance(task_data['result'], str):
@@ -216,6 +310,14 @@ def display_final_result(task_data):
     if status == 'FAILED':
         print(f"\n{Fore.RED}Error:{Style.RESET_ALL}")
         print(task_data.get('error', 'No error information available'))
+    
+    # Show step summaries if available
+    if isinstance(task_data.get('result'), dict) and 'step_summaries' in task_data['result']:
+        print(f"\n{Fore.CYAN}Step Summaries:{Style.RESET_ALL}")
+        for summary in task_data['result']['step_summaries']:
+            print(f"  - {summary}")
+    elif isinstance(task_data.get('result'), str) and "Step Summaries:" in task_data['result']:
+        print("\n" + task_data['result'].split("Step Summaries:")[1])
 
 def monitor_task(task_id, poll_interval=5, max_polls=60):
     """Monitor a task, show step updates, and display the final result"""
@@ -234,6 +336,9 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
             time.sleep(poll_interval)
             continue
         
+        # Get protocol tasks
+        protocol_tasks = get_protocol_tasks(task_id)
+        
         steps = task_data.get('steps', [])
         
         # Display step summary
@@ -251,7 +356,7 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
             )
             
             if is_new_step or is_updated_step:
-                display_step_details(step, i+1)
+                display_step_details(step, i+1, protocol_tasks)
         
         # Update previous steps
         previous_steps = steps.copy()
@@ -265,9 +370,10 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
             
             # Get the most up-to-date task data for the final result
             final_task_data = get_task_details(task_id)
+            final_protocol_tasks = get_protocol_tasks(task_id)
             
             # Display final result
-            display_final_result(final_task_data)
+            display_final_result(final_task_data, final_protocol_tasks)
             task_completed = True
             return final_task_data
         
@@ -277,9 +383,10 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
             
             # Get the most up-to-date task data
             final_task_data = get_task_details(task_id)
+            final_protocol_tasks = get_protocol_tasks(task_id)
             
             # Display final result
-            display_final_result(final_task_data)
+            display_final_result(final_task_data, final_protocol_tasks)
             task_completed = True
             return final_task_data
         
@@ -290,7 +397,8 @@ def monitor_task(task_id, poll_interval=5, max_polls=60):
         print(f"\n{Fore.RED}Maximum polling attempts reached. Task not completed.{Style.RESET_ALL}")
         # Get one last update and show the current state
         final_data = get_task_details(task_id)
-        display_final_result(final_data)
+        final_protocol_tasks = get_protocol_tasks(task_id)
+        display_final_result(final_data, final_protocol_tasks)
         return final_data
 
 def main():

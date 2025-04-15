@@ -67,6 +67,15 @@ async def get_task(task_id: str):
     
     return TaskResponse(**task_data)
 
+@app.get("/tasks/{task_id}/protocols")
+async def get_protocol_tasks(task_id: str):
+    """Get all protocol tasks for a task"""
+    try:
+        protocol_tasks = await mongodb.get_protocol_tasks(task_id)
+        return protocol_tasks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting protocol tasks: {str(e)}")
+
 # Agent endpoints
 @app.post("/agents", response_model=Agent)
 async def create_agent(agent: Agent):
