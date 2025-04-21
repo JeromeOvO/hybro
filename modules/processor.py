@@ -13,7 +13,7 @@ from services.openai_service import openai_service
 from services.agent_service import agent_service
 from database.mongodb import mongodb
 from modules.lead_ai import lead_ai
-from modules.classifier import classifier
+from modules.Classifier import classifier
 
 class Processor:
     async def process_step(self, agent_task: AgentTaskRequest) -> Dict[str, Any]:
