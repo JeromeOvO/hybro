@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     CLASSIFIER_AI_MODEL: str = os.getenv("CLASSIFIER_AI_MODEL", "gpt-4o")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
     
+    # Google Gemini settings
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "your-gemini-api-key")
+    GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+    GEMINI_EMBEDDING_MODEL_NAME: str = os.getenv("GEMINI_EMBEDDING_MODEL_NAME", "embedding-001")
+    
     class Config:
         env_file = ".env"
 

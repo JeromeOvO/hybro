@@ -1,7 +1,8 @@
-from __future__ import annotations
-from typing import Union, Any, Literal, List, Annotated, Optional, Dict
-from pydantic import BaseModel, Field, TypeAdapter, model_validator, ConfigDict, field_serializer
+from typing import Union, Any
+from pydantic import BaseModel, Field, TypeAdapter
+from typing import Literal, List, Annotated, Optional
 from datetime import datetime
+from pydantic import model_validator, ConfigDict, field_serializer
 from uuid import uuid4
 from enum import Enum
 from typing_extensions import Self
@@ -20,7 +21,7 @@ class TaskState(str, Enum):
 class TextPart(BaseModel):
     type: Literal["text"] = "text"
     text: str
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class FileContent(BaseModel):
@@ -43,13 +44,13 @@ class FileContent(BaseModel):
 class FilePart(BaseModel):
     type: Literal["file"] = "file"
     file: FileContent
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class DataPart(BaseModel):
     type: Literal["data"] = "data"
-    data: Dict[str, Any]
-    metadata: Dict[str, Any] | None = None
+    data: dict[str, Any]
+    metadata: dict[str, Any] | None = None
 
 
 Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="type")]
@@ -58,7 +59,7 @@ Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="type"
 class Message(BaseModel):
     role: Literal["user", "agent"]
     parts: List[Part]
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TaskStatus(BaseModel):
@@ -75,7 +76,7 @@ class Artifact(BaseModel):
     name: str | None = None
     description: str | None = None
     parts: List[Part]
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
     index: int = 0
     append: bool | None = None
     lastChunk: bool | None = None
@@ -87,20 +88,20 @@ class Task(BaseModel):
     status: TaskStatus
     artifacts: List[Artifact] | None = None
     history: List[Message] | None = None
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TaskStatusUpdateEvent(BaseModel):
     id: str
     status: TaskStatus
     final: bool = False
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TaskArtifactUpdateEvent(BaseModel):
     id: str
     artifact: Artifact    
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class AuthenticationInfo(BaseModel):
@@ -118,7 +119,7 @@ class PushNotificationConfig(BaseModel):
 
 class TaskIdParams(BaseModel):
     id: str
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TaskQueryParams(TaskIdParams):
@@ -132,7 +133,7 @@ class TaskSendParams(BaseModel):
     acceptedOutputModes: Optional[List[str]] = None
     pushNotification: PushNotificationConfig | None = None
     historyLength: int | None = None
-    metadata: Dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TaskPushNotificationConfig(BaseModel):
@@ -140,7 +141,8 @@ class TaskPushNotificationConfig(BaseModel):
     pushNotificationConfig: PushNotificationConfig
 
 
-# RPC Messages
+## RPC Messages
+
 
 class JSONRPCMessage(BaseModel):
     jsonrpc: Literal["2.0"] = "2.0"
@@ -149,7 +151,7 @@ class JSONRPCMessage(BaseModel):
 
 class JSONRPCRequest(JSONRPCMessage):
     method: str
-    params: Dict[str, Any] | None = None
+    params: dict[str, Any] | None = None
 
 
 class JSONRPCError(BaseModel):
@@ -191,7 +193,7 @@ class GetTaskResponse(JSONRPCResponse):
 
 
 class CancelTaskRequest(JSONRPCRequest):
-    method: Literal["tasks/cancel"] = "tasks/cancel"
+    method: Literal["tasks/cancel",] = "tasks/cancel"
     params: TaskIdParams
 
 
@@ -200,7 +202,7 @@ class CancelTaskResponse(JSONRPCResponse):
 
 
 class SetTaskPushNotificationRequest(JSONRPCRequest):
-    method: Literal["tasks/pushNotification/set"] = "tasks/pushNotification/set"
+    method: Literal["tasks/pushNotification/set",] = "tasks/pushNotification/set"
     params: TaskPushNotificationConfig
 
 
@@ -209,7 +211,7 @@ class SetTaskPushNotificationResponse(JSONRPCResponse):
 
 
 class GetTaskPushNotificationRequest(JSONRPCRequest):
-    method: Literal["tasks/pushNotification/get"] = "tasks/pushNotification/get"
+    method: Literal["tasks/pushNotification/get",] = "tasks/pushNotification/get"
     params: TaskIdParams
 
 
@@ -218,7 +220,7 @@ class GetTaskPushNotificationResponse(JSONRPCResponse):
 
 
 class TaskResubscriptionRequest(JSONRPCRequest):
-    method: Literal["tasks/resubscribe"] = "tasks/resubscribe"
+    method: Literal["tasks/resubscribe",] = "tasks/resubscribe"
     params: TaskIdParams
 
 
@@ -237,7 +239,8 @@ A2ARequest = TypeAdapter(
     ]
 )
 
-# Error types
+## Error types
+
 
 class JSONParseError(JSONRPCError):
     code: int = -32700
@@ -358,4 +361,5 @@ class A2AClientJSONError(A2AClientError):
 
 class MissingAPIKeyError(Exception):
     """Exception for missing API key."""
-    pass 
+
+    pass

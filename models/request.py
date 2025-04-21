@@ -1,15 +1,64 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from uuid import uuid4
+from models.protocol import Message, Part, TextPart
 
 class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     query: str
-    context: Optional[Dict[str, Any]] = {}
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    message: Optional[Message] = None
+    
+    def to_message(self) -> Message:
+        """Convert request to A2A protocol Message"""
+        if self.message:
+            return self.message
+            
+        # Create message if not provided
+        parts = [TextPart(text=self.query)]
+        return Message(
+            role="user",
+            parts=parts,
+            metadata=self.context
+        )
 
 class AgentTaskRequest(BaseModel):
     task_id: str
     agent_id: str
     step_id: str
     input_data: Any
-    context: Optional[Dict[str, Any]] = {} 
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    message: Optional[Message] = None
+    
+    def to_message(self) -> Message:
+        """Convert agent task request to A2A protocol Message"""
+        if self.message:
+            return self.message
+            
+        # Create message from input data
+        if isinstance(self.input_data, str):
+            parts = [TextPart(text=self.input_data)]
+        elif isinstance(self.input_data, dict) and "text" in self.input_data:
+            parts = [TextPart(text=self.input_data["text"])]
+        else:
+            # Try to convert to string or use as-is
+            try:
+                text = str(self.input_data)
+                parts = [TextPart(text=text)]
+            except:
+                # Use generic text if conversion fails
+                parts = [TextPart(text=f"Processing step {self.step_id}")]
+        
+        # Add metadata
+        metadata = {
+            "task_id": self.task_id,
+            "agent_id": self.agent_id,
+            "step_id": self.step_id,
+            **self.context
+        }
+        
+        return Message(
+            role="user",
+            parts=parts,
+            metadata=metadata
+        )

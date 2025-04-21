@@ -19,6 +19,9 @@ class Agent(BaseModel):
     parameters: Dict[str, Any] = {}
     embedding: Optional[List[float]] = None
     model: str
+    is_remote: bool = False  # Flag indicating if this is a remote agent
+    endpoint: Optional[str] = None  # API endpoint for remote agents
+    prompt: Optional[str] = None  # System prompt for local agents
     
     class Config:
         schema_extra = {
@@ -29,6 +32,29 @@ class Agent(BaseModel):
                 "agent_type": "math",
                 "capabilities": ["algebra", "calculus", "statistics"],
                 "parameters": {"precision": "high"},
-                "model": "gpt-4o"
+                "model": "gpt-4o",
+                "is_remote": False,
+                "prompt": "You are an expert mathematics problem solver specialized in algebra, calculus, and statistics."
             }
-        } 
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert agent to dictionary format for storage"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "agent_type": self.agent_type,
+            "capabilities": self.capabilities,
+            "parameters": self.parameters,
+            "embedding": self.embedding,
+            "model": self.model,
+            "is_remote": self.is_remote,
+            "endpoint": self.endpoint,
+            "prompt": self.prompt
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Agent":
+        """Create agent from dictionary"""
+        return cls(**data) 

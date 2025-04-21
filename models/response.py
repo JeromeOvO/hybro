@@ -1,24 +1,23 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from enum import Enum
-
-class TaskStatus(str, Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
+from models.protocol import TaskState
 
 class Step(BaseModel):
     step_id: str
     description: str
     agent_id: Optional[str] = None
-    status: TaskStatus = TaskStatus.PENDING
+    status: str = TaskState.SUBMITTED
     input_data: Optional[Any] = None
     output_data: Optional[Any] = None
+    priority: int = 2  # Default priority
+    dependencies: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    result: Optional[Any] = None
 
 class TaskResponse(BaseModel):
     task_id: str
-    status: TaskStatus
-    steps: List[Step] = []
+    status: str = TaskState.SUBMITTED  
+    steps: List[Step] = Field(default_factory=list)
     result: Optional[Any] = None
     error: Optional[str] = None 

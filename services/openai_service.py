@@ -255,4 +255,205 @@ class OpenAIService:
             print(f"Error in chat completion: {str(e)}")
             raise
 
+    async def task_decomposition(self, user_input: str) -> Dict[str, Any]:
+        """
+        Decompose a user input into structured subtasks
+        
+        Args:
+            user_input: Original user task
+            
+        Returns:
+            Dictionary with subtasks information
+        """
+        system_prompt = """You are a task decomposition AI that breaks complex tasks into specific subtasks.
+        Always respond with a JSON object containing an array of subtasks."""
+        
+        prompt = f"""
+        Please decompose the following user task into specific subtasks:
+        
+        User task: {user_input}
+        
+        Based on task complexity, decompose into an appropriate number of subtasks (no limit on quantity).
+        Return in JSON format with this structure:
+        {{
+          "subtasks": [
+            {{
+              "task_id": "unique_identifier",
+              "description": "detailed subtask description",
+              "priority": priority_level (1-4, 1 lowest, 4 highest),
+              "dependencies": ["id_of_task_this_depends_on", ...] 
+            }},
+            ...
+          ]
+        }}
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=settings.LEAD_AI_MODEL,
+                messages=messages,
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                print(f"Error parsing JSON: {content}")
+                return {"subtasks": []}
+        except Exception as e:
+            print(f"Error in task decomposition: {str(e)}")
+            return {"subtasks": []}
+
+    async def select_best_agent(self, task_description: str, agents: List[Dict[str, Any]]) -> str:
+        """
+        Use LLM to select the best agent for a task from candidate agents
+        
+        Args:
+            task_description: Description of the task
+            agents: List of candidate agents with their details
+            
+        Returns:
+            ID of the selected agent
+        """
+        system_prompt = """You are an AI tasked with selecting the most appropriate agent for a given task.
+        Analyze the task description and the capabilities of each candidate agent, then select the best match.
+        Return only the ID of the best matching agent."""
+        
+        # Prepare agent descriptions
+        agent_descriptions = []
+        for i, agent in enumerate(agents):
+            agent_desc = f"Agent {i+1}:\n"
+            agent_desc += f"ID: {agent['_id']}\n"
+            agent_desc += f"Name: {agent.get('name', 'Unknown')}\n"
+            agent_desc += f"Description: {agent.get('description', 'No description')}\n"
+            agent_desc += f"Capabilities: {', '.join(agent.get('capabilities', []))}\n"
+            agent_desc += f"Similarity Score: {agent.get('score', 0)}\n"
+            agent_desc += f"Remote: {agent.get('is_remote', False)}\n"
+            agent_descriptions.append(agent_desc)
+        
+        agents_text = "\n\n".join(agent_descriptions)
+        
+        prompt = f"""Task Description: {task_description}
+
+Available Agents:
+{agents_text}
+
+Based on the task description and agent capabilities, which agent (by ID) would be most appropriate for this task?
+"""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=settings.CLASSIFIER_AI_MODEL,
+                messages=messages
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Extract agent ID
+            for agent in agents:
+                if agent["_id"] in content:
+                    return agent["_id"]
+            
+            # If no exact match found, return first agent ID
+            return agents[0]["_id"]
+        except Exception as e:
+            print(f"Error selecting best agent: {str(e)}")
+            return agents[0]["_id"]  # Default to first agent
+
+    async def execute_agent_task(self, task_description: str, agent_prompt: str, 
+                                model: str = "gpt-4o", context: Dict[str, Any] = None) -> str:
+        """
+        Execute a task using an agent prompt
+        
+        Args:
+            task_description: Description of the task
+            agent_prompt: Prompt template for the agent
+            model: Model to use for completion
+            context: Additional context
+            
+        Returns:
+            Agent's response
+        """
+        # Prepare system prompt with agent instructions
+        system_prompt = agent_prompt
+        
+        # Prepare context as string if provided
+        context_str = ""
+        if context:
+            context_str = "Context:\n" + json.dumps(context, indent=2)
+        
+        # Create messages
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Task: {task_description}\n{context_str}"}
+        ]
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages
+            )
+            
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error executing agent task: {str(e)}")
+            raise
+
+    async def summarize_task_results(self, original_input: str, step_results: List[Dict[str, Any]]) -> str:
+        """
+        Summarize the results of multiple task steps
+        
+        Args:
+            original_input: Original user input
+            step_results: Results from each task step
+            
+        Returns:
+            Summarized result
+        """
+        system_prompt = """You are an AI tasked with summarizing the results of a multi-step task.
+        Create a comprehensive yet concise summary that addresses the original request and incorporates
+        the results from all completed steps. Format your response according to the A2A protocol."""
+        
+        # Prepare step results for the prompt
+        steps_text = ""
+        for i, result in enumerate(step_results):
+            steps_text += f"Step {i+1}: {result['description']}\n"
+            steps_text += f"Status: {result['status']}\n"
+            steps_text += f"Result: {result['result']}\n\n"
+        
+        prompt = f"""Original Request: {original_input}
+
+Step Results:
+{steps_text}
+
+Please provide a comprehensive summary that addresses the original request based on these results.
+"""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=settings.LEAD_AI_MODEL,
+                messages=messages
+            )
+            
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error summarizing task results: {str(e)}")
+            return f"Error generating summary: {str(e)}"
+
 openai_service = OpenAIService() 
