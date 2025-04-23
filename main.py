@@ -11,9 +11,8 @@ from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 
-from modules.lead_ai import lead_ai
-from modules.classifier import classifier
-from modules.processor import processor
+
+from modules.Classifier import classifier
 
 from services.agent_service import agent_service
 

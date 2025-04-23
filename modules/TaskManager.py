@@ -1,7 +1,7 @@
 import json
 from typing import List, Dict, Any, Optional
 from enum import Enum
-from models.protocol import (
+from common.types import (
     TaskState, Task, Message, TextPart, Artifact, 
     TaskStatus, Part
 )

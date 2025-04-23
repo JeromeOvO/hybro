@@ -4,8 +4,8 @@ from models.response import Step
 from services.openai_service import openai_service
 from database.pinecone_db import pinecone_db
 from database.mongodb import mongodb
-from models.protocol import Message, TextPart, TaskState
-from modules.A2AClient import A2AClient
+from common.types import Message, TextPart, TaskState, AgentCard
+from common.client.client import A2AClient
 
 class Classifier:
     async def find_matching_agents(self, task_description: str, top_k: int = 5) -> List[Dict[str, Any]]:
@@ -120,35 +120,48 @@ class Classifier:
         
         agent_info = mongodb.serialize_mongodb_doc(agent_data)
         
-        # Create A2A client for the agent
-        client = A2AClient(step.agent_id, agent_info)
+        # Create A2A client for the agent using the agent's URL
+        agent_card = AgentCard(url=agent_info.get("url"))
+        client = A2AClient(agent_card=agent_card)
         
-        # Execute the task
-        context = {
-            "step_id": step.step_id,
-            "priority": step.priority,
-            **(task_context or {})
+        # Prepare payload for the task
+        payload = {
+            "task": step.description,
+            "context": {
+                "step_id": step.step_id,
+                "priority": step.priority,
+                **(task_context or {})
+            }
         }
         
         # Update step status
         step.status = TaskState.WORKING.value
         
-        # Execute the task with the A2A client
-        result = await client.execute_task(step.description, context)
-        
-        # Update step status based on execution result
-        if result.get("success", False):
+        try:
+            # Execute the task with the A2A client
+            response = await client.send_task(payload)
+            
+            # Update step status based on execution result
             step.status = TaskState.COMPLETED.value
-            step.result = result.get("message", {}).get("parts", [{}])[0].get("text", "")
-        else:
+            # Extract result from the response
+            if hasattr(response, "result"):
+                step.result = response.result.get("message", {}).get("parts", [{}])[0].get("text", "")
+            else:
+                step.result = str(response)
+            
+            return {
+                "success": True,
+                "step": step,
+                "result": {"message": {"parts": [{"text": step.result}]}}
+            }
+        except Exception as e:
             step.status = TaskState.FAILED.value
-            step.error = result.get("error", "Unknown error")
-        
-        return {
-            "success": result.get("success", False),
-            "step": step,
-            "result": result
-        }
+            step.error = str(e)
+            return {
+                "success": False,
+                "step": step,
+                "error": str(e)
+            }
     
     async def summarize_results(self, user_input: str, steps: List[Step]) -> str:
         """
