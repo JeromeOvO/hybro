@@ -4,8 +4,10 @@ from models.response import Step
 from services.openai_service import openai_service
 from database.pinecone_db import pinecone_db
 from database.mongodb import mongodb
-from common.types import Message, TextPart, TaskState, AgentCard
+from common.types import Message, TextPart, TaskState, AgentCard, TaskSendParams
 from common.client.client import A2AClient
+from common.utils.remote_agent_connection import RemoteAgentConnections
+import uuid
 
 class Classifier:
     async def find_matching_agents(self, task_description: str, top_k: int = 5) -> List[Dict[str, Any]]:
@@ -120,34 +122,65 @@ class Classifier:
         
         agent_info = mongodb.serialize_mongodb_doc(agent_data)
         
-        # Create A2A client for the agent using the agent's URL
-        agent_card = AgentCard(url=agent_info.get("url"))
-        client = A2AClient(agent_card=agent_card)
+        # Create AgentCard and RemoteAgentConnections
+        agent_card = AgentCard(
+            name=agent_info.get("name", "Unknown Agent"),
+            url=agent_info.get("url"),
+            capabilities=agent_info.get("capabilities", {"streaming": False, "pushNotifications": False}),
+            skills=[],  # Populate with actual skills if available
+            provider={"organization": agent_info.get("organization", "Unknown")}
+        )
         
-        # Prepare payload for the task
-        payload = {
-            "task": step.description,
-            "context": {
+        # Create remote agent connection
+        connection = RemoteAgentConnections(agent_card)
+        
+        # Prepare task message
+        message = Message(
+            role="agent",
+            parts=[TextPart(text=step.description)],
+            metadata={"step_id": step.step_id}
+        )
+        
+        # Create task params
+        task_params = TaskSendParams(
+            id=str(uuid.uuid4()),
+            message=message,
+            metadata={
                 "step_id": step.step_id,
                 "priority": step.priority,
                 **(task_context or {})
             }
-        }
+        )
         
         # Update step status
         step.status = TaskState.WORKING.value
         
         try:
-            # Execute the task with the A2A client
-            response = await client.send_task(payload)
+            # Define callback to process updates
+            def task_callback(update, agent):
+                if hasattr(update, "status") and update.status.message:
+                    # Extract message text from parts if available
+                    if update.status.message.parts and len(update.status.message.parts) > 0:
+                        for part in update.status.message.parts:
+                            if hasattr(part, "text"):
+                                step.result = part.text
+                                break
+                return update
+            
+            # Execute the task with RemoteAgentConnections
+            result = await connection.send_task(task_params, task_callback)
             
             # Update step status based on execution result
             step.status = TaskState.COMPLETED.value
-            # Extract result from the response
-            if hasattr(response, "result"):
-                step.result = response.result.get("message", {}).get("parts", [{}])[0].get("text", "")
-            else:
-                step.result = str(response)
+            
+            # If result hasn't been set by callback, extract it from the final result
+            if not hasattr(step, "result") or not step.result:
+                if hasattr(result, "status") and result.status.message:
+                    if result.status.message.parts and len(result.status.message.parts) > 0:
+                        for part in result.status.message.parts:
+                            if hasattr(part, "text"):
+                                step.result = part.text
+                                break
             
             return {
                 "success": True,
