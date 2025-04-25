@@ -5,25 +5,36 @@ import json
 import time
 from datetime import datetime
 
-from models.protocol import (
+from common.types import (
     Task, Message, TextPart, DataPart, Part,
     TaskState, TaskStatus
 )
 
 if TYPE_CHECKING:
-    from models.protocol import Task
+    from common.types import Task
 
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     
-    async def get_embedding(self, text: str) -> List[float]:
-        """Get embedding for text"""
+    async def get_embedding(self, text: str, target_dim: int = None) -> List[float]:
+        """Get embedding for text
+        
+        Args:
+            text: The text to embed
+            target_dim: Optional target dimension to resize the embedding to
+        
+        Returns:
+            List of embedding values (original or resized)
+        """
         response = await self.client.embeddings.create(
             input=text,
-            model="text-embedding-ada-002"
+            model="text-embedding-ada-002"  # Keep using the same model
         )
-        return response.data[0].embedding
+        
+        embedding = response.data[0].embedding
+        
+        return embedding
     
     async def lead_ai_completion(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get completion from lead AI model"""
@@ -168,7 +179,7 @@ class OpenAIService:
 
     async def protocol_completion(self, agent_model: str, task: 'Task') -> 'Task':
         """Process a task according to the agent-to-agent protocol"""
-        from models.protocol import Message, TextPart, Role, TaskState
+        from common.types import Message, TextPart, Role, TaskState
         
         # Extract the latest user message
         user_messages = [m for m in task.messages if m.role == Role.USER]

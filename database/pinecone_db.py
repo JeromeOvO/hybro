@@ -18,7 +18,7 @@ class PineconeDB:
         if self.index_name not in [index.name for index in self.pc.list_indexes()]:
             self.pc.create_index(
                 name=self.index_name,
-                dimension=1024,  # Using OpenAI's embedding dimension
+                dimension=1536,  # Using OpenAI's embedding dimension
                 metric="cosine"
             )
         

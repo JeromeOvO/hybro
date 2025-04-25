@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # Pinecone settings
     PINECONE_API_KEY: str = os.getenv("PINECONE_API_KEY", "pcsk_5gQzcD_PauDu3LAUTfD9sqoNH8QtgdFzD9ALcqAHgapU6trEqviyc1uAExApmpTDkEhTp6")
     PINECONE_ENVIRONMENT: str = os.getenv("PINECONE_ENVIRONMENT", "us-east1-aws")
-    PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "agents-match")
+    PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "bromatch-test")
     
     # OpenAI settings
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "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")

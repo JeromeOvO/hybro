@@ -41,10 +41,19 @@ def serialize_mongodb_doc(doc):
 class MongoDB:
     client: AsyncIOMotorClient = None
     
-    async def connect_to_database(self):
-        """Connect to MongoDB"""
-        self.client = AsyncIOMotorClient(settings.MONGODB_URL)
-        
+    def __init__(self):
+        self.client = None
+    
+    async def connect(self):
+        try:
+            self.client = AsyncIOMotorClient(settings.MONGODB_URL)
+            # Verify connection works
+            await self.client.admin.command('ping')
+            print("Connected to MongoDB successfully")
+        except Exception as e:
+            print(f"MongoDB connection error: {e}")
+            self.client = None
+    
     async def close_database_connection(self):
         """Close MongoDB connection"""
         if self.client:
@@ -53,21 +62,29 @@ class MongoDB:
     @property
     def db(self):
         """Get database instance"""
+        if not self.client:
+            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.client[settings.MONGODB_DB_NAME]
     
     @property
     def agents_collection(self):
         """Get agents collection"""
+        if not self.client:
+            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.agents
     
     @property
     def tasks_collection(self):
         """Get tasks collection"""
+        if not self.client:
+            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.tasks
     
     @property
     def protocols_collection(self):
         """Get protocols collection for agent-to-agent communication"""
+        if not self.client:
+            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.protocols
     
     async def save_protocol_task(self, task_id: str, protocol_task: Any) -> Any:
@@ -108,5 +125,30 @@ class MongoDB:
                 protocol_tasks.append(serialize_mongodb_doc(pt_data))
                 
         return protocol_tasks
+
+    def serialize_mongodb_doc(self, doc):
+        """Convert MongoDB document to JSON-serializable dict"""
+        if doc is None:
+            return None
+        
+        # Convert ObjectId to string
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
+        
+        # Recursively process embedded documents
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                doc[key] = str(value)
+            elif isinstance(value, datetime):
+                doc[key] = value.isoformat()
+            elif isinstance(value, dict):
+                doc[key] = self.serialize_mongodb_doc(value)
+            elif isinstance(value, list):
+                doc[key] = [self.serialize_mongodb_doc(item) if isinstance(item, dict) else 
+                            str(item) if isinstance(item, ObjectId) else 
+                            item.isoformat() if isinstance(item, datetime) else 
+                            item for item in value]
+        
+        return doc
 
 mongodb = MongoDB() 

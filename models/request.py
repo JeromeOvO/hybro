@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 from uuid import uuid4
-from models.protocol import Message, Part, TextPart
+from common.types import Message, Part, TextPart
 
 class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))

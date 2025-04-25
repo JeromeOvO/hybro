@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from enum import Enum
-from models.protocol import TaskState
+from common.types import TaskState
 
 class Step(BaseModel):
     step_id: str
@@ -14,6 +14,8 @@ class Step(BaseModel):
     dependencies: List[str] = Field(default_factory=list)
     error: Optional[str] = None
     result: Optional[Any] = None
+    agent_name: Optional[str] = None
+    is_remote_agent: Optional[bool] = False
 
 class TaskResponse(BaseModel):
     task_id: str

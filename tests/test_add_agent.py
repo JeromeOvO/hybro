@@ -14,7 +14,12 @@ from models.agent import Agent, AgentType
 
 async def create_agent_embedding(description: str) -> List[float]:
     """Create embedding for agent description"""
-    return await openai_service.get_embedding(description)
+    # Request embeddings with target dimension of 1024 to match Pinecone
+    return await openai_service.get_embedding(description, target_dim=1024)
+    # Alternative models commented for reference:
+    # - "text-embedding-ada-002" (older model, 1536 dimensions)
+    # - "text-embedding-3-small" (1024 dimensions)
+    # - "text-embedding-3-large" (3072 dimensions)
 
 async def seed_agents():
     """Seed the database with agents from tests/agents directory"""

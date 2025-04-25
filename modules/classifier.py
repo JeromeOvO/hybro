@@ -26,12 +26,11 @@ class Classifier:
         
         # Query Pinecone for similar vectors
         results = pinecone_db.query(embedding, top_k=top_k)
-        
         # Get agent details from MongoDB
         matching_agents = []
         for match in results.matches:
             agent_id = match.id
-            agent_data = await mongodb.agents_collection.find_one({"_id": agent_id})
+            agent_data = await mongodb.agents_collection.find_one({"id": agent_id})
             if agent_data:
                 agent_info = mongodb.serialize_mongodb_doc(agent_data)
                 agent_info["score"] = match.score  # Add similarity score
@@ -81,10 +80,10 @@ class Classifier:
             
             if best_agent:
                 # Assign agent to the step
-                step.agent_id = best_agent["_id"]
+                step.agent_id = best_agent["id"]
                 step.agent_name = best_agent.get("name", "Unknown Agent")
                 step.is_remote_agent = best_agent.get("is_remote", False)
-                print(f"Assigned agent {best_agent['_id']} ({best_agent.get('name', 'Unknown')}) to step {step.step_id}")
+                print(f"Assigned agent {best_agent['id']} ({best_agent.get('name', 'Unknown')}) to step {step.step_id}")
             else:
                 print(f"WARNING: Could not select best agent for step: {step.step_id}")
         else:
