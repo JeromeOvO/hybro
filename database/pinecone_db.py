@@ -43,5 +43,19 @@ class PineconeDB:
             self.connect()
             
         return self.index.upsert(vectors=vectors)
+        
+    def delete(self, ids):
+        """Delete vectors from the database by their IDs
+        
+        Args:
+            ids: A single ID string or list of IDs to delete
+        
+        Returns:
+            The deletion response from Pinecone
+        """
+        if not self.index:
+            self.connect()
+            
+        return self.index.delete(ids=ids)
 
 pinecone_db = PineconeDB() 

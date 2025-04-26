@@ -4,39 +4,7 @@ import json
 from typing import Any, Dict, List
 from bson import ObjectId
 from datetime import datetime
-
-class JSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, ObjectId):
-            return str(obj)
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        return super().default(obj)
-
-def serialize_mongodb_doc(doc):
-    """Convert MongoDB document to JSON-serializable dict"""
-    if doc is None:
-        return None
-    
-    # Convert ObjectId to string
-    if "_id" in doc:
-        doc["_id"] = str(doc["_id"])
-    
-    # Recursively process embedded documents
-    for key, value in doc.items():
-        if isinstance(value, ObjectId):
-            doc[key] = str(value)
-        elif isinstance(value, datetime):
-            doc[key] = value.isoformat()
-        elif isinstance(value, dict):
-            doc[key] = serialize_mongodb_doc(value)
-        elif isinstance(value, list):
-            doc[key] = [serialize_mongodb_doc(item) if isinstance(item, dict) else 
-                        str(item) if isinstance(item, ObjectId) else 
-                        item.isoformat() if isinstance(item, datetime) else 
-                        item for item in value]
-    
-    return doc
+from models.agent import Agent
 
 class MongoDB:
     client: AsyncIOMotorClient = None
@@ -79,52 +47,6 @@ class MongoDB:
         if not self.client:
             raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.tasks
-    
-    @property
-    def protocols_collection(self):
-        """Get protocols collection for agent-to-agent communication"""
-        if not self.client:
-            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
-        return self.db.protocols
-    
-    async def save_protocol_task(self, task_id: str, protocol_task: Any) -> Any:
-        """Save a protocol task to the database"""
-        # Convert to dict for storage
-        task_dict = protocol_task.model_dump()
-        
-        # Convert datetime objects to strings for MongoDB storage
-        if "status" in task_dict and "timestamp" in task_dict["status"]:
-            if hasattr(task_dict["status"]["timestamp"], "isoformat"):
-                task_dict["status"]["timestamp"] = task_dict["status"]["timestamp"].isoformat()
-        
-        # Store in protocols collection
-        await self.protocols_collection.update_one(
-            {"id": protocol_task.id},
-            {"$set": task_dict},
-            upsert=True
-        )
-        
-        # Also link to the task
-        await self.tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$addToSet": {"protocol_tasks": protocol_task.id}}
-        )
-        
-        return protocol_task
-    
-    async def get_protocol_tasks(self, task_id: str) -> List[Dict[str, Any]]:
-        """Get all protocol tasks for a main task"""
-        task_data = await self.tasks_collection.find_one({"task_id": task_id})
-        if not task_data or "protocol_tasks" not in task_data:
-            return []
-            
-        protocol_tasks = []
-        for pt_id in task_data["protocol_tasks"]:
-            pt_data = await self.protocols_collection.find_one({"id": pt_id})
-            if pt_data:
-                protocol_tasks.append(serialize_mongodb_doc(pt_data))
-                
-        return protocol_tasks
 
     def serialize_mongodb_doc(self, doc):
         """Convert MongoDB document to JSON-serializable dict"""
@@ -150,5 +72,88 @@ class MongoDB:
                             item for item in value]
         
         return doc
+
+    async def add_agent(self, agent: Agent) -> str:
+        """
+        Add an agent to the database
+        
+        Args:
+            agent: agent in Agent model
+            
+        Returns:
+            str: ID of the added agent
+        """
+            
+        # Insert into collection
+        result = await self.agents_collection.insert_one(agent)
+        return str(result.inserted_id)
+    
+    async def get_agent(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get an agent by AgentID
+        
+        Args:
+            agent_id: AgentID of the agent to retrieve
+            
+        Returns:
+            Dict: Agent document or None if not found
+        """
+        agent = await self.agents_collection.find_one({"agent_id": ObjectId(agent_id)})
+        return self.serialize_mongodb_doc(agent) if agent else None
+    
+    async def get_agents(self, query: Dict[str, Any] = None, limit: int = 0) -> List[Dict[str, Any]]:
+        """
+        Get multiple agents matching a query
+        
+        Args:
+            query: Query filter
+            limit: Maximum number of results (0 for no limit)
+            
+        Returns:
+            List[Dict]: List of agent documents
+        """
+        if query is None:
+            query = {}
+            
+        agents = self.agents_collection.find(query)
+        if limit > 0:
+            agents = agents.limit(limit)
+            
+        agents = []
+        async for agent in agents:
+            agents.append(self.serialize_mongodb_doc(agent))
+            
+        return agents
+    
+    async def update_agent(self, agent_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update an agent
+        
+        Args:
+            agent_id: ID of the agent to update
+            update_data: New data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        result = await self.agents_collection.update_one(
+            {"agent_id": ObjectId(agent_id)},
+            {"$set": update_data}
+        )
+        return result.modified_count > 0
+    
+    async def delete_agent(self, agent_id: str) -> bool:
+        """
+        Delete an agent
+        
+        Args:
+            agent_id: ID of the agent to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        result = await self.agents_collection.delete_one({"agent_id": ObjectId(agent_id)})
+        return result.deleted_count > 0
+    
 
 mongodb = MongoDB() 
