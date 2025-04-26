@@ -19,7 +19,8 @@ async def test_end_to_end_processing():
     Test the entire process from user input to task execution:
     1. Task Manager breaks down the task
     2. Classifier assigns agents to each step
-    3. Print the assignments
+    3. Execute each step with assigned agents
+    4. Generate final answer
     """
     print("\n" + "="*80)
     print("END-TO-END TASK PROCESSING TEST")
@@ -68,7 +69,7 @@ async def test_end_to_end_processing():
             classified_steps.append(classified_step)
             
             # Show assignment result
-            if hasattr(classified_step, "agent_id") and classified_step.agent_id:
+            if classified_step.agent_id:
                 print(f"✓ Assigned to: {classified_step.agent_name} (ID: {classified_step.agent_id})")
                 if classified_step.is_remote_agent:
                     print(f"  (Remote agent)")
@@ -79,7 +80,7 @@ async def test_end_to_end_processing():
         print("\n--- STEP 3: FINAL TASK BREAKDOWN AND ASSIGNMENTS ---")
         print("\nTask Execution Plan:")
         for i, step in enumerate(classified_steps):
-            agent = f"{step.agent_name}" if hasattr(step, "agent_name") and step.agent_name else "Unassigned"
+            agent = step.agent_name if step.agent_name else "Unassigned"
             dependencies = ", ".join(step.dependencies) if step.dependencies else "None"
             
             print(f"Step {i+1}: {step.step_id}")
@@ -89,16 +90,118 @@ async def test_end_to_end_processing():
             print(f"  Dependencies: {dependencies}")
             print("  --")
         
-        # Option to continue with execution simulation
-        # Uncomment this section if you want to simulate execution
-        """
-        print("\n--- STEP 4: SIMULATING TASK EXECUTION ---")
-        print("This would execute each step with its assigned agent")
-        # This part would use classifier.execute_step() for each step in the right order
-        """
+        # Step 4: Execute each step with its assigned agent
+        print("\n--- STEP 4: EXECUTING TASKS WITH AGENTS ---")
+        
+        # Create a list to track completed steps
+        completed_steps = []
+        remaining_steps = classified_steps.copy()
+        
+        # Process steps in order, respecting dependencies
+        while remaining_steps:
+            # Find executable steps (no pending dependencies)
+            executable_steps = []
+            
+            for step in remaining_steps:
+                can_execute = True
+                
+                # Check if all dependencies are completed
+                for dep_id in step.dependencies:
+                    if not any(s.step_id == dep_id and s.status == TaskState.COMPLETED.value for s in completed_steps):
+                        can_execute = False
+                        break
+                
+                if can_execute:
+                    executable_steps.append(step)
+            
+            if not executable_steps:
+                print("\n⚠️ No more executable steps but tasks remain. Possible circular dependency.")
+                break
+            
+            # Execute the highest priority steps
+            executable_steps.sort(key=lambda s: s.priority, reverse=True)
+            
+            for step in executable_steps:
+                print(f"\nExecuting step: {step.step_id} - {step.description[:100]}...")
+                
+                if not step.agent_id:
+                    print("  ✗ No agent assigned to execute this step")
+                    step.status = TaskState.FAILED.value
+                    step.error = "No agent assigned"
+                    completed_steps.append(step)
+                    remaining_steps.remove(step)
+                    continue
+                
+                # 获取agent详细信息
+                agent_data = await mongodb.agents_collection.find_one({"id": step.agent_id})
+                if agent_data:
+                    agent_info = mongodb.serialize_mongodb_doc(agent_data)
+                    print(f"  🔍 Agent details:")
+                    print(f"    - Name: {agent_info.get('name', 'Unknown')}")
+                    print(f"    - URL: {agent_info.get('url', 'No URL')}")
+                    print(f"    - Is Remote: {agent_info.get('is_remote', False)}")
+                    print(f"    - Capabilities: {agent_info.get('capabilities', {})}")
+                    print(f"  📡 Preparing A2A protocol call...")
+                else:
+                    print(f"  ⚠️ Warning: Agent with ID {step.agent_id} not found in MongoDB")
+                
+                # 准备上下文
+                context = {
+                    "user_input": user_input,
+                    "previous_results": {}
+                }
+                
+                # 添加之前步骤的结果
+                for completed_step in completed_steps:
+                    if hasattr(completed_step, "result") and completed_step.result:
+                        context["previous_results"][completed_step.step_id] = completed_step.result
+                
+                # 执行步骤（通过A2A协议）
+                try:
+                    print(f"  🚀 Sending task to agent via A2A protocol...")
+                    result = await classifier.execute_step(step, context)
+                    
+                    if result.get("success", False):
+                        print("  ✓ A2A call successful")
+                        if hasattr(step, "result") and step.result:
+                            print(f"  📊 Result received: {step.result[:150]}..." if len(step.result) > 150 else f"  📊 Result: {step.result}")
+                    else:
+                        print(f"  ✗ A2A call failed: {result.get('error', 'Unknown error')}")
+                except Exception as e:
+                    print(f"  ✗ Error in A2A protocol: {str(e)}")
+                    step.status = TaskState.FAILED.value
+                    step.error = str(e)
+                
+                # 标记步骤为已完成并从待执行列表中移除
+                completed_steps.append(step)
+                remaining_steps.remove(step)
+        
+        # Step 5: Generate final answer
+        print("\n--- STEP 5: GENERATING FINAL ANSWER ---")
+        
+        # Summarize results to generate the final answer
+        final_result = await classifier.summarize_results(user_input, completed_steps)
+        
+        print("\n" + "="*80)
+        print("FINAL ANSWER TO USER QUERY")
+        print("="*80)
+        print(f"\nQuery: {user_input}\n")
+        print(final_result)
+        print("\n" + "="*80)
+        
+        # Output statistics
+        completed_count = sum(1 for s in completed_steps if s.status == TaskState.COMPLETED.value)
+        failed_count = sum(1 for s in completed_steps if s.status == TaskState.FAILED.value)
+        
+        print(f"\nExecution summary:")
+        print(f"- Total steps: {len(completed_steps)}")
+        print(f"- Successfully completed: {completed_count}")
+        print(f"- Failed: {failed_count}")
         
     except Exception as e:
         print(f"Error during end-to-end test: {str(e)}")
+        import traceback
+        traceback.print_exc()
     finally:
         # Close MongoDB connection
         await mongodb.close_database_connection()

@@ -2,7 +2,7 @@
 
 import logging
 from typing import AsyncIterable
-from agent import ImageGenerationAgent
+from .agent import ImageGenerationAgent
 from common.server.task_manager import InMemoryTaskManager
 from common.server import utils
 from common.types import (

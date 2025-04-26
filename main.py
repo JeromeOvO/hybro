@@ -2,6 +2,7 @@ import json
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
+import uuid
 
 from config import settings
 from models.request import TaskRequest
@@ -11,12 +12,15 @@ from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 
-
+from modules.TaskManager import TaskManagementAgent
 from modules.Classifier import classifier
 
 from services.agent_service import agent_service
 
 app = FastAPI(title="Multi-Agent AI System")
+
+# Initialize TaskManagementAgent
+task_manager = TaskManagementAgent()
 
 # Add CORS middleware
 app.add_middleware(
@@ -47,11 +51,26 @@ async def health_check():
 async def create_task(task_request: TaskRequest, background_tasks: BackgroundTasks):
     """Create a new task from user input"""
     try:
-        # Use Lead AI to break down the task
-        task_response = await lead_ai.process_task(task_request)
+        # Use TaskManager to break down the task
+        task_result = await task_manager.process_user_input(task_request.task)
+        
+        if not task_result.get("success", False):
+            raise HTTPException(status_code=500, detail=task_result.get("error", "Unknown error"))
+        
+        # Create TaskResponse
+        task_id = str(uuid.uuid4())
+        task_response = TaskResponse(
+            task_id=task_id,
+            task=task_request.task,
+            status=TaskStatus.PROCESSING.value,
+            steps=task_result.get("steps", [])
+        )
+        
+        # Save to database
+        await mongodb.tasks_collection.insert_one(task_response.dict())
         
         # Run the rest of the process in the background
-        background_tasks.add_task(process_task_workflow, task_response.task_id)
+        background_tasks.add_task(process_task_workflow, task_id)
         
         return task_response
     except Exception as e:

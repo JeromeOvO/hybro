@@ -4,13 +4,13 @@ It initializes the A2A server, defines the agent's capabilities,
 and starts the server to handle incoming requests.
 """
 
-from agent import ImageGenerationAgent
+from .agent import ImageGenerationAgent
 import click
 from common.server.server import A2AServer
 from common.types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError
 import logging
 import os
-from task_manager import AgentTaskManager
+from .task_manager import AgentTaskManager
 from dotenv import load_dotenv
 
 load_dotenv()

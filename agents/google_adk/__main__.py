@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 @click.option("--port", default=10002)
 def main(host, port):
     try:
-        # if not os.getenv("GOOGLE_API_KEY"):
-        #         raise MissingAPIKeyError("GOOGLE_API_KEY environment variable not set.")
+        if not os.getenv("GOOGLE_API_KEY"):
+                raise MissingAPIKeyError("GOOGLE_API_KEY environment variable not set.")
         
         capabilities = AgentCapabilities(streaming=True)
         skill = AgentSkill(

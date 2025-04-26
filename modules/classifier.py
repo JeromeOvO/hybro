@@ -4,7 +4,7 @@ from models.response import Step
 from services.openai_service import openai_service
 from database.pinecone_db import pinecone_db
 from database.mongodb import mongodb
-from common.types import Message, TextPart, TaskState, AgentCard, TaskSendParams
+from common.types import Message, TextPart, TaskState, AgentCard, TaskSendParams, AgentCapabilities, AgentSkill, AgentProvider
 from common.client.client import A2AClient
 from common.utils.remote_agent_connection import RemoteAgentConnections
 import uuid
@@ -111,7 +111,7 @@ class Classifier:
             }
         
         # Get agent information from MongoDB
-        agent_data = await mongodb.agents_collection.find_one({"_id": step.agent_id})
+        agent_data = await mongodb.agents_collection.find_one({"id": step.agent_id})
         if not agent_data:
             return {
                 "success": False,
@@ -124,10 +124,33 @@ class Classifier:
         # Create AgentCard and RemoteAgentConnections
         agent_card = AgentCard(
             name=agent_info.get("name", "Unknown Agent"),
-            url=agent_info.get("url"),
-            capabilities=agent_info.get("capabilities", {"streaming": False, "pushNotifications": False}),
-            skills=[],  # Populate with actual skills if available
-            provider={"organization": agent_info.get("organization", "Unknown")}
+            url=agent_info.get("url", ""),
+            version=agent_info.get("version", "1.0"),
+            capabilities=AgentCapabilities(
+                streaming=agent_info.get("capabilities", {}).get("streaming", False),
+                pushNotifications=agent_info.get("capabilities", {}).get("pushNotifications", False),
+                stateTransitionHistory=agent_info.get("capabilities", {}).get("stateTransitionHistory", False)
+            ),
+            skills=[
+                AgentSkill(
+                    id=skill.get("id", str(uuid.uuid4())),
+                    name=skill.get("name", "Unknown Skill"),
+                    description=skill.get("description"),
+                    tags=skill.get("tags", []),
+                    examples=skill.get("examples", []),
+                    inputModes=skill.get("inputModes", ["text"]),
+                    outputModes=skill.get("outputModes", ["text"])
+                )
+                for skill in agent_info.get("skills", [])
+            ],
+            provider=AgentProvider(
+                organization=agent_info.get("organization", "Unknown"),
+                url=agent_info.get("provider_url")
+            ),
+            description=agent_info.get("description"),
+            documentationUrl=agent_info.get("documentation_url"),
+            defaultInputModes=agent_info.get("defaultInputModes", ["text"]),
+            defaultOutputModes=agent_info.get("defaultOutputModes", ["text"]),
         )
         
         # Create remote agent connection

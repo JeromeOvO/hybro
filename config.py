@@ -1,5 +1,6 @@
 import os
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     # MongoDB settings
@@ -22,7 +23,12 @@ class Settings(BaseSettings):
     GEMINI_MODEL_NAME: str = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
     GEMINI_EMBEDDING_MODEL_NAME: str = os.getenv("GEMINI_EMBEDDING_MODEL_NAME", "embedding-001")
     
+    # Add these new fieldss
+    google_api_key: Optional[str] = None
+    llama_cloud_api_key: Optional[str] = None
+    
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
 settings = Settings() 
