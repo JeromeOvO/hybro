@@ -4,6 +4,9 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import time
 from datetime import datetime
+import uuid
+from models.task import RootTask, ChildTask
+from services.task_service import TaskService
 
 from common.types import (
     Task, Message, TextPart, DataPart, Part,
@@ -16,7 +19,7 @@ if TYPE_CHECKING:
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    
+        self.task_service = TaskService()
     async def get_embedding(self, text: str, target_dim: int = None) -> List[float]:
         """Get embedding for text
         
@@ -36,31 +39,6 @@ class OpenAIService:
         
         return embedding
     
-    async def lead_ai_completion(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Get completion from lead AI model"""
-        system_prompt = "You are a lead AI that breaks down complex tasks into steps. Respond with JSON."
-        
-        prompt = f"Break down this task into steps: {query}"
-        if context:
-            prompt += f"\nContext: {json.dumps(context)}"
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-        
-        response = await self.client.chat.completions.create(
-            model=settings.LEAD_AI_MODEL,
-            messages=messages,
-            response_format={"type": "json_object"}
-        )
-        
-        content = response.choices[0].message.content
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            # Handle non-JSON response by creating a structured version
-            return {"steps": [{"description": content, "step_id": "single_step"}]}
     
     async def classifier_ai_completion(self, description: str) -> Dict[str, Any]:
         """Get completion from Classifier AI model"""
@@ -266,45 +244,49 @@ class OpenAIService:
             print(f"Error in chat completion: {str(e)}")
             raise
 
-    async def task_decomposition(self, user_input: str) -> Dict[str, Any]:
+    async def decompose_rootTask(self, root_task: RootTask) -> RootTask:
         """
-        Decompose a user input into structured subtasks
+        Decompose a RootTask into subtasks and return the updated RootTask
         
         Args:
-            user_input: Original user task
+            root_task: The RootTask to decompose
             
         Returns:
-            Dictionary with subtasks information
+            RootTask: The root task with populated subtasks
         """
-        system_prompt = """You are a task decomposition AI that breaks complex tasks into specific subtasks.
-        Always respond with a JSON object containing an array of subtasks."""
-        
-        prompt = f"""
-        Please decompose the following user task into specific subtasks:
-        
-        User task: {user_input}
-        
-        Based on task complexity, decompose into an appropriate number of subtasks (no limit on quantity).
-        Return in JSON format with this structure:
-        {{
-          "subtasks": [
-            {{
-              "task_id": "unique_identifier",
-              "description": "detailed subtask description",
-              "priority": priority_level (1-4, 1 lowest, 4 highest),
-              "dependencies": ["id_of_task_this_depends_on", ...] 
-            }},
-            ...
-          ]
-        }}
-        """
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
         
         try:
+            # Get user input from task description
+            user_input = root_task.description
+            
+            # Call the AI to decompose the task
+            system_prompt = """You are a task decomposition AI that breaks complex tasks into specific subtasks.
+            Always respond with a JSON object containing an array of subtasks."""
+            
+            prompt = f"""
+            Please decompose the following user task into specific subtasks:
+            
+            User task: {user_input}
+            
+            Based on task complexity, decompose into an appropriate number of subtasks (no limit on quantity).
+            Return in JSON format with this structure:
+            {{
+              "subtasks": [
+                {{
+                  "description": "detailed subtask description",
+                  "priority": priority_level (1-4, 1 lowest, 4 highest),
+                  "dependencies": ["id_of_task_this_depends_on", ...] 
+                }},
+                ...
+              ]
+            }}
+            """
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+            
             response = await self.client.chat.completions.create(
                 model=settings.LEAD_AI_MODEL,
                 messages=messages,
@@ -313,13 +295,50 @@ class OpenAIService:
             
             content = response.choices[0].message.content
             try:
-                return json.loads(content)
+                decomposition_result = json.loads(content)
             except json.JSONDecodeError:
                 print(f"Error parsing JSON: {content}")
-                return {"subtasks": []}
+                
+
+                error_status = TaskStatus(
+                    state=TaskState.FAILED,
+                    message=Message(
+                        role="system",
+                        parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
+                    ),
+                    timestamp=datetime.now()
+                )
+
+                await self.task_service.update_task_status(root_task.task_id, error_status)
+
+                return root_task
+            
+            # Convert decomposition results to ChildTask objects
+            child_tasks = []
+            for idx, subtask_data in enumerate(decomposition_result.get("subtasks", [])):
+                subtask_id = uuid.uuid4().hex
+                subtask_description = subtask_data.get("description", "")
+                
+                await self.task_service.create_child_task(root_task.task_id, subtask_id, subtask_description, subtask_data.get("priority", 1), subtask_data.get("dependencies", []))
+
+            root_task = await self.task_service.get_task(root_task.task_id)
+
+            return root_task
         except Exception as e:
-            print(f"Error in task decomposition: {str(e)}")
-            return {"subtasks": []}
+            print(f"Error in task decomposition process: {str(e)}")
+            # Update task status to reflect error
+            error_status = TaskStatus(
+                state=TaskState.FAILED,
+                message=Message(
+                    role="system",
+                    parts=[TextPart(text=f"Failed to decompose task: {str(e)}")]
+                ),
+                timestamp=datetime.now()
+            )
+
+
+            await self.task_service.update_task_status(root_task.task_id, error_status)
+            return root_task
 
     async def select_best_agent(self, task_description: str, agents: List[Dict[str, Any]]) -> str:
         """
@@ -466,5 +485,6 @@ Please provide a comprehensive summary that addresses the original request based
         except Exception as e:
             print(f"Error summarizing task results: {str(e)}")
             return f"Error generating summary: {str(e)}"
+        
 
 openai_service = OpenAIService() 

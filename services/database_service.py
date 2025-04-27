@@ -3,7 +3,9 @@ from database.pinecone_db import pinecone_db
 from services.openai_service import openai_service
 from models.agent import Agent
 from common.types import AgentCard
+from models.task import RootTask, ChildTask
 import uuid
+from typing import List, Dict, Any
 
 class DatabaseService:
     def __init__(self):
@@ -217,5 +219,239 @@ class DatabaseService:
         sorted_agents = sorted(agents, key=lambda agent: id_to_position.get(agent.get('agent_id'), float('inf')))
         
         return sorted_agents
+    
+    async def add_task(self, task: RootTask) -> str:
+        """
+        Add a root task to the database
+        
+        Args:
+            task: The RootTask object to add
+            
+        Returns:
+            str: The ID of the added task if successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            # Generate UUID if not provided
+            if not hasattr(task, 'task_id') or not task.task_id:
+                task.task_id = str(uuid.uuid4())
+                
+            # Add to MongoDB
+            await self.mongo.add_task(task)
+            return task.task_id
+        
+        except Exception as e:
+            # Re-raise the exception
+            raise Exception(f"Failed to add task to database: {str(e)}")
+
+    async def get_task(self, task_id: str) -> RootTask:
+        """
+        Get a task by ID from MongoDB
+        
+        Args:
+            task_id: The ID of the task to retrieve
+            
+        Returns:
+            RootTask: The task object or None if not found
+        """
+        return await self.mongo.get_task(task_id)
+
+    async def get_tasks(self, query=None, limit=0) -> List[RootTask]:
+        """
+        Get multiple tasks matching a query
+        
+        Args:
+            query: Optional query filter
+            limit: Maximum number of results (0 for no limit)
+            
+        Returns:
+            List[RootTask]: List of task objects
+        """
+        return await self.mongo.get_tasks(query, limit)
+
+    async def update_task(self, task_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a task in the database
+        
+        Args:
+            task_id: The ID of the task to update
+            update_data: Dictionary containing fields to update
+            
+        Returns:
+            bool: True if update was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            return await self.mongo.update_task(task_id, update_data)
+        except Exception as e:
+            raise Exception(f"Failed to update task in database: {str(e)}")
+
+    async def delete_task(self, task_id: str) -> bool:
+        """
+        Delete a task from the database
+        
+        Args:
+            task_id: The ID of the task to delete
+            
+        Returns:
+            bool: True if deletion was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            return await self.mongo.delete_task(task_id)
+        except Exception as e:
+            raise Exception(f"Failed to delete task from database: {str(e)}")
+    
+    async def add_child_task(self, root_task_id: str, child_task: ChildTask) -> str:
+        """
+        Add a child task and maintain consistency with parent task
+        
+        Args:
+            root_task_id: ID of the parent root task
+            child_task: The ChildTask object to add
+            
+        Returns:
+            str: The ID of the created child task
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            # Generate UUID if not provided
+            if not hasattr(child_task, 'task_id') or not child_task.task_id:
+                child_task.task_id = str(uuid.uuid4())
+            
+            # Set parent ID
+            child_task.parent_id = root_task_id
+            
+            # First add to child_tasks collection
+            child_task_id = await self.mongo.add_child_task(child_task)
+            
+            # Then update the parent task's subtasks list
+            subtask_reference = {
+                "task_id": child_task.task_id,
+                "description": child_task.description
+            }
+            
+            # Add reference to parent's subtasks array
+            await self.mongo.tasks_collection.update_one(
+                {"task_id": root_task_id},
+                {"$push": {"subtasks": subtask_reference}}
+            )
+            
+            return child_task.task_id
+        
+        except Exception as e:
+            # Try to clean up if first operation succeeded but second failed
+            try:
+                await self.mongo.delete_child_task(child_task.task_id)
+            except Exception:
+                pass
+            
+            # Re-raise the exception
+            raise Exception(f"Failed to add child task to database: {str(e)}")
+
+    async def get_child_task(self, child_task_id: str) -> ChildTask:
+        """
+        Get a specific child task
+        
+        Args:
+            child_task_id: ID of the child task to retrieve
+            
+        Returns:
+            ChildTask: The child task object or None if not found
+        """
+        child_task = await self.mongo.get_child_task(child_task_id)
+        if not child_task:
+            return None
+        
+        return child_task
+
+    async def get_child_tasks_by_parent(self, root_task_id: str) -> List[ChildTask]:
+        """
+        Get all child tasks for a parent task
+        
+        Args:
+            root_task_id: ID of the parent task
+            
+        Returns:
+            List[ChildTask]: List of child task objects
+        """
+        child_tasks = await self.mongo.get_child_tasks_by_parent(root_task_id)
+        return [ChildTask(**task) for task in child_tasks]
+
+    async def update_child_task(self, child_task_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a child task and maintain consistency with parent task if needed
+        
+        Args:
+            child_task_id: ID of the child task to update
+            update_data: Dictionary containing fields to update
+            
+        Returns:
+            bool: True if update was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            # If update_data is a Pydantic model, convert to dict
+            if hasattr(update_data, 'dict'):
+                update_data = update_data.dict(exclude_unset=True)
+            
+            # First, get the child task to find its parent_id
+            child_task = await self.get_child_task(child_task_id)
+            if not child_task:
+                return False
+            
+            # Update the child task in its collection
+            success = await self.mongo.update_child_task(child_task_id, update_data)
+            
+            # If description is updated, also update the reference in parent's subtasks array
+            if 'description' in update_data and success:
+                await self.mongo.tasks_collection.update_one(
+                    {"task_id": child_task.parent_id, "subtasks.task_id": child_task_id},
+                    {"$set": {"subtasks.$.description": update_data['description']}}
+                )
+            
+            return success
+        except Exception as e:
+            raise Exception(f"Failed to update child task in database: {str(e)}")
+
+    async def delete_child_task(self, child_task_id: str) -> bool:
+        """
+        Delete a child task and maintain consistency with parent task
+        
+        Args:
+            child_task_id: ID of the child task to delete
+            
+        Returns:
+            bool: True if deletion was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            # First, get the child task to find its parent_id
+            child_task = await self.get_child_task(child_task_id)
+            if not child_task:
+                return False
+            
+            # First remove the reference from parent's subtasks array
+            await self.mongo.tasks_collection.update_one(
+                {"task_id": child_task.parent_id},
+                {"$pull": {"subtasks": {"task_id": child_task_id}}}
+            )
+            
+            # Then delete the child task from its collection
+            return await self.mongo.delete_child_task(child_task_id)
+        except Exception as e:
+            raise Exception(f"Failed to delete child task from database: {str(e)}")
     
 
