@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from config import settings
 
-from models.protocol import (
+from common.types import (
     Task, Message, TextPart, DataPart, Part,
     TaskState, TaskStatus
 )

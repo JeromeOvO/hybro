@@ -1,65 +1,114 @@
-import json
 from typing import List, Dict, Any, Optional
-from models.agent import Agent, AgentType
-from database.mongodb import mongodb
-from database.pinecone_db import pinecone_db
+from models.agent import Agent
+from services.database_service import DatabaseService
 from services.openai_service import openai_service
 
 class AgentService:
-    async def create_agent(self, agent: Agent) -> Agent:
-        """Create a new agent in the system"""
-        # Generate embedding for agent description
-        description = f"{agent.name}. {agent.description}. Capabilities: {', '.join(agent.capabilities)}"
-        full_embedding = await openai_service.get_embedding(description)
+    def __init__(self):
+        self.database_service = DatabaseService()
+        self.openai_service = openai_service
+
+    async def create_agent(self, agent: Agent) -> str:
+        """
+        Create a new agent in the system
         
-        # Resize embedding to 1024 dimensions to match Pinecone index
-        # Method 1: Simple truncation (take the first 1024 dimensions)
-        agent.embedding = full_embedding[:1024]
-        
-        # Store in MongoDB
-        await mongodb.agents_collection.insert_one(agent.dict())
-        
-        # Store in Pinecone
-        pinecone_db.upsert(vectors=[{
-            "id": agent.id,
-            "values": agent.embedding,
-            "metadata": {
-                "agent_type": agent.agent_type,
-                "capabilities": agent.capabilities
-            }
-        }])
-        
-        return agent
+        Args:
+            agent: The agent object to create
+            
+        Returns:
+            str: The ID of the created agent
+            
+        Raises:
+            Exception: If creation fails
+        """
+            
+        # Let database service handle the creation and consistency
+        return await self.database_service.add_agent(agent)
     
     async def get_agent(self, agent_id: str) -> Optional[Agent]:
-        """Get agent by ID"""
-        agent_data = await mongodb.agents_collection.find_one({"id": agent_id})
-        if not agent_data:
-            return None
-        return Agent(**agent_data)
+        """
+        Get agent by ID
+        
+        Args:
+            agent_id: The ID of the agent to retrieve
+            
+        Returns:
+            Agent: The agent object or None if not found
+        """
+        return await self.database_service.get_agent(agent_id)
     
-    async def find_best_agent(self, capabilities: List[str], count: int = 1) -> List[Agent]:
-        """Find the best agent(s) for given capabilities"""
+    async def update_agent(self, agent_id: str, update_data: dict) -> bool:
+        """
+        Update an agent's information
+        
+        Args:
+            agent_id: The ID of the agent to update
+            update_data: Dictionary containing fields to update
+            
+        Returns:
+            bool: True if update was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        return await self.database_service.update_agent(agent_id, update_data)
+    
+    async def delete_agent(self, agent_id: str) -> bool:
+        """
+        Delete an agent from the system
+        
+        Args:
+            agent_id: The ID of the agent to delete
+            
+        Returns:
+            bool: True if deletion was successful
+            
+        Raises:
+            Exception: If database operation fails
+        """
+        return await self.database_service.delete_agent(agent_id)
+    
+    async def get_all_agents(self, limit: int = 0) -> List[Agent]:
+        """
+        Get all agents in the system
+        
+        Args:
+            limit: Maximum number of agents to return (0 for no limit)
+            
+        Returns:
+            List[Agent]: List of agent objects
+        """
+        return await self.database_service.get_agents(None, limit)
+    
+    
+    async def query_machted_agents_by_capabilities(self, capabilities: List[str], count: int = 1) -> List[Agent]:
+        """
+        Find the best agent(s) for given capabilities using vector similarity
+        
+        Args:
+            capabilities: List of required capabilities
+            count: Number of agents to return
+            
+        Returns:
+            List[Agent]: List of best matching agents
+        """
         # Create a text description from capabilities
         capability_text = f"Agent capable of: {', '.join(capabilities)}"
         
-        # Generate embedding for the capability text
-        full_embedding = await openai_service.get_embedding(capability_text)
+        # Use database service to find similar agents
+        return await self.database_service.query_similar_agents(capability_text, count)
+    
+    async def query_matched_agents_by_text(self, query_text: str, count: int = 5) -> List[Agent]:
+        """
+        Find agents based on text similarity to the query
         
-        # Resize embedding to match Pinecone index dimension
-        embedding = full_embedding[:1024]
-        
-        # Query Pinecone for similar agents
-        results = pinecone_db.query(vector=embedding, top_k=count)
-        
-        # Get agent details from MongoDB
-        agents = []
-        for match in results.matches:
-            agent_id = match.id
-            agent_data = await mongodb.agents_collection.find_one({"id": agent_id})
-            if agent_data:
-                agents.append(Agent(**agent_data))
-        
-        return agents
+        Args:
+            query_text: Text to search for relevant agents
+            count: Number of agents to return
+            
+        Returns:
+            List[Agent]: List of matching agents
+        """
+        return await self.database_service.query_similar_agents(query_text, count)
 
 agent_service = AgentService() 

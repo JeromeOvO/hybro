@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 import uuid
 from models.task import RootTask, ChildTask
-from services.task_service import TaskService
+
 
 from common.types import (
     Task, Message, TextPart, DataPart, Part,
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.task_service = TaskService()
+
     async def get_embedding(self, text: str, target_dim: int = None) -> List[float]:
         """Get embedding for text
         
@@ -244,15 +244,15 @@ class OpenAIService:
             print(f"Error in chat completion: {str(e)}")
             raise
 
-    async def decompose_rootTask(self, root_task: RootTask) -> RootTask:
+    async def decompose_rootTask(self, root_task: RootTask) -> str:
         """
-        Decompose a RootTask into subtasks and return the updated RootTask
+        Get OpenAI completion for task decomposition
         
         Args:
             root_task: The RootTask to decompose
             
         Returns:
-            RootTask: The root task with populated subtasks
+            str: The JSON content from OpenAI
         """
         
         try:
@@ -293,52 +293,17 @@ class OpenAIService:
                 response_format={"type": "json_object"}
             )
             
-            content = response.choices[0].message.content
-            try:
-                decomposition_result = json.loads(content)
-            except json.JSONDecodeError:
-                print(f"Error parsing JSON: {content}")
-                
-
-                error_status = TaskStatus(
-                    state=TaskState.FAILED,
-                    message=Message(
-                        role="system",
-                        parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
-                    ),
-                    timestamp=datetime.now()
-                )
-
-                await self.task_service.update_task_status(root_task.task_id, error_status)
-
-                return root_task
-            
-            # Convert decomposition results to ChildTask objects
-            child_tasks = []
-            for idx, subtask_data in enumerate(decomposition_result.get("subtasks", [])):
-                subtask_id = uuid.uuid4().hex
-                subtask_description = subtask_data.get("description", "")
-                
-                await self.task_service.create_child_task(root_task.task_id, subtask_id, subtask_description, subtask_data.get("priority", 1), subtask_data.get("dependencies", []))
-
-            root_task = await self.task_service.get_task(root_task.task_id)
-
-            return root_task
+            return response.choices[0].message.content
         except Exception as e:
             print(f"Error in task decomposition process: {str(e)}")
-            # Update task status to reflect error
-            error_status = TaskStatus(
-                state=TaskState.FAILED,
-                message=Message(
-                    role="system",
-                    parts=[TextPart(text=f"Failed to decompose task: {str(e)}")]
-                ),
-                timestamp=datetime.now()
-            )
 
-
-            await self.task_service.update_task_status(root_task.task_id, error_status)
-            return root_task
+            error_message = f"Failed to decompose task: {str(e)}"
+            # Return error information for host agent
+            return json.dumps({
+                "error": True,
+                "task_id": root_task.task_id,
+                "error_message": error_message
+            })
 
     async def select_best_agent(self, task_description: str, agents: List[Dict[str, Any]]) -> str:
         """

@@ -1,6 +1,7 @@
-from pinecone import Pinecone
+# from pinecone import Pinecone
+import pinecone
 from config import settings
-import os
+
 
 class PineconeDB:
     def __init__(self):
@@ -10,7 +11,7 @@ class PineconeDB:
         
     def connect(self):
         # Initialize Pinecone with the new SDK approach
-        self.pc = Pinecone(
+        self.pc =pinecone.Pinecone(
             api_key=settings.PINECONE_API_KEY
         )
         

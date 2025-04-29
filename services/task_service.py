@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
 import uuid
 from datetime import datetime
-
+import json
 from models.task import RootTask, ChildTask
 from common.types import Task, TaskState, TaskStatus, Message, TextPart
 from services.database_service import DatabaseService
@@ -246,5 +246,73 @@ class TaskService:
         # Use the existing update_child_task method
         return await self.update_child_task(child_task_id, update_data)
     
+    async def create_subtasks_with_openai_content(self, root_task: RootTask, content: str) -> RootTask:
+        """
+        Process OpenAI content and create subtasks for a root task
+        
+        Args:
+            root_task: The root task to update
+            content: The JSON content from OpenAI
+            
+        Returns:
+            RootTask: The updated root task with child tasks
+        """
+        try:
+            # Parse the JSON content
+            try:
+                decomposition_result = json.loads(content)
+            except json.JSONDecodeError:
+                print(f"Error parsing JSON: {content}")
+                error_status = TaskStatus(
+                    state=TaskState.FAILED,
+                    message=Message(
+                        role="system",
+                        parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
+                    ),
+                    timestamp=datetime.now()
+                )
+                await self.update_task_status(root_task.task_id, error_status)
+                return root_task
+            
+            # Convert decomposition results to ChildTask objects
+            for idx, subtask_data in enumerate(decomposition_result.get("subtasks", [])):
+                subtask_id = uuid.uuid4().hex
+                subtask_description = subtask_data.get("description", "")
+                subtask_priority = subtask_data.get("priority", 1)
+                subtask_dependencies = subtask_data.get("dependencies", [])
+
+                await self.create_child_task(
+                    root_task.task_id, 
+                    subtask_id, 
+                    subtask_description, 
+                    subtask_priority, 
+                    subtask_dependencies
+                )
+
+            # Get updated root task with all child tasks
+            updated_root_task = await self.get_task(root_task.task_id)
+            return updated_root_task
+            
+        except Exception as e:
+            print(f"Error creating subtasks: {str(e)}")
+            # Update task status to reflect error
+            await self.update_task_as_failed(root_task.task_id, f"Failed to create subtasks: {str(e)}")
+            return root_task
     
-    
+    async def update_task_as_failed(self, task_id: str, error_message: str) -> None:
+        """
+        Mark a task as failed with the provided error message
+        
+        Args:
+            task_id: ID of the task to update
+            error_message: Error message explaining the failure
+        """
+        error_status = TaskStatus(
+            state=TaskState.FAILED,
+            message=Message(
+                role="system",
+                parts=[TextPart(text=error_message)]
+            ),
+            timestamp=datetime.now()
+        )
+        await self.update_task_status(task_id, error_status)
