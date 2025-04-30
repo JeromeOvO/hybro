@@ -68,7 +68,7 @@ class AgentService:
         """
         return await self.database_service.delete_agent(agent_id)
     
-    async def get_all_agents(self, limit: int = 0) -> List[Agent]:
+    def get_all_agents(self, limit: int = 0) -> List[Agent]:
         """
         Get all agents in the system
         
@@ -78,7 +78,7 @@ class AgentService:
         Returns:
             List[Agent]: List of agent objects
         """
-        return await self.database_service.get_agents(None, limit)
+        return self.database_service.get_agents(None, limit)
     
     
     async def query_machted_agents_by_capabilities(self, capabilities: List[str], count: int = 1) -> List[Agent]:

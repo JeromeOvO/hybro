@@ -24,7 +24,7 @@ class Agent(BaseModel):
         return self.agentCard
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "agent_id": "math-solver-1",
                 "agentCard": {

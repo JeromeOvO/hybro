@@ -92,9 +92,11 @@ class MongoDB:
         Returns:
             str: ID of the added agent
         """
-            
+        # 将Pydantic模型转换为dict
+        agent_dict = agent.dict() if hasattr(agent, 'dict') else agent.model_dump()
+        
         # Insert into collection
-        result = await self.agents_collection.insert_one(agent)
+        result = await self.agents_collection.insert_one(agent_dict)
         return str(result.inserted_id)
     
     async def get_agent(self, agent_id: str) -> Dict[str, Any]:
@@ -107,7 +109,19 @@ class MongoDB:
         Returns:
             Dict: Agent document or None if not found
         """
-        agent = await self.agents_collection.find_one({"agent_id": ObjectId(agent_id)})
+        # 考虑到ObjectId的问题，这里可能需要检查输入
+        try:
+            agent = await self.agents_collection.find_one({"agent_id": agent_id})
+            # 如果找不到，尝试将agent_id作为ObjectId查询
+            if not agent and len(agent_id) == 24:
+                try:
+                    agent = await self.agents_collection.find_one({"agent_id": ObjectId(agent_id)})
+                except:
+                    pass
+        except Exception:
+            # 如果出错，可能是格式问题，尝试直接查询
+            agent = await self.agents_collection.find_one({"agent_id": agent_id})
+        
         return self.serialize_mongodb_doc(agent) if agent else None
     
     async def get_agents(self, query: Dict[str, Any] = None, limit: int = 0) -> List[Dict[str, Any]]:
@@ -124,12 +138,12 @@ class MongoDB:
         if query is None:
             query = {}
             
-        agents = self.agents_collection.find(query)
+        cursor = self.agents_collection.find(query)
         if limit > 0:
-            agents = agents.limit(limit)
+            cursor = cursor.limit(limit)
             
         agents = []
-        async for agent in agents:
+        async for agent in cursor:
             agents.append(self.serialize_mongodb_doc(agent))
             
         return agents
@@ -145,6 +159,12 @@ class MongoDB:
         Returns:
             bool: True if update was successful
         """
+        # If update_data is a Pydantic model, convert to dict
+        if hasattr(update_data, 'dict'):
+            update_data = update_data.dict(exclude_unset=True)
+        elif hasattr(update_data, 'model_dump'):
+            update_data = update_data.model_dump(exclude_unset=True)
+        
         result = await self.agents_collection.update_one(
             {"agent_id": ObjectId(agent_id)},
             {"$set": update_data}
@@ -164,38 +184,75 @@ class MongoDB:
         result = await self.agents_collection.delete_one({"agent_id": ObjectId(agent_id)})
         return result.deleted_count > 0
     
-    async def add_task(self, task: 'RootTask') -> str:
+    async def add_task(self, task: RootTask) -> str:
         """
-        Add a root task to the database
+        Add a task to MongoDB
         
         Args:
-            task: RootTask object to add
+            task: The task to add
             
         Returns:
-            str: ID of the added task
+            str: The ID of the added task
         """
-        # Convert the Pydantic model to dict for MongoDB storage
-        result = await self.tasks_collection.insert_one(task)
-        return str(result.inserted_id)
+        # 为任务生成ID（如果尚未设置）
+        if not task.task_id:
+            task.task_id = str(uuid.uuid4())
+        
+        # 将Pydantic模型转换为dict
+        task_dict = task.dict() if hasattr(task, 'dict') else task.model_dump()
+        
+        # 插入字典而不是对象
+        result = await self.tasks_collection.insert_one(task_dict)
+        
+        # 返回任务ID
+        return task.task_id
 
-    async def get_task(self, task_id: str) -> 'RootTask':
+    async def get_task(self, task_id: str) -> Dict[str, Any]:
         """
-        Get a task by task_id
+        Get a task by ID
         
         Args:
             task_id: ID of the task to retrieve
             
         Returns:
-            RootTask: Task object or None if not found
+            Dict: Task document or None if not found
         """
-
-        
-        task_dict = await self.tasks_collection.find_one({"task_id": task_id})
-        if not task_dict:
+        task = await self.tasks_collection.find_one({"task_id": task_id})
+        if not task:
             return None
         
-        # Clean the document and convert to RootTask model
-        task_dict = self.serialize_mongodb_doc(task_dict)
+        # 转换为可序列化的字典
+        task_dict = self.serialize_mongodb_doc(task)
+        
+        # 补充subtasks中缺少的字段
+        if "subtasks" in task_dict and task_dict["subtasks"]:
+            for i, subtask_ref in enumerate(task_dict["subtasks"]):
+                # 如果subtask只包含最小引用信息，补充必要字段
+                if "task" not in subtask_ref:
+                    # 创建一个基本Task对象字典，使用有效的枚举值
+                    subtask_ref["task"] = {
+                        "id": subtask_ref.get("task_id", ""),
+                        "sessionId": task_dict.get("task_id", ""),
+                        "status": {
+                            "state": "submitted",  # 使用有效的枚举值替换 'pending'
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        "artifacts": [],
+                        "history": [],
+                        "metadata": {}
+                    }
+                
+                # 确保parent_id字段存在
+                if "parent_id" not in subtask_ref:
+                    subtask_ref["parent_id"] = task_dict.get("task_id", "")
+                
+                # 确保其他必要字段存在
+                if "priority" not in subtask_ref:
+                    subtask_ref["priority"] = 1
+                
+                if "dependencies" not in subtask_ref:
+                    subtask_ref["dependencies"] = []
+        
         return RootTask.parse_obj(task_dict)
 
     async def get_tasks(self, query: Dict[str, Any] = None, limit: int = 0) -> List['RootTask']:
@@ -220,7 +277,33 @@ class MongoDB:
         tasks = []
         async for task_dict in cursor:
             task_dict = self.serialize_mongodb_doc(task_dict)
-            tasks.append(RootTask)
+            
+            # 补充subtasks中缺少的字段，与get_task方法类似
+            if "subtasks" in task_dict and task_dict["subtasks"]:
+                for i, subtask_ref in enumerate(task_dict["subtasks"]):
+                    if "task" not in subtask_ref:
+                        subtask_ref["task"] = {
+                            "id": subtask_ref.get("task_id", ""),
+                            "sessionId": task_dict.get("task_id", ""),
+                            "status": {
+                                "state": "submitted",
+                                "timestamp": datetime.now().isoformat()
+                            },
+                            "artifacts": [],
+                            "history": [],
+                            "metadata": {}
+                        }
+                    
+                    if "parent_id" not in subtask_ref:
+                        subtask_ref["parent_id"] = task_dict.get("task_id", "")
+                    
+                    if "priority" not in subtask_ref:
+                        subtask_ref["priority"] = 1
+                    
+                    if "dependencies" not in subtask_ref:
+                        subtask_ref["dependencies"] = []
+            
+            tasks.append(RootTask.parse_obj(task_dict))
             
         return tasks
 
@@ -238,6 +321,8 @@ class MongoDB:
         # If update_data is a Pydantic model, convert to dict
         if hasattr(update_data, 'dict'):
             update_data = update_data.dict(exclude_unset=True)
+        elif hasattr(update_data, 'model_dump'):
+            update_data = update_data.model_dump(exclude_unset=True)
         
         result = await self.tasks_collection.update_one(
             {"task_id": task_id},
@@ -268,9 +353,16 @@ class MongoDB:
         Returns:
             str: ID of the added child task
         """
+        # Generate ID if not set
+        if not child_task.task_id:
+            child_task.task_id = str(uuid.uuid4())
+        
         # Convert the Pydantic model to dict for MongoDB storage
-        result = await self.child_tasks_collection.insert_one(child_task)
-        return str(result.inserted_id)
+        child_task_dict = child_task.dict() if hasattr(child_task, 'dict') else child_task.model_dump()
+        
+        # Insert the dictionary
+        result = await self.child_tasks_collection.insert_one(child_task_dict)
+        return child_task.task_id
 
     async def get_child_task(self, child_task_id: str) -> Dict[str, Any]:
         """
@@ -315,6 +407,8 @@ class MongoDB:
         # If update_data is a Pydantic model, convert to dict
         if hasattr(update_data, 'dict'):
             update_data = update_data.dict(exclude_unset=True)
+        elif hasattr(update_data, 'model_dump'):
+            update_data = update_data.model_dump(exclude_unset=True)
         
         result = await self.child_tasks_collection.update_one(
             {"task_id": child_task_id},

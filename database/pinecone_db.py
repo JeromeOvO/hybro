@@ -1,4 +1,3 @@
-# from pinecone import Pinecone
 import pinecone
 from config import settings
 
@@ -6,24 +5,17 @@ from config import settings
 class PineconeDB:
     def __init__(self):
         self.index_name = settings.PINECONE_INDEX_NAME
-        self.pc = None
         self.index = None
         
     def connect(self):
-        # Initialize Pinecone with the new SDK approach
-        self.pc =pinecone.Pinecone(
-            api_key=settings.PINECONE_API_KEY
+        # Initialize Pinecone (Serverless style)
+        pinecone.init(
+            api_key=settings.PINECONE_API_KEY,
+            host=settings.PINECONE_HOST  # 必须是你的 index host，例如 bromatch-test-xxxx.pinecone.io
         )
         
-        # Check if index exists, if not create it
-        if self.index_name not in [index.name for index in self.pc.list_indexes()]:
-            self.pc.create_index(
-                name=self.index_name,
-                dimension=1536,  # Using OpenAI's embedding dimension
-                metric="cosine"
-            )
-        
-        self.index = self.pc.Index(self.index_name)
+        # 直接连接已有的 Serverless Index
+        self.index = pinecone.Index(self.index_name)
         
     def query(self, vector, top_k=5):
         """Query the vector database for similar vectors"""
@@ -59,4 +51,4 @@ class PineconeDB:
             
         return self.index.delete(ids=ids)
 
-pinecone_db = PineconeDB() 
+pinecone_db = PineconeDB()

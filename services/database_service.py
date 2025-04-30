@@ -171,7 +171,7 @@ class DatabaseService:
         """
         return await self.mongo.get_agent(agent_id)
     
-    async def get_agents(self, query=None, limit=0):
+    def get_agents(self, query=None, limit=0):
         """
         Get multiple agents matching a query
         
@@ -182,7 +182,7 @@ class DatabaseService:
         Returns:
             List[Dict]: List of agent documents
         """
-        return await self.mongo.get_agents(query, limit)
+        return self.mongo.get_agents(query, limit)
     
     async def query_similar_agents(self, description: str, top_k=5):
         """
@@ -330,7 +330,7 @@ class DatabaseService:
             # Set parent ID
             child_task.parent_id = root_task_id
             
-            # First add to child_tasks collection
+            # First add to child_tasks collection - 只传递child_task参数
             child_task_id = await self.mongo.add_child_task(child_task)
             
             # Then update the parent task's subtasks list

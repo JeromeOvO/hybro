@@ -4,8 +4,8 @@ from services.openai_service import openai_service
 from common.types import TaskState
 
 class HostAgent:
-    def __init__(self, task_service: TaskService):
-        self.task_service = task_service
+    def __init__(self):
+        self.task_service = TaskService()
         self.openai_service = openai_service
 
     async def create_task_from_input(self, user_input: str) -> str:
@@ -41,12 +41,16 @@ class HostAgent:
         
         # Call OpenAI to decompose the task
         decomposed_task_reuslt_from_llm = await self.openai_service.decompose_rootTask(root_task)
+        print("decomposed_task_reuslt_from_llm: ", decomposed_task_reuslt_from_llm)
         
         # Create child tasks for each subtask
-        root_task = await self.task_service.create_subtasks_with_openai_content(decomposed_task_reuslt_from_llm)
-        
-        if(root_task.status.state == TaskState.FAILED):
-            raise Exception(f"Failed to create subtasks: {root_task.status.message.parts[0].text}")
+        root_task_id = await self.task_service.create_subtasks_with_openai_content(root_task.task_id, decomposed_task_reuslt_from_llm)
+        root_task = await self.task_service.get_task(root_task_id)
+        if not root_task:
+            raise Exception(f"Root task with ID {root_task_id} not found")
+
+        if(root_task.task.status.state == TaskState.FAILED):
+            raise Exception(f"Failed to create subtasks: {root_task.task.status.message.parts[0].text}")
         
         return root_task.subtasks
 

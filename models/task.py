@@ -16,7 +16,7 @@ class ChildTask(BaseModel):
     parent_id: str  # ID of the parent task (either RootTask or another ChildTask)
     order: int = 0  # Execution order within siblings 
     priority: int = 0  # Priority for execution (higher number = higher priority)
-    dependencies: List[str] = Field(default_factory=list)  # List of other task IDs this depends on
+    dependencies: List[int] = Field(default_factory=list)  # List of other task IDs this depends on
     subtasks: List["ChildTask"] = Field(default_factory=list)  # For hierarchical decomposition
     depth: int = 1  # Depth in the task tree (root = 0, first level = 1, etc.)
     
