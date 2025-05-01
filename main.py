@@ -33,6 +33,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class TaskInput(BaseModel):
+    user_input: str
+
+class TaskIdInput(BaseModel):
+    child_task_id: str
+
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup_db_client():
@@ -48,8 +54,6 @@ async def shutdown_db_client():
 async def health_check():
     return {"status": "ok"}
 
-class TaskInput(BaseModel):
-    user_input: str
 
 @app.post("/HostAgent/createTask")
 async def create_task(task_data: TaskInput):
@@ -58,8 +62,10 @@ async def create_task(task_data: TaskInput):
     root_task = await task_manager.get_task(task_id)
     return root_task
 
-class TaskIdInput(BaseModel):
-    child_task_id: str
+@app.post("/HostAgent/sendTaskToAgent")
+async def send_task_to_agent(task_data: TaskIdInput):
+    child_task = await host_agent.send_task_to_agent(task_data.child_task_id)
+    return child_task
 
 @app.post("/Classifier/findBestAgentForTask")
 async def find_best_agent_for_task(task_data: TaskIdInput):
