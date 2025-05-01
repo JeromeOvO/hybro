@@ -8,14 +8,16 @@ class PineconeDB:
         self.index = None
         
     def connect(self):
-        # Initialize Pinecone (Serverless style)
-        pinecone.init(
-            api_key=settings.PINECONE_API_KEY,
-            host=settings.PINECONE_HOST  # 必须是你的 index host，例如 bromatch-test-xxxx.pinecone.io
+        # Initialize Pinecone for serverless
+        pc = pinecone.Pinecone(
+            api_key=settings.PINECONE_API_KEY
         )
         
-        # 直接连接已有的 Serverless Index
-        self.index = pinecone.Index(self.index_name)
+        # For serverless, we don't need to create the index here
+        # as it should be created through the Pinecone console
+        
+        # Get the existing index
+        self.index = pc.Index(self.index_name)
         
     def query(self, vector, top_k=5):
         """Query the vector database for similar vectors"""
@@ -32,7 +34,7 @@ class PineconeDB:
     
     def upsert(self, vectors):
         """Insert or update vectors in the database"""
-        if not self.index:
+        if not self.index: 
             self.connect()
             
         return self.index.upsert(vectors=vectors)
@@ -52,3 +54,19 @@ class PineconeDB:
         return self.index.delete(ids=ids)
 
 pinecone_db = PineconeDB()
+
+def test_pinecone_connection():
+    """Test if Pinecone connection is successful"""
+    try:
+        pinecone_db.connect()
+        # Check if we can access index info to verify connection
+        index_stats = pinecone_db.index.describe_index_stats()
+        print(f"连接成功! 索引信息: {index_stats}")
+        return True
+    except Exception as e:
+        print(f"连接失败: {str(e)}")
+        return False
+
+# 如果直接运行此文件，测试连接
+if __name__ == "__main__":
+    test_pinecone_connection()

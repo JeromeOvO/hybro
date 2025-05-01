@@ -9,8 +9,7 @@ from common.types import (
     TaskStatus,
     TaskState,
 )
-from common.client import A2AClient
-
+from common.client.client import A2AClient
 TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
 TaskUpdateCallback = Callable[[TaskCallbackArg, AgentCard], Task]
 

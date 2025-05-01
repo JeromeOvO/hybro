@@ -102,12 +102,12 @@ class OpenAIService:
                 "error_message": error_message
             })
 
-    async def select_best_agent(self, task_description: str, agents: List[Dict[str, Any]]) -> str:
+    async def select_best_agent_for_task(self, child_task_description: str, agents: List[Dict[str, Any]]) -> str:
         """
-        Use LLM to select the best agent for a task from candidate agents
+        Use LLM to select the best agent for a child task from candidate agents
         
         Args:
-            task_description: Description of the task
+            child_task_description: Description of the child task
             agents: List of candidate agents with their details
             
         Returns:
@@ -121,17 +121,31 @@ class OpenAIService:
         agent_descriptions = []
         for i, agent in enumerate(agents):
             agent_desc = f"Agent {i+1}:\n"
-            agent_desc += f"ID: {agent['_id']}\n"
-            agent_desc += f"Name: {agent.get('name', 'Unknown')}\n"
-            agent_desc += f"Description: {agent.get('description', 'No description')}\n"
-            agent_desc += f"Capabilities: {', '.join(agent.get('capabilities', []))}\n"
+            agent_desc += f"ID: {agent['agent_id']}\n"
+            agent_desc += f"Name: {agent.get('agentCard', {}).get('name', 'Unknown')}\n"
+            agent_desc += f"Description: {agent.get('agentCard', {}).get('description', 'No description')}\n"
+            
+            # Handle capabilities - in Agent model it's a dict, not a list
+            capabilities = agent.get('agentCard', {}).get('capabilities', {})
+            if isinstance(capabilities, dict):
+                cap_strings = [f"{k}: {v}" for k, v in capabilities.items()]
+            else:
+                cap_strings = capabilities if isinstance(capabilities, list) else []
+            agent_desc += f"Capabilities: {', '.join(cap_strings)}\n"
+            
+            # Add skills if available
+            skills = agent.get('agentCard', {}).get('skills', [])
+            if skills:
+                skill_names = [skill.get('name', skill.get('id', 'Unknown')) for skill in skills]
+                agent_desc += f"Skills: {', '.join(skill_names)}\n"
+            
             agent_desc += f"Similarity Score: {agent.get('score', 0)}\n"
             agent_desc += f"Remote: {agent.get('is_remote', False)}\n"
             agent_descriptions.append(agent_desc)
         
         agents_text = "\n\n".join(agent_descriptions)
         
-        prompt = f"""Task Description: {task_description}
+        prompt = f"""Task Description: {child_task_description}
 
 Available Agents:
 {agents_text}
@@ -154,14 +168,14 @@ Based on the task description and agent capabilities, which agent (by ID) would 
             
             # Extract agent ID
             for agent in agents:
-                if agent["_id"] in content:
-                    return agent["_id"]
+                if agent["agent_id"] in content:
+                    return agent["agent_id"]
             
             # If no exact match found, return first agent ID
-            return agents[0]["_id"]
+            return agents[0]["agent_id"]
         except Exception as e:
             print(f"Error selecting best agent: {str(e)}")
-            return agents[0]["_id"]  # Default to first agent
+            return agents[0]["agent_id"]  # Default to first agent
 
 
     async def summarize_task_results(self, original_input: str, step_results: List[Dict[str, Any]]) -> str:

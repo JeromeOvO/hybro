@@ -7,7 +7,7 @@ def test_pinecone_connection():
         # 初始化 Pinecone
         pinecone.init(
             api_key=settings.PINECONE_API_KEY,
-            environment=settings.PINECONE_ENVIRONMENT
+            host=settings.PINECONE_HOST
         )
         print("✅ Successfully initialized Pinecone!")
 

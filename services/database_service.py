@@ -14,7 +14,7 @@ class DatabaseService:
         self.ai_service = openai_service
     
 
-    def add_agent(self, agent : Agent):
+    async def add_agent(self, agent : Agent):
         """
         Add an agent to both MongoDB and Pinecone databases.
         Ensures consistency by rolling back if either operation fails.
@@ -35,7 +35,8 @@ class DatabaseService:
             agent.agent_id = str(uuid.uuid4())
         
         # Embed the agent description
-        agent_embedding = self.ai_service.get_embedding(agent.agentCard.description)
+        agent_embedding = await self.ai_service.get_embedding(agent.agentCard.description)
+
         vector_data = {
             'id': str(agent.agent_id),
             'values': agent_embedding,
@@ -44,7 +45,7 @@ class DatabaseService:
         
         try:
             # Add to MongoDB
-            mongo_id = self.mongo.add_agent(agent)
+            mongo_id = await self.mongo.add_agent(agent)
             # Add to Pinecone
             self.pinecone.upsert([vector_data])
             
@@ -54,7 +55,7 @@ class DatabaseService:
             # Rollback MongoDB insertion if needed
             if mongo_id:
                 try:
-                    self.mongo.delete_agent(agent.agent_id)
+                    await self.mongo.delete_agent(agent.agent_id)
                 except Exception as delete_error:
                     print(f"Rollback failed: {delete_error}")
                     
@@ -137,7 +138,7 @@ class DatabaseService:
             # If description was updated, update the vector in Pinecone
             if 'agentCard' in update_data and 'description' in update_data.get('agentCard', {}):
                 # Get new embedding for updated description
-                new_embedding = self.ai_service.get_embedding(update_data['agentCard']['description'])
+                new_embedding = await self.ai_service.get_embedding(update_data['agentCard']['description'])
                 vector_data = {
                     'id': str(agent_id),
                     'values': new_embedding,
@@ -171,7 +172,7 @@ class DatabaseService:
         """
         return await self.mongo.get_agent(agent_id)
     
-    def get_agents(self, query=None, limit=0):
+    async def get_agents(self, query=None, limit=0):
         """
         Get multiple agents matching a query
         
@@ -182,30 +183,30 @@ class DatabaseService:
         Returns:
             List[Dict]: List of agent documents
         """
-        return self.mongo.get_agents(query, limit)
+        return await self.mongo.get_agents(query, limit)
     
-    async def query_similar_agents(self, description: str, top_k=5):
+    async def query_similar_agents(self, task_description: str, top_k: int = 5):
         """
-        Find similar agents based on description embedding and return their full information
+        Find similar agents based on task description embedding and return their full information
         
         Args:
-            description: Text to find similar agents for
+            task_description: Text to find similar agents for
             top_k: Number of results to return
             
         Returns:
             List[Agent]: List of similar agents with complete information from MongoDB
         """
-        # Get embedding for the query text
-        query_embedding = self.ai_service.get_embedding(description)
+        # Make sure to await the embedding generation
+        embedding = await self.ai_service.get_embedding(task_description)
         
-        # Query Pinecone for similar vectors
-        pinecone_results = self.pinecone.query(
-            vector=query_embedding,
+        # Then use the embedding with Pinecone - remove the incompatible parameter
+        results = self.pinecone.query(
+            vector=embedding,
             top_k=top_k
         )
         
         # Extract agent IDs from Pinecone results
-        agent_ids = [match['id'] for match in pinecone_results.get('matches', [])]
+        agent_ids = [match['id'] for match in results.get('matches', [])]
         
         if not agent_ids:
             return []

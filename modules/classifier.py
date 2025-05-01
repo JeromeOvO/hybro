@@ -1,332 +1,163 @@
 import json
 from typing import Dict, Any, List, Optional
-from models.response import Step
 from services.openai_service import openai_service
-from database.pinecone_db import pinecone_db
-from database.mongodb import mongodb
+from services.database_service import DatabaseService
 from common.types import Message, TextPart, TaskState, AgentCard, TaskSendParams, AgentCapabilities, AgentSkill, AgentProvider
 from common.client.client import A2AClient
 from common.utils.remote_agent_connection import RemoteAgentConnections
 import uuid
 
 class Classifier:
-    async def find_matching_agents(self, task_description: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def __init__(self):
+        self.database_service = DatabaseService()
+        self.openai_service = openai_service
+    
+    async def find_best_agent_for_task(self, child_task_id: str, top_k: int = 5) -> str:
         """
-        Find matching agents for a task from the vector database
+        Find the most suitable agents for a child task using Pinecone vector search
         
         Args:
-            task_description: Description of the task
-            top_k: Number of top matches to return
+            child_task_id: ID of the child task
+            top_k: Number of top agents to return
             
         Returns:
-            List of matching agent information
+            List[Dict]: List of agent details sorted by relevance
         """
-        # Get embedding for the task description
-        embedding = await openai_service.get_embedding(task_description)
+        # Get the child task
+        child_task = await self.database_service.get_child_task(child_task_id)
+        if not child_task:
+            raise ValueError(f"Child task with ID {child_task_id} not found")
         
-        # Query Pinecone for similar vectors
-        results = pinecone_db.query(embedding, top_k=top_k)
-        # Get agent details from MongoDB
-        matching_agents = []
-        for match in results.matches:
-            agent_id = match.id
-            agent_data = await mongodb.agents_collection.find_one({"id": agent_id})
-            if agent_data:
-                agent_info = mongodb.serialize_mongodb_doc(agent_data)
-                agent_info["score"] = match.score  # Add similarity score
-                matching_agents.append(agent_info)
+        # Get the task description
+        task_description = child_task["description"]
         
-        return matching_agents
+        # Query Pinecone for similar agents
+        best_agents = await self.database_service.query_similar_agents(task_description, top_k)
+
+        best_agent_id = await self.openai_service.select_best_agent_for_task(task_description, best_agents)
+
+        await self.database_service.update_child_task(child_task_id, {"agent_id": best_agent_id})
+        
+        return best_agent_id
     
-    async def select_best_agent(self, task_description: str, agents: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+
+    async def execute_remote_agent(self, child_task_id: str) -> Dict[str, Any]:
         """
-        Use LLM to select the best agent for a task from a list of candidates
+        Execute a remote agent to process a child task
         
         Args:
-            task_description: Description of the task
-            agents: List of candidate agents
+            child_task_id: ID of the child task
+            agent_id: ID of the agent to execute
             
         Returns:
-            Information about the selected agent
+            Dict: The execution result
         """
-        if not agents:
-            return None
+        # Get the child task
+        child_task = await self.database_service.get_child_task(child_task_id)
+        if not child_task:
+            raise ValueError(f"Child task with ID {child_task_id} not found")
         
-        # If only one agent, return it directly
-        if len(agents) == 1:
-            return agents[0]
-        
-        # Use OpenAI to select the best agent
-        selected_agent = await openai_service.select_best_agent(task_description, agents)
-        
-        # Find the selected agent in the list
-        for agent in agents:
-            if agent["_id"] == selected_agent:
-                return agent
-        
-        # If no match found, return the first agent
-        return agents[0]
-    
-    async def classify_step(self, step: Step) -> Step:
-        """Classify a step and assign the best agent for it"""
-        print(f"Classifying step: {step.step_id} - {step.description[:50]}...")
-        
-        # Find matching agents from vector database
-        matching_agents = await self.find_matching_agents(step.description)
-        
-        if matching_agents:
-            # Select the best agent using LLM
-            best_agent = await self.select_best_agent(step.description, matching_agents)
-            
-            if best_agent:
-                # Assign agent to the step
-                step.agent_id = best_agent["id"]
-                step.agent_name = best_agent.get("name", "Unknown Agent")
-                step.is_remote_agent = best_agent.get("is_remote", False)
-                print(f"Assigned agent {best_agent['id']} ({best_agent.get('name', 'Unknown')}) to step {step.step_id}")
-            else:
-                print(f"WARNING: Could not select best agent for step: {step.step_id}")
+        if(child_task["agent_id"]):
+            agent_id = child_task["agent_id"]
         else:
-            print(f"WARNING: No matching agents found for step: {step.description[:50]}...")
+            agent_id = await self.find_best_agent_for_task(child_task_id)
         
-        return step
-    
-    async def execute_step(self, step: Step, task_context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Execute a classified step using the assigned agent
+        # Get the agent
+        agent = await self.database_service.get_agent(agent_id)
+        if not agent:
+            raise ValueError(f"Agent with ID {agent_id} not found")
         
-        Args:
-            step: The step to execute
-            task_context: Additional context for the task
-            
-        Returns:
-            Execution result
-        """
-        # Verify the step has an assigned agent
-        if not hasattr(step, "agent_id") or not step.agent_id:
-            return {
-                "success": False,
-                "error": "No agent assigned to step",
-                "step_id": step.step_id
-            }
+        # Create A2A client
+        agent_card = AgentCard(**agent)
+        client = RemoteAgentConnections(agent_card)
         
-        # Get agent information from MongoDB
-        agent_data = await mongodb.agents_collection.find_one({"id": step.agent_id})
-        if not agent_data:
-            return {
-                "success": False,
-                "error": f"Agent {step.agent_id} not found in database",
-                "step_id": step.step_id
-            }
-        
-        agent_info = mongodb.serialize_mongodb_doc(agent_data)
-        
-        # Create AgentCard and RemoteAgentConnections
-        agent_card = AgentCard(
-            name=agent_info.get("name", "Unknown Agent"),
-            url=agent_info.get("url", ""),
-            version=agent_info.get("version", "1.0"),
-            capabilities=AgentCapabilities(
-                streaming=agent_info.get("capabilities", {}).get("streaming", False),
-                pushNotifications=agent_info.get("capabilities", {}).get("pushNotifications", False),
-                stateTransitionHistory=agent_info.get("capabilities", {}).get("stateTransitionHistory", False)
-            ),
-            skills=[
-                AgentSkill(
-                    id=skill.get("id", str(uuid.uuid4())),
-                    name=skill.get("name", "Unknown Skill"),
-                    description=skill.get("description"),
-                    tags=skill.get("tags", []),
-                    examples=skill.get("examples", []),
-                    inputModes=skill.get("inputModes", ["text"]),
-                    outputModes=skill.get("outputModes", ["text"])
-                )
-                for skill in agent_info.get("skills", [])
-            ],
-            provider=AgentProvider(
-                organization=agent_info.get("organization", "Unknown"),
-                url=agent_info.get("provider_url")
-            ),
-            description=agent_info.get("description"),
-            documentationUrl=agent_info.get("documentation_url"),
-            defaultInputModes=agent_info.get("defaultInputModes", ["text"]),
-            defaultOutputModes=agent_info.get("defaultOutputModes", ["text"]),
-        )
-        
-        # Create remote agent connection
-        connection = RemoteAgentConnections(agent_card)
-        
-        # Prepare task message
-        message = Message(
-            role="agent",
-            parts=[TextPart(text=step.description)],
-            metadata={"step_id": step.step_id}
-        )
-        
-        # Create task params
-        task_params = TaskSendParams(
-            id=str(uuid.uuid4()),
-            message=message,
-            metadata={
-                "step_id": step.step_id,
-                "priority": step.priority,
-                **(task_context or {})
-            }
-        )
-        
-        # Update step status
-        step.status = TaskState.WORKING.value
+        # Prepare payload for the agent
+        payload = {
+            "id": child_task_id,
+            "message": Message(
+                role="user",
+                parts=[TextPart(text=child_task.description)]
+            )
+        }
         
         try:
-            # Define callback to process updates
-            def task_callback(update, agent):
-                if hasattr(update, "status") and update.status.message:
-                    # Extract message text from parts if available
-                    if update.status.message.parts and len(update.status.message.parts) > 0:
-                        for part in update.status.message.parts:
-                            if hasattr(part, "text"):
-                                step.result = part.text
-                                break
-                return update
+            # Send task to the agent
+            response = await client.send_task(payload)
             
-            # Execute the task with RemoteAgentConnections
-            result = await connection.send_task(task_params, task_callback)
-            
-            # Update step status based on execution result
-            step.status = TaskState.COMPLETED.value
-            
-            # If result hasn't been set by callback, extract it from the final result
-            if not hasattr(step, "result") or not step.result:
-                if hasattr(result, "status") and result.status.message:
-                    if result.status.message.parts and len(result.status.message.parts) > 0:
-                        for part in result.status.message.parts:
-                            if hasattr(part, "text"):
-                                step.result = part.text
-                                break
+            # Update child task with agent ID and response
+            await self.database_service.update_child_task(child_task_id, {
+                "agent_id": agent_id,
+                "task.status.state": TaskState.COMPLETED,
+                "task.history": response.result.history if response.result and response.result.history else []
+            })
             
             return {
                 "success": True,
-                "step": step,
-                "result": {"message": {"parts": [{"text": step.result}]}}
+                "task_id": child_task_id,
+                "agent_id": agent_id,
+                "result": response.result
             }
+            
         except Exception as e:
-            step.status = TaskState.FAILED.value
-            step.error = str(e)
+            # Update child task with error status
+            await self.database_service.update_child_task(child_task_id, {
+                "agent_id": agent_id,
+                "task.status.state": TaskState.FAILED,
+                "task.status.message": {
+                    "role": "agent", 
+                    "parts": [{"type": "text", "text": f"Error executing agent: {str(e)}"}]
+                }
+            })
+            
             return {
                 "success": False,
-                "step": step,
+                "task_id": child_task_id,
+                "agent_id": agent_id,
                 "error": str(e)
             }
     
-    async def summarize_results(self, user_input: str, steps: List[Step]) -> str:
+    async def process_child_task(self, child_task_id: str, top_k: int = 5) -> Dict[str, Any]:
         """
-        Summarize the results of all executed steps
+        Complete pipeline to process a child task: find agents, select best, execute
         
         Args:
-            user_input: Original user input
-            steps: List of executed steps
+            child_task_id: ID of the child task to process
+            top_k: Number of top agents to consider
             
         Returns:
-            Summarized result
+            Dict: The execution result
         """
-        # Collect results from all steps
-        step_results = []
-        for step in steps:
-            if hasattr(step, "result") and step.result:
-                step_results.append({
-                    "step_id": step.step_id,
-                    "description": step.description,
-                    "result": step.result,
-                    "status": step.status
-                })
-        
-        # Use OpenAI to summarize the results
-        summary = await openai_service.summarize_task_results(
-            user_input, 
-            step_results
-        )
-        
-        return summary
-    
-    async def process_task_manager_output(self, task_manager_output: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process the output from TaskManager
-        
-        Args:
-            task_manager_output: Output dictionary from TaskManager's process_user_input
+        try:
+            # Find the best candidate agents
+            candidate_agents = await self.find_best_agents_for_task(child_task_id, top_k)
             
-        Returns:
-            Processed output with executed steps and final result
-        """
-        if not task_manager_output.get("success", False):
-            return task_manager_output
-        
-        # Get user input and steps from TaskManager output
-        user_input = task_manager_output.get("message").parts[0].text
-        steps = task_manager_output.get("steps", [])
-        
-        # Classify all steps first
-        classified_steps = []
-        for step in steps:
-            classified_step = await self.classify_step(step)
-            classified_steps.append(classified_step)
-        
-        # Execute steps in sequence
-        executed_steps = []
-        step_results = []
-        
-        for step in classified_steps:
-            # Check for dependencies
-            can_execute = True
-            for dep_id in step.dependencies:
-                # Find the dependent step
-                dep_step = next((s for s in executed_steps if s.step_id == dep_id), None)
-                if not dep_step or dep_step.status != TaskState.COMPLETED.value:
-                    can_execute = False
-                    break
+            if not candidate_agents:
+                raise ValueError(f"No suitable agents found for task {child_task_id}")
             
-            if can_execute:
-                # Prepare context with results from completed steps
-                context = {
-                    "original_input": user_input,
-                    "previous_results": {s.step_id: s.result for s in executed_steps if hasattr(s, "result")}
+            # Determine the best agent
+            best_agent_id = await self.determine_best_agent(child_task_id, candidate_agents)
+            
+            # Execute the selected agent
+            result = await self.execute_remote_agent(child_task_id, best_agent_id)
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error processing child task {child_task_id}: {str(e)}")
+            
+            # Update child task with error status
+            await self.database_service.update_child_task(child_task_id, {
+                "task.status.state": TaskState.FAILED,
+                "task.status.message": {
+                    "role": "agent", 
+                    "parts": [{"type": "text", "text": f"Error processing task: {str(e)}"}]
                 }
-                
-                # Execute the step
-                result = await self.execute_step(step, context)
-                step_results.append(result)
-                executed_steps.append(step)
-            else:
-                # Mark as failed due to dependencies
-                step.status = TaskState.FAILED.value
-                step.error = "Dependent tasks failed or not completed"
-                executed_steps.append(step)
-        
-        # Summarize results
-        final_result = await self.summarize_results(user_input, executed_steps)
-        
-        # Create final message with A2A protocol format
-        parts = [TextPart(text=final_result)]
-        
-        # Add detailed results as data parts if needed
-        # (optional, depending on how detailed you want the response to be)
-        
-        final_message = Message(
-            role="agent",
-            parts=parts,
-            metadata={
-                "total_steps": len(executed_steps),
-                "completed_steps": sum(1 for s in executed_steps if s.status == TaskState.COMPLETED.value),
-                "failed_steps": sum(1 for s in executed_steps if s.status == TaskState.FAILED.value)
+            })
+            
+            return {
+                "success": False,
+                "task_id": child_task_id,
+                "error": str(e)
             }
-        )
-        
-        return {
-            "success": True,
-            "message": final_message,
-            "steps": executed_steps,
-            "step_count": len(executed_steps),
-            "final_result": final_result
-        }
 
 classifier = Classifier() 

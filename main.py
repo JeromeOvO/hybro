@@ -58,15 +58,33 @@ async def create_task(task_data: TaskInput):
     root_task = await task_manager.get_task(task_id)
     return root_task
 
+class TaskIdInput(BaseModel):
+    child_task_id: str
+
+@app.post("/Classifier/findBestAgentForTask")
+async def find_best_agent_for_task(task_data: TaskIdInput):
+    best_agent_id = await classifier.find_best_agent_for_task(task_data.child_task_id, top_k=5)
+    best_agent = await agent_service.get_agent(best_agent_id)
+    return best_agent
+
 # Agent endpoints
-@app.get("/agents")
-async def get_agents():
-    return agent_service.get_all_agents()
+@app.post("/agents/createAgent")
+async def create_agent(agent_data: Dict[str, Any] = Body(...)):
+    agent = Agent(**agent_data)
+    return await agent_service.create_agent(agent)
 
-# Task endpoints
+@app.post("/agents/getAllAgents")
+async def get_all_agents():
+    return await agent_service.get_all_agents()
 
+@app.post("/agents/getAgent")
+async def get_agent(data: Dict[str, str] = Body(...)):
+    agent_id = data.get("agent_id")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    return await agent_service.get_agent(agent_id)
 
-
+# Fix the indentation of the uvicorn run command
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 

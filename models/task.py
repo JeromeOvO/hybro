@@ -11,6 +11,7 @@ class ChildTask(BaseModel):
     for task decomposition relationships.
     """
     task_id: str = Field(default_factory=lambda: uuid4().hex)
+    agent_id: str = Field(default="Not Assigned")
     description: Optional[str] = Field(default="")
     task: Task  # The base task from common/types
     parent_id: str  # ID of the parent task (either RootTask or another ChildTask)

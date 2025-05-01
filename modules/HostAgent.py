@@ -41,7 +41,6 @@ class HostAgent:
         
         # Call OpenAI to decompose the task
         decomposed_task_reuslt_from_llm = await self.openai_service.decompose_rootTask(root_task)
-        print("decomposed_task_reuslt_from_llm: ", decomposed_task_reuslt_from_llm)
         
         # Create child tasks for each subtask
         root_task_id = await self.task_service.create_subtasks_with_openai_content(root_task.task_id, decomposed_task_reuslt_from_llm)
