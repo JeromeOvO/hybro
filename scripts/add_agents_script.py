@@ -11,7 +11,7 @@ framework_agents = {
     "crewai": {
         "name": "CrewAI Image Generator",
         "description": "An image generation agent built on CrewAI that can create or modify images based on text descriptions",
-        "url": "http://localhost:9001/crewai",
+        "url": "http://localhost:10001",
         "provider": {
             "organization": "CrewAI Integration",
             "url": "https://crewai.io"
@@ -41,7 +41,7 @@ framework_agents = {
     "google_adk": {
         "name": "Google ADK Reimbursement Assistant",
         "description": "A reimbursement processing agent built with Google ADK, handling employee expense requests and form submissions",
-        "url": "http://localhost:9002/google_adk",
+        "url": "http://localhost:10002",
         "provider": {
             "organization": "Google ADK Integration",
             "url": "https://developers.generativeai.google"
@@ -71,7 +71,7 @@ framework_agents = {
     "langgraph": {
         "name": "LangGraph Currency Assistant",
         "description": "A currency conversion agent built with LangGraph, capable of querying and calculating exchange rates between different currencies",
-        "url": "http://localhost:9003/langgraph",
+        "url": "http://localhost:10003",
         "provider": {
             "organization": "LangGraph Integration",
             "url": "https://github.com/langchain-ai/langgraph"
@@ -101,7 +101,7 @@ framework_agents = {
     "llama_index_file_chat": {
         "name": "LlamaIndex Document Assistant",
         "description": "A document Q&A agent built with LlamaIndex, supporting PDF parsing and document content queries",
-        "url": "http://localhost:9004/llama_index",
+        "url": "http://localhost:10004",
         "provider": {
             "organization": "LlamaIndex Integration",
             "url": "https://www.llamaindex.ai"
@@ -131,7 +131,7 @@ framework_agents = {
     "marvin": {
         "name": "Marvin Data Extraction Assistant",
         "description": "A data extraction agent built with Marvin framework, capable of extracting structured information from unstructured text",
-        "url": "http://localhost:9005/marvin",
+        "url": "http://localhost:10005",
         "provider": {
             "organization": "Marvin Integration",
             "url": "https://www.askmarvin.ai"
@@ -161,7 +161,7 @@ framework_agents = {
     "semantickernel": {
         "name": "Semantic Kernel Travel Assistant",
         "description": "A travel planning agent developed with Semantic Kernel, providing travel recommendations, currency conversion, and more",
-        "url": "http://localhost:9006/semantickernel",
+        "url": "http://localhost:10006",
         "provider": {
             "organization": "Semantic Kernel Integration",
             "url": "https://learn.microsoft.com/en-us/semantic-kernel"

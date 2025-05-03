@@ -11,7 +11,6 @@ from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 
-from modules.Classifier import classifier
 from modules.HostAgent import HostAgent
 
 from services.task_service import TaskService
@@ -64,12 +63,14 @@ async def create_task(task_data: TaskInput):
 
 @app.post("/HostAgent/sendTaskToAgent")
 async def send_task_to_agent(task_data: TaskIdInput):
-    child_task = await host_agent.send_task_to_agent(task_data.child_task_id)
-    return child_task
+    result = await host_agent.send_task_to_agent(task_data.child_task_id)
+    # result = {"task_id": "...", "agent_id": "...", "state": "...", "result_text": "..."}
+    return result
 
-@app.post("/Classifier/findBestAgentForTask")
+
+@app.post("/HostAgent/findBestAgentForTask")
 async def find_best_agent_for_task(task_data: TaskIdInput):
-    best_agent_id = await classifier.find_best_agent_for_task(task_data.child_task_id, top_k=5)
+    best_agent_id = await HostAgent.find_best_agent_for_task(task_data.child_task_id, top_k=5)
     best_agent = await agent_service.get_agent(best_agent_id)
     return best_agent
 
