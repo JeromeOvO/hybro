@@ -24,7 +24,7 @@ class HostAgent:
         self.database_service = DatabaseService()
 
     # ------------------------------------------------------------------ #
-    # 上游：创建 / 拆解任务
+    # Upstream: Create / Decompose Tasks
     # ------------------------------------------------------------------ #
     async def create_task_from_input(self, user_input: str) -> str:
         """
@@ -68,7 +68,7 @@ class HostAgent:
         return root_task.subtasks
 
     # ------------------------------------------------------------------ #
-    # 发送子任务到远端 Agent（自动流式 / 非流式）
+    # Send Subtasks to Remote Agents (Automatic Stream/Non-Stream)
     # ------------------------------------------------------------------ #
     async def send_task_to_agent(self, child_task_id: str) -> Dict[str, Any]:
         """
@@ -87,7 +87,7 @@ class HostAgent:
         if not child_doc:
             raise ValueError(f"Child task {child_task_id!r} not found")
 
-        # 1) 选 Agent
+        # 1) Select Agent
         agent_id = child_doc.get("agent_id") or await self.find_best_agent_for_task(
             child_task_id
         )
@@ -95,7 +95,7 @@ class HostAgent:
         if not agent_doc:
             raise ValueError(f"Agent {agent_id!r} not found")
 
-        # 2) 构造客户端 / Payload
+        # 2) Create client / Payload
         agent_card = AgentCard(**agent_doc["agentCard"])
         client = RemoteAgentConnections(agent_card)
         child_task = ChildTask(**child_doc)
@@ -108,7 +108,7 @@ class HostAgent:
             metadata=child_task.task.metadata,
         )
 
-        # 3) 根据 capability 选择模式
+        # 3) Choose mode based on capabilities
         supports_streaming = getattr(agent_card.capabilities, "streaming", False)
 
         try:
@@ -135,7 +135,7 @@ class HostAgent:
             raise
 
     # ------------------------------------------------------------------ #
-    # 同步模式：tasks/send
+    # Synchronous Mode: tasks/send
     # ------------------------------------------------------------------ #
     async def _send_sync(
         self,
@@ -156,7 +156,7 @@ class HostAgent:
         Returns:
             Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
         """
-        task = await client.send_task(payload)  # 完整 Task
+        task = await client.send_task(payload)  # Complete Task
         await self._persist_result(child_task_id, agent_id, task)
         return {
             "task_id": child_task_id,
@@ -166,7 +166,7 @@ class HostAgent:
         }
 
     # ------------------------------------------------------------------ #
-    # 流式模式：tasks/sendSubscribe
+    # Streaming Mode: tasks/sendSubscribe
     # ------------------------------------------------------------------ #
     async def _send_streaming(
         self,
@@ -196,7 +196,7 @@ class HostAgent:
             nonlocal final_task
             name = evt.__class__.__name__
 
-            # ---- 1. 收集文本增量 ----
+            # ---- 1. Collect text increments ----
             if name in ("TaskArtifactUpdateEvent", "TaskMessageUpdateEvent"):
                 part = (
                     evt.artifact.parts[-1]
@@ -206,7 +206,7 @@ class HostAgent:
                 if isinstance(part, TextPart):
                     buffer_text.append(part.text)
 
-            # ---- 2. 处理状态事件 ----
+            # ---- 2. Handle status events ----
             elif name == "TaskStatusUpdateEvent":
                 if hasattr(evt, "status") and evt.status.state == "input-required":
                     buffer_text.append("[ERROR] Agent paused for input — not yet supported")
@@ -280,7 +280,7 @@ class HostAgent:
             )
 
     # ------------------------------------------------------------------ #
-    # 通用：写库 & 文本提取 & 失败处理
+    # Common: Database Updates & Text Extraction & Error Handling
     # ------------------------------------------------------------------ #
     async def _persist_result(
         self, child_task_id: str, agent_id: str, task_obj: Any
@@ -366,7 +366,7 @@ class HostAgent:
             if txt:
                 return txt
 
-        # 3) 最后一条 agent 消息
+        # 3) Last agent message
         if getattr(task_obj, "messages", None):
             for msg in reversed(task_obj.messages):
                 if msg.role == "agent":
