@@ -91,6 +91,20 @@ async def get_agent(data: Dict[str, str] = Body(...)):
         raise HTTPException(status_code=400, detail="agent_id is required")
     return await agent_service.get_agent(agent_id)
 
+@app.post("/agents/updateAgent")
+async def update_agent(data: Dict[str, str] = Body(...)):
+    agent_id = data.get("agent_id")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    return await agent_service.update_agent(agent_id, data)
+
+@app.post("/agents/deleteAgent")
+async def delete_agent(data: Dict[str, str] = Body(...)):
+    agent_id = data.get("agent_id")
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    return await agent_service.delete_agent(agent_id)
+
 # Fix the indentation of the uvicorn run command
 if __name__ == "__main__":
     import uvicorn
