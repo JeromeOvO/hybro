@@ -65,7 +65,7 @@ class HostAgent:
             text = root_task.task.status.message.parts[0].text
             raise RuntimeError(f"OpenAI decomposition failed: {text}")
 
-        return root_task.subtasks
+        return root_task.task_id
 
     # ------------------------------------------------------------------ #
     # Send Subtasks to Remote Agents (Automatic Stream/Non-Stream)
@@ -237,8 +237,7 @@ class HostAgent:
                         "task.status.message": {
                             "role": "agent", 
                             "parts": [{"type": "text", "text": result_text}]
-                        },
-                        "result": result_text
+                        }
                     },
                 )
                 
@@ -397,7 +396,11 @@ class HostAgent:
         task_description = child_task["description"]
         
         # Query Pinecone for similar agents
-        best_agents = await self.database_service.query_similar_agents(task_description, top_k)
+        try:
+            best_agents = await self.database_service.query_similar_agents(task_description, top_k)
+        except Exception as e:
+            print(f"Error querying Pinecone: {e}")
+            return None
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(task_description, best_agents)
 

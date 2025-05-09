@@ -4,25 +4,52 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 import uuid
 from pydantic import BaseModel
-
+from models.request import UserInput, TaskIdInput
 from config import settings
 from models.agent import Agent
-
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
-
 from modules.HostAgent import HostAgent
-
 from services.task_service import TaskService
-from services.agent_service import agent_service
+from services.agent_service import AgentService
+from loguru import logger
+import sys, logging
+from uvicorn.config import LOGGING_CONFIG
+
+class InterceptHandler(logging.Handler):
+    def emit(self, record):
+        # 将标准 logging record 转成 loguru 调用
+        level   = logger.level(record.levelname).name \
+                  if record.levelname in logger._levels else record.levelno
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame, depth = frame.f_back, depth + 1
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+logging_config = LOGGING_CONFIG.copy()
+logging_config["handlers"]["default"]["class"] = "__main__.InterceptHandler"
+logging_config["loggers"]["uvicorn"]["handlers"] = ["default"]
+logging_config["loggers"]["uvicorn.error"]["handlers"] = ["default"]
+logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
+
+logger.remove()  # remove default stderr handler
+logger.add(
+    sys.stderr,
+    enqueue=True,          # multi-thread/multi-process safe
+    backtrace=True,        # print full call stack when exception occurs
+    diagnose=True,         # variable insight
+    serialize=False        # if want to output JSON, change to True
+)
+
+
 
 app = FastAPI(title="Multi-Agent AI System")
 
-task_manager = TaskService()
-
-# Initialize HostAgent with properly initialized TaskService
+task_service = TaskService()
 host_agent = HostAgent()
-
+agent_service = AgentService()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -32,11 +59,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class TaskInput(BaseModel):
-    user_input: str
-
-class TaskIdInput(BaseModel):
-    child_task_id: str
 
 # Startup and shutdown events
 @app.on_event("startup")
@@ -54,25 +76,31 @@ async def health_check():
     return {"status": "ok"}
 
 
-@app.post("/HostAgent/createTask")
-async def create_task(task_data: TaskInput):
-    task_id = await host_agent.create_task_from_input(task_data.user_input)
-    await host_agent.decompose_task(task_id)
-    root_task = await task_manager.get_task(task_id)
-    return root_task
+#Host Agent Endpoints
+@app.post("/hostAgent/sendTask")
+async def send_task_to_hostAgent(input: UserInput):
+    logger.info("user_input: {}", input.user_input)
 
-@app.post("/HostAgent/sendTaskToAgent")
-async def send_task_to_agent(task_data: TaskIdInput):
-    result = await host_agent.send_task_to_agent(task_data.child_task_id)
-    # result = {"task_id": "...", "agent_id": "...", "state": "...", "result_text": "..."}
-    return result
+    task_id = await host_agent.create_task_from_input(input.user_input)
+    logger.info("rootTask Created: {}", task_id)
 
+    root_task_id = await host_agent.decompose_task(task_id)
 
-@app.post("/HostAgent/findBestAgentForTask")
-async def find_best_agent_for_task(task_data: TaskIdInput):
-    best_agent_id = await HostAgent.find_best_agent_for_task(task_data.child_task_id, top_k=5)
-    best_agent = await agent_service.get_agent(best_agent_id)
-    return best_agent
+    child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
+    for child_task in child_tasks:
+        logger.info("childTask: {}", child_task)
+
+    for child_task in child_tasks:
+        best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
+        agent = await agent_service.get_agent(best_agent_id)
+        logger.info("bestAgent: {}", agent["agentCard"]["name"])
+    
+    # for child_task in child_tasks:
+    #     if child_task.agent_id == "Not Assigned":
+    #         best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
+    #         await host_agent.send_task_to_agent(child_task.task_id, best_agent_id)
+    
+    return await task_service.get_task(root_task_id)
 
 # Agent endpoints
 @app.post("/agents/createAgent")
@@ -104,6 +132,16 @@ async def delete_agent(data: Dict[str, str] = Body(...)):
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
     return await agent_service.delete_agent(agent_id)
+
+
+#Task Endpoints
+@app.post("/tasks/getTask")
+async def get_task(taskId: TaskIdInput):
+    task_id = taskId.task_id
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    return await task_service.get_task(task_id)
+
 
 # Fix the indentation of the uvicorn run command
 if __name__ == "__main__":
