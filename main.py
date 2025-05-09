@@ -12,7 +12,7 @@ from modules.HostAgent import HostAgent
 from services.task_service import TaskService
 from services.agent_service import AgentService
 from loguru import logger
-import sys, logging 
+import sys, logging
 from dotenv import load_dotenv
 import os
 
@@ -20,16 +20,17 @@ load_dotenv()
 
 from uvicorn.config import LOGGING_CONFIG
 
+
 class InterceptHandler(logging.Handler):
     def emit(self, record):
-        level   = logger.level(record.levelname).name \
-                  if record.levelname in logger._levels else record.levelno
+        level = logger.level(record.levelname, no=record.levelno).name
         frame, depth = logging.currentframe(), 2
         while frame and frame.f_code.co_filename == logging.__file__:
             frame, depth = frame.f_back, depth + 1
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
         )
+
 
 logging_config = LOGGING_CONFIG.copy()
 logging_config["handlers"]["default"]["class"] = "__main__.InterceptHandler"
@@ -40,12 +41,11 @@ logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
 logger.remove()
 logger.add(
     sys.stderr,
-    enqueue=True,          # multi-thread/multi-process safe
-    backtrace=True,        # print full call stack when exception occurs
-    diagnose=True,         # variable insight
-    serialize=False        # if want to output JSON, change to True
+    enqueue=True,  # multi-thread/multi-process safe
+    backtrace=True,  # print full call stack when exception occurs
+    diagnose=True,  # variable insight
+    serialize=False,  # if want to output JSON, change to True
 )
-
 
 
 app = FastAPI(title="Multi-Agent AI System")
@@ -69,9 +69,11 @@ async def startup_db_client():
     await mongodb.connect()
     pinecone_db.connect()
 
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     await mongodb.close_database_connection()
+
 
 # Health check endpoint
 @app.get("/health")
@@ -79,7 +81,7 @@ async def health_check():
     return {"status": "ok"}
 
 
-#Host Agent Endpoints
+# Host Agent Endpoints
 @app.post("/hostAgent/sendTask")
 async def send_task_to_hostAgent(input: UserInput):
     logger.info("user_input: {}", input.user_input)
@@ -97,13 +99,14 @@ async def send_task_to_hostAgent(input: UserInput):
         best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
         agent = await agent_service.get_agent(best_agent_id)
         logger.info("bestAgent: {}", agent["agentCard"]["name"])
-    
+
     # for child_task in child_tasks:
     #     if child_task.agent_id == "Not Assigned":
     #         best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
     #         await host_agent.send_task_to_agent(child_task.task_id, best_agent_id)
-    
+
     return await task_service.get_task(root_task_id)
+
 
 # Agent endpoints
 @app.post("/agents/createAgent")
@@ -111,9 +114,11 @@ async def create_agent(agent_data: Dict[str, Any] = Body(...)):
     agent = Agent(**agent_data)
     return await agent_service.create_agent(agent)
 
+
 @app.post("/agents/getAllAgents")
 async def get_all_agents():
     return await agent_service.get_all_agents()
+
 
 @app.post("/agents/getAgent")
 async def get_agent(data: Dict[str, str] = Body(...)):
@@ -122,12 +127,14 @@ async def get_agent(data: Dict[str, str] = Body(...)):
         raise HTTPException(status_code=400, detail="agent_id is required")
     return await agent_service.get_agent(agent_id)
 
+
 @app.post("/agents/updateAgent")
 async def update_agent(data: Dict[str, str] = Body(...)):
     agent_id = data.get("agent_id")
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
     return await agent_service.update_agent(agent_id, data)
+
 
 @app.post("/agents/deleteAgent")
 async def delete_agent(data: Dict[str, str] = Body(...)):
@@ -137,7 +144,7 @@ async def delete_agent(data: Dict[str, str] = Body(...)):
     return await agent_service.delete_agent(agent_id)
 
 
-#Task Endpoints
+# Task Endpoints
 @app.post("/tasks/getTask")
 async def get_task(taskId: TaskIdInput):
     task_id = taskId.task_id
@@ -149,4 +156,5 @@ async def get_task(taskId: TaskIdInput):
 # Fix the indentation of the uvicorn run command
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
