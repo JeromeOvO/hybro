@@ -62,3 +62,11 @@ class AgentTaskRequest(BaseModel):
             parts=parts,
             metadata=metadata
         )
+
+# for user input
+class UserInput(BaseModel):
+    user_input: str
+
+# for task id input
+class TaskIdInput(BaseModel):
+    task_id: str

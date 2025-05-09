@@ -1,16 +1,18 @@
 import pinecone
-from config import settings
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 class PineconeDB:
     def __init__(self):
-        self.index_name = settings.PINECONE_INDEX_NAME
+        self.index_name = os.getenv("PINECONE_INDEX_NAME")
         self.index = None
         
     def connect(self):
         # Initialize Pinecone for serverless
         pc = pinecone.Pinecone(
-            api_key=settings.PINECONE_API_KEY
+            api_key=os.getenv("PINECONE_API_KEY")
         )
         
         # For serverless, we don't need to create the index here

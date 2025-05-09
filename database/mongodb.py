@@ -1,5 +1,4 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-from config import settings
 import json
 from typing import Any, Dict, List
 from bson import ObjectId
@@ -7,6 +6,10 @@ from datetime import datetime
 from models.agent import Agent
 from models.task import RootTask, ChildTask
 import uuid
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 class MongoDB:
     client: AsyncIOMotorClient = None
@@ -16,7 +19,7 @@ class MongoDB:
     
     async def connect(self):
         try:
-            self.client = AsyncIOMotorClient(settings.MONGODB_URL)
+            self.client = AsyncIOMotorClient(os.getenv("MONGODB_URL"))
             # Verify connection works
             await self.client.admin.command('ping')
             print("Connected to MongoDB successfully")
@@ -34,7 +37,7 @@ class MongoDB:
         """Get database instance"""
         if not self.client:
             raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
-        return self.client[settings.MONGODB_DB_NAME]
+        return self.client[os.getenv("MONGODB_DB_NAME")]
     
     @property
     def agents_collection(self):
