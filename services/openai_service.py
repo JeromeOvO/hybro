@@ -1,11 +1,14 @@
 from openai import AsyncOpenAI
-from config import settings
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import time
 from datetime import datetime
 import uuid
 from models.task import RootTask, ChildTask
+from dotenv import load_dotenv
+import os
+load_dotenv()
+
 
 
 from common.types import (
@@ -18,7 +21,7 @@ if TYPE_CHECKING:
 
 class OpenAIService:
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     async def get_embedding(self, text: str, target_dim: int = None) -> List[float]:
         """Get embedding for text
@@ -85,7 +88,7 @@ class OpenAIService:
             ]
             
             response = await self.client.chat.completions.create(
-                model=settings.LEAD_AI_MODEL,
+                model=os.getenv("LEAD_AI_MODEL"),
                 messages=messages,
                 response_format={"type": "json_object"}
             )
@@ -160,7 +163,7 @@ Based on the task description and agent capabilities, which agent (by ID) would 
         
         try:
             response = await self.client.chat.completions.create(
-                model=settings.CLASSIFIER_AI_MODEL,
+                model=os.getenv("CLASSIFIER_AI_MODEL"),
                 messages=messages
             )
             
@@ -215,7 +218,7 @@ Please provide a comprehensive summary that addresses the original request based
         
         try:
             response = await self.client.chat.completions.create(
-                model=settings.LEAD_AI_MODEL,
+                model=os.getenv("LEAD_AI_MODEL"),
                 messages=messages
             )
             

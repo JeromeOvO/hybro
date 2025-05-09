@@ -5,7 +5,6 @@ from typing import Dict, Any
 import uuid
 from pydantic import BaseModel
 from models.request import UserInput, TaskIdInput
-from config import settings
 from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
@@ -13,7 +12,12 @@ from modules.HostAgent import HostAgent
 from services.task_service import TaskService
 from services.agent_service import AgentService
 from loguru import logger
-import sys, logging
+import sys, logging 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 from uvicorn.config import LOGGING_CONFIG
 
 class InterceptHandler(logging.Handler):

@@ -3,7 +3,10 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import time
 from datetime import datetime
-from config import settings
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 from common.types import (
     Task, Message, TextPart, DataPart, Part,
@@ -13,9 +16,9 @@ from common.types import (
 class GeminiService:
     def __init__(self):
         # Configure the Gemini API
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(settings.GEMINI_MODEL_NAME)
-        self.embedding_model = genai.GenerativeModel(settings.GEMINI_EMBEDDING_MODEL_NAME)
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+        self.model = genai.GenerativeModel(os.getenv("GEMINI_MODEL_NAME"))
+        self.embedding_model = genai.GenerativeModel(os.getenv("GEMINI_EMBEDDING_MODEL_NAME"))
     
     async def get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using Gemini"""
