@@ -22,7 +22,6 @@ from uvicorn.config import LOGGING_CONFIG
 
 class InterceptHandler(logging.Handler):
     def emit(self, record):
-        # 将标准 logging record 转成 loguru 调用
         level   = logger.level(record.levelname).name \
                   if record.levelname in logger._levels else record.levelno
         frame, depth = logging.currentframe(), 2
@@ -38,7 +37,7 @@ logging_config["loggers"]["uvicorn"]["handlers"] = ["default"]
 logging_config["loggers"]["uvicorn.error"]["handlers"] = ["default"]
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
 
-logger.remove()  # remove default stderr handler
+logger.remove()
 logger.add(
     sys.stderr,
     enqueue=True,          # multi-thread/multi-process safe
