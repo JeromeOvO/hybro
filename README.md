@@ -115,6 +115,14 @@ curl -X GET http://localhost:8000/tasks/status/your_task_id_here
 
 This will return the current status of the task and its subtasks.
 
+## Data model sharing between backend and frontend
+
+Data models defined via Pydantic in the backend here should serve as the single source of truth and are shared with the frontend. Frontend Typescript data models can be generated using pydantic2ts like following example:
+
+``bash
+pydantic2ts --module ./models/agent.py --output ./models/agent.ts
+``
+
 ## Troubleshooting
 
 - If you encounter connection issues with MongoDB, check your database configuration in the config file.

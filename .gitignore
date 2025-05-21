@@ -1,6 +1,13 @@
 # Python
 __pycache__/
 
+# Distribution / packaging
+dist/
+build/
+eggs/
+.eggs/
+*.egg-info/
+
 # Virtual Environment
 venv/
 
