@@ -46,6 +46,9 @@ class A2AServer:
         self.app.add_route(
             "/.well-known/agent.json", self._get_agent_card, methods=["GET"]
         )
+        self.app.add_route(
+            "/.well-known/agent.json", self._handle_options, methods=["OPTIONS"]
+        )
 
     def start(self):
         if self.agent_card is None:
@@ -59,7 +62,23 @@ class A2AServer:
         uvicorn.run(self.app, host=self.host, port=self.port)
 
     def _get_agent_card(self, request: Request) -> JSONResponse:
-        return JSONResponse(self.agent_card.model_dump(exclude_none=True))
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+        return JSONResponse(
+            self.agent_card.model_dump(exclude_none=True), headers=headers
+        )
+
+    async def _handle_options(self, request: Request) -> JSONResponse:
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        }
+        return JSONResponse({}, headers=headers)
 
     async def _process_request(self, request: Request):
         try:
@@ -77,9 +96,13 @@ class A2AServer:
             elif isinstance(json_rpc_request, CancelTaskRequest):
                 result = await self.task_manager.on_cancel_task(json_rpc_request)
             elif isinstance(json_rpc_request, SetTaskPushNotificationRequest):
-                result = await self.task_manager.on_set_task_push_notification(json_rpc_request)
+                result = await self.task_manager.on_set_task_push_notification(
+                    json_rpc_request
+                )
             elif isinstance(json_rpc_request, GetTaskPushNotificationRequest):
-                result = await self.task_manager.on_get_task_push_notification(json_rpc_request)
+                result = await self.task_manager.on_get_task_push_notification(
+                    json_rpc_request
+                )
             elif isinstance(json_rpc_request, TaskResubscriptionRequest):
                 result = await self.task_manager.on_resubscribe_to_task(
                     json_rpc_request
