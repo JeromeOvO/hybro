@@ -98,15 +98,20 @@ async def send_task_to_hostAgent(input: UserInput):
     for child_task in child_tasks:
         best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
         agent = await agent_service.get_agent(best_agent_id)
-        logger.info("bestAgent: {}", agent["agentCard"]["name"])
+        logger.info("For task: {} bestAgent: {}", child_task.task_id, agent["agentCard"]["name"])
 
-    # for child_task in child_tasks:
-    #     if child_task.agent_id == "Not Assigned":
-    #         best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
-    #         await host_agent.send_task_to_agent(child_task.task_id, best_agent_id)
 
-    return await task_service.get_task(root_task_id)
+    for child_task in child_tasks:
+        await host_agent.send_task_to_agent(child_task.task_id)
 
+    child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
+    for child_task in child_tasks:
+        logger.info("child_task_status: {}", child_task.task.status.state)
+
+    final_answer = await host_agent.summarize_subtask_answers(root_task_id)
+    logger.info("Final Answer: {}", final_answer)
+
+    return final_answer
 
 # Agent endpoints
 @app.post("/agents/createAgent")
@@ -151,6 +156,13 @@ async def get_task(taskId: TaskIdInput):
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_task(task_id)
+
+@app.post("/tasks/getSubTask")
+async def get_sub_tasks(taskId: TaskIdInput):
+    task_id = taskId.task_id
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    return await task_service.get_child_task(task_id)
 
 
 # Fix the indentation of the uvicorn run command

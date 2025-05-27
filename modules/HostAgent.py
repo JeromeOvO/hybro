@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from services.task_service import TaskService
 from services.openai_service import openai_service
 from services.database_service import DatabaseService
+from services.agent_service import AgentService
 
 from common.types import (
     TaskState,
@@ -22,7 +23,7 @@ class HostAgent:
         self.task_service = TaskService()
         self.openai_service = openai_service
         self.database_service = DatabaseService()
-
+        self.agent_service = AgentService()
     # ------------------------------------------------------------------ #
     # Upstream: Create / Decompose Tasks
     # ------------------------------------------------------------------ #
@@ -83,7 +84,7 @@ class HostAgent:
         Raises:
             ValueError: If child task or agent not found
         """
-        child_doc = await self.database_service.get_child_task(child_task_id)
+        child_doc = await self.task_service.get_child_task(child_task_id)
         if not child_doc:
             raise ValueError(f"Child task {child_task_id!r} not found")
 
@@ -91,7 +92,7 @@ class HostAgent:
         agent_id = child_doc.get("agent_id") or await self.find_best_agent_for_task(
             child_task_id
         )
-        agent_doc = await self.database_service.get_agent(agent_id)
+        agent_doc = await self.agent_service.get_agent(agent_id)
         if not agent_doc:
             raise ValueError(f"Agent {agent_id!r} not found")
 
@@ -109,7 +110,7 @@ class HostAgent:
         )
 
         # 3) Choose mode based on capabilities
-        supports_streaming = getattr(agent_card.capabilities, "streaming", False)
+        supports_streaming = agent_card.capabilities.streaming
 
         try:
             if supports_streaming:
@@ -407,3 +408,64 @@ class HostAgent:
         await self.database_service.update_child_task(child_task_id, {"agent_id": best_agent_id})
         
         return best_agent_id
+
+    async def summarize_subtask_answers(self, root_task_id: str) -> str:
+        """
+        Collect answers from all subtasks and generate a final summarized answer.
+        
+        Args:
+            root_task_id: The ID of the root task
+            
+        Returns:
+            str: Summarized answer to the original question
+            
+        Raises:
+            ValueError: If root task not found or no subtasks exist
+        """
+        # Get the root task and its subtasks
+        root_task = await self.task_service.get_task(root_task_id)
+        if not root_task:
+            raise ValueError(f"Root task {root_task_id!r} not found")
+        
+        # Get all child tasks
+        child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
+        if not child_tasks:
+            raise ValueError(f"No subtasks found for root task {root_task_id!r}")
+        
+        # Collect answers from completed subtasks
+        subtask_answers = []
+        for child in child_tasks:
+            # Access attributes directly since child is a ChildTask object
+            if child.task.status.state == TaskState.COMPLETED:
+                # Extract the answer using existing _extract_text method
+                answer = child.task.status.message.parts[0].text
+                if answer:
+                    subtask_answers.append({
+                        "task_description": child.description,
+                        "answer": answer
+                    })
+        
+        if not subtask_answers:
+            raise ValueError("No completed subtasks with answers found")
+        
+        # Use OpenAI to generate final summary
+        final_answer = await self.openai_service.summarize_subtask_answers(
+            original_question=root_task.task.history[0].parts[0].text,
+            subtask_answers=subtask_answers
+        )
+        
+        # Update root task with final answer
+        await self.database_service.update_task(
+            root_task_id,
+            {
+                "task.status.state": TaskState.COMPLETED,
+                "task.status.message": {
+                    "role": "agent",
+                    "parts": [{"type": "text", "text": final_answer}]
+                }
+            }
+        )
+        
+        return final_answer
+    
+    

@@ -71,7 +71,7 @@ framework_agents = {
     "langgraph": {
         "name": "LangGraph Currency Assistant",
         "description": "A currency conversion agent built with LangGraph, capable of querying and calculating exchange rates between different currencies",
-        "url": "http://localhost:10003",
+        "url": "http://localhost:10000",
         "provider": {
             "organization": "LangGraph Integration",
             "url": "https://github.com/langchain-ai/langgraph"
@@ -98,40 +98,40 @@ framework_agents = {
             }
         ]
     },
-    "llama_index_file_chat": {
-        "name": "LlamaIndex Document Assistant",
-        "description": "A document Q&A agent built with LlamaIndex, supporting PDF parsing and document content queries",
-        "url": "http://localhost:10004",
-        "provider": {
-            "organization": "LlamaIndex Integration",
-            "url": "https://www.llamaindex.ai"
-        },
-        "capabilities": {
-            "streaming": True,
-            "pushNotifications": False,
-            "stateTransitionHistory": True
-        },
-        "defaultInputModes": ["text", "file"],
-        "defaultOutputModes": ["text", "markdown"],
-        "skills": [
-            {
-                "id": "document-qa",
-                "name": "Document Q&A",
-                "description": "Parse documents and answer questions about their content",
-                "tags": ["document", "QA", "PDF"]
-            },
-            {
-                "id": "citation-generation",
-                "name": "Citation Generation",
-                "description": "Extract information from documents and generate citations",
-                "tags": ["citations", "extraction", "document analysis"]
-            }
-        ]
-    },
+    # "llama_index_file_chat": {
+    #     "name": "LlamaIndex Document Assistant",
+    #     "description": "A document Q&A agent built with LlamaIndex, supporting PDF parsing and document content queries",
+    #     "url": "http://localhost:10010",
+    #     "provider": {
+    #         "organization": "LlamaIndex Integration",
+    #         "url": "https://www.llamaindex.ai"
+    #     },
+    #     "capabilities": {
+    #         "streaming": True,
+    #         "pushNotifications": False,
+    #         "stateTransitionHistory": True
+    #     },
+    #     "defaultInputModes": ["text", "file"],
+    #     "defaultOutputModes": ["text", "markdown"],
+    #     "skills": [
+    #         {
+    #             "id": "document-qa",
+    #             "name": "Document Q&A",
+    #             "description": "Parse documents and answer questions about their content",
+    #             "tags": ["document", "QA", "PDF"]
+    #         },
+    #         {
+    #             "id": "citation-generation",
+    #             "name": "Citation Generation",
+    #             "description": "Extract information from documents and generate citations",
+    #             "tags": ["citations", "extraction", "document analysis"]
+    #         }
+    #     ]
+    # },
     "marvin": {
         "name": "Marvin Data Extraction Assistant",
         "description": "A data extraction agent built with Marvin framework, capable of extracting structured information from unstructured text",
-        "url": "http://localhost:10005",
+        "url": "http://localhost:10030",
         "provider": {
             "organization": "Marvin Integration",
             "url": "https://www.askmarvin.ai"
@@ -161,7 +161,7 @@ framework_agents = {
     "semantickernel": {
         "name": "Semantic Kernel Travel Assistant",
         "description": "A travel planning agent developed with Semantic Kernel, providing travel recommendations, currency conversion, and more",
-        "url": "http://localhost:10006",
+        "url": "http://localhost:10020",
         "provider": {
             "organization": "Semantic Kernel Integration",
             "url": "https://learn.microsoft.com/en-us/semantic-kernel"
