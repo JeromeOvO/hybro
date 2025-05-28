@@ -180,35 +180,32 @@ Based on the task description and agent capabilities, which agent (by ID) would 
             print(f"Error selecting best agent: {str(e)}")
             return agents[0]["agent_id"]  # Default to first agent
 
-
-    async def summarize_task_results(self, original_input: str, step_results: List[Dict[str, Any]]) -> str:
+    async def summarize_subtask_answers(self, original_question: str, subtask_answers: List[Dict[str, Any]]) -> str:
         """
-        Summarize the results of multiple task steps
+        Summarize the answers from multiple subtasks into a cohesive response
         
         Args:
-            original_input: Original user input
-            step_results: Results from each task step
+            original_question: Original user question
+            subtask_answers: List of answers from each subtask
             
         Returns:
-            Summarized result
+            Summarized final answer
         """
-        system_prompt = """You are an AI tasked with summarizing the results of a multi-step task.
-        Create a comprehensive yet concise summary that addresses the original request and incorporates
-        the results from all completed steps. Format your response according to the A2A protocol."""
+        system_prompt = """You are an AI tasked with synthesizing answers from multiple subtasks into a cohesive response.
+        Create a comprehensive yet concise summary that directly addresses the original question while incorporating
+        all relevant information from the subtask answers."""
         
-        # Prepare step results for the prompt
-        steps_text = ""
-        for i, result in enumerate(step_results):
-            steps_text += f"Step {i+1}: {result['description']}\n"
-            steps_text += f"Status: {result['status']}\n"
-            steps_text += f"Result: {result['result']}\n\n"
+        # Prepare subtask answers for the prompt
+        answers_text = ""
+        for i, answer in enumerate(subtask_answers):
+            answers_text += f"Subtask {i+1} Answer:\n{answer}\n\n"
         
-        prompt = f"""Original Request: {original_input}
+        prompt = f"""Original Question: {original_question}
 
-Step Results:
-{steps_text}
+Subtask Answers:
+{answers_text}
 
-Please provide a comprehensive summary that addresses the original request based on these results.
+Please provide a comprehensive final answer that addresses the original question based on these subtask results.
 """
         
         messages = [
@@ -224,8 +221,7 @@ Please provide a comprehensive summary that addresses the original request based
             
             return response.choices[0].message.content
         except Exception as e:
-            print(f"Error summarizing task results: {str(e)}")
-            return f"Error generating summary: {str(e)}"
-        
+            print(f"Error summarizing subtask answers: {str(e)}")
+            return f"Error generating final answer: {str(e)}"
 
 openai_service = OpenAIService() 
