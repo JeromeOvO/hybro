@@ -15,6 +15,8 @@ from loguru import logger
 import sys, logging
 from dotenv import load_dotenv
 import os
+import asyncio
+from models.response import TaskResponse
 
 load_dotenv()
 
@@ -100,9 +102,13 @@ async def send_task_to_hostAgent(input: UserInput):
         agent = await agent_service.get_agent(best_agent_id)
         logger.info("For task: {} bestAgent: {}", child_task.task_id, agent["agentCard"]["name"])
 
-
-    for child_task in child_tasks:
-        await host_agent.send_task_to_agent(child_task.task_id)
+    # Send all tasks concurrently and wait for all to complete
+    tasks = [host_agent.send_task_to_agent(child_task.task_id) for child_task in child_tasks]
+    results = await asyncio.gather(*tasks)
+    
+    # Log the results
+    for result in results:
+        logger.info("Task {} completed with state: {}", result["task_id"], result["state"])
 
     child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
     for child_task in child_tasks:
@@ -111,7 +117,11 @@ async def send_task_to_hostAgent(input: UserInput):
     final_answer = await host_agent.summarize_subtask_answers(root_task_id)
     logger.info("Final Answer: {}", final_answer)
 
-    return final_answer
+    return TaskResponse(
+        task_id=root_task_id,
+        status="COMPLETED", 
+        result=final_answer
+    )
 
 # Agent endpoints
 @app.post("/agents/createAgent")
