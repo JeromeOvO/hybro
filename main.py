@@ -33,9 +33,6 @@ class InterceptHandler(logging.Handler):
 
 
 logging_config = LOGGING_CONFIG.copy()
-logging_config["handlers"]["default"]["class"] = "__main__.InterceptHandler"
-logging_config["loggers"]["uvicorn"]["handlers"] = ["default"]
-logging_config["loggers"]["uvicorn.error"]["handlers"] = ["default"]
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
 
 logger.remove()
