@@ -15,6 +15,8 @@ from loguru import logger
 import sys, logging
 from dotenv import load_dotenv
 import os
+import asyncio
+from models.response import TaskResponse
 
 load_dotenv()
 
@@ -97,9 +99,13 @@ async def send_task_to_hostAgent(input: UserInput):
         agent = await agent_service.get_agent(best_agent_id)
         logger.info("For task: {} bestAgent: {}", child_task.task_id, agent["agentCard"]["name"])
 
-
-    for child_task in child_tasks:
-        await host_agent.send_task_to_agent(child_task.task_id)
+    # Send all tasks concurrently and wait for all to complete
+    tasks = [host_agent.send_task_to_agent(child_task.task_id) for child_task in child_tasks]
+    results = await asyncio.gather(*tasks)
+    
+    # Log the results
+    for result in results:
+        logger.info("Task {} completed with state: {}", result["task_id"], result["state"])
 
     child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
     for child_task in child_tasks:
@@ -108,55 +114,55 @@ async def send_task_to_hostAgent(input: UserInput):
     final_answer = await host_agent.summarize_subtask_answers(root_task_id)
     logger.info("Final Answer: {}", final_answer)
 
-    return final_answer
+    return TaskResponse(
+        task_id=root_task_id,
+        status="COMPLETED", 
+        result=final_answer
+    )
 
-# Agent endpoints
-@app.post("/agents/createAgent")
+# Agents Collection - REST Compliant
+@app.post("/agents")
 async def create_agent(agent_data: Dict[str, Any] = Body(...)):
+    """Create a new agent"""
     agent = Agent(**agent_data)
     return await agent_service.create_agent(agent)
 
-
-@app.post("/agents/getAllAgents")
+@app.get("/agents")
 async def get_all_agents():
+    """Get all agents"""
     return await agent_service.get_all_agents()
 
+@app.post("/agents/search")
+async def search_agents(search_params: Dict[str, Any] = Body(...)):
+    """Search agents with complex filters"""
+    return await agent_service.query_matched_agents_by_text(search_params["query_text"], search_params["count"])
 
-@app.post("/agents/getAgent")
-async def get_agent(data: Dict[str, str] = Body(...)):
-    agent_id = data.get("agent_id")
-    if not agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required")
+@app.get("/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    """Get a specific agent by ID"""
     return await agent_service.get_agent(agent_id)
 
+@app.put("/agents/{agent_id}")
+async def update_agent(agent_id: str, agent_data: Dict[str, Any] = Body(...)):
+    """Update an existing agent"""
+    return await agent_service.update_agent(agent_id, agent_data)
 
-@app.post("/agents/updateAgent")
-async def update_agent(data: Dict[str, str] = Body(...)):
-    agent_id = data.get("agent_id")
-    if not agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required")
-    return await agent_service.update_agent(agent_id, data)
-
-
-@app.post("/agents/deleteAgent")
-async def delete_agent(data: Dict[str, str] = Body(...)):
-    agent_id = data.get("agent_id")
-    if not agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required")
+@app.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    """Delete an agent"""
     return await agent_service.delete_agent(agent_id)
 
-
 # Task Endpoints
-@app.post("/tasks/getTask")
-async def get_task(taskId: TaskIdInput):
-    task_id = taskId.task_id
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str):
+    """Get a task by its ID"""
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_task(task_id)
 
-@app.post("/tasks/getSubTask")
-async def get_sub_tasks(taskId: TaskIdInput):
-    task_id = taskId.task_id
+@app.get("/tasks/{task_id}/subtasks")
+async def get_sub_tasks(task_id: str):
+    """Get all subtasks of a parent task"""
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_child_task(task_id)
