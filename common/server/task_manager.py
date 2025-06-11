@@ -1,29 +1,22 @@
+import asyncio
+import logging
 from abc import ABC, abstractmethod
 from typing import Union, AsyncIterable, List
-from common.types import Task
-from common.types import (
+
+from a2a.types import Task
+from a2a.types import (
     JSONRPCResponse,
     TaskIdParams,
     TaskQueryParams,
     GetTaskRequest,
     TaskNotFoundError,
-    SendTaskRequest,
     CancelTaskRequest,
     TaskNotCancelableError,
-    SetTaskPushNotificationRequest,
-    GetTaskPushNotificationRequest,
     GetTaskResponse,
     CancelTaskResponse,
-    SendTaskResponse,
-    SetTaskPushNotificationResponse,
-    GetTaskPushNotificationResponse,
-    PushNotificationNotSupportedError,
-    TaskSendParams,
     TaskStatus,
     TaskState,
     TaskResubscriptionRequest,
-    SendTaskStreamingRequest,
-    SendTaskStreamingResponse,
     Artifact,
     PushNotificationConfig,
     TaskStatusUpdateEvent,
@@ -31,9 +24,18 @@ from common.types import (
     TaskPushNotificationConfig,
     InternalError,
 )
+from common.types import (
+    SendTaskRequest,
+    SetTaskPushNotificationRequest,
+    GetTaskPushNotificationRequest,
+    GetTaskPushNotificationResponse,
+    TaskSendParams,
+    SendTaskResponse,
+    SetTaskPushNotificationResponse,
+    SendTaskStreamingRequest,
+    SendTaskStreamingResponse,
+)
 from common.server.utils import new_not_implemented_error
-import asyncio
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +193,7 @@ class InMemoryTaskManager(TaskManager):
                     id=task_send_params.id,
                     sessionId = task_send_params.sessionId,
                     messages=[task_send_params.message],
-                    status=TaskStatus(state=TaskState.SUBMITTED),
+                    status=TaskStatus(state=TaskState.submitted),
                     history=[task_send_params.message],
                 )
                 self.tasks[task_send_params.id] = task

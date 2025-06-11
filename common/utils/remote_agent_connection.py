@@ -1,14 +1,14 @@
 from typing import Callable
 import uuid
-from common.types import (
+from a2a.types import (
     AgentCard,
     Task,
-    TaskSendParams,
     TaskStatusUpdateEvent,
     TaskArtifactUpdateEvent,
     TaskStatus,
     TaskState,
 )
+from common.types import TaskSendParams
 from common.client.client import A2AClient
 TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
 TaskUpdateCallback = Callable[[TaskCallbackArg, AgentCard], Task]
@@ -39,7 +39,7 @@ class RemoteAgentConnections:
             id=request.id,
             sessionId=request.sessionId,
             status=TaskStatus(
-                state=TaskState.SUBMITTED,
+                state=TaskState.submitted,
                 message=request.message,
             ),
             history=[request.message],

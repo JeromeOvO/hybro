@@ -1,15 +1,17 @@
 import httpx
 from httpx_sse import connect_sse
 from typing import Any, AsyncIterable
-from common.types import (
+from a2a.types import (
     AgentCard,
     GetTaskRequest,
-    SendTaskRequest,
-    SendTaskResponse,
     JSONRPCRequest,
     GetTaskResponse,
     CancelTaskResponse,
     CancelTaskRequest,
+)
+from common.types import (
+    SendTaskRequest,
+    SendTaskResponse,
     SetTaskPushNotificationRequest,
     SetTaskPushNotificationResponse,
     GetTaskPushNotificationRequest,

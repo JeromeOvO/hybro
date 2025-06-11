@@ -1,19 +1,21 @@
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
-from starlette.requests import Request
-from common.types import (
+from a2a.types import (
     A2ARequest,
     JSONRPCResponse,
     InvalidRequestError,
     JSONParseError,
     GetTaskRequest,
     CancelTaskRequest,
+    InternalError,
+    AgentCard,
+)
+from common.types import (
     SendTaskRequest,
     SetTaskPushNotificationRequest,
     GetTaskPushNotificationRequest,
-    InternalError,
-    AgentCard,
     TaskResubscriptionRequest,
     SendTaskStreamingRequest,
 )

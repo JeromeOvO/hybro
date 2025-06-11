@@ -2,7 +2,6 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from services.openai_service import openai_service
 from models.agent import Agent
-from common.types import AgentCard
 from models.task import RootTask, ChildTask
 import uuid
 from typing import List, Dict, Any

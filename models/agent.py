@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any, Union
 from enum import Enum
-from common.types import AgentCard
+from a2a.types import AgentCard
 
 
 class Agent(BaseModel):

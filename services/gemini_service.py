@@ -8,7 +8,7 @@ import os
 
 load_dotenv()
 
-from common.types import (
+from a2a.types import (
     Task, Message, TextPart, DataPart, Part,
     TaskState, TaskStatus
 )
@@ -63,7 +63,7 @@ class GeminiService:
         if not task.history or not any(msg.role == "user" for msg in task.history):
             # Create failed status if no user message
             task.status = TaskStatus(
-                state=TaskState.FAILED,
+                state=TaskState.failed,
                 message=Message(
                     role="agent",
                     parts=[TextPart(text="No user message found in task history")]
@@ -105,7 +105,7 @@ class GeminiService:
         
         # Update status
         task.status = TaskStatus(
-            state=TaskState.COMPLETED,
+            state=TaskState.completed,
             message=agent_message,
             timestamp=datetime.now()
         )
