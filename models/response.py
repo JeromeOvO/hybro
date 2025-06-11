@@ -1,13 +1,12 @@
+from typing import List, Optional, Any
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from enum import Enum
-from common.types import TaskState
+from a2a.types import TaskState
 
 class Step(BaseModel):
     step_id: str
     description: str
     agent_id: Optional[str] = None
-    status: str = TaskState.SUBMITTED
+    status: str = TaskState.submitted
     input_data: Optional[Any] = None
     output_data: Optional[Any] = None
     priority: int = 2  # Default priority
@@ -19,7 +18,7 @@ class Step(BaseModel):
 
 class TaskResponse(BaseModel):
     task_id: str
-    status: str = TaskState.SUBMITTED  
+    status: str = TaskState.submitted  
     steps: List[Step] = Field(default_factory=list)
     result: Optional[Any] = None
     error: Optional[str] = None 

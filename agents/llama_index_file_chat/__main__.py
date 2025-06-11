@@ -6,14 +6,10 @@ import httpx
 
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore, InMemoryPushNotifier
-from a2a.types import (
-    AgentCapabilities,
-    AgentCard,
-    AgentSkill,
-)
-from agent_executor import LlamaIndexAgentExecutor
-from agents.llama_index_file_chat.agent import ParseAndChat
+from a2a.server.tasks import InMemoryPushNotifier, InMemoryTaskStore
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+from .agent_executor import LlamaIndexAgentExecutor
+from .agent import ParseAndChat
 from dotenv import load_dotenv
 
 

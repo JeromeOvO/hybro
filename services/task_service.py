@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 import json
 from models.task import RootTask, ChildTask
-from common.types import Task, TaskState, TaskStatus, Message, TextPart
+from a2a.types import Task, TaskState, TaskStatus, Message, TextPart
 from services.database_service import DatabaseService
 from services.openai_service import openai_service
 
@@ -32,7 +32,7 @@ class TaskService:
             id=task_id,
             sessionId=session_id,
             status=TaskStatus(
-                state=TaskState.SUBMITTED,
+                state=TaskState.submitted,
                 timestamp=datetime.now()
             ),
             artifacts=[],
@@ -158,7 +158,7 @@ class TaskService:
             id=subtask_id,
             sessionId=sessionId,  # Will inherit from parent
             status=TaskStatus(
-                state=TaskState.SUBMITTED,
+                state=TaskState.submitted,
                 timestamp=datetime.now()
             ),
             artifacts=[],
@@ -273,7 +273,7 @@ class TaskService:
             except json.JSONDecodeError:
                 print(f"Error parsing JSON: {content}")
                 error_status = TaskStatus(
-                    state=TaskState.FAILED,
+                    state=TaskState.failed,
                     message=Message(
                         role="agent",
                         parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
@@ -322,7 +322,7 @@ class TaskService:
             error_message: Error message explaining the failure
         """
         error_status = TaskStatus(
-            state=TaskState.FAILED,
+            state=TaskState.failed,
             message=Message(
                 role="agent",
                 parts=[TextPart(text=error_message)]

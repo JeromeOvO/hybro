@@ -4,25 +4,9 @@ from typing import Literal, List, Annotated, Optional
 from datetime import datetime
 from pydantic import model_validator, ConfigDict, field_serializer
 from uuid import uuid4
-from enum import Enum
 from typing_extensions import Self
 
-
-class TaskState(str, Enum):
-    SUBMITTED = "submitted"
-    WORKING = "working"
-    INPUT_REQUIRED = "input-required"
-    COMPLETED = "completed"
-    CANCELED = "canceled"
-    FAILED = "failed"
-    UNKNOWN = "unknown"
-
-
-class TextPart(BaseModel):
-    type: Literal["text"] = "text"
-    text: str
-    metadata: dict[str, Any] | None = None
-
+from a2a.types import TaskState, TextPart, FilePart, DataPart
 
 class FileContent(BaseModel):
     name: str | None = None
@@ -41,19 +25,8 @@ class FileContent(BaseModel):
         return self
 
 
-class FilePart(BaseModel):
-    type: Literal["file"] = "file"
-    file: FileContent
-    metadata: dict[str, Any] | None = None
 
-
-class DataPart(BaseModel):
-    type: Literal["data"] = "data"
-    data: dict[str, Any]
-    metadata: dict[str, Any] | None = None
-
-
-Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="type")]
+Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="kind")]
 
 
 class Message(BaseModel):

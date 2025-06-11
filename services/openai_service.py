@@ -10,15 +10,6 @@ import os
 load_dotenv()
 
 
-
-from common.types import (
-    Task, Message, TextPart, DataPart, Part,
-    TaskState, TaskStatus
-)
-
-if TYPE_CHECKING:
-    from common.types import Task
-
 class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))

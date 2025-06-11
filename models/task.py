@@ -1,7 +1,7 @@
+from typing import List, Optional
 from uuid import uuid4
-from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
-from common.types import Task, TaskState, TaskStatus, Message, Artifact
+from a2a.types import Task
 
 
 class ChildTask(BaseModel):

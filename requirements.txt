@@ -1,4 +1,4 @@
-a2a==0.44
+a2a-sdk==0.2.5
 absl-py==2.2.2
 aiofiles==24.1.0
 aiohappyeyeballs==2.6.1

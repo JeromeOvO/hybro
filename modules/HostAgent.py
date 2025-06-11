@@ -2,20 +2,19 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 
-from services.task_service import TaskService
-from services.openai_service import openai_service
-from services.database_service import DatabaseService
-from services.agent_service import AgentService
-
-from common.types import (
+from a2a.types import (
     TaskState,
     Message,
     TextPart,
     AgentCard,
-    TaskSendParams,
 )
+from common.types import TaskSendParams
 from common.utils.remote_agent_connection import RemoteAgentConnections
 from models.task import ChildTask
+from services.task_service import TaskService
+from services.openai_service import openai_service
+from services.database_service import DatabaseService
+from services.agent_service import AgentService
 
 
 class HostAgent:
@@ -62,7 +61,7 @@ class HostAgent:
         )
         root_task = await self.task_service.get_task(root_id)
 
-        if root_task.task.status.state == TaskState.FAILED:
+        if root_task.task.status.state == TaskState.failed:
             text = root_task.task.status.message.parts[0].text
             raise RuntimeError(f"OpenAI decomposition failed: {text}")
 
@@ -126,7 +125,7 @@ class HostAgent:
                 child_task_id,
                 {
                     "agent_id": agent_id,
-                    "task.status.state": TaskState.FAILED,
+                    "task.status.state": TaskState.failed,
                     "task.status.message": {
                         "role": "agent",
                         "parts": [{"type": "text", "text": error_message}],
@@ -234,7 +233,7 @@ class HostAgent:
                     child_task_id,
                     {
                         "agent_id": agent_id,
-                        "task.status.state": TaskState.COMPLETED,
+                        "task.status.state": TaskState.completed,
                         "task.status.message": {
                             "role": "agent", 
                             "parts": [{"type": "text", "text": result_text}]
@@ -245,7 +244,7 @@ class HostAgent:
                 return {
                     "task_id": child_task_id,
                     "agent_id": agent_id,
-                    "state": TaskState.COMPLETED,
+                    "state": TaskState.completed,
                     "result_text": result_text,
                 }
             else:
@@ -258,7 +257,7 @@ class HostAgent:
                     child_task_id, 
                     {
                         "agent_id": agent_id,
-                        "task.status.state": TaskState.FAILED,
+                        "task.status.state": TaskState.failed,
                         "task.status.message": {
                             "role": "agent", 
                             "parts": [{"type": "text", "text": error_message}]
@@ -268,7 +267,7 @@ class HostAgent:
                 return {
                     "task_id": child_task_id,
                     "agent_id": agent_id,
-                    "state": TaskState.FAILED,
+                    "state": TaskState.failed,
                     "result_text": error_message,
                 }
                 
@@ -321,7 +320,7 @@ class HostAgent:
             child_task_id,
             {
                 "agent_id": agent_id,
-                "task.status.state": TaskState.FAILED,
+                "task.status.state": TaskState.failed,
                 "task.status.message": {
                     "role": "agent",
                     "parts": [{"type": "text", "text": error_message}],
@@ -331,7 +330,7 @@ class HostAgent:
         return {
             "task_id": child_task_id,
             "agent_id": agent_id,
-            "state": TaskState.FAILED,
+            "state": TaskState.failed,
             "result_text": error_message,
         }
 
@@ -436,7 +435,7 @@ class HostAgent:
         subtask_answers = []
         for child in child_tasks:
             # Access attributes directly since child is a ChildTask object
-            if child.task.status.state == TaskState.COMPLETED:
+            if child.task.status.state == TaskState.completed:
                 # Extract the answer using existing _extract_text method
                 answer = child.task.status.message.parts[0].text
                 if answer:
@@ -458,7 +457,7 @@ class HostAgent:
         await self.database_service.update_task(
             root_task_id,
             {
-                "task.status.state": TaskState.COMPLETED,
+                "task.status.state": TaskState.completed,
                 "task.status.message": {
                     "role": "agent",
                     "parts": [{"type": "text", "text": final_answer}]
