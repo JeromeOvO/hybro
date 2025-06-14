@@ -215,4 +215,77 @@ Please provide a comprehensive final answer that addresses the original question
             print(f"Error summarizing subtask answers: {str(e)}")
             return f"Error generating final answer: {str(e)}"
 
+    async def short_debate_with_openai(self, original_userinput: str, other_agent_answer: str) -> str:
+        """
+        Let OpenAI (Lead_ai) generate an updated response based on other agent's answer.
+        """
+        system_prompt = "You are an expert AI agent participating in a debate."
+        prompt = (
+            f"Original user input: {original_userinput}\n\n"
+            f"These are the solutions to the problem from other agents: {other_agent_answer}\n"
+            "Based off the opinion of other agents, can you give an updated response . . ."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        try:
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL"),
+                messages=messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error in debate_with_openai: {str(e)}")
+            return f"Error: {str(e)}"
+        
+    async def long_debate_with_openai(self, original_userinput: str, other_agent_answer: str) -> str:
+        """
+        Let OpenAI (Lead_ai) generate an updated response based on other agent's answer.
+        """
+        system_prompt = "You are an expert AI agent participating in a debate."
+        prompt = (
+            f"Original user input: {original_userinput}\n\n"
+            f"These are the solutions to the problem from other agents: {other_agent_answer}\n"
+            "Using the opinion of other agents as additional advice, can you give an updated response . . ."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        try:
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL"),
+                messages=messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error in debate_with_openai: {str(e)}")
+            return f"Error: {str(e)}"
+    
+
+    async def summarize_debate_answer(self, messages: List[str]) -> str:
+        """
+        Summarize the answers from multiple AI agents into a single summary using Lead_ai.
+        """
+        system_prompt = "You are an expert AI agent tasked with summarizing the debate answers from multiple agents into a concise and comprehensive summary."
+        answers_text = "\n\n".join([f"Agent {i+1}: {msg}" for i, msg in enumerate(messages)])
+        prompt = (
+            f"Here are the answers from different agents:\n{answers_text}\n\n"
+            "Please provide a summary that captures the main points and consensus (if any) from these answers."
+        )
+        chat_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        try:
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL"),
+                messages=chat_messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error in summarize_debate_answer: {str(e)}")
+            return f"Error: {str(e)}"
+
 openai_service = OpenAIService() 
