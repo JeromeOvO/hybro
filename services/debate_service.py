@@ -6,7 +6,7 @@ from datetime import datetime
 from services.openai_service import openai_service
 from services.agent_service import agent_service
 from common.utils.remote_agent_connection import RemoteAgentConnections
-from a2a.types import Message, TextPart, AgentCard
+from a2a.types import Message, TextPart, AgentCard, TaskSendParams
 from common.types import TaskSendParams
 
 
