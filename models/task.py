@@ -2,6 +2,7 @@ from typing import List, Optional
 from uuid import uuid4
 from pydantic import BaseModel, Field, ConfigDict
 from a2a.types import Task
+from datetime import datetime
 
 
 class ChildTask(BaseModel):
@@ -45,3 +46,12 @@ class RootTask(BaseModel):
             # Add any custom encoders if needed for MongoDB serialization
         },
     )
+
+class TaskSession(BaseModel):
+    user_name: str = Field(default="")
+    session_id: str
+    session_name: str
+    session_description: Optional[str] = Field(default="")
+    session_created_at: datetime = Field(default_factory=datetime.now)
+    session_updated_at: datetime = Field(default_factory=datetime.now)
+    rootTasks: List[str] = Field(default_factory=list)

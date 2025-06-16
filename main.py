@@ -5,6 +5,7 @@ from typing import Dict, Any
 import uuid
 from pydantic import BaseModel
 from models.request import UserInput, TaskIdInput
+from models.response import UserResponse
 from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
@@ -14,15 +15,9 @@ from services.agent_service import AgentService
 from loguru import logger
 import sys, logging
 from dotenv import load_dotenv
-import os
-import asyncio
-from models.response import TaskResponse
-
-load_dotenv()
-
 from uvicorn.config import LOGGING_CONFIG
 
-
+load_dotenv()
 class InterceptHandler(logging.Handler):
     def emit(self, record):
         level = logger.level(record.levelname, no=record.levelno).name
@@ -32,7 +27,6 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
         )
-
 
 logging_config = LOGGING_CONFIG.copy()
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
@@ -46,12 +40,8 @@ logger.add(
     serialize=False,  # if want to output JSON, change to True
 )
 
-
 app = FastAPI(title="Multi-Agent AI System")
 
-task_service = TaskService()
-host_agent = HostAgent()
-agent_service = AgentService()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # Startup and shutdown events
 @app.on_event("startup")
@@ -83,79 +72,57 @@ async def health_check():
 # Host Agent Endpoints
 @app.post("/hostAgent/sendTask")
 async def send_task_to_hostAgent(input: UserInput):
-    logger.info("user_input: {}", input.user_input)
+    host_agent = HostAgent()
+    logger.info("controller sendTask: receive request: {}", input)
 
-    task_id = await host_agent.create_task_from_input(input.user_input)
-    logger.info("rootTask Created: {}", task_id)
+    response = await host_agent.handle_input(input.user_name, input.user_input, input.session_id);
 
-    root_task_id = await host_agent.decompose_task(task_id)
+    return response
 
-    child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
-    for child_task in child_tasks:
-        logger.info("childTask: {}", child_task)
-
-    for child_task in child_tasks:
-        best_agent_id = await host_agent.find_best_agent_for_task(child_task.task_id)
-        agent = await agent_service.get_agent(best_agent_id)
-        logger.info("For task: {} bestAgent: {}", child_task.task_id, agent["agentCard"]["name"])
-
-    # Send all tasks concurrently and wait for all to complete
-    tasks = [host_agent.send_task_to_agent(child_task.task_id) for child_task in child_tasks]
-    results = await asyncio.gather(*tasks)
-    
-    # Log the results
-    for result in results:
-        logger.info("Task {} completed with state: {}", result["task_id"], result["state"])
-
-    child_tasks = await task_service.get_child_tasks_by_parent(root_task_id)
-    for child_task in child_tasks:
-        logger.info("child_task_status: {}", child_task.task.status.state)
-
-    final_answer = await host_agent.summarize_subtask_answers(root_task_id)
-    logger.info("Final Answer: {}", final_answer)
-
-    return TaskResponse(
-        task_id=root_task_id,
-        status="COMPLETED", 
-        result=final_answer
-    )
 
 # Agents Collection - REST Compliant
 @app.post("/agents")
 async def create_agent(agent_data: Dict[str, Any] = Body(...)):
     """Create a new agent"""
+    agent_service = AgentService()
     agent = Agent(**agent_data)
     return await agent_service.create_agent(agent)
 
 @app.get("/agents")
 async def get_all_agents():
     """Get all agents"""
+    agent_service = AgentService()
     return await agent_service.get_all_agents()
 
 @app.post("/agents/search")
 async def search_agents(search_params: Dict[str, Any] = Body(...)):
     """Search agents with complex filters"""
+    agent_service = AgentService()
     return await agent_service.query_matched_agents_by_text(search_params["query_text"], search_params["count"])
 
 @app.get("/agents/{agent_id}")
 async def get_agent(agent_id: str):
     """Get a specific agent by ID"""
+    agent_service = AgentService()
     return await agent_service.get_agent(agent_id)
 
 @app.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, agent_data: Dict[str, Any] = Body(...)):
     """Update an existing agent"""
+    agent_service = AgentService()
     return await agent_service.update_agent(agent_id, agent_data)
 
 @app.delete("/agents/{agent_id}")
 async def delete_agent(agent_id: str):
     """Delete an agent"""
+    agent_service = AgentService()
     return await agent_service.delete_agent(agent_id)
 
 # Task Endpoints
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
     """Get a task by its ID"""
+    task_service = TaskService()
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_task(task_id)
@@ -163,6 +130,7 @@ async def get_task(task_id: str):
 @app.get("/tasks/{task_id}/subtasks")
 async def get_sub_tasks(task_id: str):
     """Get all subtasks of a parent task"""
+    task_service = TaskService()
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_child_task(task_id)

@@ -11,8 +11,9 @@ from a2a.types import (
 from common.types import TaskSendParams
 from common.utils.remote_agent_connection import RemoteAgentConnections
 from models.task import ChildTask
+from models.response import UserResponse
 from services.task_service import TaskService
-from services.openai_service import openai_service
+from services.openai_service import OpenAIService
 from services.database_service import DatabaseService
 from services.agent_service import AgentService
 
@@ -20,23 +21,9 @@ from services.agent_service import AgentService
 class HostAgent:
     def __init__(self) -> None:
         self.task_service = TaskService()
-        self.openai_service = openai_service
+        self.openai_service = OpenAIService()
         self.database_service = DatabaseService()
         self.agent_service = AgentService()
-    # ------------------------------------------------------------------ #
-    # Upstream: Create / Decompose Tasks
-    # ------------------------------------------------------------------ #
-    async def create_task_from_input(self, user_input: str) -> str:
-        """
-        Create a new task from user input.
-        
-        Args:
-            user_input: The text input from the user
-            
-        Returns:
-            str: The ID of the created task
-        """
-        return await self.task_service.create_task(user_input)
 
     async def decompose_task(self, task_id: str) -> List[str]:
         """
@@ -67,10 +54,7 @@ class HostAgent:
 
         return root_task.task_id
 
-    # ------------------------------------------------------------------ #
-    # Send Subtasks to Remote Agents (Automatic Stream/Non-Stream)
-    # ------------------------------------------------------------------ #
-    async def send_task_to_agent(self, child_task_id: str) -> Dict[str, Any]:
+    async def process_child_task(self, child_task_id: str) -> Dict[str, Any]:
         """
         Send a child task to the appropriate remote agent.
         
@@ -467,4 +451,53 @@ class HostAgent:
         
         return final_answer
     
-    
+        
+    async def handle_input(self, user_name: str, user_input: str, session_id: str | None = None):
+
+        try:
+            # Create a new session
+            if(session_id == None):
+                # todo: build up session name and description
+                session_id = await self.task_service.create_task_session(user_name, "New Session", "New Session Description")
+            else:
+                session_id = await self.task_service.get_task_session(session_id)
+
+            # Create a new task
+            root_task_id = await self.task_service.create_task(user_input)
+            await self.task_service.add_root_task_to_session(session_id, root_task_id)
+
+            # process the task
+            self.decompose_task(root_task_id)
+
+            child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
+            for child_task in child_tasks:
+                agent_id = await self.find_best_agent_for_task(child_task.task_id)
+
+            for child_task in child_tasks:
+                await self.process_child_task(child_task.task_id)
+
+            # summarize the task
+            final_answer = await self.summarize_subtask_answers(root_task_id)
+
+            # update the root task with the final answer
+            history = [
+                {
+                    "role": "agent",
+                    "parts": [{"type": "text", "text": final_answer}]
+                }
+            ]
+            await self.task_service.update_task_history(root_task_id, history)
+
+            return UserResponse(
+                session_id=session_id,
+                task_id=root_task_id,
+                result="success" 
+            )
+        
+        except Exception as e:
+            print(f"Error handling input: {e}")
+            return UserResponse(
+                session_id="",
+                task_id="",
+                result="error"
+            )

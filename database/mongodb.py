@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 from bson import ObjectId
 from datetime import datetime
 from models.agent import Agent
-from models.task import RootTask, ChildTask
+from models.task import RootTask, ChildTask, TaskSession
 import uuid
 from dotenv import load_dotenv
 import os
@@ -59,6 +59,13 @@ class MongoDB:
         if not self.client:
             raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.child_tasks
+    
+    @property
+    def task_sessions_collection(self):
+        """Get task sessions collection"""
+        if not self.client:
+            raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
+        return self.db.task_sessions
 
     def serialize_mongodb_doc(self, doc):
         """Convert MongoDB document to JSON-serializable dict"""
@@ -332,6 +339,15 @@ class MongoDB:
             {"$set": update_data}
         )
         return result.modified_count > 0
+    
+    async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
+        """
+        Update the history of a task
+        """
+        result = await self.tasks_collection.update_one(
+            {"task_id": task_id},
+            {"$set": {"task.history": history}}
+        )
 
     async def delete_task(self, task_id: str) -> bool:
         """
@@ -431,5 +447,101 @@ class MongoDB:
         """
         result = await self.child_tasks_collection.delete_one({"task_id": child_task_id})
         return result.deleted_count > 0
+
+    async def add_task_session(self, task_session: TaskSession) -> str:
+        """
+        Add a task session to the database
+        
+        Args:
+            task_session: TaskSession object to add
+            
+        Returns:
+            str: ID of the added task session
+        """
+        # Generate ID if not set
+        if not task_session.session_id:
+            task_session.session_id = str(uuid.uuid4())
+        
+        # Convert the Pydantic model to dict for MongoDB storage
+        task_session_dict = task_session.dict() if hasattr(task_session, 'dict') else task_session.model_dump()
+        
+        # Insert the dictionary
+        result = await self.task_sessions_collection.insert_one(task_session_dict)
+        return task_session.session_id
+    
+    async def get_task_session(self, session_id: str) -> Dict[str, Any]:
+        """
+        Get a task session by ID
+        
+        Args:
+            session_id: ID of the task session to retrieve
+            
+        Returns:
+            Dict: Task session document or None if not found
+        """
+        task_session = await self.task_sessions_collection.find_one({"session_id": session_id})
+        return self.serialize_mongodb_doc(task_session) if task_session else None
+    
+    async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a task session
+        
+        Args:
+            session_id: ID of the task session to update
+            update_data: New data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        result = await self.task_sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$set": update_data}
+        )
+
+        return result.modified_count > 0
+    
+    async def delete_task_session(self, session_id: str) -> bool:
+        """
+        Delete a task session
+        
+        Args:
+            session_id: ID of the task session to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        result = await self.task_sessions_collection.delete_one({"session_id": session_id})
+        return result.deleted_count > 0
+
+    async def add_root_task_to_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Add a root task to a task session
+        
+        Args:
+            session_id: ID of the task session to add the root task to
+            root_task_id: ID of the root task to add
+
+        Returns:
+            bool: True if addition was successful
+        """
+        result = await self.task_sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$push": {"rootTasks": root_task_id}}
+        )
+        return result.modified_count > 0
+    
+    async def get_root_tasks_by_session(self, session_id: str) -> List[str]:
+        """
+        Get all root tasks for a task session
+        
+        Args:
+            session_id: ID of the task session to get root tasks from
+
+        Returns:
+            List[RootTask]: List of root task objects
+        """
+        result = await self.task_sessions_collection.find_one({"session_id": session_id})
+        return result["rootTasks"]
+    
 
 mongodb = MongoDB() 

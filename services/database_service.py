@@ -1,8 +1,8 @@
-from database.mongodb import mongodb
+from database.mongodb import mongodb 
 from database.pinecone_db import pinecone_db
-from services.openai_service import openai_service
+from services.openai_service import OpenAIService
 from models.agent import Agent
-from models.task import RootTask, ChildTask
+from models.task import RootTask, ChildTask, TaskSession
 import uuid
 from typing import List, Dict, Any
 
@@ -10,7 +10,7 @@ class DatabaseService:
     def __init__(self):
         self.mongo = mongodb
         self.pinecone = pinecone_db
-        self.ai_service = openai_service
+        self.ai_service = OpenAIService()
     
 
     async def add_agent(self, agent : Agent):
@@ -289,6 +289,12 @@ class DatabaseService:
             return await self.mongo.update_task(task_id, update_data)
         except Exception as e:
             raise Exception(f"Failed to update task in database: {str(e)}")
+        
+    async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
+        """
+        Update the history of a task
+        """
+        return await self.mongo.update_task_history(task_id, history)
 
     async def delete_task(self, task_id: str) -> bool:
         """
@@ -455,3 +461,78 @@ class DatabaseService:
             raise Exception(f"Failed to delete child task from database: {str(e)}")
     
 
+    async def add_task_session(self, task_session: TaskSession) -> str:
+        """
+        Add a task session to the database
+        
+        Args:
+            task_session: TaskSession object to add
+            
+        Returns:
+            str: ID of the added task session
+        """
+        return await self.mongo.add_task_session(task_session)
+    
+    async def get_task_session(self, session_id: str) -> TaskSession:
+        """
+        Get a task session by ID
+        
+        Args:
+            session_id: ID of the task session to retrieve
+
+        Returns:
+            TaskSession: The task session object or None if not found
+        """
+        return await self.mongo.get_task_session(session_id)
+    
+    async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a task session
+        
+        Args:
+            session_id: ID of the task session to update
+            update_data: New data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        return await self.mongo.update_task_session(session_id, update_data)
+    
+    async def delete_task_session(self, session_id: str) -> bool:
+        """
+        Delete a task session
+        
+        Args:
+            session_id: ID of the task session to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        return await self.mongo.delete_task_session(session_id)
+
+    async def add_root_task_to_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Add a root task to a task session
+        
+        Args:
+            session_id: ID of the task session to add the root task to
+            root_task_id: ID of the root task to add
+
+        Returns:
+            bool: True if addition was successful
+        """
+        return await self.mongo.add_root_task_to_session(session_id, root_task_id)
+    
+    async def get_root_tasks_by_session(self, session_id: str) -> List[RootTask]:
+        """
+        Get all root tasks for a task session      
+
+        Args:
+            session_id: ID of the task session to get root tasks from
+
+        Returns:
+            List[RootTask]: List of root task objects
+        """
+        return await self.mongo.get_root_tasks_by_session(session_id)
+    
+    
