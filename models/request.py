@@ -63,9 +63,12 @@ class AgentTaskRequest(BaseModel):
             metadata=metadata
         )
 
-# for user input
+# for user
 class UserInput(BaseModel):
+    user_name: str
     user_input: str
+    session_id: Optional[str] = None
+
 
 # for task id input
 class TaskIdInput(BaseModel):

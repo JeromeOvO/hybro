@@ -1,12 +1,12 @@
 from typing import List, Dict, Any, Optional
 from models.agent import Agent
 from services.database_service import DatabaseService
-from services.openai_service import openai_service
+from services.openai_service import OpenAIService
 
 class AgentService:
     def __init__(self):
         self.database_service = DatabaseService()
-        self.openai_service = openai_service
+        self.openai_service = OpenAIService()
 
     async def create_agent(self, agent: Agent) -> str:
         """

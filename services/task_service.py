@@ -2,15 +2,15 @@ from typing import List, Dict, Any, Optional
 import uuid
 from datetime import datetime
 import json
-from models.task import RootTask, ChildTask
+from models.task import RootTask, ChildTask, TaskSession
 from a2a.types import Task, TaskState, TaskStatus, Message, TextPart
 from services.database_service import DatabaseService
-from services.openai_service import openai_service
+from services.openai_service import OpenAIService
 
 class TaskService:
     def __init__(self):
         self.database_service = DatabaseService()
-        self.openai_service = openai_service
+        self.openai_service = OpenAIService()
     
     async def create_task(self, user_input: str) -> str:
         """
@@ -33,7 +33,7 @@ class TaskService:
             sessionId=session_id,
             status=TaskStatus(
                 state=TaskState.submitted,
-                timestamp=datetime.now()
+                timestamp=datetime.now().isoformat()
             ),
             artifacts=[],
             history=[
@@ -95,6 +95,15 @@ class TaskService:
         """
         return await self.database_service.update_task(task_id, update_data)
     
+    async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
+        """
+        Update the history of a task
+        """
+        old_history = await self.get_task(task_id).task.history
+        new_history = old_history.append(history)
+
+        return await self.database_service.update_task_history(task_id, new_history)
+    
     async def delete_task(self, task_id: str) -> bool:
         """
         Delete a task
@@ -120,7 +129,7 @@ class TaskService:
         """
         # Ensure the timestamp is set to current time if not already provided
         if not status.timestamp:
-            status.timestamp = datetime.now()
+            status.timestamp = datetime.now().isoformat()
         
         # 将 TaskStatus 对象转换为字典
         status_dict = status.dict() if hasattr(status, 'dict') else status.model_dump()
@@ -159,7 +168,7 @@ class TaskService:
             sessionId=sessionId,  # Will inherit from parent
             status=TaskStatus(
                 state=TaskState.submitted,
-                timestamp=datetime.now()
+                timestamp=datetime.now().isoformat()
             ),
             artifacts=[],
             history=None,
@@ -244,7 +253,7 @@ class TaskService:
         """
         # Ensure the timestamp is set to current time if not already provided
         if not status.timestamp:
-            status.timestamp = datetime.now()
+            status.timestamp = datetime.now().isoformat()
         
         # 将 TaskStatus 对象转换为字典
         status_dict = status.dict() if hasattr(status, 'dict') else status.model_dump()
@@ -278,7 +287,7 @@ class TaskService:
                         role="agent",
                         parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
                     ),
-                    timestamp=datetime.now()
+                    timestamp=datetime.now().isoformat()
                 )
                 await self.update_task_status(root_task_id, error_status)
                 return root_task_id
@@ -327,6 +336,141 @@ class TaskService:
                 role="agent",
                 parts=[TextPart(text=error_message)]
             ),
-            timestamp=datetime.now()
+            timestamp=datetime.now().isoformat()
         )
         await self.update_task_status(task_id, error_status)
+
+    async def create_task_session(self, user_name: str, session_name: str, session_description: str) -> str:
+        """
+        Create a new task session
+        
+        Args:
+            session_name: Name of the task session
+            session_description: Description of the task session
+            
+        Returns:
+            str: ID of the created task session
+        """
+        task_session = TaskSession(
+            session_id=uuid.uuid4().hex,
+            user_name=user_name,
+            session_name=session_name,
+            session_description=session_description,
+            session_created_at=datetime.now(),
+            session_updated_at=datetime.now(),
+            rootTasks=[]
+        )
+        return await self.database_service.add_task_session(task_session)
+    
+    async def get_task_session(self, session_id: str) -> TaskSession:
+        """
+        Get a task session by ID
+        
+        Args:
+            session_id: ID of the task session to retrieve
+            
+        Returns:
+            TaskSession: The task session object or None if not found
+        """
+        return await self.database_service.get_task_session(session_id)
+    
+    async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a task session
+        
+        Args:
+            session_id: ID of the task session to update
+            update_data: New data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        return await self.database_service.update_task_session(session_id, update_data)
+    
+    async def delete_task_session(self, session_id: str) -> bool:
+        """
+        Delete a task session
+        
+        Args:
+            session_id: ID of the task session to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        return await self.database_service.delete_task_session(session_id)
+    
+    async def add_root_task_to_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Add a root task to a task session
+        
+        Args:
+            session_id: ID of the task session to add the root task to
+            root_task: RootTask object to add
+            
+        Returns:
+            bool: True if addition was successful
+        """
+        return await self.database_service.add_root_task_to_session(session_id, root_task_id)
+    
+    async def get_root_tasks_by_session(self, session_id: str) -> List[RootTask]:
+        """
+        Get all root tasks for a task session
+        
+        Args:
+            session_id: ID of the task session to get root tasks from   
+
+        Returns:
+            List[RootTask]: List of root task objects
+        """
+        return await self.database_service.get_root_tasks_by_session(session_id)
+    
+    async def update_root_task_in_session(self, session_id: str, root_task_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a root task in a task session
+
+        Args:
+            session_id: ID of the task session to update the root task in
+            root_task_id: ID of the root task to update
+            update_data: New data to update
+            
+        Returns:
+            bool: True if update was successful
+        """
+        return await self.database_service.update_root_task_in_session(session_id, root_task_id, update_data)  
+    
+    async def delete_root_task_from_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Delete a root task from a task session
+        
+        Args:
+            session_id: ID of the task session to delete the root task from
+            root_task_id: ID of the root task to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        return await self.database_service.delete_root_task_from_session(session_id, root_task_id)
+    
+    async def get_all_task_sessions(self) -> List[TaskSession]:
+        """
+        Get all task sessions
+        
+        Returns:
+            List[TaskSession]: List of task session objects
+        """
+        return await self.database_service.get_all_task_sessions()
+    
+    async def get_task_session_by_user_name(self, user_name: str) -> TaskSession:
+        """
+        Get a task session by user name
+
+        Args:
+            user_name: Name of the user to get task sessions for
+            
+        Returns:
+            TaskSession: The task session object or None if not found
+        """
+        return await self.database_service.get_task_session_by_user_name(user_name)
+    
+
+    

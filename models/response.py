@@ -22,3 +22,8 @@ class TaskResponse(BaseModel):
     steps: List[Step] = Field(default_factory=list)
     result: Optional[Any] = None
     error: Optional[str] = None 
+
+class UserResponse(BaseModel):
+    session_id: str
+    task_id: str
+    result: str
