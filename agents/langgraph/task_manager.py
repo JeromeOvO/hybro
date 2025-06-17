@@ -55,14 +55,14 @@ class AgentTaskManager(InMemoryTaskManager):
                 end_stream = False
 
                 if not is_task_complete and not require_user_input:
-                    task_state = TaskState.WORKING
+                    task_state = TaskState.working
                     message = Message(role="agent", parts=parts)
                 elif require_user_input:
-                    task_state = TaskState.INPUT_REQUIRED
+                    task_state = TaskState.input_required
                     message = Message(role="agent", parts=parts)
                     end_stream = True
                 else:
-                    task_state = TaskState.COMPLETED
+                    task_state = TaskState.completed
                     artifact = Artifact(parts=parts, index=0, append=False)
                     end_stream = True
 
@@ -129,7 +129,7 @@ class AgentTaskManager(InMemoryTaskManager):
 
         await self.upsert_task(request.params)
         task = await self.update_store(
-            request.params.id, TaskStatus(state=TaskState.WORKING), None
+            request.params.id, TaskStatus(state=TaskState.working), None
         )
         await self.send_task_notification(task)
 
@@ -189,11 +189,11 @@ class AgentTaskManager(InMemoryTaskManager):
         artifact = None
         if agent_response["require_user_input"]:
             task_status = TaskStatus(
-                state=TaskState.INPUT_REQUIRED,
+                state=TaskState.input_required,
                 message=Message(role="agent", parts=parts),
             )
         else:
-            task_status = TaskStatus(state=TaskState.COMPLETED)
+            task_status = TaskStatus(state=TaskState.completed)
             artifact = Artifact(parts=parts)
         task = await self.update_store(
             task_id, task_status, None if artifact is None else [artifact]

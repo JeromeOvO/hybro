@@ -18,11 +18,11 @@ class GeminiService:
         # Configure the Gemini API
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         self.model = genai.GenerativeModel(os.getenv("GEMINI_MODEL_NAME"))
-        self.embedding_model = genai.GenerativeModel(os.getenv("GEMINI_EMBEDDING_MODEL_NAME"))
     
     async def get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using Gemini"""
-        result = self.embedding_model.embed_content(
+        result = genai.embed_content(
+            model=os.getenv("GEMINI_EMBEDDING_MODEL_NAME"),
             content=text,
             task_type="retrieval_document"
         )
