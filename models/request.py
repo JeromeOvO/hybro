@@ -73,3 +73,8 @@ class UserInput(BaseModel):
 # for task id input
 class TaskIdInput(BaseModel):
     task_id: str
+
+
+class SessionInput(BaseModel):
+    user_name: str
+    session_id: Optional[str] = None

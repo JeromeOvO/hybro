@@ -543,5 +543,14 @@ class MongoDB:
         result = await self.task_sessions_collection.find_one({"session_id": session_id})
         return result["rootTasks"]
     
+    async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
+        """
+        Get all task sessions for a user
+        """
+        session_docs = self.task_sessions_collection.find({"user_name": user_name})
+        sessions = []
+        async for session_doc in session_docs:
+            sessions.append(self.serialize_mongodb_doc(session_doc))
+        return sessions
 
 mongodb = MongoDB() 

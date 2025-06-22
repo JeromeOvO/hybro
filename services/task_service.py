@@ -28,28 +28,28 @@ class TaskService:
         task_id = uuid.uuid4().hex
         
         # Create base Task object
-        base_task = Task(
-            id=task_id,
-            sessionId=session_id,
-            status=TaskStatus(
-                state=TaskState.submitted,
-                timestamp=datetime.now().isoformat()
-            ),
-            artifacts=[],
-            history=[
-                Message(
-                    role="user",
-                    parts=[TextPart(text=user_input)]
-                )
-            ],
-            metadata={},
-        )
+        # base_task = Task(
+        #     id=task_id,
+        #     sessionId=session_id,
+        #     status=TaskStatus(
+        #         state=TaskState.submitted,
+        #         timestamp=datetime.now().isoformat()
+        #     ),
+        #     artifacts=[],
+        #     history=[
+        #         Message(
+        #             role="user",
+        #             parts=[TextPart(text=user_input)]
+        #         )
+        #     ],
+        #     metadata={},
+        # )
 
         # Create RootTask with the base Task
         root_task = RootTask(
             task_id=task_id,
             description=user_input,
-            task=base_task,
+            task=None,
             subtasks=[]
         )
         
@@ -99,7 +99,7 @@ class TaskService:
         """
         Update the history of a task
         """
-        old_history = await self.get_task(task_id).task.history
+        old_history = await self.get_task(task_id)['task']['history']
         new_history = old_history.append(history)
 
         return await self.database_service.update_task_history(task_id, new_history)
