@@ -36,16 +36,16 @@ class RootTask(BaseModel):
     """
 
     task_id: str = Field(default_factory=lambda: uuid4().hex)
-    task: Task  # The base task from common/types
+    task: Optional[Task] = None  # The base task from common/types
     description: Optional[str] = Field(default="")  # Description of the root task
     subtasks: List[ChildTask] = Field(default_factory=list)
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        json_encoders={
-            # Add any custom encoders if needed for MongoDB serialization
-        },
-    )
+    # model_config = ConfigDict(
+    #     populate_by_name=True,
+    #     json_encoders={
+    #         # Add any custom encoders if needed for MongoDB serialization
+    #     },
+    # )
 
 class TaskSession(BaseModel):
     user_name: str = Field(default="")

@@ -458,38 +458,38 @@ class HostAgent:
             # Create a new session
             if(session_id == None):
                 # todo: build up session name and description
-                session_id = await self.task_service.create_task_session(user_name, "New Session", "New Session Description")
+                current_session_id = await self.task_service.create_task_session(user_name, "New Session", "New Session Description")
             else:
-                session_id = await self.task_service.get_task_session(session_id)
+                current_session_id = session_id
 
             # Create a new task
             root_task_id = await self.task_service.create_task(user_input)
-            await self.task_service.add_root_task_to_session(session_id, root_task_id)
+            await self.task_service.add_root_task_to_session(current_session_id, root_task_id)
 
             # process the task
-            self.decompose_task(root_task_id)
+            # await self.decompose_task(root_task_id)
 
-            child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
-            for child_task in child_tasks:
-                agent_id = await self.find_best_agent_for_task(child_task.task_id)
+            # child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
+            # for child_task in child_tasks:
+            #     agent_id = await self.find_best_agent_for_task(child_task.task_id)
 
-            for child_task in child_tasks:
-                await self.process_child_task(child_task.task_id)
+            # for child_task in child_tasks:
+            #     await self.process_child_task(child_task.task_id)
 
-            # summarize the task
-            final_answer = await self.summarize_subtask_answers(root_task_id)
+            # # summarize the task
+            # final_answer = await self.summarize_subtask_answers(root_task_id)
 
             # update the root task with the final answer
-            history = [
-                {
-                    "role": "agent",
-                    "parts": [{"type": "text", "text": final_answer}]
-                }
-            ]
-            await self.task_service.update_task_history(root_task_id, history)
+            # history = [
+            #     {
+            #         "role": "agent",
+            #         "parts": [{"type": "text", "text": "final_answer"}]
+            #     }
+            # ]
+            # await self.task_service.update_task_history(root_task_id, history)
 
             return UserResponse(
-                session_id=session_id,
+                session_id=current_session_id,
                 task_id=root_task_id,
                 result="success" 
             )

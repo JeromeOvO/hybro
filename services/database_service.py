@@ -535,4 +535,9 @@ class DatabaseService:
         """
         return await self.mongo.get_root_tasks_by_session(session_id)
     
+    async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
+        """
+        Get all task sessions for a user
+        """
+        return await self.mongo.get_task_session_by_user_name(user_name)
     

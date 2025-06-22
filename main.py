@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 import uuid
 from pydantic import BaseModel
-from models.request import UserInput, TaskIdInput
+from models.request import UserInput, TaskIdInput, SessionInput
 from models.response import UserResponse
 from models.agent import Agent
 from database.mongodb import mongodb
@@ -134,6 +134,20 @@ async def get_sub_tasks(task_id: str):
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
     return await task_service.get_child_task(task_id)
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """Get a session by its ID"""  
+    task_service = TaskService()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    return await task_service.get_task_session(session_id)
+
+@app.get("/sessions/{user_name}")
+async def get_all_sessions(user_name: str):
+    """Get all sessions"""
+    task_service = TaskService()
+    return await task_service.get_task_session_by_user_name(user_name)
 
 
 # Fix the indentation of the uvicorn run command
