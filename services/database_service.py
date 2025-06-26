@@ -1,10 +1,13 @@
+import logging
+import uuid
+from typing import List, Dict, Any, Optional
 from database.mongodb import mongodb 
 from database.pinecone_db import pinecone_db
 from services.openai_service import OpenAIService
 from models.agent import Agent
 from models.task import RootTask, ChildTask, TaskSession
-import uuid
-from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 class DatabaseService:
     def __init__(self):
@@ -205,7 +208,7 @@ class DatabaseService:
         )
         
         # Extract agent IDs from Pinecone results
-        agent_ids = [match['id'] for match in results.get('matches', [])]
+        agent_ids = [match['id'] for match in getattr(results, 'matches', [])] if results else []
         
         if not agent_ids:
             return []
@@ -246,7 +249,7 @@ class DatabaseService:
             # Re-raise the exception
             raise Exception(f"Failed to add task to database: {str(e)}")
 
-    async def get_task(self, task_id: str) -> RootTask:
+    async def get_task(self, task_id: str) -> Optional[RootTask]:
         """
         Get a task by ID from MongoDB
         
@@ -292,9 +295,31 @@ class DatabaseService:
         
     async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
         """
-        Update the history of a task
+        Append new entries to the history of a task.
+
+        Args:
+            task_id: ID of the task to update.
+            history: List of new history entries to append.
+
+        Returns:
+            bool: True if update was successful.
         """
-        return await self.mongo.update_task_history(task_id, history)
+        root_task = await self.get_task(task_id)
+        
+        # Convert existing Message objects to dictionaries
+        old_history: List[Dict[str, Any]] = []
+        if root_task and root_task.task and root_task.task.history:
+            for msg in root_task.task.history:
+                if hasattr(msg, 'model_dump'):
+                    old_history.append(msg.model_dump())
+                elif isinstance(msg, dict):
+                    old_history.append(msg)
+                else:
+                    logger.warning(f"Skipping item that can't be converted to dict: {msg}")
+                    continue
+        
+        new_history = old_history + history
+        return await self.mongo.update_task_history(task_id, new_history)
 
     async def delete_task(self, task_id: str) -> bool:
         """
@@ -363,7 +388,7 @@ class DatabaseService:
             # Re-raise the exception
             raise Exception(f"Failed to add child task to database: {str(e)}")
 
-    async def get_child_task(self, child_task_id: str) -> ChildTask:
+    async def get_child_task(self, child_task_id: str) -> Optional[ChildTask]:
         """
         Get a specific child task
         
@@ -377,7 +402,7 @@ class DatabaseService:
         if not child_task:
             return None
         
-        return child_task
+        return ChildTask.model_validate(child_task)
 
     async def get_child_tasks_by_parent(self, root_task_id: str) -> List[ChildTask]:
         """
@@ -390,7 +415,7 @@ class DatabaseService:
             List[ChildTask]: List of child task objects
         """
         child_tasks = await self.mongo.get_child_tasks_by_parent(root_task_id)
-        return [ChildTask(**task) for task in child_tasks]
+        return [ChildTask.model_validate(task) for task in child_tasks]
 
     async def update_child_task(self, child_task_id: str, update_data: Dict[str, Any]) -> bool:
         """
@@ -408,8 +433,8 @@ class DatabaseService:
         """
         try:
             # If update_data is a Pydantic model, convert to dict
-            if hasattr(update_data, 'dict'):
-                update_data = update_data.dict(exclude_unset=True)
+            if isinstance(update_data, ChildTask):
+                update_data = update_data.model_dump(exclude_unset=True)
             
             # First, get the child task to find its parent_id
             child_task = await self.get_child_task(child_task_id)
@@ -473,7 +498,7 @@ class DatabaseService:
         """
         return await self.mongo.add_task_session(task_session)
     
-    async def get_task_session(self, session_id: str) -> TaskSession:
+    async def get_task_session(self, session_id: str) -> Optional[TaskSession]:
         """
         Get a task session by ID
         
@@ -483,7 +508,10 @@ class DatabaseService:
         Returns:
             TaskSession: The task session object or None if not found
         """
-        return await self.mongo.get_task_session(session_id)
+        task_session_dict = await self.mongo.get_task_session(session_id)
+        if task_session_dict:
+            return TaskSession.model_validate(task_session_dict)
+        return None
     
     async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
         """
@@ -541,3 +569,35 @@ class DatabaseService:
         """
         return await self.mongo.get_task_session_by_user_name(user_name)
     
+    async def get_all_task_sessions(self) -> List[TaskSession]:
+        """
+        Get all task sessions from the database
+        
+        Returns:
+            List[TaskSession]: List of all task session objects
+        """
+        task_session_dicts = await self.mongo.get_all_task_sessions()
+        return [TaskSession.model_validate(session_dict) for session_dict in task_session_dicts]
+    
+    async def update_root_task_in_session(self, session_id: str, root_task_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a root task in a session.
+        Args:
+            session_id: ID of the session
+            root_task_id: ID of the root task to update
+            update_data: Dictionary of fields to update
+        Returns:
+            bool: True if update was successful
+        """
+        return await self.mongo.update_root_task_in_session(session_id, root_task_id, update_data)
+    
+    async def delete_root_task_from_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Delete a root task from a task session.
+        Args:
+            session_id: ID of the task session to delete the root task from
+            root_task_id: ID of the root task to delete
+        Returns:
+            bool: True if deletion was successful
+        """
+        return await self.mongo.delete_root_task_from_session(session_id, root_task_id)

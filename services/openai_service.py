@@ -1,4 +1,5 @@
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionSystemMessageParam, ChatCompletionUserMessageParam
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import time
@@ -14,7 +15,7 @@ class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    async def get_embedding(self, text: str, target_dim: int = None) -> List[float]:
+    async def get_embedding(self, text: str, target_dim: Optional[int] = None) -> List[float]:
         """Get embedding for text
         
         Args:
@@ -74,17 +75,17 @@ class OpenAIService:
             """
             
             messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=prompt)
             ]
             
             response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL"),
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 response_format={"type": "json_object"}
             )
             
-            return response.choices[0].message.content
+            return response.choices[0].message.content if response.choices[0].message.content else ""
         except Exception as e:
             print(f"Error in task decomposition process: {str(e)}")
 
@@ -148,17 +149,17 @@ Based on the task description and agent capabilities, which agent (by ID) would 
 """
         
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
         ]
         
         try:
             response = await self.client.chat.completions.create(
-                model=os.getenv("CLASSIFIER_AI_MODEL"),
+                model=os.getenv("CLASSIFIER_AI_MODEL") or "gpt-4o-mini",
                 messages=messages
             )
             
-            content = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
             
             # Extract agent ID
             for agent in agents:
@@ -200,17 +201,17 @@ Please provide a comprehensive final answer that addresses the original question
 """
         
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
         ]
         
         try:
             response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL"),
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages
             )
             
-            return response.choices[0].message.content
+            return response.choices[0].message.content if response.choices[0].message.content else ""
         except Exception as e:
             print(f"Error summarizing subtask answers: {str(e)}")
             return f"Error generating final answer: {str(e)}"
@@ -226,15 +227,15 @@ Please provide a comprehensive final answer that addresses the original question
             "Based off the opinion of other agents, can you give an updated response . . ."
         )
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
         ]
         try:
             response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL"),
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content if response.choices[0].message.content else ""
         except Exception as e:
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
@@ -250,15 +251,15 @@ Please provide a comprehensive final answer that addresses the original question
             "Using the opinion of other agents as additional advice, can you give an updated response . . ."
         )
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
         ]
         try:
             response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL"),
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content if response.choices[0].message.content else ""
         except Exception as e:
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
@@ -275,15 +276,15 @@ Please provide a comprehensive final answer that addresses the original question
             "Please provide a summary that captures the main points and consensus (if any) from these answers."
         )
         chat_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
         ]
         try:
             response = await self.client.chat.completions.create(
-                model=os.getenv("LEAD_AI_MODEL"),
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=chat_messages
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content if response.choices[0].message.content else ""
         except Exception as e:
             print(f"Error in summarize_debate_answer: {str(e)}")
             return f"Error: {str(e)}"
