@@ -140,7 +140,7 @@ class JSONRPCResponse(JSONRPCMessage):
 
 class SendTaskRequest(JSONRPCRequest):
     method: Literal["tasks/send"] = "tasks/send"
-    params: TaskSendParams
+    params: TaskSendParams = Field(default_factory=lambda: TaskSendParams(id="", message=Message(role="user", parts=[])))
 
 
 class SendTaskResponse(JSONRPCResponse):
@@ -149,7 +149,7 @@ class SendTaskResponse(JSONRPCResponse):
 
 class SendTaskStreamingRequest(JSONRPCRequest):
     method: Literal["tasks/sendSubscribe"] = "tasks/sendSubscribe"
-    params: TaskSendParams
+    params: TaskSendParams = Field(default_factory=lambda: TaskSendParams(id="", message=Message(role="user", parts=[])))
 
 
 class SendTaskStreamingResponse(JSONRPCResponse):
@@ -158,7 +158,7 @@ class SendTaskStreamingResponse(JSONRPCResponse):
 
 class GetTaskRequest(JSONRPCRequest):
     method: Literal["tasks/get"] = "tasks/get"
-    params: TaskQueryParams
+    params: TaskQueryParams = Field(default_factory=lambda: TaskQueryParams(id=""))
 
 
 class GetTaskResponse(JSONRPCResponse):
@@ -167,7 +167,7 @@ class GetTaskResponse(JSONRPCResponse):
 
 class CancelTaskRequest(JSONRPCRequest):
     method: Literal["tasks/cancel",] = "tasks/cancel"
-    params: TaskIdParams
+    params: TaskIdParams = Field(default_factory=lambda: TaskIdParams(id=""))
 
 
 class CancelTaskResponse(JSONRPCResponse):
@@ -176,7 +176,7 @@ class CancelTaskResponse(JSONRPCResponse):
 
 class SetTaskPushNotificationRequest(JSONRPCRequest):
     method: Literal["tasks/pushNotification/set",] = "tasks/pushNotification/set"
-    params: TaskPushNotificationConfig
+    params: TaskPushNotificationConfig = Field(default_factory=lambda: TaskPushNotificationConfig(id="", pushNotificationConfig=PushNotificationConfig(url="")))
 
 
 class SetTaskPushNotificationResponse(JSONRPCResponse):
@@ -185,7 +185,7 @@ class SetTaskPushNotificationResponse(JSONRPCResponse):
 
 class GetTaskPushNotificationRequest(JSONRPCRequest):
     method: Literal["tasks/pushNotification/get",] = "tasks/pushNotification/get"
-    params: TaskIdParams
+    params: TaskIdParams = Field(default_factory=lambda: TaskIdParams(id=""))
 
 
 class GetTaskPushNotificationResponse(JSONRPCResponse):
@@ -194,7 +194,7 @@ class GetTaskPushNotificationResponse(JSONRPCResponse):
 
 class TaskResubscriptionRequest(JSONRPCRequest):
     method: Literal["tasks/resubscribe",] = "tasks/resubscribe"
-    params: TaskIdParams
+    params: TaskIdParams = Field(default_factory=lambda: TaskIdParams(id=""))
 
 
 A2ARequest = TypeAdapter(

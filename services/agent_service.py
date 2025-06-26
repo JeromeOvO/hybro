@@ -35,7 +35,10 @@ class AgentService:
         Returns:
             Agent: The agent object or None if not found
         """
-        return await self.database_service.get_agent(agent_id)
+        agent_dict = await self.database_service.get_agent(agent_id)
+        if agent_dict:
+            return Agent.model_validate(agent_dict)
+        return None
     
     async def update_agent(self, agent_id: str, update_data: dict) -> bool:
         """
@@ -68,7 +71,7 @@ class AgentService:
         """
         return await self.database_service.delete_agent(agent_id)
     
-    def get_all_agents(self, limit: int = 0) -> List[Agent]:
+    async def get_all_agents(self, limit: int = 0) -> List[Agent]:
         """
         Get all agents in the system
         
@@ -78,7 +81,8 @@ class AgentService:
         Returns:
             List[Agent]: List of agent objects
         """
-        return self.database_service.get_agents(None, limit)
+        agents_dict = await self.database_service.get_agents(None, limit)
+        return [Agent.model_validate(agent_dict) for agent_dict in agents_dict]
     
     
     async def query_machted_agents_by_capabilities(self, capabilities: List[str], count: int = 1) -> List[Agent]:
@@ -96,7 +100,8 @@ class AgentService:
         capability_text = f"Agent capable of: {', '.join(capabilities)}"
         
         # Use database service to find similar agents
-        return await self.database_service.query_similar_agents(capability_text, count)
+        agents_dict = await self.database_service.query_similar_agents(capability_text, count)
+        return [Agent.model_validate(agent_dict) for agent_dict in agents_dict]
     
     async def query_matched_agents_by_text(self, query_text: str, count: int = 5) -> List[Agent]:
         """
@@ -109,6 +114,7 @@ class AgentService:
         Returns:
             List[Agent]: List of matching agents
         """
-        return await self.database_service.query_similar_agents(query_text, count)
+        agents_dict = await self.database_service.query_similar_agents(query_text, count)
+        return [Agent.model_validate(agent_dict) for agent_dict in agents_dict]
 
 agent_service = AgentService() 

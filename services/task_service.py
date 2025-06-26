@@ -1,11 +1,16 @@
+from re import I
 from typing import List, Dict, Any, Optional
 import uuid
 from datetime import datetime
 import json
 from models.task import RootTask, ChildTask, TaskSession
-from a2a.types import Task, TaskState, TaskStatus, Message, TextPart
+from a2a.types import Task, TaskState, TaskStatus, Message, TextPart, Part, Role
 from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class TaskService:
     def __init__(self):
@@ -69,7 +74,7 @@ class TaskService:
         """
         return await self.database_service.get_task(task_id)
     
-    async def get_tasks(self, query: Dict[str, Any] = None, limit: int = 0) -> List[RootTask]:
+    async def get_tasks(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[RootTask]:
         """
         Get multiple tasks matching a query
         
@@ -97,10 +102,26 @@ class TaskService:
     
     async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
         """
-        Update the history of a task
+        Append new entries to the history of a task.
+
+        Args:
+            task_id: ID of the task to update.
+            history: List of new history entries to append.
+
+        Returns:
+            bool: True if update was successful.
         """
-        old_history = await self.get_task(task_id)['task']['history']
-        new_history = old_history.append(history)
+        root_task = await self.get_task(task_id)
+        old_history: List[Dict[str, Any]] = []
+        if root_task and root_task.task and root_task.task.history:
+            for msg in root_task.task.history:
+                if hasattr(msg, 'model_dump'):
+                    old_history.append(msg.model_dump())
+                elif isinstance(msg, dict):
+                    old_history.append(msg)
+                else:
+                    logger.warning(f"Skipping item that can't be converted to dict: {msg}")
+        new_history = old_history + history
 
         return await self.database_service.update_task_history(task_id, new_history)
     
@@ -154,18 +175,18 @@ class TaskService:
         Returns:
             str: The ID of the created child task
         """
-        # Get the root task to set the session ID
+        # Get the root task to set the contextId
         root_task = await self.get_task(root_task_id)
         if not root_task:
             raise Exception(f"Root task with ID {root_task_id} not found")
         
-        # Set the session ID from the parent
-        sessionId = root_task.task.sessionId
+        # Set the contextId from the parent
+        contextId = root_task.task.contextId if root_task.task else uuid.uuid4().hex
         
         # Create base Task object for the child task
         child_base_task = Task(
             id=subtask_id,
-            sessionId=sessionId,  # Will inherit from parent
+            contextId=contextId,
             status=TaskStatus(
                 state=TaskState.submitted,
                 timestamp=datetime.now().isoformat()
@@ -182,9 +203,9 @@ class TaskService:
             agent_id="Not Assigned",
             task=child_base_task,
             parent_id=root_task_id,
-            order=step,
-            priority=priority,
-            dependencies=dependencies or []
+            order=step if step is not None else 0,
+            priority=priority if priority is not None else 0,
+            dependencies=dependencies if dependencies else []
         )
 
         # Add the child task (DatabaseService handles consistency)
@@ -264,7 +285,7 @@ class TaskService:
         # Use the existing update_child_task method
         return await self.update_child_task(child_task_id, update_data)
     
-    async def create_subtasks_with_openai_content(self, root_task_id: str, content: str) -> RootTask:
+    async def create_subtasks_with_openai_content(self, root_task_id: str, content: str) -> Optional[RootTask]:
         """
         Process OpenAI content and create subtasks for a root task
         
@@ -284,13 +305,14 @@ class TaskService:
                 error_status = TaskStatus(
                     state=TaskState.failed,
                     message=Message(
-                        role="agent",
-                        parts=[TextPart(text=f"Failed to decompose task: JSON parse error")]
+                        role=Role.agent,
+                        messageId=uuid.uuid4().hex,
+                        parts=[Part(root=TextPart(text=f"Failed to decompose task: JSON parse error"))]
                     ),
                     timestamp=datetime.now().isoformat()
                 )
                 await self.update_task_status(root_task_id, error_status)
-                return root_task_id
+                return await self.get_task(root_task_id)
             
             # Get the root task to set the session ID
             root_task = await self.get_task(root_task_id)
@@ -314,13 +336,13 @@ class TaskService:
                     subtask_dependencies
                 )
 
-            return root_task_id
+            return await self.get_task(root_task_id)
             
         except Exception as e:
             print(f"Error creating subtasks: {str(e)}")
             # Update task status to reflect error
             await self.update_task_as_failed(root_task_id, f"Failed to create subtasks: {str(e)}")
-            return root_task_id
+            return await self.get_task(root_task_id)
     
     async def update_task_as_failed(self, task_id: str, error_message: str) -> None:
         """
@@ -333,8 +355,9 @@ class TaskService:
         error_status = TaskStatus(
             state=TaskState.failed,
             message=Message(
-                role="agent",
-                parts=[TextPart(text=error_message)]
+                role=Role.agent,
+                messageId=uuid.uuid4().hex,
+                parts=[Part(root=TextPart(text=error_message))]
             ),
             timestamp=datetime.now().isoformat()
         )
@@ -362,7 +385,7 @@ class TaskService:
         )
         return await self.database_service.add_task_session(task_session)
     
-    async def get_task_session(self, session_id: str) -> TaskSession:
+    async def get_task_session(self, session_id: str) -> Optional[TaskSession]:
         """
         Get a task session by ID
         
@@ -460,7 +483,7 @@ class TaskService:
         """
         return await self.database_service.get_all_task_sessions()
     
-    async def get_task_session_by_user_name(self, user_name: str) -> TaskSession:
+    async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
         """
         Get a task session by user name
 
@@ -468,7 +491,7 @@ class TaskService:
             user_name: Name of the user to get task sessions for
             
         Returns:
-            TaskSession: The task session object or None if not found
+            List[TaskSession]: List of task session objects for the user
         """
         return await self.database_service.get_task_session_by_user_name(user_name)
     

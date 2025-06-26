@@ -40,20 +40,20 @@ class AgentTaskManager(InMemoryTaskManager):
             is_task_complete = item["is_task_complete"]
             artifacts = None
             if not is_task_complete:
-              task_state = TaskState.WORKING
+              task_state = TaskState.working
               parts = [{"type": "text", "text": item["updates"]}]
             else:
               if isinstance(item["content"], dict):
                 if ("response" in item["content"]
                     and "result" in item["content"]["response"]):
                   data = json.loads(item["content"]["response"]["result"])
-                  task_state = TaskState.INPUT_REQUIRED
+                  task_state = TaskState.input_required
                 else:
                   data = item["content"]
-                  task_state = TaskState.COMPLETED
+                  task_state = TaskState.completed
                 parts = [{"type": "data", "data": data}]
               else:
-                task_state = TaskState.COMPLETED
+                task_state = TaskState.completed
                 parts = [{"type": "text", "text": item["content"]}]
               artifacts = [Artifact(parts=parts, index=0, append=False)]
           message = Message(role="agent", parts=parts)
@@ -147,7 +147,7 @@ class AgentTaskManager(InMemoryTaskManager):
             logger.error(f"Error invoking agent: {e}")
             raise ValueError(f"Error invoking agent: {e}")
         parts = [{"type": "text", "text": result}]
-        task_state = TaskState.INPUT_REQUIRED if "MISSING_INFO:" in result else TaskState.COMPLETED
+        task_state = TaskState.input_required if "MISSING_INFO:" in result else TaskState.completed
         task = await self._update_store(
             task_send_params.id,
             TaskStatus(

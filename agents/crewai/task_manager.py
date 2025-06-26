@@ -113,7 +113,7 @@ class AgentTaskManager(InMemoryTaskManager):
     print(f"Final Result ===> {result}")
     task = await self._update_store(
         task_send_params.id,
-        TaskStatus(state=TaskState.COMPLETED),
+        TaskStatus(state=TaskState.completed),
         [Artifact(parts=parts)],
     )
     return SendTaskResponse(id=request.id, result=task)

@@ -133,7 +133,7 @@ async def get_sub_tasks(task_id: str):
     task_service = TaskService()
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
-    return await task_service.get_child_task(task_id)
+    return await task_service.get_child_tasks_by_parent(task_id)
 
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):

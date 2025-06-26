@@ -1,32 +1,31 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import time
 from datetime import datetime
 from dotenv import load_dotenv
 import os
-
+import uuid
 load_dotenv()
 
 from a2a.types import (
     Task, Message, TextPart, DataPart, Part,
-    TaskState, TaskStatus
+    TaskState, TaskStatus, Role
 )
 
 class GeminiService:
     def __init__(self):
         # Configure the Gemini API
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model = genai.GenerativeModel(os.getenv("GEMINI_MODEL_NAME"))
-        self.embedding_model = genai.GenerativeModel(os.getenv("GEMINI_EMBEDDING_MODEL_NAME"))
+        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     
-    async def get_embedding(self, text: str) -> List[float]:
+    async def get_embedding(self, text: str) -> Optional[List[float]]:
         """Get embedding for text using Gemini"""
-        result = self.embedding_model.embed_content(
-            content=text,
-            task_type="retrieval_document"
+        result = self.client.models.embed_content(
+            model=os.getenv("GEMINI_EMBEDDING_MODEL_NAME") or "gemini-embedding-exp-03-07",
+            contents=[text]
         )
-        return result.embedding
+        return result.embeddings[0].values if result.embeddings else None
     
     async def generate_text(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Basic text generation with Gemini"""
@@ -34,10 +33,13 @@ class GeminiService:
         if context:
             full_prompt += f"\nContext: {json.dumps(context)}"
         
-        response = self.model.generate_content(full_prompt)
-        return response.text
+        response = self.client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+            contents=[full_prompt]
+        )
+        return response.text if response.text else ""
     
-    async def lead_ai_completion(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def lead_ai_completion(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Get completion from Gemini model for task breakdown"""
         system_prompt = "You are a lead AI that breaks down complex tasks into steps. Respond with JSON."
         
@@ -45,12 +47,15 @@ class GeminiService:
         if context:
             prompt += f"\nContext: {json.dumps(context)}"
         
-        response = self.model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
+        response = self.client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(thinking_budget=0) # Disables thinking
+            )
         )
         
-        content = response.text
+        content = response.text if response.text else ""
         try:
             return json.loads(content)
         except json.JSONDecodeError:
@@ -65,10 +70,11 @@ class GeminiService:
             task.status = TaskStatus(
                 state=TaskState.failed,
                 message=Message(
-                    role="agent",
-                    parts=[TextPart(text="No user message found in task history")]
+                    messageId=uuid.uuid4().hex,
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text="No user message found in task history"))]
                 ),
-                timestamp=datetime.now()
+                timestamp=datetime.now().isoformat()
             )
             return task
         
@@ -77,10 +83,10 @@ class GeminiService:
         for msg in task.history:
             content = ""
             for part in msg.parts:
-                if part.type == "text":
-                    content += part.text
-                elif part.type == "data":
-                    content += f"\nData: {json.dumps(part.data)}"
+                if part.root.kind == "text":
+                    content += part.root.text
+                elif part.root.kind == "data":
+                    content += f"\nData: {json.dumps(part.root.data)}"
             
             role_prefix = "User: " if msg.role == "user" else "Assistant: "
             messages_content.append(f"{role_prefix}{content}")
@@ -90,12 +96,16 @@ class GeminiService:
         prompt += "\n".join(messages_content)
         
         # Generate response
-        response = self.model.generate_content(prompt)
+        response = self.client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+            contents=[prompt]
+        )
         
         # Create agent response message
         agent_message = Message(
-            role="agent",
-            parts=[TextPart(text=response.text)]
+            messageId=uuid.uuid4().hex,
+            role=Role.agent,
+            parts=[Part(root=TextPart(text=response.text if response.text else ""))]
         )
         
         # Update task
@@ -107,7 +117,7 @@ class GeminiService:
         task.status = TaskStatus(
             state=TaskState.completed,
             message=agent_message,
-            timestamp=datetime.now()
+            timestamp=datetime.now().isoformat()
         )
         
         return task
@@ -117,7 +127,10 @@ class GeminiService:
         prompt = "You are a summarizer that creates concise summaries of agent outputs.\n\n"
         prompt += f"Summarize the following agent output for use as input to another agent:\n\n{content}"
         
-        response = self.model.generate_content(prompt)
-        return response.text
+        response = self.client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL_NAME") or "gemini-2.0-flash",
+            contents=[prompt]
+        )
+        return response.text if response.text else ""
 
 gemini_service = GeminiService() 

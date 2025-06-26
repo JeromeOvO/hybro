@@ -1,6 +1,6 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from datetime import datetime
 from models.agent import Agent
@@ -12,7 +12,7 @@ import os
 load_dotenv()
 
 class MongoDB:
-    client: AsyncIOMotorClient = None
+    client: Optional[AsyncIOMotorClient] = None
     
     def __init__(self):
         self.client = None
@@ -37,7 +37,10 @@ class MongoDB:
         """Get database instance"""
         if not self.client:
             raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
-        return self.client[os.getenv("MONGODB_DB_NAME")]
+        db_name = os.getenv("MONGODB_DB_NAME")
+        if not db_name:
+            raise ValueError("MONGODB_DB_NAME environment variable is not set")
+        return self.client[db_name]
     
     @property
     def agents_collection(self):
@@ -109,7 +112,7 @@ class MongoDB:
         result = await self.agents_collection.insert_one(agent_dict)
         return str(result.inserted_id)
     
-    async def get_agent(self, agent_id: str) -> Dict[str, Any]:
+    async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """
         Get an agent by AgentID
         
@@ -119,22 +122,21 @@ class MongoDB:
         Returns:
             Dict: Agent document or None if not found
         """
-        # 考虑到ObjectId的问题，这里可能需要检查输入
         try:
             agent = await self.agents_collection.find_one({"agent_id": agent_id})
-            # 如果找不到，尝试将agent_id作为ObjectId查询
+            # try to query by agent_id as ObjectId
             if not agent and len(agent_id) == 24:
                 try:
                     agent = await self.agents_collection.find_one({"agent_id": ObjectId(agent_id)})
                 except:
                     pass
         except Exception:
-            # 如果出错，可能是格式问题，尝试直接查询
+            # if error, try to query by agent_id directly
             agent = await self.agents_collection.find_one({"agent_id": agent_id})
         
         return self.serialize_mongodb_doc(agent) if agent else None
     
-    async def get_agents(self, query: Dict[str, Any] = None, limit: int = 0) -> List[Dict[str, Any]]:
+    async def get_agents(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[Dict[str, Any]]:
         """
         Get multiple agents matching a query
         
@@ -170,9 +172,7 @@ class MongoDB:
             bool: True if update was successful
         """
         # If update_data is a Pydantic model, convert to dict
-        if hasattr(update_data, 'dict'):
-            update_data = update_data.dict(exclude_unset=True)
-        elif hasattr(update_data, 'model_dump'):
+        if isinstance(update_data, Agent):
             update_data = update_data.model_dump(exclude_unset=True)
         
         result = await self.agents_collection.update_one(
@@ -217,7 +217,7 @@ class MongoDB:
         # 返回任务ID
         return task.task_id
 
-    async def get_task(self, task_id: str) -> Dict[str, Any]:
+    async def get_task(self, task_id: str) -> Optional[RootTask]:
         """
         Get a task by ID
         
@@ -231,20 +231,22 @@ class MongoDB:
         if not task:
             return None
         
-        # 转换为可序列化的字典
+        # serialize the task to dict
         task_dict = self.serialize_mongodb_doc(task)
+        if not task_dict:
+            return None
         
-        # 补充subtasks中缺少的字段
+        # fill the missing fields in subtasks
         if "subtasks" in task_dict and task_dict["subtasks"]:
             for i, subtask_ref in enumerate(task_dict["subtasks"]):
-                # 如果subtask只包含最小引用信息，补充必要字段
+                # if subtask only contains minimal reference information, fill the necessary fields
                 if "task" not in subtask_ref:
-                    # 创建一个基本Task对象字典，使用有效的枚举值
+                    # create a basic Task object dictionary, using valid enum values
                     subtask_ref["task"] = {
                         "id": subtask_ref.get("task_id", ""),
                         "sessionId": task_dict.get("task_id", ""),
                         "status": {
-                            "state": "submitted",  # 使用有效的枚举值替换 'pending'
+                            "state": "submitted",
                             "timestamp": datetime.now().isoformat()
                         },
                         "artifacts": [],
@@ -252,20 +254,20 @@ class MongoDB:
                         "metadata": {}
                     }
                 
-                # 确保parent_id字段存在
+                # ensure parent_id field exists
                 if "parent_id" not in subtask_ref:
                     subtask_ref["parent_id"] = task_dict.get("task_id", "")
                 
-                # 确保其他必要字段存在
+                # ensure other necessary fields exist
                 if "priority" not in subtask_ref:
                     subtask_ref["priority"] = 1
                 
                 if "dependencies" not in subtask_ref:
                     subtask_ref["dependencies"] = []
         
-        return RootTask.parse_obj(task_dict)
+        return RootTask.model_validate(task_dict)
 
-    async def get_tasks(self, query: Dict[str, Any] = None, limit: int = 0) -> List['RootTask']:
+    async def get_tasks(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[RootTask]:
         """
         Get multiple tasks matching a query
         
@@ -287,8 +289,10 @@ class MongoDB:
         tasks = []
         async for task_dict in cursor:
             task_dict = self.serialize_mongodb_doc(task_dict)
+            if not task_dict:
+                continue
             
-            # 补充subtasks中缺少的字段，与get_task方法类似
+            # fill the missing fields in subtasks, similar to get_task method
             if "subtasks" in task_dict and task_dict["subtasks"]:
                 for i, subtask_ref in enumerate(task_dict["subtasks"]):
                     if "task" not in subtask_ref:
@@ -329,9 +333,7 @@ class MongoDB:
             bool: True if update was successful
         """
         # If update_data is a Pydantic model, convert to dict
-        if hasattr(update_data, 'dict'):
-            update_data = update_data.dict(exclude_unset=True)
-        elif hasattr(update_data, 'model_dump'):
+        if isinstance(update_data, RootTask):
             update_data = update_data.model_dump(exclude_unset=True)
         
         result = await self.tasks_collection.update_one(
@@ -348,6 +350,7 @@ class MongoDB:
             {"task_id": task_id},
             {"$set": {"task.history": history}}
         )
+        return result.modified_count > 0
 
     async def delete_task(self, task_id: str) -> bool:
         """
@@ -383,7 +386,7 @@ class MongoDB:
         result = await self.child_tasks_collection.insert_one(child_task_dict)
         return child_task.task_id
 
-    async def get_child_task(self, child_task_id: str) -> Dict[str, Any]:
+    async def get_child_task(self, child_task_id: str) -> Optional[ChildTask]:
         """
         Get a child task by ID
         
@@ -424,9 +427,7 @@ class MongoDB:
             bool: True if update was successful
         """
         # If update_data is a Pydantic model, convert to dict
-        if hasattr(update_data, 'dict'):
-            update_data = update_data.dict(exclude_unset=True)
-        elif hasattr(update_data, 'model_dump'):
+        if isinstance(update_data, ChildTask):
             update_data = update_data.model_dump(exclude_unset=True)
         
         result = await self.child_tasks_collection.update_one(
@@ -469,7 +470,7 @@ class MongoDB:
         result = await self.task_sessions_collection.insert_one(task_session_dict)
         return task_session.session_id
     
-    async def get_task_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_task_session(self, session_id: str) -> Optional[TaskSession]:
         """
         Get a task session by ID
         
@@ -530,7 +531,7 @@ class MongoDB:
         )
         return result.modified_count > 0
     
-    async def get_root_tasks_by_session(self, session_id: str) -> List[str]:
+    async def get_root_tasks_by_session(self, session_id: str) -> List[RootTask]:
         """
         Get all root tasks for a task session
         
@@ -541,7 +542,13 @@ class MongoDB:
             List[RootTask]: List of root task objects
         """
         result = await self.task_sessions_collection.find_one({"session_id": session_id})
-        return result["rootTasks"]
+        root_task_ids = result["rootTasks"] if result and "rootTasks" in result else []
+        root_tasks = []
+        for task_id in root_task_ids:
+            task_data = await self.tasks_collection.find_one({"task_id": task_id})
+            if task_data:
+                root_tasks.append(RootTask.model_validate(task_data))
+        return root_tasks
     
     async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
         """
@@ -552,5 +559,49 @@ class MongoDB:
         async for session_doc in session_docs:
             sessions.append(self.serialize_mongodb_doc(session_doc))
         return sessions
+
+    async def get_all_task_sessions(self) -> List[Dict[str, Any]]:
+        """
+        Get all task sessions from the database
+        
+        Returns:
+            List[Dict]: List of all task session documents
+        """
+        session_docs = self.task_sessions_collection.find({})
+        sessions = []
+        async for session_doc in session_docs:
+            sessions.append(self.serialize_mongodb_doc(session_doc))
+        return sessions
+
+    async def update_root_task_in_session(self, session_id: str, root_task_id: str, update_data: Dict[str, Any]) -> bool:
+        """
+        Update a root task in a session.
+        Args:
+            session_id: ID of the session (not used in update, for interface consistency)
+            root_task_id: ID of the root task to update
+            update_data: Dictionary of fields to update
+        Returns:
+            bool: True if update was successful
+        """
+        result = await self.task_sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$set": {"rootTasks.$[task]": update_data}}
+        )
+        return result.modified_count > 0
+
+    async def delete_root_task_from_session(self, session_id: str, root_task_id: str) -> bool:
+        """
+        Delete a root task from a task session.
+        Args:
+            session_id: ID of the task session to delete the root task from
+            root_task_id: ID of the root task to delete
+        Returns:
+            bool: True if deletion was successful
+        """
+        result = await self.task_sessions_collection.update_one(
+            {"session_id": session_id},
+            {"$pull": {"rootTasks": root_task_id}}
+        )
+        return result.modified_count > 0
 
 mongodb = MongoDB() 
