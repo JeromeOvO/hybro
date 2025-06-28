@@ -1,6 +1,7 @@
 from typing import List, Optional, Any
 from pydantic import BaseModel, Field
-from a2a.types import TaskState
+from a2a.types import TaskState, AgentCard
+
 
 class Step(BaseModel):
     step_id: str
@@ -27,3 +28,9 @@ class UserResponse(BaseModel):
     session_id: str
     task_id: str
     result: str
+
+class InspectionCenterResponse(BaseModel):
+    agent_url: str
+    agent_card: Optional[AgentCard] = None
+    result: List[str]
+    status_code: int = 200

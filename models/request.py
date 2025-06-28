@@ -78,3 +78,6 @@ class TaskIdInput(BaseModel):
 class SessionInput(BaseModel):
     user_name: str
     session_id: Optional[str] = None
+
+class InspectionCenterRequest(BaseModel):
+    agent_url: str

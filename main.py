@@ -1,5 +1,6 @@
 import json
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 import uuid
@@ -16,6 +17,14 @@ from loguru import logger
 import sys, logging
 from dotenv import load_dotenv
 from uvicorn.config import LOGGING_CONFIG
+
+
+from modules.InspectionCenter import InspectionCenter
+
+
+from models.request import InspectionCenterRequest
+from models.response import InspectionCenterResponse
+
 
 load_dotenv()
 class InterceptHandler(logging.Handler):
@@ -76,6 +85,26 @@ async def send_task_to_hostAgent(input: UserInput):
     logger.info("controller sendTask: receive request: {}", input)
 
     response = await host_agent.handle_input(input.user_name, input.user_input, input.session_id);
+
+    return response
+
+# Inspection Center Endpoints
+@app.post("/inspectionCenter/inspect")
+async def inspect_agent(request: Request):
+    inspection_center = InspectionCenter()
+
+    request_data = await request.json()
+    agent_url = request_data.get('agent_url')
+
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    
+    logger.info("inspectionCenter/inspect request: {}", agent_url)
+    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
+    inspection_center_response = await inspection_center.inspect(inspection_center_request)
+
+    result = inspection_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
 
     return response
 

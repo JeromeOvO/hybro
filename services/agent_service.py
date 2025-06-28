@@ -8,6 +8,7 @@ class AgentService:
         self.database_service = DatabaseService()
         self.openai_service = OpenAIService()
 
+    # agent management
     async def create_agent(self, agent: Agent) -> str:
         """
         Create a new agent in the system
@@ -116,5 +117,67 @@ class AgentService:
         """
         agents_dict = await self.database_service.query_similar_agents(query_text, count)
         return [Agent.model_validate(agent_dict) for agent_dict in agents_dict]
+    
+    # agent validate service
+    async def validate_agent_card(self, card_data: dict[str, Any]) -> list[str]:
+        """Validate the structure and fields of an agent card."""
+        errors: list[str] = []
+
+        # Use a frozenset for efficient checking and to indicate immutability.
+        required_fields = frozenset(
+            [
+                'name',
+                'description',
+                'url',
+                'version',
+                'capabilities',
+                'defaultInputModes',
+                'defaultOutputModes',
+                'skills',
+            ]
+        )
+
+        # Check for the presence of all required fields
+        for field in required_fields:
+            if field not in card_data:
+                errors.append(f"Required field is missing: '{field}'.")
+
+        # Check if 'url' is an absolute URL (basic check)
+        if 'url' in card_data and not (
+            card_data['url'].startswith('http://')
+            or card_data['url'].startswith('https://')
+        ):
+            errors.append(
+                "Field 'url' must be an absolute URL starting with http:// or https://."
+            )
+
+        # Check if capabilities is a dictionary
+        if 'capabilities' in card_data and not isinstance(
+            card_data['capabilities'], dict
+        ):
+            errors.append("Field 'capabilities' must be an object.")
+
+        # Check if defaultInputModes and defaultOutputModes are arrays of strings
+        for field in ['defaultInputModes', 'defaultOutputModes']:
+            if field in card_data:
+                if not isinstance(card_data[field], list):
+                    errors.append(f"Field '{field}' must be an array of strings.")
+                elif not all(isinstance(item, str) for item in card_data[field]):
+                    errors.append(f"All items in '{field}' must be strings.")
+
+        # Check skills array
+        if 'skills' in card_data:
+            if not isinstance(card_data['skills'], list):
+                errors.append(
+                    "Field 'skills' must be an array of AgentSkill objects."
+                )
+            elif not card_data['skills']:
+                errors.append(
+                    "Field 'skills' array is empty. Agent must have at least one skill if it performs actions."
+                )
+
+        return errors
+
+    
 
 agent_service = AgentService() 
