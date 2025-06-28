@@ -34,3 +34,10 @@ class InspectionCenterResponse(BaseModel):
     agent_card: Optional[AgentCard] = None
     result: List[str]
     status_code: int = 200
+
+class InsepectionCenterConnectionValidationResponse(BaseModel):
+    agent_url: str
+    agent_card: Optional[AgentCard] = None
+    is_valid: bool
+    result: Optional[List[str]] = None
+    status_code: int = 200

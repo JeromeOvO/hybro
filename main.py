@@ -89,7 +89,7 @@ async def send_task_to_hostAgent(input: UserInput):
     return response
 
 # Inspection Center Endpoints
-@app.post("/inspectionCenter/inspect")
+@app.post("/inspectionCenter/inspectAgentCard")
 async def inspect_agent(request: Request):
     inspection_center = InspectionCenter()
 
@@ -101,8 +101,26 @@ async def inspect_agent(request: Request):
     
     logger.info("inspectionCenter/inspect request: {}", agent_url)
     inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
-    inspection_center_response = await inspection_center.inspect(inspection_center_request)
+    inspection_center_response = await inspection_center.inspect_agent_card(inspection_center_request)
 
+    result = inspection_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
+
+    return response
+
+@app.post("/inspectionCenter/inspectA2AConnection")
+async def inspect_a2a_connection(request: Request):
+    inspection_center = InspectionCenter()
+    request_data = await request.json()
+    agent_url = request_data.get('agent_url')
+
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    
+    logger.info("inspectionCenter/inspectA2AConnection request: {}", agent_url)
+
+    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
+    inspection_center_response = await inspection_center.inspect_a2a_connection(inspection_center_request)
     result = inspection_center_response.model_dump_json(exclude_none=False)
     response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
 
