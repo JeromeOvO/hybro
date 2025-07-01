@@ -1,6 +1,7 @@
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
-from a2a.types import TaskState, AgentCard
+from a2a.types import TaskState, AgentCard, Message
+from models.agent import Agent
 
 
 class Step(BaseModel):
@@ -40,4 +41,29 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
     agent_card: Optional[AgentCard] = None
     is_valid: bool
     result: Optional[List[str]] = None
+    status_code: int = 200
+
+class OrchestrationCenterResponse(BaseModel):
+    task_id: str
+    agent_id: str
+    step_id: str
+    input_data: Any
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    message: Optional[Message] = None
+
+class DebatationCenterResponse(BaseModel):
+    task_id: str
+    agent_id: str
+    step_id: str
+    result: Optional[Any] = None
+    error: Optional[str] = None
+    status_code: int = 200
+
+class AgentCenterResponse(BaseModel):
+    agent_id: str
+    agent_card: Optional[AgentCard] = None
+    agent: Optional[Agent] = None
+    agents: Optional[List[Agent]] = None
+    success: bool
+    error: Optional[str] = None
     status_code: int = 200

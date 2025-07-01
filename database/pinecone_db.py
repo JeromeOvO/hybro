@@ -15,9 +15,7 @@ class PineconeDB:
             api_key=os.getenv("PINECONE_API_KEY")
         )
         
-        # For serverless, we don't need to create the index here
-        # as it should be created through the Pinecone console
-        
+    
         # Get the existing index
         self.index = pc.Index(self.index_name)
         
@@ -63,12 +61,11 @@ def test_pinecone_connection():
         pinecone_db.connect()
         # Check if we can access index info to verify connection
         index_stats = pinecone_db.index.describe_index_stats()
-        print(f"连接成功! 索引信息: {index_stats}")
+        print(f"Connection successful! Index info: {index_stats}")
         return True
     except Exception as e:
-        print(f"连接失败: {str(e)}")
+        print(f"Connection failed: {str(e)}")
         return False
 
-# 如果直接运行此文件，测试连接
 if __name__ == "__main__":
     test_pinecone_connection()

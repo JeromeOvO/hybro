@@ -30,6 +30,7 @@ class A2AService:
     def __init__(self):
         pass
     
+    # for inspection center
     async def dry_send_message(self, a2a_client: A2AClient, aegnt_card: AgentCard, message_text: str) -> InsepectionCenterConnectionValidationResponse:
         message = Message(
             role=Role.user,
@@ -185,7 +186,7 @@ class A2AService:
         return errors
 
 
-
+    # to be continued
 
 
 a2a_service = A2AService()

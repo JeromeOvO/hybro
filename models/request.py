@@ -2,6 +2,9 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 from uuid import uuid4
 from a2a.types import Message, TextPart
+from a2a.types import AgentCard
+from models.agent import Agent
+
 
 class TaskRequest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -80,4 +83,22 @@ class SessionInput(BaseModel):
     session_id: Optional[str] = None
 
 class InspectionCenterRequest(BaseModel):
+    agent_id: Optional[str] = None
     agent_url: str
+
+class OrchestrationCenterRequest(BaseModel):
+    task_id: str
+ 
+class DebatationCenterRequest(BaseModel):
+    task_id: str
+
+class AgentCenterRequest(BaseModel):
+    agent_id: Optional[str] = None
+    agent_card: Optional[AgentCard] = None
+    call_increment: Optional[int] = 0
+    call_success_increment: Optional[int] = 0
+    like_increment: Optional[int] = 0
+    dislike_increment: Optional[int] = 0
+    query_text: Optional[str] = None
+    agent: Optional[Agent] = None
+    agent_count: Optional[int] = 0

@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 from datetime import datetime
 from models.agent import Agent
-from models.task import RootTask, ChildTask, TaskSession
+from models.task import RootTask, SubTask, TaskSession
+from a2a.types import AgentCard
 import uuid
 from dotenv import load_dotenv
 import os
@@ -70,31 +71,7 @@ class MongoDB:
             raise ConnectionError("MongoDB client is not connected. Please call connect() first.")
         return self.db.task_sessions
 
-    def serialize_mongodb_doc(self, doc):
-        """Convert MongoDB document to JSON-serializable dict"""
-        if doc is None:
-            return None
-        
-        # Convert ObjectId to string
-        if "_id" in doc:
-            doc["_id"] = str(doc["_id"])
-        
-        # Recursively process embedded documents
-        for key, value in doc.items():
-            if isinstance(value, ObjectId):
-                doc[key] = str(value)
-            elif isinstance(value, datetime):
-                doc[key] = value.isoformat()
-            elif isinstance(value, dict):
-                doc[key] = self.serialize_mongodb_doc(value)
-            elif isinstance(value, list):
-                doc[key] = [self.serialize_mongodb_doc(item) if isinstance(item, dict) else 
-                            str(item) if isinstance(item, ObjectId) else 
-                            item.isoformat() if isinstance(item, datetime) else 
-                            item for item in value]
-        
-        return doc
-
+# agent management
     async def add_agent(self, agent: Agent) -> str:
         """
         Add an agent to the database
@@ -103,85 +80,12 @@ class MongoDB:
             agent: agent in Agent model
             
         Returns:
-            str: ID of the added agent
+            str: inserted_id
         """
-        # 将Pydantic模型转换为dict
-        agent_dict = agent.dict() if hasattr(agent, 'dict') else agent.model_dump()
-        
-        # Insert into collection
-        result = await self.agents_collection.insert_one(agent_dict)
+        result = await self.agents_collection.insert_one(agent.model_dump())
         return str(result.inserted_id)
     
-    async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get an agent by AgentID
-        
-        Args:
-            agent_id: AgentID of the agent to retrieve
-            
-        Returns:
-            Dict: Agent document or None if not found
-        """
-        try:
-            agent = await self.agents_collection.find_one({"agent_id": agent_id})
-            # try to query by agent_id as ObjectId
-            if not agent and len(agent_id) == 24:
-                try:
-                    agent = await self.agents_collection.find_one({"agent_id": ObjectId(agent_id)})
-                except:
-                    pass
-        except Exception:
-            # if error, try to query by agent_id directly
-            agent = await self.agents_collection.find_one({"agent_id": agent_id})
-        
-        return self.serialize_mongodb_doc(agent) if agent else None
-    
-    async def get_agents(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[Dict[str, Any]]:
-        """
-        Get multiple agents matching a query
-        
-        Args:
-            query: Query filter
-            limit: Maximum number of results (0 for no limit)
-            
-        Returns:
-            List[Dict]: List of agent documents
-        """
-        if query is None:
-            query = {}
-            
-        cursor = self.agents_collection.find(query)
-        if limit > 0:
-            cursor = cursor.limit(limit)
-            
-        agents = []
-        async for agent in cursor:
-            agents.append(self.serialize_mongodb_doc(agent))
-            
-        return agents
-    
-    async def update_agent(self, agent_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update an agent
-        
-        Args:
-            agent_id: ID of the agent to update
-            update_data: New data to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        # If update_data is a Pydantic model, convert to dict
-        if isinstance(update_data, Agent):
-            update_data = update_data.model_dump(exclude_unset=True)
-        
-        result = await self.agents_collection.update_one(
-            {"agent_id": ObjectId(agent_id)},
-            {"$set": update_data}
-        )
-        return result.modified_count > 0
-    
-    async def delete_agent(self, agent_id: str) -> bool:
+    async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
         """
         Delete an agent
         
@@ -191,417 +95,91 @@ class MongoDB:
         Returns:
             bool: True if deletion was successful
         """
-        result = await self.agents_collection.delete_one({"agent_id": ObjectId(agent_id)})
+        result = await self.agents_collection.delete_one({"agent_id": agent_id})
         return result.deleted_count > 0
     
-    async def add_task(self, task: RootTask) -> str:
+    async def get_agent_by_agent_id(self, agent_id: str) -> Optional[Agent]:
         """
-        Add a task to MongoDB
+        Get an agent by AgentID
         
         Args:
-            task: The task to add
+            agent_id: AgentID of the agent to retrieve
             
         Returns:
-            str: The ID of the added task
+            Agent: Agent document or None if not found
         """
-        # 为任务生成ID（如果尚未设置）
-        if not task.task_id:
-            task.task_id = str(uuid.uuid4())
+        agent = await self.agents_collection.find_one({"agent_id": agent_id})
         
-        # 将Pydantic模型转换为dict
-        task_dict = task.dict() if hasattr(task, 'dict') else task.model_dump()
-        
-        # 插入字典而不是对象
-        result = await self.tasks_collection.insert_one(task_dict)
-        
-        # 返回任务ID
-        return task.task_id
-
-    async def get_task(self, task_id: str) -> Optional[RootTask]:
+        return Agent(**agent) if agent else None
+    
+    async def get_all_agents(self) -> List[Agent]:
         """
-        Get a task by ID
-        
-        Args:
-            task_id: ID of the task to retrieve
-            
-        Returns:
-            Dict: Task document or None if not found
+        Get all agents
         """
-        task = await self.tasks_collection.find_one({"task_id": task_id})
-        if not task:
-            return None
-        
-        # serialize the task to dict
-        task_dict = self.serialize_mongodb_doc(task)
-        if not task_dict:
-            return None
-        
-        # fill the missing fields in subtasks
-        if "subtasks" in task_dict and task_dict["subtasks"]:
-            for i, subtask_ref in enumerate(task_dict["subtasks"]):
-                # if subtask only contains minimal reference information, fill the necessary fields
-                if "task" not in subtask_ref:
-                    # create a basic Task object dictionary, using valid enum values
-                    subtask_ref["task"] = {
-                        "id": subtask_ref.get("task_id", ""),
-                        "sessionId": task_dict.get("task_id", ""),
-                        "status": {
-                            "state": "submitted",
-                            "timestamp": datetime.now().isoformat()
-                        },
-                        "artifacts": [],
-                        "history": [],
-                        "metadata": {}
-                    }
-                
-                # ensure parent_id field exists
-                if "parent_id" not in subtask_ref:
-                    subtask_ref["parent_id"] = task_dict.get("task_id", "")
-                
-                # ensure other necessary fields exist
-                if "priority" not in subtask_ref:
-                    subtask_ref["priority"] = 1
-                
-                if "dependencies" not in subtask_ref:
-                    subtask_ref["dependencies"] = []
-        
-        return RootTask.model_validate(task_dict)
-
-    async def get_tasks(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[RootTask]:
+        results = self.agents_collection.find()
+        agents = []
+        async for agent in results: 
+            agents.append(Agent(**agent))
+        return agents
+    
+    async def get_agents_with_conditions(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[Agent]:
         """
-        Get multiple tasks matching a query
+        Get multiple agents matching a query
         
         Args:
             query: Query filter
             limit: Maximum number of results (0 for no limit)
             
         Returns:
-            List[RootTask]: List of task objects
+            List[Agent]: List of agent documents
         """
-        
         if query is None:
             query = {}
             
-        cursor = self.tasks_collection.find(query)
+        results = self.agents_collection.find(query)
         if limit > 0:
-            cursor = cursor.limit(limit)
+            results = results.limit(limit)
             
-        tasks = []
-        async for task_dict in cursor:
-            task_dict = self.serialize_mongodb_doc(task_dict)
-            if not task_dict:
-                continue
+        agents = []
+        async for agent in results:
+            agents.append(Agent(**agent))
             
-            # fill the missing fields in subtasks, similar to get_task method
-            if "subtasks" in task_dict and task_dict["subtasks"]:
-                for i, subtask_ref in enumerate(task_dict["subtasks"]):
-                    if "task" not in subtask_ref:
-                        subtask_ref["task"] = {
-                            "id": subtask_ref.get("task_id", ""),
-                            "sessionId": task_dict.get("task_id", ""),
-                            "status": {
-                                "state": "submitted",
-                                "timestamp": datetime.now().isoformat()
-                            },
-                            "artifacts": [],
-                            "history": [],
-                            "metadata": {}
-                        }
-                    
-                    if "parent_id" not in subtask_ref:
-                        subtask_ref["parent_id"] = task_dict.get("task_id", "")
-                    
-                    if "priority" not in subtask_ref:
-                        subtask_ref["priority"] = 1
-                    
-                    if "dependencies" not in subtask_ref:
-                        subtask_ref["dependencies"] = []
-            
-            tasks.append(RootTask.parse_obj(task_dict))
-            
-        return tasks
-
-    async def update_task(self, task_id: str, update_data: Dict[str, Any]) -> bool:
+        return agents
+    
+    async def update_agent_agent_card_by_agent_id(self, agent_id: str, agent_card: AgentCard) -> bool:
         """
-        Update a task
+        Update an agent
         
         Args:
-            task_id: ID of the task to update
-            update_data: New data to update
+            agent_id: ID of the agent to update
+            agent_card: New agent card to update
             
         Returns:
             bool: True if update was successful
         """
-        # If update_data is a Pydantic model, convert to dict
-        if isinstance(update_data, RootTask):
-            update_data = update_data.model_dump(exclude_unset=True)
-        
-        result = await self.tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": update_data}
-        )
-        return result.modified_count > 0
-    
-    async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
-        """
-        Update the history of a task
-        """
-        result = await self.tasks_collection.update_one(
-            {"task_id": task_id},
-            {"$set": {"task.history": history}}
+        result = await self.agents_collection.update_one(
+            {"agent_id": agent_id},
+            {"$set": agent_card.model_dump(exclude_unset=True)}
         )
         return result.modified_count > 0
 
-    async def delete_task(self, task_id: str) -> bool:
+    async def update_agent_by_agent_id(self, agent_id: str, agent: Agent) -> bool:
         """
-        Delete a task
+        Update an agent
+        """
+        if not agent:
+            raise ValueError("Agent is required")
         
-        Args:
-            task_id: ID of the task to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        result = await self.tasks_collection.delete_one({"task_id": task_id})
-        return result.deleted_count > 0
-
-    async def add_child_task(self, child_task: ChildTask) -> str:
-        """
-        Add a child task to the database
-        
-        Args:
-            child_task: ChildTask object to add
-            
-        Returns:
-            str: ID of the added child task
-        """
-        # Generate ID if not set
-        if not child_task.task_id:
-            child_task.task_id = str(uuid.uuid4())
-        
-        # Convert the Pydantic model to dict for MongoDB storage
-        child_task_dict = child_task.dict() if hasattr(child_task, 'dict') else child_task.model_dump()
-        
-        # Insert the dictionary
-        result = await self.child_tasks_collection.insert_one(child_task_dict)
-        return child_task.task_id
-
-    async def get_child_task(self, child_task_id: str) -> Optional[ChildTask]:
-        """
-        Get a child task by ID
-        
-        Args:
-            child_task_id: ID of the child task to retrieve
-            
-        Returns:
-            Dict: Child task document or None if not found
-        """
-        child_task = await self.child_tasks_collection.find_one({"task_id": child_task_id})
-        return self.serialize_mongodb_doc(child_task) if child_task else None
-
-    async def get_child_tasks_by_parent(self, root_task_id: str) -> List[Dict[str, Any]]:
-        """
-        Get all child tasks for a parent task
-        
-        Args:
-            root_task_id: ID of the parent task
-            
-        Returns:
-            List[Dict]: List of child task documents
-        """
-        cursor = self.child_tasks_collection.find({"parent_id": root_task_id})
-        child_tasks = []
-        async for task in cursor:
-            child_tasks.append(self.serialize_mongodb_doc(task))
-        return child_tasks
-
-    async def update_child_task(self, child_task_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a child task
-        
-        Args:
-            child_task_id: ID of the child task to update
-            update_data: New data to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        # If update_data is a Pydantic model, convert to dict
-        if isinstance(update_data, ChildTask):
-            update_data = update_data.model_dump(exclude_unset=True)
-        
-        result = await self.child_tasks_collection.update_one(
-            {"task_id": child_task_id},
-            {"$set": update_data}
-        )
-        return result.modified_count > 0
-
-    async def delete_child_task(self, child_task_id: str) -> bool:
-        """
-        Delete a child task
-        
-        Args:
-            child_task_id: ID of the child task to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        result = await self.child_tasks_collection.delete_one({"task_id": child_task_id})
-        return result.deleted_count > 0
-
-    async def add_task_session(self, task_session: TaskSession) -> str:
-        """
-        Add a task session to the database
-        
-        Args:
-            task_session: TaskSession object to add
-            
-        Returns:
-            str: ID of the added task session
-        """
-        # Generate ID if not set
-        if not task_session.session_id:
-            task_session.session_id = str(uuid.uuid4())
-        
-        # Convert the Pydantic model to dict for MongoDB storage
-        task_session_dict = task_session.dict() if hasattr(task_session, 'dict') else task_session.model_dump()
-        
-        # Insert the dictionary
-        result = await self.task_sessions_collection.insert_one(task_session_dict)
-        return task_session.session_id
-    
-    async def get_task_session(self, session_id: str) -> Optional[TaskSession]:
-        """
-        Get a task session by ID
-        
-        Args:
-            session_id: ID of the task session to retrieve
-            
-        Returns:
-            Dict: Task session document or None if not found
-        """
-        task_session = await self.task_sessions_collection.find_one({"session_id": session_id})
-        return self.serialize_mongodb_doc(task_session) if task_session else None
-    
-    async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a task session
-        
-        Args:
-            session_id: ID of the task session to update
-            update_data: New data to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": update_data}
+        result = await self.agents_collection.update_one(
+            {"agent_id": agent_id},
+            {"$set": agent.model_dump(exclude_unset=True)}
         )
 
         return result.modified_count > 0
     
-    async def delete_task_session(self, session_id: str) -> bool:
-        """
-        Delete a task session
-        
-        Args:
-            session_id: ID of the task session to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        result = await self.task_sessions_collection.delete_one({"session_id": session_id})
-        return result.deleted_count > 0
 
-    async def add_root_task_to_session(self, session_id: str, root_task_id: str) -> bool:
-        """
-        Add a root task to a task session
-        
-        Args:
-            session_id: ID of the task session to add the root task to
-            root_task_id: ID of the root task to add
+# task management
 
-        Returns:
-            bool: True if addition was successful
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$push": {"rootTasks": root_task_id}}
-        )
-        return result.modified_count > 0
-    
-    async def get_root_tasks_by_session(self, session_id: str) -> List[RootTask]:
-        """
-        Get all root tasks for a task session
-        
-        Args:
-            session_id: ID of the task session to get root tasks from
 
-        Returns:
-            List[RootTask]: List of root task objects
-        """
-        result = await self.task_sessions_collection.find_one({"session_id": session_id})
-        root_task_ids = result["rootTasks"] if result and "rootTasks" in result else []
-        root_tasks = []
-        for task_id in root_task_ids:
-            task_data = await self.tasks_collection.find_one({"task_id": task_id})
-            if task_data:
-                root_tasks.append(RootTask.model_validate(task_data))
-        return root_tasks
-    
-    async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
-        """
-        Get all task sessions for a user
-        """
-        session_docs = self.task_sessions_collection.find({"user_name": user_name})
-        sessions = []
-        async for session_doc in session_docs:
-            sessions.append(self.serialize_mongodb_doc(session_doc))
-        return sessions
-
-    async def get_all_task_sessions(self) -> List[Dict[str, Any]]:
-        """
-        Get all task sessions from the database
-        
-        Returns:
-            List[Dict]: List of all task session documents
-        """
-        session_docs = self.task_sessions_collection.find({})
-        sessions = []
-        async for session_doc in session_docs:
-            sessions.append(self.serialize_mongodb_doc(session_doc))
-        return sessions
-
-    async def update_root_task_in_session(self, session_id: str, root_task_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a root task in a session.
-        Args:
-            session_id: ID of the session (not used in update, for interface consistency)
-            root_task_id: ID of the root task to update
-            update_data: Dictionary of fields to update
-        Returns:
-            bool: True if update was successful
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$set": {"rootTasks.$[task]": update_data}}
-        )
-        return result.modified_count > 0
-
-    async def delete_root_task_from_session(self, session_id: str, root_task_id: str) -> bool:
-        """
-        Delete a root task from a task session.
-        Args:
-            session_id: ID of the task session to delete the root task from
-            root_task_id: ID of the root task to delete
-        Returns:
-            bool: True if deletion was successful
-        """
-        result = await self.task_sessions_collection.update_one(
-            {"session_id": session_id},
-            {"$pull": {"rootTasks": root_task_id}}
-        )
-        return result.modified_count > 0
 
 mongodb = MongoDB() 

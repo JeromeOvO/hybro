@@ -1,39 +1,33 @@
+from enum import Enum
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from a2a.types import AgentCard
 
+
+class AgentStatus(Enum):
+    active = "active"
+    inactive = "inactive"
+    deleted = "deleted"
 
 class Agent(BaseModel):
 
     # Primary identification field
     agent_id: str
 
-    # Agent provider
-    agent_provider: str
-
     # Agent card
     agent_card: AgentCard
 
     # Agent status
-    agent_status: bool = False
+    agent_status: AgentStatus = AgentStatus.active
 
-    # RAG URL
-    rag_url: Optional[str] = None
-
+    # Count for agent usage
     call_count: int = 0
 
+    # Count for agent success usage
     call_success_count: int = 0
 
+    # Like count from user
     like_count: int = 0
 
+    # Dislike count from user   
     dislike_count: int = 0
-
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Agent":
-        """Create agent from dictionary"""
-        return cls(**data)
-
-    def to_agent_card(self) -> AgentCard:
-        """Return the agent card directly"""
-        return self.agentCard
