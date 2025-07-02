@@ -32,3 +32,9 @@ class QueryTextRequiredError(Error):
     error_code: str = "query_text_required"
     error_message: str = "Query text is required"
     error_data: Optional[Any] = None
+
+class IllgalParameterError(Error):
+    status_code: int = 200
+    error_code: str = "illgal_parameter"
+    error_message: str = "Illegal parameter"
+    error_data: Optional[Any] = None

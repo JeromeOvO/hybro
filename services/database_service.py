@@ -5,7 +5,7 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from services.openai_service import openai_service
 from models.agent import Agent
-from models.task import RootTask, SubTask, TaskSession
+from models.task import BaseTask, MetaTask, TaskSession
 from a2a.types import AgentCard
 
 # Database Service designed for:
@@ -218,4 +218,138 @@ class DatabaseService:
             logging.error(f"Failed to update agent {agent_id} in databases: {str(e)}")
             return False
     
+
+
+
     # tassk management
+    async def add_base_task(self, base_task: BaseTask) -> bool:
+        """
+        Add a base task to the database
+        """
+
+        # check if task_id is provided
+        if base_task.task_id == "":
+            base_task.task_id = str(uuid.uuid4())
+
+        try:
+            await self.mongo.add_base_task(base_task)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to add base task {base_task.task_id} to databases: {str(e)}")
+            return False
+    
+    async def add_meta_task(self, meta_task: MetaTask) -> bool:
+        """
+        Add a meta task to the database
+        """
+
+        # check if task_id is provided
+        if meta_task.task_id == "":
+            meta_task.task_id = str(uuid.uuid4())
+
+        try:
+            await self.mongo.add_meta_task(meta_task)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to add meta task {meta_task.task_id} to databases: {str(e)}")
+            return False
+    
+    async def delete_meta_tasks_by_parent_task_id(self, parent_task_id: str):
+        """
+        Recursively delete all meta tasks whose parent_task_id is the given parent_task_id.
+        """
+        meta_tasks = await self.mongo.get_meta_tasks_by_parent_task_id(parent_task_id)
+        for meta_task in meta_tasks:
+            await self.delete_meta_task_by_task_id(meta_task['task_id'])
+
+    async def delete_base_task_by_task_id(self, task_id: str) -> bool:
+        """
+        Delete a base task by task_id, and recursively delete all its meta tasks.
+        """
+        try:
+            await self.delete_meta_tasks_by_parent_task_id(task_id)
+            await self.mongo.delete_base_task_by_task_id(task_id)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to delete base task {task_id} from databases: {str(e)}")
+            return False
+
+    async def delete_meta_task_by_task_id(self, task_id: str) -> bool:
+        """
+        Delete a meta task by task_id, and recursively delete all its sub meta tasks.
+        """
+        try:
+            await self.delete_meta_tasks_by_parent_task_id(task_id)
+            await self.mongo.delete_meta_task_by_task_id(task_id)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to delete meta task {task_id} from databases: {str(e)}")
+            return False
+
+    async def delete_task_session_by_session_id(self, session_id: str) -> bool:
+        """
+        Delete a task session by session_id, and delete all its base tasks and their meta tasks.
+        """
+        try:
+            base_tasks = await self.mongo.get_base_tasks_by_session_id(session_id)
+            for base_task in base_tasks:
+                await self.delete_base_task_by_task_id(base_task['task_id'])
+            await self.mongo.delete_task_session_by_session_id(session_id)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to delete task session {session_id} from databases: {str(e)}")
+            return False
+    
+    async def get_base_task_by_task_id(self, task_id: str) -> Optional[BaseTask]:
+        """
+        Get a base task by task_id
+        """
+        return await self.mongo.get_base_task_by_task_id(task_id)
+    
+    async def get_meta_task_by_task_id(self, task_id: str) -> Optional[MetaTask]:
+        """
+        Get a meta task by task_id
+        """
+        return await self.mongo.get_meta_task_by_task_id(task_id)
+    
+    async def get_task_session_by_session_id(self, session_id: str) -> Optional[TaskSession]:
+        """
+        Get a task session by session_id
+        """
+        return await self.mongo.get_task_session_by_session_id(session_id)
+    
+    async def get_task_sessions_by_user_name(self, user_name: str) -> List[TaskSession]:
+        """
+        Get all task sessions by user_name
+        """
+        return await self.mongo.get_task_sessions_by_user_name(user_name)
+    
+    async def get_base_tasks_by_session_id(self, session_id: str) -> List[BaseTask]:
+        """
+        Get all base tasks by session_id
+        """
+        return await self.mongo.get_base_tasks_by_session_id(session_id)
+    
+    async def get_meta_tasks_by_parent_task_id(self, parent_task_id: str) -> List[MetaTask]:
+        """
+        Get all meta tasks by parent_task_id
+        """
+        return await self.mongo.get_meta_tasks_by_parent_task_id(parent_task_id)
+    
+    async def update_meta_task_by_task_id(self, task_id: str, meta_task: MetaTask) -> bool:
+        """
+        Update a meta task by task_id
+        """
+        return await self.mongo.update_meta_task_by_task_id(task_id, meta_task)
+    
+    async def update_base_task_by_task_id(self, task_id: str, base_task: BaseTask) -> bool:
+        """
+        Update a base task by task_id
+        """
+        return await self.mongo.update_base_task_by_task_id(task_id, base_task)
+    
+    async def update_task_session_by_session_id(self, session_id: str, task_session: TaskSession) -> bool:
+        """
+        Update a task session by session_id
+        """
+        return await self.mongo.update_task_session_by_session_id(session_id, task_session)

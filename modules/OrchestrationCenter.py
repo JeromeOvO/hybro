@@ -3,6 +3,8 @@ from models.response import OrchestrationCenterResponse
 from services.task_service import TaskService
 from services.openai_service import OpenAIService
 
+from a2a.types import TaskState
+
 class OrchestrationCenter:
 
     def __init__(self):
