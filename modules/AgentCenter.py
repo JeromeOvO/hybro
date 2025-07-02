@@ -101,7 +101,7 @@ class AgentCenter:
             )
 
 
-    async def delete_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
+    async def remove_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
         agent_id = request.agent_id
         if agent_id is None:
             raise AgentIdRequiredError()
@@ -124,7 +124,7 @@ class AgentCenter:
             status_code=200
         )
     
-    async def get_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
+    async def query_agent_by_agent_id(self, request: AgentCenterRequest) -> AgentCenterResponse:
         agent_id = request.agent_id
         if agent_id is None:
             raise AgentIdRequiredError()
