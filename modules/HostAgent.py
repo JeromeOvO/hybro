@@ -12,7 +12,7 @@ from common.types import TaskSendParams
 from common.utils.remote_agent_connection import RemoteAgentConnections
 from a2a.client.client import A2ACardResolver
 
-from models.task import ChildTask
+from models.task import MetaTask
 from models.response import UserResponse
 from services.task_service import TaskService
 from services.openai_service import OpenAIService

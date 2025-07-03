@@ -1,4 +1,4 @@
-from a2a.client.client import A2AClient
+from a2a.client.client import A2AClient, A2ACardResolver
 from a2a.types import (
     AgentCard,
     SendMessageRequest,
@@ -13,11 +13,18 @@ from a2a.types import (
     MessageSendConfiguration,
     JSONRPCErrorResponse,
 )
-from uuid import uuid4
-from fastapi.responses import JSONResponse
-from models.response import InspectionCenterResponse, InsepectionCenterConnectionValidationResponse
+
+from models.response import InsepectionCenterConnectionValidationResponse, OrchestrationCenterResponse
+from models.request import OrchestrationCenterRequest
+from models.error import IllgalParameterError, A2AServiceError
+from models.task import MetaTask
+
 import logging
 from typing import Any
+from uuid import uuid4
+import httpx
+
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +36,26 @@ logger = logging.getLogger(__name__)
 class A2AService:
     def __init__(self):
         pass
+
+    async def get_a2a_client(self, agent_url: str) -> A2AClient:
+        # check if agent url is valid
+
+        if not agent_url:
+            raise IllgalParameterError()
+        
+        try:
+            httpx_client = httpx.AsyncClient(timeout=600.0)
+            card_resolver = A2ACardResolver(httpx_client, str(agent_url))
+            card = await card_resolver.get_agent_card()
+            a2a_client = A2AClient(httpx_client, agent_card=card)
+
+            return a2a_client
+
+        except Exception as e:
+            logger.error(
+                f'Failed to initialize a2a client: {e}', exc_info=True
+            )
+            raise A2AServiceError()
     
     # for inspection center
     async def dry_send_message(self, a2a_client: A2AClient, aegnt_card: AgentCard, message_text: str) -> InsepectionCenterConnectionValidationResponse:
@@ -186,7 +213,10 @@ class A2AService:
         return errors
 
 
-    # to be continued
+    # for orchestration center
+    async def send_meta_task_to_agent(self, a2a_client: A2AClient, meta_task: MetaTask) -> OrchestrationCenterResponse:
+
+        pass
 
 
 a2a_service = A2AService()

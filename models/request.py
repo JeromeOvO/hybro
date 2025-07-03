@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 from uuid import uuid4
-from a2a.types import Message, TextPart
-from a2a.types import AgentCard
+from a2a.types import Message, TextPart, Task, AgentCard
 from models.agent import Agent
+from models.task import MetaTask, BaseTask, TaskSession
 
 
 class TaskRequest(BaseModel):
@@ -102,3 +102,16 @@ class AgentCenterRequest(BaseModel):
     query_text: Optional[str] = None
     agent: Optional[Agent] = None
     agent_count: Optional[int] = 0
+
+class TaskCenterRequest(BaseModel):
+    task_id: Optional[str] = None
+    user_name: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    meta_task: Optional[MetaTask] = None
+    base_task: Optional[BaseTask] = None
+    task_session: Optional[TaskSession] = None
+    task: Optional[Task] = None 
+    message: Optional[Message] = None
+

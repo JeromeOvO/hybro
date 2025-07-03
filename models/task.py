@@ -2,6 +2,10 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 from a2a.types import Task, Message
 from datetime import datetime
+from enum import Enum
+
+class TaskDefaultValue(Enum):
+    NOT_ASSIGNED = "Not Assigned"
 
 
 class MetaTask(BaseModel):
@@ -9,7 +13,7 @@ class MetaTask(BaseModel):
 
     task_id: str
     parent_task_id: str
-    agent_id: str = Field(default="Not Assigned")
+    agent_id: str = Field(default=TaskDefaultValue.NOT_ASSIGNED.value)
     task_description: Optional[str] = Field(default="")
     task: Task | None = None
     execution_order: int = 0

@@ -254,6 +254,23 @@ class DatabaseService:
             logging.error(f"Failed to add meta task {meta_task.task_id} to databases: {str(e)}")
             return False
     
+    async def add_task_session(self, task_session: TaskSession) -> bool:
+        """
+        Add a task session to the database
+        """
+
+        # check if session_id is provided
+        if task_session.session_id == "":
+            task_session.session_id = str(uuid.uuid4())
+
+        try:
+            await self.mongo.add_task_session(task_session)
+            return True
+        except Exception as e:
+            logging.error(f"Failed to add task session {task_session.session_id} to databases: {str(e)}")
+            return False
+
+
     async def delete_meta_tasks_by_parent_task_id(self, parent_task_id: str):
         """
         Recursively delete all meta tasks whose parent_task_id is the given parent_task_id.

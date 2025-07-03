@@ -1,8 +1,8 @@
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
-from a2a.types import TaskState, AgentCard, Message
+from a2a.types import TaskState, AgentCard, Message, Task
 from models.agent import Agent
-
+from models.task import MetaTask, BaseTask, TaskSession
 
 class Step(BaseModel):
     step_id: str
@@ -64,6 +64,22 @@ class AgentCenterResponse(BaseModel):
     agent_card: Optional[AgentCard] = None
     agent: Optional[Agent] = None
     agents: Optional[List[Agent]] = None
+    success: bool
+    error: Optional[str] = None
+    status_code: int = 200
+
+class TaskCenterResponse(BaseModel):
+    task_id: Optional[str] = None
+    user_name: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    task: Optional[Task] = None
+    meta_task: Optional[MetaTask] = None
+    base_task: Optional[BaseTask] = None
+    task_session: Optional[TaskSession] = None
+    meta_tasks: Optional[List[MetaTask]] = None
+    base_tasks: Optional[List[BaseTask]] = None
+    task_sessions: Optional[List[TaskSession]] = None
     success: bool
     error: Optional[str] = None
     status_code: int = 200
