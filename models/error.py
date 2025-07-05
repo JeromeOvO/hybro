@@ -15,6 +15,12 @@ class AgentNotFoundError(Error):
     error_message: str = "Agent not found"
     error_data: Optional[Any] = None
 
+class AgentNotAssignedError(Error):
+    status_code: int = 200
+    error_code: str = "agent_not_assigned"
+    error_message: str = "Agent not assigned"
+    error_data: Optional[Any] = None
+
 class AgentCardRequiredError(Error):
     status_code: int = 200
     error_code: str = "agent_card_required"
@@ -61,4 +67,16 @@ class A2AServiceError(Error):
     status_code: int = 200
     error_code: str = "a2a_service_error"
     error_message: str = "A2A service error"
+    error_data: Optional[Any] = None
+
+class TaskNotFoundError(Error):
+    status_code: int = 200
+    error_code: str = "task_not_found"
+    error_message: str = "Task not found"
+    error_data: Optional[Any] = None
+
+class AgentAlreadyAssignedError(Error):
+    status_code: int = 200
+    error_code: str = "agent_already_assigned"
+    error_message: str = "Agent already assigned"
     error_data: Optional[Any] = None

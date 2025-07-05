@@ -78,7 +78,7 @@ class MongoDB:
         Returns:
             str: inserted_id
         """
-        result = await self.agents_collection.insert_one(agent.model_dump())
+        result = await self.agents_collection.insert_one(agent.model_dump(mode="json"))
         return str(result.inserted_id)
     
     async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
@@ -179,21 +179,21 @@ class MongoDB:
         """
         Add a base task to the database
         """
-        result = await self.base_tasks_collection.insert_one(base_task.model_dump())
+        result = await self.base_tasks_collection.insert_one(base_task.model_dump(mode="json"))
         return str(result.inserted_id)
 
     async def add_meta_task(self, meta_task: MetaTask) -> str:
         """
         Add a meta task to the database
         """
-        result = await self.meta_tasks_collection.insert_one(meta_task.model_dump())
+        result = await self.meta_tasks_collection.insert_one(meta_task.model_dump(mode="json"))
         return str(result.inserted_id)
     
     async def add_task_session(self, task_session: TaskSession) -> str:
         """
         Add a task session to the database
         """
-        result = await self.task_sessions_collection.insert_one(task_session.model_dump())
+        result = await self.task_sessions_collection.insert_one(task_session.model_dump(mode="json"))
         return str(result.inserted_id)
     
     async def delete_base_task_by_task_id(self, task_id: str) -> bool:

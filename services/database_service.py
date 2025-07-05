@@ -55,6 +55,8 @@ class DatabaseService:
             'metadata': {'type': 'a2a_agent'}
         }
         
+        mongo_id = None
+
         try:
             # Add to MongoDB
             mongo_id = await self.mongo.add_agent(agent)
@@ -157,7 +159,7 @@ class DatabaseService:
         
         # Sort agents in the same order as the Pinecone results
         id_to_position = {id: i for i, id in enumerate(agent_ids)}
-        sorted_agents = sorted(agents, key=lambda agent: id_to_position.get(agent.get('agent_id'), float('inf')))
+        sorted_agents = sorted(agents, key=lambda agent: id_to_position.get(agent.agent_id, float('inf')))
         
         return sorted_agents
     

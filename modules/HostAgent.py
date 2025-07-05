@@ -1,505 +1,587 @@
 # host_agent.py
-import asyncio
-from typing import List, Dict, Any, Optional
+import logging
 
-from a2a.types import (
-    TaskState,
-    Message,
-    TextPart,
-    AgentCard,
-)
-from common.types import TaskSendParams
-from common.utils.remote_agent_connection import RemoteAgentConnections
-from a2a.client.client import A2ACardResolver
 
-from models.task import MetaTask
-from models.response import UserResponse
 from services.task_service import TaskService
 from services.openai_service import OpenAIService
 from services.database_service import DatabaseService
 from services.agent_service import AgentService
+from services.a2a_service import A2AService
+from models.request import ChatRequest, TaskCenterRequest, OrchestrationCenterRequest
+from models.response import ChatResponse, TaskCenterResponse, OrchestrationCenterResponse
+from models.task import BaseTask, MetaTask, TaskDefaultValue
+from a2a.types import Task, Message, TextPart, Role
+from modules.OrchestrationCenter import OrchestrationCenter
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger(__name__)
 
 
+# for bussiness logic
 class HostAgent:
     def __init__(self) -> None:
         self.task_service = TaskService()
         self.openai_service = OpenAIService()
         self.database_service = DatabaseService()
         self.agent_service = AgentService()
+        self.a2a_service = A2AService()
+        self.orchestration_center = OrchestrationCenter()
 
-    async def decompose_task(self, task_id: str) -> List[str]:
-        """
-        Decompose a root task into subtasks using OpenAI.
+    async def send_message(self, request: ChatRequest) -> ChatResponse:
+        user_name = request.user_name
+        user_input = request.user_input
+        session_id = request.session_id
         
-        Args:
-            task_id: The ID of the root task to decompose
-            
-        Returns:
-            List[str]: List of subtask IDs
-            
-        Raises:
-            RuntimeError: If task not found or decomposition fails
-        """
-        root_task = await self.task_service.get_task(task_id)
-        if not root_task:
-            raise RuntimeError(f"Task {task_id!r} not found")
-
-        llm_res = await self.openai_service.decompose_rootTask(root_task)
-        root_id = await self.task_service.create_subtasks_with_openai_content(
-            root_task.task_id, llm_res
-        )
-        root_task = await self.task_service.get_task(root_id)
-
-        if root_task.task.status.state == TaskState.failed:
-            text = root_task.task.status.message.parts[0].text
-            raise RuntimeError(f"OpenAI decomposition failed: {text}")
-
-        return root_task.task_id
-
-    async def process_child_task(self, child_task_id: str) -> Dict[str, Any]:
-        """
-        Send a child task to the appropriate remote agent.
-        
-        Args:
-            child_task_id: The ID of the child task to send
-            
-        Returns:
-            Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
-            
-        Raises:
-            ValueError: If child task or agent not found
-        """
-        child_doc = await self.task_service.get_child_task(child_task_id)
-        if not child_doc:
-            raise ValueError(f"Child task {child_task_id!r} not found")
-
-        # 1) Select Agent
-        agent_id = child_doc.get("agent_id") or await self.find_best_agent_for_task(
-            child_task_id
-        )
-        agent_doc = await self.agent_service.get_agent(agent_id)
-        if not agent_doc:
-            raise ValueError(f"Agent {agent_id!r} not found")
-
-        # 2) Create client / Payload
-        agent_card = AgentCard(**agent_doc["agentCard"])
-        client = RemoteAgentConnections(agent_card)
-        child_task = ChildTask(**child_doc)
-
-        payload = TaskSendParams(
-            id=child_task.task_id,
-            sessionId=child_task.task.sessionId,
-            message=Message(role="user", parts=[TextPart(text=child_task.description)]),
-            acceptedOutputModes=["text"],
-            metadata=child_task.task.metadata,
-        )
-
-        # 3) Choose mode based on capabilities
-        supports_streaming = agent_card.capabilities.streaming
-
-        try:
-            if supports_streaming:
-                return await self._send_streaming(
-                    client, payload, child_task_id, agent_id
-                )
+        # create a new session if not exists
+        if session_id is None:
+            create_session_response = await self.task_service.create_new_session(TaskCenterRequest(user_name=user_name))
+            if create_session_response.success:
+                session_id = create_session_response.session_id
             else:
-                return await self._send_sync(client, payload, child_task_id, agent_id)
-        except Exception as e:
-            # Handle exceptions during task execution
-            error_message = f"Error executing agent: {str(e)}"
-            await self.database_service.update_child_task(
-                child_task_id,
-                {
-                    "agent_id": agent_id,
-                    "task.status.state": TaskState.failed,
-                    "task.status.message": {
-                        "role": "agent",
-                        "parts": [{"type": "text", "text": error_message}],
-                    },
-                },
-            )
-            raise
-
-    # ------------------------------------------------------------------ #
-    # Synchronous Mode: tasks/send
-    # ------------------------------------------------------------------ #
-    async def _send_sync(
-        self,
-        client: RemoteAgentConnections,
-        payload: TaskSendParams,
-        child_task_id: str,
-        agent_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Send task to agent using synchronous mode.
-        
-        Args:
-            client: The remote agent connection client
-            payload: The task parameters to send
-            child_task_id: The ID of the child task
-            agent_id: The ID of the agent
-            
-        Returns:
-            Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
-        """
-        task = await client.send_task(payload)  # Complete Task
-        await self._persist_result(child_task_id, agent_id, task)
-        return {
-            "task_id": child_task_id,
-            "agent_id": agent_id,
-            "state": task.status.state,
-            "result_text": self._extract_text(task),
-        }
-
-    # ------------------------------------------------------------------ #
-    # Streaming Mode: tasks/sendSubscribe
-    # ------------------------------------------------------------------ #
-    async def _send_streaming(
-        self,
-        client: RemoteAgentConnections,
-        payload: TaskSendParams,
-        child_task_id: str,
-        agent_id: str,
-    ) -> Dict[str, Any]:
-        """
-        Send task to agent using streaming mode.
-        
-        Args:
-            client: The remote agent connection client
-            payload: The task parameters to send
-            child_task_id: The ID of the child task
-            agent_id: The ID of the agent
-            
-        Returns:
-            Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
-        """
-        done_evt: asyncio.Event = asyncio.Event()
-        buffer_text: list[str] = []
-        final_task: Optional[Any] = None
-
-        # Change the callback to be a regular function instead of async
-        def _cb(evt, *_):
-            nonlocal final_task
-            name = evt.__class__.__name__
-
-            # ---- 1. Collect text increments ----
-            if name in ("TaskArtifactUpdateEvent", "TaskMessageUpdateEvent"):
-                part = (
-                    evt.artifact.parts[-1]
-                    if name == "TaskArtifactUpdateEvent"
-                    else evt.message.parts[-1]
+                return ChatResponse(
+                    user_name=user_name,
+                    success=False,
+                    error="Failed to create session",
+                    status_code=500
                 )
-                if isinstance(part, TextPart):
-                    buffer_text.append(part.text)
+        
+        # create a new base task
+        new_a2a_task = await self.task_service.create_a2a_task()
+        new_a2a_task.history.append(await self.task_service.create_a2a_message(Role.user, user_input))
 
-            # ---- 2. Handle status events ----
-            elif name == "TaskStatusUpdateEvent":
-                if hasattr(evt, "status") and evt.status.state == "input-required":
-                    buffer_text.append("[ERROR] Agent paused for input — not yet supported")
-                
-                # Check if this is a final event and has the necessary attributes
-                is_final = hasattr(evt, "final") and evt.final
-                
-                # Store the event itself as we may not have a task attribute
-                if is_final:
-                    final_task = evt  # Store the event itself
-                    asyncio.get_event_loop().call_soon_threadsafe(done_evt.set)
-
-        try:
-            await client.send_task(payload, _cb)
-            # Set a timeout for waiting
-            await asyncio.wait_for(done_evt.wait(), timeout=30.0)  # 30 second timeout
-            
-            if final_task:
-                # Extract text from buffer or try to get it from the event
-                result_text = "".join(buffer_text) if buffer_text else "Task completed but no text was returned"
-                
-                # Update the task in the database
-                await self.database_service.update_child_task(
-                    child_task_id,
-                    {
-                        "agent_id": agent_id,
-                        "task.status.state": TaskState.completed,
-                        "task.status.message": {
-                            "role": "agent", 
-                            "parts": [{"type": "text", "text": result_text}]
-                        }
-                    },
-                )
-                
-                return {
-                    "task_id": child_task_id,
-                    "agent_id": agent_id,
-                    "state": TaskState.completed,
-                    "result_text": result_text,
-                }
-            else:
-                # Handle timeout or other issues
-                error_message = "Task execution timed out or failed to complete"
-                if buffer_text:
-                    error_message = "".join(buffer_text)
-                
-                await self.database_service.update_child_task(
-                    child_task_id, 
-                    {
-                        "agent_id": agent_id,
-                        "task.status.state": TaskState.failed,
-                        "task.status.message": {
-                            "role": "agent", 
-                            "parts": [{"type": "text", "text": error_message}]
-                        }
-                    }
-                )
-                return {
-                    "task_id": child_task_id,
-                    "agent_id": agent_id,
-                    "state": TaskState.failed,
-                    "result_text": error_message,
-                }
-                
-        except asyncio.TimeoutError:
-            return await self._fail_and_return(
-                child_task_id,
-                agent_id,
-                "Task execution timed out or failed to complete",
+        create_base_task_response = await self.task_service.create_new_base_task(TaskCenterRequest(user_name=user_name, session_id=session_id, task=new_a2a_task))
+        if not create_base_task_response.success:
+            return ChatResponse(
+                user_name=user_name,
+                success=False,
+                error="Failed to create base task",
+                status_code=500
             )
 
-    # ------------------------------------------------------------------ #
-    # Common: Database Updates & Text Extraction & Error Handling
-    # ------------------------------------------------------------------ #
-    async def _persist_result(
-        self, child_task_id: str, agent_id: str, task_obj: Any
-    ) -> None:
-        """
-        Persist task results to the database.
-        
-        Args:
-            child_task_id: The ID of the child task
-            agent_id: The ID of the agent
-            task_obj: The task object containing results
-        """
-        await self.database_service.update_child_task(
-            child_task_id,
-            {
-                "agent_id": agent_id,
-                "task": task_obj.model_dump(mode="json"),
-                "task.status.state": task_obj.status.state,
-                "result": self._extract_text(task_obj),
-            },
-        )
-
-    async def _fail_and_return(
-        self, child_task_id: str, agent_id: str, error_message: str
-    ) -> Dict[str, Any]:
-        """
-        Handle task failure by updating database and returning error.
-        
-        Args:
-            child_task_id: The ID of the child task
-            agent_id: The ID of the agent
-            error_message: The error message to record
-            
-        Returns:
-            Dict[str, Any]: Result containing task_id, agent_id, failed state, and error message
-        """
-        await self.database_service.update_child_task(
-            child_task_id,
-            {
-                "agent_id": agent_id,
-                "task.status.state": TaskState.failed,
-                "task.status.message": {
-                    "role": "agent",
-                    "parts": [{"type": "text", "text": error_message}],
-                },
-            },
-        )
-        return {
-            "task_id": child_task_id,
-            "agent_id": agent_id,
-            "state": TaskState.failed,
-            "result_text": error_message,
-        }
-
-    @staticmethod
-    def _extract_text(task_obj) -> str:
-        """
-        Extract text from task response, supporting multiple return formats.
-        
-        Compatible with multiple return formats: artifacts → output → messages
-        
-        Args:
-            task_obj: The task object containing response data
-            
-        Returns:
-            str: The extracted text content
-        """
-        # 1) artifacts
-        if getattr(task_obj, "artifacts", None):
-            txt = "".join(
-                p.text
-                for p in task_obj.artifacts[0].parts
-                if isinstance(p, TextPart)
+        # create a meta task
+        new_a2a_task = await self.task_service.create_a2a_task()
+        new_a2a_task.history.append(await self.task_service.create_a2a_message(Role.user, user_input))
+        create_meta_task_response = await self.task_service.create_new_meta_task(TaskCenterRequest(user_name=user_name, parent_task_id=create_base_task_response.task_id, task=new_a2a_task, user_input=user_input))
+        if not create_meta_task_response.success:
+            return ChatResponse(
+                user_name=user_name,
+                success=False,
+                error="Failed to create meta task",
+                status_code=500
             )
-            if txt:
-                return txt
+        
+        # assign agent to meta task
+        assign_agent_to_meta_task_response = await self.orchestration_center.assign_agent_to_meta_task(OrchestrationCenterRequest(task_id=create_meta_task_response.task_id))
 
-        # 2) output.parts
-        if getattr(task_obj, "output", None) and task_obj.output.parts:
-            txt = "".join(
-                p.text for p in task_obj.output.parts if isinstance(p, TextPart)
+        if not assign_agent_to_meta_task_response.success:
+            return ChatResponse(
+                user_name=user_name,
+                success=False,
+                error="Failed to assign agent to meta task",
+                status_code=500
             )
-            if txt:
-                return txt
 
-        # 3) Last agent message
-        if getattr(task_obj, "messages", None):
-            for msg in reversed(task_obj.messages):
-                if msg.role == "agent":
-                    txt = "".join(
-                        p.text for p in msg.parts if isinstance(p, TextPart)
-                    )
-                    if txt:
-                        return txt
-        return ""
+        # send the task to the a2a agent
+        process_meta_task_response = await self.orchestration_center.process_meta_task(OrchestrationCenterRequest(task_id=create_meta_task_response.task_id))
+        logger.info(f"HostAgent: process meta task response: {process_meta_task_response}")
 
-    async def find_best_agent_for_task(self, child_task_id: str, top_k: int = 5) -> str:
-        """
-        Find the most suitable agents for a child task using Pinecone vector search
+        if not process_meta_task_response.success:
+            return ChatResponse(
+                user_name=user_name,
+                user_input=user_input,
+                success=False,
+                error="Failed to process meta task",
+                status_code=500
+            )
         
-        Args:
-            child_task_id: ID of the child task
-            top_k: Number of top agents to return
-            
-        Returns:
-            List[Dict]: List of agent details sorted by relevance
-        """
-        # Get the child task
-        child_task = await self.database_service.get_child_task(child_task_id)
-        if not child_task:
-            raise ValueError(f"Child task with ID {child_task_id} not found")
-        
-        # Get the task description
-        task_description = child_task["description"]
-        
-        # Query Pinecone for similar agents
-        try:
-            best_agents = await self.database_service.query_similar_agents(task_description, top_k)
-        except Exception as e:
-            print(f"Error querying Pinecone: {e}")
-            return None
-
-        best_agent_id = await self.openai_service.select_best_agent_for_task(task_description, best_agents)
-
-        await self.database_service.update_child_task(child_task_id, {"agent_id": best_agent_id})
-        
-        return best_agent_id
-
-    async def summarize_subtask_answers(self, root_task_id: str) -> str:
-        """
-        Collect answers from all subtasks and generate a final summarized answer.
-        
-        Args:
-            root_task_id: The ID of the root task
-            
-        Returns:
-            str: Summarized answer to the original question
-            
-        Raises:
-            ValueError: If root task not found or no subtasks exist
-        """
-        # Get the root task and its subtasks
-        root_task = await self.task_service.get_task(root_task_id)
-        if not root_task:
-            raise ValueError(f"Root task {root_task_id!r} not found")
-        
-        # Get all child tasks
-        child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
-        if not child_tasks:
-            raise ValueError(f"No subtasks found for root task {root_task_id!r}")
-        
-        # Collect answers from completed subtasks
-        subtask_answers = []
-        for child in child_tasks:
-            # Access attributes directly since child is a ChildTask object
-            if child.task.status.state == TaskState.completed:
-                # Extract the answer using existing _extract_text method
-                answer = child.task.status.message.parts[0].text
-                if answer:
-                    subtask_answers.append({
-                        "task_description": child.description,
-                        "answer": answer
-                    })
-        
-        if not subtask_answers:
-            raise ValueError("No completed subtasks with answers found")
-        
-        # Use OpenAI to generate final summary
-        final_answer = await self.openai_service.summarize_subtask_answers(
-            original_question=root_task.task.history[0].parts[0].text,
-            subtask_answers=subtask_answers
+        return ChatResponse(
+            user_name=user_name,
+            user_input=user_input,
+            session_id=session_id,
+            success=True,
+            error=None,
+            status_code=200
         )
+
+
+    # async def decompose_task(self, task_id: str) -> List[str]:
+    #     """
+    #     Decompose a root task into subtasks using OpenAI.
         
-        # Update root task with final answer
-        await self.database_service.update_task(
-            root_task_id,
-            {
-                "task.status.state": TaskState.completed,
-                "task.status.message": {
-                    "role": "agent",
-                    "parts": [{"type": "text", "text": final_answer}]
-                }
-            }
-        )
+    #     Args:
+    #         task_id: The ID of the root task to decompose
+            
+    #     Returns:
+    #         List[str]: List of subtask IDs
+            
+    #     Raises:
+    #         RuntimeError: If task not found or decomposition fails
+    #     """
+    #     root_task = await self.task_service.get_task(task_id)
+    #     if not root_task:
+    #         raise RuntimeError(f"Task {task_id!r} not found")
+
+    #     llm_res = await self.openai_service.decompose_rootTask(root_task)
+    #     root_id = await self.task_service.create_subtasks_with_openai_content(
+    #         root_task.task_id, llm_res
+    #     )
+    #     root_task = await self.task_service.get_task(root_id)
+
+    #     if root_task.task.status.state == TaskState.failed:
+    #         text = root_task.task.status.message.parts[0].text
+    #         raise RuntimeError(f"OpenAI decomposition failed: {text}")
+
+    #     return root_task.task_id
+
+    # async def process_child_task(self, child_task_id: str) -> Dict[str, Any]:
+    #     """
+    #     Send a child task to the appropriate remote agent.
         
-        return final_answer
+    #     Args:
+    #         child_task_id: The ID of the child task to send
+            
+    #     Returns:
+    #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
+            
+    #     Raises:
+    #         ValueError: If child task or agent not found
+    #     """
+    #     child_doc = await self.task_service.get_child_task(child_task_id)
+    #     if not child_doc:
+    #         raise ValueError(f"Child task {child_task_id!r} not found")
+
+    #     # 1) Select Agent
+    #     agent_id = child_doc.get("agent_id") or await self.find_best_agent_for_task(
+    #         child_task_id
+    #     )
+    #     agent_doc = await self.agent_service.get_agent(agent_id)
+    #     if not agent_doc:
+    #         raise ValueError(f"Agent {agent_id!r} not found")
+
+    #     # 2) Create client / Payload
+    #     agent_card = AgentCard(**agent_doc["agentCard"])
+    #     client = RemoteAgentConnections(agent_card)
+    #     child_task = ChildTask(**child_doc)
+
+    #     payload = TaskSendParams(
+    #         id=child_task.task_id,
+    #         sessionId=child_task.task.sessionId,
+    #         message=Message(role="user", parts=[TextPart(text=child_task.description)]),
+    #         acceptedOutputModes=["text"],
+    #         metadata=child_task.task.metadata,
+    #     )
+
+    #     # 3) Choose mode based on capabilities
+    #     supports_streaming = agent_card.capabilities.streaming
+
+    #     try:
+    #         if supports_streaming:
+    #             return await self._send_streaming(
+    #                 client, payload, child_task_id, agent_id
+    #             )
+    #         else:
+    #             return await self._send_sync(client, payload, child_task_id, agent_id)
+    #     except Exception as e:
+    #         # Handle exceptions during task execution
+    #         error_message = f"Error executing agent: {str(e)}"
+    #         await self.database_service.update_child_task(
+    #             child_task_id,
+    #             {
+    #                 "agent_id": agent_id,
+    #                 "task.status.state": TaskState.failed,
+    #                 "task.status.message": {
+    #                     "role": "agent",
+    #                     "parts": [{"type": "text", "text": error_message}],
+    #                 },
+    #             },
+    #         )
+    #         raise
+
+    # # ------------------------------------------------------------------ #
+    # # Synchronous Mode: tasks/send
+    # # ------------------------------------------------------------------ #
+    # async def _send_sync(
+    #     self,
+    #     client: RemoteAgentConnections,
+    #     payload: TaskSendParams,
+    #     child_task_id: str,
+    #     agent_id: str,
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Send task to agent using synchronous mode.
+        
+    #     Args:
+    #         client: The remote agent connection client
+    #         payload: The task parameters to send
+    #         child_task_id: The ID of the child task
+    #         agent_id: The ID of the agent
+            
+    #     Returns:
+    #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
+    #     """
+    #     task = await client.send_task(payload)  # Complete Task
+    #     await self._persist_result(child_task_id, agent_id, task)
+    #     return {
+    #         "task_id": child_task_id,
+    #         "agent_id": agent_id,
+    #         "state": task.status.state,
+    #         "result_text": self._extract_text(task),
+    #     }
+
+    # # ------------------------------------------------------------------ #
+    # # Streaming Mode: tasks/sendSubscribe
+    # # ------------------------------------------------------------------ #
+    # async def _send_streaming(
+    #     self,
+    #     client: RemoteAgentConnections,
+    #     payload: TaskSendParams,
+    #     child_task_id: str,
+    #     agent_id: str,
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Send task to agent using streaming mode.
+        
+    #     Args:
+    #         client: The remote agent connection client
+    #         payload: The task parameters to send
+    #         child_task_id: The ID of the child task
+    #         agent_id: The ID of the agent
+            
+    #     Returns:
+    #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
+    #     """
+    #     done_evt: asyncio.Event = asyncio.Event()
+    #     buffer_text: list[str] = []
+    #     final_task: Optional[Any] = None
+
+    #     # Change the callback to be a regular function instead of async
+    #     def _cb(evt, *_):
+    #         nonlocal final_task
+    #         name = evt.__class__.__name__
+
+    #         # ---- 1. Collect text increments ----
+    #         if name in ("TaskArtifactUpdateEvent", "TaskMessageUpdateEvent"):
+    #             part = (
+    #                 evt.artifact.parts[-1]
+    #                 if name == "TaskArtifactUpdateEvent"
+    #                 else evt.message.parts[-1]
+    #             )
+    #             if isinstance(part, TextPart):
+    #                 buffer_text.append(part.text)
+
+    #         # ---- 2. Handle status events ----
+    #         elif name == "TaskStatusUpdateEvent":
+    #             if hasattr(evt, "status") and evt.status.state == "input-required":
+    #                 buffer_text.append("[ERROR] Agent paused for input — not yet supported")
+                
+    #             # Check if this is a final event and has the necessary attributes
+    #             is_final = hasattr(evt, "final") and evt.final
+                
+    #             # Store the event itself as we may not have a task attribute
+    #             if is_final:
+    #                 final_task = evt  # Store the event itself
+    #                 asyncio.get_event_loop().call_soon_threadsafe(done_evt.set)
+
+    #     try:
+    #         await client.send_task(payload, _cb)
+    #         # Set a timeout for waiting
+    #         await asyncio.wait_for(done_evt.wait(), timeout=30.0)  # 30 second timeout
+            
+    #         if final_task:
+    #             # Extract text from buffer or try to get it from the event
+    #             result_text = "".join(buffer_text) if buffer_text else "Task completed but no text was returned"
+                
+    #             # Update the task in the database
+    #             await self.database_service.update_child_task(
+    #                 child_task_id,
+    #                 {
+    #                     "agent_id": agent_id,
+    #                     "task.status.state": TaskState.completed,
+    #                     "task.status.message": {
+    #                         "role": "agent", 
+    #                         "parts": [{"type": "text", "text": result_text}]
+    #                     }
+    #                 },
+    #             )
+                
+    #             return {
+    #                 "task_id": child_task_id,
+    #                 "agent_id": agent_id,
+    #                 "state": TaskState.completed,
+    #                 "result_text": result_text,
+    #             }
+    #         else:
+    #             # Handle timeout or other issues
+    #             error_message = "Task execution timed out or failed to complete"
+    #             if buffer_text:
+    #                 error_message = "".join(buffer_text)
+                
+    #             await self.database_service.update_child_task(
+    #                 child_task_id, 
+    #                 {
+    #                     "agent_id": agent_id,
+    #                     "task.status.state": TaskState.failed,
+    #                     "task.status.message": {
+    #                         "role": "agent", 
+    #                         "parts": [{"type": "text", "text": error_message}]
+    #                     }
+    #                 }
+    #             )
+    #             return {
+    #                 "task_id": child_task_id,
+    #                 "agent_id": agent_id,
+    #                 "state": TaskState.failed,
+    #                 "result_text": error_message,
+    #             }
+                
+    #     except asyncio.TimeoutError:
+    #         return await self._fail_and_return(
+    #             child_task_id,
+    #             agent_id,
+    #             "Task execution timed out or failed to complete",
+    #         )
+
+    # # ------------------------------------------------------------------ #
+    # # Common: Database Updates & Text Extraction & Error Handling
+    # # ------------------------------------------------------------------ #
+    # async def _persist_result(
+    #     self, child_task_id: str, agent_id: str, task_obj: Any
+    # ) -> None:
+    #     """
+    #     Persist task results to the database.
+        
+    #     Args:
+    #         child_task_id: The ID of the child task
+    #         agent_id: The ID of the agent
+    #         task_obj: The task object containing results
+    #     """
+    #     await self.database_service.update_child_task(
+    #         child_task_id,
+    #         {
+    #             "agent_id": agent_id,
+    #             "task": task_obj.model_dump(mode="json"),
+    #             "task.status.state": task_obj.status.state,
+    #             "result": self._extract_text(task_obj),
+    #         },
+    #     )
+
+    # async def _fail_and_return(
+    #     self, child_task_id: str, agent_id: str, error_message: str
+    # ) -> Dict[str, Any]:
+    #     """
+    #     Handle task failure by updating database and returning error.
+        
+    #     Args:
+    #         child_task_id: The ID of the child task
+    #         agent_id: The ID of the agent
+    #         error_message: The error message to record
+            
+    #     Returns:
+    #         Dict[str, Any]: Result containing task_id, agent_id, failed state, and error message
+    #     """
+    #     await self.database_service.update_child_task(
+    #         child_task_id,
+    #         {
+    #             "agent_id": agent_id,
+    #             "task.status.state": TaskState.failed,
+    #             "task.status.message": {
+    #                 "role": "agent",
+    #                 "parts": [{"type": "text", "text": error_message}],
+    #             },
+    #         },
+    #     )
+    #     return {
+    #         "task_id": child_task_id,
+    #         "agent_id": agent_id,
+    #         "state": TaskState.failed,
+    #         "result_text": error_message,
+    #     }
+
+    # @staticmethod
+    # def _extract_text(task_obj) -> str:
+    #     """
+    #     Extract text from task response, supporting multiple return formats.
+        
+    #     Compatible with multiple return formats: artifacts → output → messages
+        
+    #     Args:
+    #         task_obj: The task object containing response data
+            
+    #     Returns:
+    #         str: The extracted text content
+    #     """
+    #     # 1) artifacts
+    #     if getattr(task_obj, "artifacts", None):
+    #         txt = "".join(
+    #             p.text
+    #             for p in task_obj.artifacts[0].parts
+    #             if isinstance(p, TextPart)
+    #         )
+    #         if txt:
+    #             return txt
+
+    #     # 2) output.parts
+    #     if getattr(task_obj, "output", None) and task_obj.output.parts:
+    #         txt = "".join(
+    #             p.text for p in task_obj.output.parts if isinstance(p, TextPart)
+    #         )
+    #         if txt:
+    #             return txt
+
+    #     # 3) Last agent message
+    #     if getattr(task_obj, "messages", None):
+    #         for msg in reversed(task_obj.messages):
+    #             if msg.role == "agent":
+    #                 txt = "".join(
+    #                     p.text for p in msg.parts if isinstance(p, TextPart)
+    #                 )
+    #                 if txt:
+    #                     return txt
+    #     return ""
+
+    # async def find_best_agent_for_task(self, child_task_id: str, top_k: int = 5) -> str:
+    #     """
+    #     Find the most suitable agents for a child task using Pinecone vector search
+        
+    #     Args:
+    #         child_task_id: ID of the child task
+    #         top_k: Number of top agents to return
+            
+    #     Returns:
+    #         List[Dict]: List of agent details sorted by relevance
+    #     """
+    #     # Get the child task
+    #     child_task = await self.database_service.get_child_task(child_task_id)
+    #     if not child_task:
+    #         raise ValueError(f"Child task with ID {child_task_id} not found")
+        
+    #     # Get the task description
+    #     task_description = child_task["description"]
+        
+    #     # Query Pinecone for similar agents
+    #     try:
+    #         best_agents = await self.database_service.query_similar_agents(task_description, top_k)
+    #     except Exception as e:
+    #         print(f"Error querying Pinecone: {e}")
+    #         return None
+
+    #     best_agent_id = await self.openai_service.select_best_agent_for_task(task_description, best_agents)
+
+    #     await self.database_service.update_child_task(child_task_id, {"agent_id": best_agent_id})
+        
+    #     return best_agent_id
+
+    # async def summarize_subtask_answers(self, root_task_id: str) -> str:
+    #     """
+    #     Collect answers from all subtasks and generate a final summarized answer.
+        
+    #     Args:
+    #         root_task_id: The ID of the root task
+            
+    #     Returns:
+    #         str: Summarized answer to the original question
+            
+    #     Raises:
+    #         ValueError: If root task not found or no subtasks exist
+    #     """
+    #     # Get the root task and its subtasks
+    #     root_task = await self.task_service.get_task(root_task_id)
+    #     if not root_task:
+    #         raise ValueError(f"Root task {root_task_id!r} not found")
+        
+    #     # Get all child tasks
+    #     child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
+    #     if not child_tasks:
+    #         raise ValueError(f"No subtasks found for root task {root_task_id!r}")
+        
+    #     # Collect answers from completed subtasks
+    #     subtask_answers = []
+    #     for child in child_tasks:
+    #         # Access attributes directly since child is a ChildTask object
+    #         if child.task.status.state == TaskState.completed:
+    #             # Extract the answer using existing _extract_text method
+    #             answer = child.task.status.message.parts[0].text
+    #             if answer:
+    #                 subtask_answers.append({
+    #                     "task_description": child.description,
+    #                     "answer": answer
+    #                 })
+        
+    #     if not subtask_answers:
+    #         raise ValueError("No completed subtasks with answers found")
+        
+    #     # Use OpenAI to generate final summary
+    #     final_answer = await self.openai_service.summarize_subtask_answers(
+    #         original_question=root_task.task.history[0].parts[0].text,
+    #         subtask_answers=subtask_answers
+    #     )
+        
+    #     # Update root task with final answer
+    #     await self.database_service.update_task(
+    #         root_task_id,
+    #         {
+    #             "task.status.state": TaskState.completed,
+    #             "task.status.message": {
+    #                 "role": "agent",
+    #                 "parts": [{"type": "text", "text": final_answer}]
+    #             }
+    #         }
+    #     )
+        
+    #     return final_answer
     
         
-    async def handle_input(self, user_name: str, user_input: str, session_id: str | None = None):
+    # async def handle_input(self, user_name: str, user_input: str, session_id: str | None = None):
 
-        try:
-            # Create a new session
-            if(session_id == None):
-                # todo: build up session name and description
-                current_session_id = await self.task_service.create_task_session(user_name, "New Session", "New Session Description")
-            else:
-                current_session_id = session_id
+    #     try:
+    #         # Create a new session
+    #         if(session_id == None):
+    #             # todo: build up session name and description
+    #             current_session_id = await self.task_service.create_task_session(user_name, "New Session", "New Session Description")
+    #         else:
+    #             current_session_id = session_id
 
-            # Create a new task
-            root_task_id = await self.task_service.create_task(user_input)
-            await self.task_service.add_root_task_to_session(current_session_id, root_task_id)
+    #         # Create a new task
+    #         root_task_id = await self.task_service.create_task(user_input)
+    #         await self.task_service.add_root_task_to_session(current_session_id, root_task_id)
 
-            # process the task
-            # await self.decompose_task(root_task_id)
+    #         # process the task
+    #         # await self.decompose_task(root_task_id)
 
-            # child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
-            # for child_task in child_tasks:
-            #     agent_id = await self.find_best_agent_for_task(child_task.task_id)
+    #         # child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
+    #         # for child_task in child_tasks:
+    #         #     agent_id = await self.find_best_agent_for_task(child_task.task_id)
 
-            # for child_task in child_tasks:
-            #     await self.process_child_task(child_task.task_id)
+    #         # for child_task in child_tasks:
+    #         #     await self.process_child_task(child_task.task_id)
 
-            # # summarize the task
-            # final_answer = await self.summarize_subtask_answers(root_task_id)
+    #         # # summarize the task
+    #         # final_answer = await self.summarize_subtask_answers(root_task_id)
 
-            # update the root task with the final answer
-            # history = [
-            #     {
-            #         "role": "agent",
-            #         "parts": [{"type": "text", "text": "final_answer"}]
-            #     }
-            # ]
-            # await self.task_service.update_task_history(root_task_id, history)
+    #         # update the root task with the final answer
+    #         # history = [
+    #         #     {
+    #         #         "role": "agent",
+    #         #         "parts": [{"type": "text", "text": "final_answer"}]
+    #         #     }
+    #         # ]
+    #         # await self.task_service.update_task_history(root_task_id, history)
 
-            return UserResponse(
-                session_id=current_session_id,
-                task_id=root_task_id,
-                result="success" 
-            )
+    #         return UserResponse(
+    #             session_id=current_session_id,
+    #             task_id=root_task_id,
+    #             result="success" 
+    #         )
         
-        except Exception as e:
-            print(f"Error handling input: {e}")
-            return UserResponse(
-                session_id="",
-                task_id="",
-                result="error"
-            )
+    #     except Exception as e:
+    #         print(f"Error handling input: {e}")
+    #         return UserResponse(
+    #             session_id="",
+    #             task_id="",
+    #             result="error"
+    #         )
+
+host_agent = HostAgent()

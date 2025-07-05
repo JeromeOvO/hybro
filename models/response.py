@@ -44,12 +44,10 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
     status_code: int = 200
 
 class OrchestrationCenterResponse(BaseModel):
-    task_id: str
-    agent_id: str
-    step_id: str
-    input_data: Any
-    context: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    message: Optional[Message] = None
+    task_id: Optional[str] = None
+    success: bool
+    error: Optional[str] = None
+    status_code: int = 200
 
 class DebatationCenterResponse(BaseModel):
     task_id: str
@@ -60,7 +58,7 @@ class DebatationCenterResponse(BaseModel):
     status_code: int = 200
 
 class AgentCenterResponse(BaseModel):
-    agent_id: str
+    agent_id: Optional[str] = None
     agent_card: Optional[AgentCard] = None
     agent: Optional[Agent] = None
     agents: Optional[List[Agent]] = None
@@ -80,6 +78,14 @@ class TaskCenterResponse(BaseModel):
     meta_tasks: Optional[List[MetaTask]] = None
     base_tasks: Optional[List[BaseTask]] = None
     task_sessions: Optional[List[TaskSession]] = None
+    success: bool
+    error: Optional[str] = None
+    status_code: int = 200
+
+class ChatResponse(BaseModel):
+    user_name: str
+    user_input: str
+    session_id: Optional[str] = None
     success: bool
     error: Optional[str] = None
     status_code: int = 200

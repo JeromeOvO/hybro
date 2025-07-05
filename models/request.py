@@ -71,17 +71,7 @@ class UserInput(BaseModel):
     user_name: str
     user_input: str
     session_id: Optional[str] = None
-
-
-# for task id input
-class TaskIdInput(BaseModel):
-    task_id: str
-
-
-class SessionInput(BaseModel):
-    user_name: str
-    session_id: Optional[str] = None
-
+    
 class InspectionCenterRequest(BaseModel):
     agent_id: Optional[str] = None
     agent_url: str
@@ -93,6 +83,7 @@ class DebatationCenterRequest(BaseModel):
     task_id: str
 
 class AgentCenterRequest(BaseModel):
+    agent_url: Optional[str] = None
     agent_id: Optional[str] = None
     agent_card: Optional[AgentCard] = None
     call_increment: Optional[int] = 0
@@ -114,4 +105,9 @@ class TaskCenterRequest(BaseModel):
     task_session: Optional[TaskSession] = None
     task: Optional[Task] = None 
     message: Optional[Message] = None
+    user_input: Optional[str] = None
 
+class ChatRequest(BaseModel):
+    user_name: str
+    user_input: str
+    session_id: Optional[str] = None
