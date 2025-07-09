@@ -60,45 +60,64 @@ class HostAgent:
                 error="Failed to create base task",
                 status_code=500
             )
+        
+        logger.info(f"HostAgent: create base task response: {create_base_task_response.task_id}")
 
-        # create a meta task
-        new_a2a_task = await self.task_service.create_a2a_task()
-        new_a2a_task.history.append(await self.task_service.create_a2a_message(Role.user, user_input))
-        create_meta_task_response = await self.task_service.create_new_meta_task(TaskCenterRequest(user_name=user_name, parent_task_id=create_base_task_response.task_id, task=new_a2a_task, user_input=user_input))
-        if not create_meta_task_response.success:
+        # decompose the task
+        decompose_task_response = await self.orchestration_center.decompose_task(OrchestrationCenterRequest(task_id=create_base_task_response.task_id))
+        
+        if not decompose_task_response.success:
             return ChatResponse(
                 user_name=user_name,
                 success=False,
-                error="Failed to create meta task",
+                error="Failed to decompose task",
                 status_code=500
             )
         
-        # assign agent to meta task
-        assign_agent_to_meta_task_response = await self.orchestration_center.assign_agent_to_meta_task(OrchestrationCenterRequest(task_id=create_meta_task_response.task_id))
+        logger.info(f"HostAgent: decompose task response: {decompose_task_response.meta_task_ids}")
+        
+        meta_task_ids = decompose_task_response.meta_task_ids
+        for meta_task_id in meta_task_ids:
+            # assign agent to meta task
+            assign_agent_to_meta_task_response = await self.orchestration_center.assign_agent_to_meta_task(OrchestrationCenterRequest(task_id=meta_task_id))
 
-        if not assign_agent_to_meta_task_response.success:
-            return ChatResponse(
-                user_name=user_name,
-                success=False,
-                error="Failed to assign agent to meta task",
-                status_code=500
-            )
+            if not assign_agent_to_meta_task_response.success:
+                return ChatResponse(
+                    user_name=user_name,
+                    success=False,
+                    error="Failed to assign agent to meta task",
+                    status_code=500
+                )
+            
+            logger.info(f"HostAgent: assign agent to meta task {meta_task_id} with agent {assign_agent_to_meta_task_response.agent_id}")
+            
+            # send the task to the a2a agent
+            process_meta_task_response = await self.orchestration_center.process_meta_task(OrchestrationCenterRequest(task_id=meta_task_id))
 
-        # send the task to the a2a agent
-        process_meta_task_response = await self.orchestration_center.process_meta_task(OrchestrationCenterRequest(task_id=create_meta_task_response.task_id))
-        logger.info(f"HostAgent: process meta task response: {process_meta_task_response}")
+            if not process_meta_task_response.success:
+                return ChatResponse(
+                    user_name=user_name,
+                    user_input=user_input,
+                    success=False,
+                    error="Failed to process response from agent",
+                    status_code=500
+                )
 
-        if not process_meta_task_response.success:
+        # summarize the meta task
+        summarize_meta_task_response = await self.orchestration_center.summarize_meta_task_for_base_task(OrchestrationCenterRequest(task_id=create_base_task_response.task_id))
+
+        if not summarize_meta_task_response.success:
             return ChatResponse(
                 user_name=user_name,
                 user_input=user_input,
                 success=False,
-                error="Failed to process meta task",
+                error="Failed to summarize meta task",
                 status_code=500
             )
         
         return ChatResponse(
             user_name=user_name,
+            task_id=summarize_meta_task_response.task_id,
             user_input=user_input,
             session_id=session_id,
             success=True,

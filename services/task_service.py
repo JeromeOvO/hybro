@@ -136,6 +136,26 @@ class TaskService:
                 error="Failed to create new meta task",
                 status_code=500
             )
+    
+    async def query_base_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        task_id = request.task_id
+        base_task = await self.database_service.get_base_task_by_task_id(task_id)
+        if base_task:
+            return TaskCenterResponse(
+                base_task=base_task,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to query base task",
+                status_code=500
+            )
 
     async def query_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         
@@ -314,6 +334,30 @@ class TaskService:
             return TaskCenterResponse( 
                 success=False,
                 error="Failed to update task of meta task",
+                status_code=500
+            )
+        
+    async def update_base_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        if request.base_task is None:
+            raise IllgalParameterError()
+        
+        task_id = request.task_id
+        base_task = request.base_task
+        success = await self.database_service.update_base_task_by_task_id(task_id, base_task)
+        if success:
+            return TaskCenterResponse(
+                base_task=base_task,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to update base task",
                 status_code=500
             )
 

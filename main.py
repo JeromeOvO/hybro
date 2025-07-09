@@ -10,7 +10,7 @@ from uvicorn.config import LOGGING_CONFIG
 from modules.InspectionCenter import InspectionCenter
 from modules.OrchestrationCenter import OrchestrationCenter
 from modules.TaskCenter import TaskCenter
-from models.request import InspectionCenterRequest, ChatRequest
+from models.request import InspectionCenterRequest, ChatRequest, TaskCenterRequest, OrchestrationCenterRequest
 from modules.HostAgent import HostAgent
 from modules.AgentCenter import AgentCenter
 from models.request import AgentCenterRequest
@@ -126,7 +126,24 @@ async def send_message(request: Request):
 
     response = chat_response.model_dump_json(exclude_none=False)
     return response
-    
+
+# Task endpoints
+@app.post("/task/queryTask")
+async def query_task(request: Request):
+    task_center = TaskCenter()
+    request_data = await request.json()
+    task_id = request_data.get('task_id')
+
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+
+    task_center_request = TaskCenterRequest(task_id=task_id)
+    task_center_response = await task_center.query_meta_task_by_task_id(task_center_request)
+
+    result = task_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=task_center_response.status_code)
+    return response
+
 # Agent endpoints
 @app.post("/agent/registerAgent")
 async def register_agent(request: Request):
@@ -179,6 +196,45 @@ async def delete_agent(request: Request):
 
     return response
 
+@app.post("/agent/getAgentList")
+async def get_agent_list(request: Request):    
+    agent_center = AgentCenter()
+    agent_center_request = AgentCenterRequest()
+    agent_center_response = await agent_center.get_all_agents(agent_center_request)
+
+    result = agent_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+
+    return response
+
+# Orchestration Center Endpoints
+@app.post("/orchestrationCenter/decomposeTask")
+async def decompose_task(request: Request):
+    orchestration_center = OrchestrationCenter()
+    request_data = await request.json()
+    task_id = request_data.get('task_id')
+
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+
+    orchestration_center_request = OrchestrationCenterRequest(task_id=task_id)
+    orchestration_center_response = await orchestration_center.decompose_task(orchestration_center_request)
+
+    return JSONResponse(content=orchestration_center_response.model_dump_json(exclude_none=False), status_code=orchestration_center_response.status_code)
+
+@app.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
+async def summarize_meta_task_for_base_task(request: Request):
+    orchestration_center = OrchestrationCenter()
+    request_data = await request.json()
+    task_id = request_data.get('task_id')
+
+    if not task_id:
+        raise HTTPException(status_code=400, detail="task_id is required")
+
+    orchestration_center_request = OrchestrationCenterRequest(task_id=task_id)
+    orchestration_center_response = await orchestration_center.summarize_meta_task_for_base_task(orchestration_center_request)
+
+    return JSONResponse(content=orchestration_center_response.model_dump_json(exclude_none=False), status_code=orchestration_center_response.status_code)
 
 # Fix the indentation of the uvicorn run command
 if __name__ == "__main__":

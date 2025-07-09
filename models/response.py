@@ -45,6 +45,8 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
 
 class OrchestrationCenterResponse(BaseModel):
     task_id: Optional[str] = None
+    meta_task_ids: Optional[List[str]] = None
+    agent_id: Optional[str] = None
     success: bool
     error: Optional[str] = None
     status_code: int = 200
@@ -86,6 +88,7 @@ class ChatResponse(BaseModel):
     user_name: str
     user_input: str
     session_id: Optional[str] = None
+    task_id: Optional[str] = None
     success: bool
     error: Optional[str] = None
     status_code: int = 200
