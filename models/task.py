@@ -1,57 +1,42 @@
-from typing import List, Optional
-from uuid import uuid4
-from pydantic import BaseModel, Field, ConfigDict
-from a2a.types import Task
+from typing import Any, List, Optional
+from pydantic import BaseModel, Field
+from a2a.types import Task, Message
 from datetime import datetime
+from enum import Enum
+
+class TaskDefaultValue(Enum):
+    NOT_ASSIGNED = "Not Assigned"
 
 
-class ChildTask(BaseModel):
-    """Model for a subtask created from AI decomposition.
+class MetaTask(BaseModel):
+    """A meta task model in the system and also represent a subtask created from decomposition, design for a2a agent communication"""
 
-    Contains a Task from common/types.py and adds fields
-    for task decomposition relationships.
-    """
-
-    task_id: str = Field(default_factory=lambda: uuid4().hex)
-    agent_id: str = Field(default="Not Assigned")
-    description: Optional[str] = Field(default="")
-    task: Task  # The base task from common/types
-    parent_id: str  # ID of the parent task (either RootTask or another ChildTask)
-    order: int = 0  # Execution order within siblings
-    priority: int = 0  # Priority for execution (higher number = higher priority)
-    dependencies: List[str] = Field(
-        default_factory=list
-    )  # List of other task IDs this depends on
-    subtasks: List["ChildTask"] = Field(
-        default_factory=list
-    )  # For hierarchical decomposition
-    depth: int = 1  # Depth in the task tree (root = 0, first level = 1, etc.)
+    task_id: str
+    parent_task_id: str
+    agent_id: str = Field(default=TaskDefaultValue.NOT_ASSIGNED.value)
+    task_description: Optional[str] = Field(default="")
+    task: Task | None = None
+    execution_order: int = 0
+    extend_info: Optional[Any] = None
 
 
-class RootTask(BaseModel):
-    """Enhanced Task model for MongoDB storage.
+class BaseTask(BaseModel):
+    """A base task mode for one request from user"""
 
-    Contains a Task from common/types.py and adds task_id and subtasks fields
-    for storing AI-decomposed subtasks.
-    """
+    task_id: str
+    session_id: str
+    user_name: str
+    task: Task
+    extend_info: Optional[Any] = None
 
-    task_id: str = Field(default_factory=lambda: uuid4().hex)
-    task: Optional[Task] = None  # The base task from common/types
-    description: Optional[str] = Field(default="")  # Description of the root task
-    subtasks: List[ChildTask] = Field(default_factory=list)
-
-    # model_config = ConfigDict(
-    #     populate_by_name=True,
-    #     json_encoders={
-    #         # Add any custom encoders if needed for MongoDB serialization
-    #     },
-    # )
 
 class TaskSession(BaseModel):
-    user_name: str = Field(default="")
+    """Model for a task session. One meta session for one chat session"""
+
     session_id: str
+    user_name: str
     session_name: str
     session_description: Optional[str] = Field(default="")
     session_created_at: datetime = Field(default_factory=datetime.now)
     session_updated_at: datetime = Field(default_factory=datetime.now)
-    rootTasks: List[str] = Field(default_factory=list)
+    extend_info: Optional[Any] = None

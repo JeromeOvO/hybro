@@ -1,499 +1,320 @@
-from re import I
-from typing import List, Dict, Any, Optional
-import uuid
-from datetime import datetime
-import json
-from models.task import RootTask, ChildTask, TaskSession
-from a2a.types import Task, TaskState, TaskStatus, Message, TextPart, Part, Role
-from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
-import logging
-
-logger = logging.getLogger(__name__)
+from services.database_service import DatabaseService
+from services.agent_service import AgentService
+from models.task import TaskSession, BaseTask, MetaTask, TaskDefaultValue
+from models.agent import Agent
+from models.request import TaskCenterRequest
+from models.response import TaskCenterResponse
+from models.error import TaskIdRequiredError, ParentTaskIdRequiredError, SessionIdRequiredError, IllgalParameterError
+from uuid import uuid4
+from a2a.types import Task, TaskStatus, TaskState, Message, TextPart, Role
 
 
 class TaskService:
     def __init__(self):
-        self.database_service = DatabaseService()
         self.openai_service = OpenAIService()
-    
-    async def create_task(self, user_input: str) -> str:
-        """
-        Create a new task from user input
-        
-        Args:
-            user_input: User's original task request
-            session_id: Optional session ID (generated if not provided)
-            
-        Returns:
-            str: The ID of the created task
-        """
-        # Generate task ID and session ID
-        session_id = uuid.uuid4().hex
-        task_id = uuid.uuid4().hex
-        
-        # Create base Task object
-        # base_task = Task(
-        #     id=task_id,
-        #     sessionId=session_id,
-        #     status=TaskStatus(
-        #         state=TaskState.submitted,
-        #         timestamp=datetime.now().isoformat()
-        #     ),
-        #     artifacts=[],
-        #     history=[
-        #         Message(
-        #             role="user",
-        #             parts=[TextPart(text=user_input)]
-        #         )
-        #     ],
-        #     metadata={},
-        # )
+        self.database_service = DatabaseService()
+        self.agent_service = AgentService()
 
-        # Create RootTask with the base Task
-        root_task = RootTask(
-            task_id=task_id,
-            description=user_input,
-            task=None,
-            subtasks=[]
+    async def create_a2a_message(self, role: Role, text: str) -> Message:
+        return Message(
+            messageId=str(uuid4()),
+            role=role,
+            parts=[TextPart(text=text)]
         )
-        
-        # Save task to database
-        task_id = await self.database_service.add_task(root_task)
-        return task_id
-    
-    async def get_task(self, task_id: str) -> Optional[RootTask]:
-        """
-        Get a task by ID
-        
-        Args:
-            task_id: ID of the task to retrieve
-            
-        Returns:
-            RootTask or None if not found
-        """
-        return await self.database_service.get_task(task_id)
-    
-    async def get_tasks(self, query: Optional[Dict[str, Any]] = None, limit: int = 0) -> List[RootTask]:
-        """
-        Get multiple tasks matching a query
-        
-        Args:
-            query: Optional query filter
-            limit: Maximum number of results (0 for no limit)
-            
-        Returns:
-            List of RootTask objects
-        """
-        return await self.database_service.get_tasks(query, limit)
-    
-    async def update_task(self, task_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a task
-        
-        Args:
-            task_id: ID of the task to update
-            update_data: Dictionary of fields to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        return await self.database_service.update_task(task_id, update_data)
-    
-    async def update_task_history(self, task_id: str, history: List[Dict[str, Any]]) -> bool:
-        """
-        Append new entries to the history of a task.
 
-        Args:
-            task_id: ID of the task to update.
-            history: List of new history entries to append.
-
-        Returns:
-            bool: True if update was successful.
-        """
-        root_task = await self.get_task(task_id)
-        old_history: List[Dict[str, Any]] = []
-        if root_task and root_task.task and root_task.task.history:
-            for msg in root_task.task.history:
-                if hasattr(msg, 'model_dump'):
-                    old_history.append(msg.model_dump())
-                elif isinstance(msg, dict):
-                    old_history.append(msg)
-                else:
-                    logger.warning(f"Skipping item that can't be converted to dict: {msg}")
-        new_history = old_history + history
-
-        return await self.database_service.update_task_history(task_id, new_history)
-    
-    async def delete_task(self, task_id: str) -> bool:
-        """
-        Delete a task
-        
-        Args:
-            task_id: ID of the task to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        return await self.database_service.delete_task(task_id)
-    
-    async def update_task_status(self, task_id: str, status: TaskStatus) -> bool:
-        """
-        Update a task's status
-        
-        Args:
-            task_id: ID of the task to update
-            status: New TaskStatus to set
-            
-        Returns:
-            bool: True if update was successful
-        """
-        # Ensure the timestamp is set to current time if not already provided
-        if not status.timestamp:
-            status.timestamp = datetime.now().isoformat()
-        
-        # 将 TaskStatus 对象转换为字典
-        status_dict = status.dict() if hasattr(status, 'dict') else status.model_dump()
-        
-        # Create update data with just the status field
-        update_data = {"task.status": status_dict}
-        
-        # Use the existing update_task method
-        return await self.database_service.update_task(task_id, update_data)
-    
-    async def create_child_task(self, root_task_id: str, subtask_id: str, description: str, step: Optional[int] = None, priority: Optional[int] = None, dependencies: Optional[List[str]] = None) -> str:
-        """
-        Create a new child task under a root task
-        
-        Args:
-            root_task_id: ID of the parent root task
-            description: Description of the child task
-            step: Optional execution order for the child task
-            priority: Optional priority level for the child task
-            dependencies: Optional list of task IDs this task depends on
-            
-        Returns:
-            str: The ID of the created child task
-        """
-        # Get the root task to set the contextId
-        root_task = await self.get_task(root_task_id)
-        if not root_task:
-            raise Exception(f"Root task with ID {root_task_id} not found")
-        
-        # Set the contextId from the parent
-        contextId = root_task.task.contextId if root_task.task else uuid.uuid4().hex
-        
-        # Create base Task object for the child task
-        child_base_task = Task(
-            id=subtask_id,
-            contextId=contextId,
+    async def create_a2a_task(self) -> Task:
+        return Task(
+            id=str(uuid4()),
+            kind="task",
             status=TaskStatus(
                 state=TaskState.submitted,
-                timestamp=datetime.now().isoformat()
             ),
-            artifacts=[],
-            history=None,
+            history=[],
+            contextId=str(uuid4()),
             metadata={},
+            artifacts=[]
         )
+        
+    # Task Sessions
+    async def create_new_session(self, request: TaskCenterRequest) -> TaskCenterResponse:
 
-        # Create ChildTask with the base Task
-        child_task = ChildTask(
-            task_id=subtask_id,  # Will be generated by the database service
-            description=description,
-            agent_id="Not Assigned",
-            task=child_base_task,
-            parent_id=root_task_id,
-            order=step if step is not None else 0,
-            priority=priority if priority is not None else 0,
-            dependencies=dependencies if dependencies else []
-        )
+        session_id = str(uuid4())
+        user_name = request.user_name
+        session_name = "New Session"
+        session_description = "New Session Description"
 
-        # Add the child task (DatabaseService handles consistency)
-        child_task_id = await self.database_service.add_child_task(root_task_id, child_task)
-        return child_task_id
-
-    async def get_child_task(self, child_task_id: str) -> Optional[ChildTask]:
-        """
-        Get a child task by its ID
-        
-        Args:
-            child_task_id: ID of the child task to retrieve
-            
-        Returns:
-            ChildTask or None if not found
-        """
-        return await self.database_service.get_child_task(child_task_id)
-
-    async def get_child_tasks_by_parent(self, root_task_id: str) -> List[ChildTask]:
-        """
-        Get all child tasks for a parent task
-        
-        Args:
-            root_task_id: ID of the parent task
-            
-        Returns:
-            List[ChildTask]: List of child task objects
-        """
-        return await self.database_service.get_child_tasks_by_parent(root_task_id)
-
-    async def update_child_task(self, child_task_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a child task
-        
-        Args:
-            child_task_id: ID of the child task to update
-            update_data: Dictionary of fields to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        return await self.database_service.update_child_task(child_task_id, update_data)
-
-    async def delete_child_task(self, child_task_id: str) -> bool:
-        """
-        Delete a child task
-        
-        Args:
-            child_task_id: ID of the child task to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        return await self.database_service.delete_child_task(child_task_id)
-
-    async def update_child_task_status(self, child_task_id: str, status: TaskStatus) -> bool:
-        """
-        Update a child task's status
-        
-        Args:
-            child_task_id: ID of the child task to update
-            status: New TaskStatus to set
-            
-        Returns:
-            bool: True if update was successful
-        """
-        # Ensure the timestamp is set to current time if not already provided
-        if not status.timestamp:
-            status.timestamp = datetime.now().isoformat()
-        
-        # 将 TaskStatus 对象转换为字典
-        status_dict = status.dict() if hasattr(status, 'dict') else status.model_dump()
-        
-        # Create update data with just the status field
-        update_data = {"task.status": status_dict}
-        
-        # Use the existing update_child_task method
-        return await self.update_child_task(child_task_id, update_data)
-    
-    async def create_subtasks_with_openai_content(self, root_task_id: str, content: str) -> Optional[RootTask]:
-        """
-        Process OpenAI content and create subtasks for a root task
-        
-        Args:
-            root_task: The root task to update
-            content: The JSON content from OpenAI
-            
-        Returns:
-            RootTask: The updated root task with child tasks
-        """
-        try:
-            # Parse the JSON content
-            try:
-                decomposition_result = json.loads(content)
-            except json.JSONDecodeError:
-                print(f"Error parsing JSON: {content}")
-                error_status = TaskStatus(
-                    state=TaskState.failed,
-                    message=Message(
-                        role=Role.agent,
-                        messageId=uuid.uuid4().hex,
-                        parts=[Part(root=TextPart(text=f"Failed to decompose task: JSON parse error"))]
-                    ),
-                    timestamp=datetime.now().isoformat()
-                )
-                await self.update_task_status(root_task_id, error_status)
-                return await self.get_task(root_task_id)
-            
-            # Get the root task to set the session ID
-            root_task = await self.get_task(root_task_id)
-            if not root_task:
-                raise Exception(f"Root task with ID {root_task_id} not found")
-            
-            # Convert decomposition results to ChildTask objects
-            for idx, subtask_data in enumerate(decomposition_result.get("subtasks", [])):
-                subtask_id = uuid.uuid4().hex
-                subtask_description = subtask_data.get("description", "")
-                subtask_step = subtask_data.get("step", 1)
-                subtask_priority = subtask_data.get("priority", 1)
-                subtask_dependencies = subtask_data.get("dependencies", [])
-
-                await self.create_child_task(
-                    root_task_id, 
-                    subtask_id, 
-                    subtask_description, 
-                    subtask_step,
-                    subtask_priority, 
-                    subtask_dependencies
-                )
-
-            return await self.get_task(root_task_id)
-            
-        except Exception as e:
-            print(f"Error creating subtasks: {str(e)}")
-            # Update task status to reflect error
-            await self.update_task_as_failed(root_task_id, f"Failed to create subtasks: {str(e)}")
-            return await self.get_task(root_task_id)
-    
-    async def update_task_as_failed(self, task_id: str, error_message: str) -> None:
-        """
-        Mark a task as failed with the provided error message
-        
-        Args:
-            task_id: ID of the task to update
-            error_message: Error message explaining the failure
-        """
-        error_status = TaskStatus(
-            state=TaskState.failed,
-            message=Message(
-                role=Role.agent,
-                messageId=uuid.uuid4().hex,
-                parts=[Part(root=TextPart(text=error_message))]
-            ),
-            timestamp=datetime.now().isoformat()
-        )
-        await self.update_task_status(task_id, error_status)
-
-    async def create_task_session(self, user_name: str, session_name: str, session_description: str) -> str:
-        """
-        Create a new task session
-        
-        Args:
-            session_name: Name of the task session
-            session_description: Description of the task session
-            
-        Returns:
-            str: ID of the created task session
-        """
-        task_session = TaskSession(
-            session_id=uuid.uuid4().hex,
+        new_task_session = TaskSession(
+            session_id=session_id,
             user_name=user_name,
             session_name=session_name,
-            session_description=session_description,
-            session_created_at=datetime.now(),
-            session_updated_at=datetime.now(),
-            rootTasks=[]
+            session_description=session_description)
+        
+        success = await self.database_service.add_task_session(new_task_session)
+        if success:
+            return TaskCenterResponse(
+                session_id=session_id,
+                user_name=user_name,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                user_name=user_name, 
+                success=False,
+                error="Failed to create new session",
+                status_code=500
+            )
+    
+    # Base Tasks
+
+    async def create_new_base_task(self, request: TaskCenterRequest) -> TaskCenterResponse:
+
+        task_id = str(uuid4())
+        session_id = request.session_id
+        user_name = request.user_name
+        task = request.task
+
+        new_base_task = BaseTask(
+            task_id=task_id,
+            session_id=session_id,
+            user_name=user_name,
+            task=task
         )
-        return await self.database_service.add_task_session(task_session)
-    
-    async def get_task_session(self, session_id: str) -> Optional[TaskSession]:
-        """
-        Get a task session by ID
-        
-        Args:
-            session_id: ID of the task session to retrieve
-            
-        Returns:
-            TaskSession: The task session object or None if not found
-        """
-        return await self.database_service.get_task_session(session_id)
-    
-    async def update_task_session(self, session_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a task session
-        
-        Args:
-            session_id: ID of the task session to update
-            update_data: New data to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        return await self.database_service.update_task_session(session_id, update_data)
-    
-    async def delete_task_session(self, session_id: str) -> bool:
-        """
-        Delete a task session
-        
-        Args:
-            session_id: ID of the task session to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        return await self.database_service.delete_task_session(session_id)
-    
-    async def add_root_task_to_session(self, session_id: str, root_task_id: str) -> bool:
-        """
-        Add a root task to a task session
-        
-        Args:
-            session_id: ID of the task session to add the root task to
-            root_task: RootTask object to add
-            
-        Returns:
-            bool: True if addition was successful
-        """
-        return await self.database_service.add_root_task_to_session(session_id, root_task_id)
-    
-    async def get_root_tasks_by_session(self, session_id: str) -> List[RootTask]:
-        """
-        Get all root tasks for a task session
-        
-        Args:
-            session_id: ID of the task session to get root tasks from   
 
-        Returns:
-            List[RootTask]: List of root task objects
-        """
-        return await self.database_service.get_root_tasks_by_session(session_id)
-    
-    async def update_root_task_in_session(self, session_id: str, root_task_id: str, update_data: Dict[str, Any]) -> bool:
-        """
-        Update a root task in a task session
+        success = await self.database_service.add_base_task(new_base_task)
+        if success:
+            return TaskCenterResponse(
+                task_id=task_id,
+                session_id=session_id,
+                user_name=user_name,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                user_name=user_name,
+                success=False,
+                error="Failed to create new base task",
+                status_code=500
+            )
 
-        Args:
-            session_id: ID of the task session to update the root task in
-            root_task_id: ID of the root task to update
-            update_data: New data to update
-            
-        Returns:
-            bool: True if update was successful
-        """
-        return await self.database_service.update_root_task_in_session(session_id, root_task_id, update_data)  
-    
-    async def delete_root_task_from_session(self, session_id: str, root_task_id: str) -> bool:
-        """
-        Delete a root task from a task session
+    # Meta Tasks
+
+    async def create_new_meta_task(self, request: TaskCenterRequest) -> TaskCenterResponse:
+
+        task_id = str(uuid4())
+        parent_task_id = request.parent_task_id
+        user_name = request.user_name
+        task = request.task
+        user_input = request.user_input
+
+        new_meta_task = MetaTask(
+            task_id=task_id,
+            task_description=user_input,
+            agent_id=TaskDefaultValue.NOT_ASSIGNED.value,
+            parent_task_id=parent_task_id,
+            task=task
+        )
+
+        success = await self.database_service.add_meta_task(new_meta_task)
+        if success:
+            return TaskCenterResponse(
+                task_id=task_id,
+                parent_task_id=parent_task_id,
+                user_name=user_name,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                user_name=user_name,
+                success=False,
+                error="Failed to create new meta task",
+                status_code=500
+            )
+
+    async def query_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         
-        Args:
-            session_id: ID of the task session to delete the root task from
-            root_task_id: ID of the root task to delete
-            
-        Returns:
-            bool: True if deletion was successful
-        """
-        return await self.database_service.delete_root_task_from_session(session_id, root_task_id)
-    
-    async def get_all_task_sessions(self) -> List[TaskSession]:
-        """
-        Get all task sessions
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+
+        task_id = request.task_id
+        meta_task = await self.database_service.get_meta_task_by_task_id(task_id)
+        if meta_task:
+            return TaskCenterResponse(
+                meta_task=meta_task,
+                success=True,
+                error=None, 
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to query meta task",
+                status_code=500
+            )
         
-        Returns:
-            List[TaskSession]: List of task session objects
-        """
-        return await self.database_service.get_all_task_sessions()
+    async def query_meta_tasks_by_parent_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.parent_task_id is None:
+            raise ParentTaskIdRequiredError()
+        
+        parent_task_id = request.parent_task_id
+        meta_tasks = await self.database_service.get_meta_tasks_by_parent_task_id(parent_task_id)
+        if meta_tasks:
+            return TaskCenterResponse(
+                meta_tasks=meta_tasks,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to query meta tasks",
+                status_code=500
+            )
     
-    async def get_task_session_by_user_name(self, user_name: str) -> List[TaskSession]:
-        """
-        Get a task session by user name
+    async def delete_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        task_id = request.task_id
+        success = await self.database_service.delete_meta_task_by_task_id(task_id)
+        if success:
+            return TaskCenterResponse(
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to delete meta task",
+                status_code=500
+            )
+    
+    async def update_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
 
-        Args:
-            user_name: Name of the user to get task sessions for
-            
-        Returns:
-            List[TaskSession]: List of task session objects for the user
-        """
-        return await self.database_service.get_task_session_by_user_name(user_name)
+        if request.meta_task is None:
+            raise IllgalParameterError()
+        
+        task_id = request.task_id
+        meta_task = request.meta_task
+        success = await self.database_service.update_meta_task_by_task_id(task_id, meta_task)
+        if success:
+            return TaskCenterResponse(
+                meta_task=meta_task,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to update meta task",
+                status_code=500
+            )
     
+    async def add_message_to_meta_task(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        if request.message is None:
+            raise IllgalParameterError()
+        
+        task_id = request.task_id
+        message = request.message
 
+        meta_task = await self.database_service.get_meta_task_by_task_id(task_id)
+        if meta_task:
+            meta_task.task.history.append(message)
+            success = await self.database_service.update_meta_task_by_task_id(task_id, meta_task)
+            if success:
+                return TaskCenterResponse(
+                    meta_task=meta_task,
+                    success=True,
+                    error=None,
+                    status_code=200
+                )
+            else:
+                return TaskCenterResponse(
+                    success=False,
+                    error="Failed to update message to meta task",
+                    status_code=500
+                )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to update message to meta task",
+                status_code=500
+            )
     
+    async def update_agent_id_of_meta_task(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        if request.agent_id is None:
+            raise IllgalParameterError()
+        
+        task_id = request.task_id
+        agent_id = request.agent_id
+
+        meta_task = await self.database_service.get_meta_task_by_task_id(task_id)
+        if meta_task:
+            meta_task.agent_id = agent_id
+            success = await self.database_service.update_meta_task_by_task_id(task_id, meta_task)
+            if success:
+                return TaskCenterResponse(
+                    meta_task=meta_task,
+                    success=True,
+                    error=None,
+                    status_code=200
+                )
+            else:
+                return TaskCenterResponse(
+                    success=False,
+                    error="Failed to update agent id of meta task",
+                    status_code=500
+                )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to update agent id of meta task",
+                status_code=500
+            )
+    
+    async def update_task_of_meta_task(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.task_id is None:
+            raise TaskIdRequiredError()
+        
+        if request.task is None:
+            raise IllgalParameterError()
+        
+        task_id = request.task_id
+        task = request.task
+
+        meta_task = await self.database_service.get_meta_task_by_task_id(task_id)
+        if meta_task:
+            meta_task.task = task
+            success = await self.database_service.update_meta_task_by_task_id(task_id, meta_task)
+        if success:
+            return TaskCenterResponse(
+                meta_task=meta_task,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse( 
+                success=False,
+                error="Failed to update task of meta task",
+                status_code=500
+            )
+
+task_service = TaskService()

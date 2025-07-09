@@ -1,21 +1,20 @@
-import json
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Body
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
-import uuid
-from pydantic import BaseModel
-from models.request import UserInput, TaskIdInput, SessionInput
-from models.response import UserResponse
-from models.agent import Agent
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
-from modules.HostAgent import HostAgent
-from services.task_service import TaskService
-from services.agent_service import AgentService
 from loguru import logger
 import sys, logging
 from dotenv import load_dotenv
 from uvicorn.config import LOGGING_CONFIG
+from modules.InspectionCenter import InspectionCenter
+from modules.OrchestrationCenter import OrchestrationCenter
+from modules.TaskCenter import TaskCenter
+from models.request import InspectionCenterRequest, ChatRequest
+from modules.HostAgent import HostAgent
+from modules.AgentCenter import AgentCenter
+from models.request import AgentCenterRequest
+from models.response import AgentCenterResponse
 
 load_dotenv()
 class InterceptHandler(logging.Handler):
@@ -68,86 +67,117 @@ async def shutdown_db_client():
 async def health_check():
     return {"status": "ok"}
 
+# Inspection Center Endpoints
+@app.post("/inspectionCenter/inspectAgentCard")
+async def inspect_agent(request: Request):
+    inspection_center = InspectionCenter()
 
-# Host Agent Endpoints
-@app.post("/hostAgent/sendTask")
-async def send_task_to_hostAgent(input: UserInput):
-    host_agent = HostAgent()
-    logger.info("controller sendTask: receive request: {}", input)
+    request_data = await request.json()
+    agent_url = request_data.get('agent_url')
 
-    response = await host_agent.handle_input(input.user_name, input.user_input, input.session_id);
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    
+    logger.info("inspectionCenter/inspect request: {}", agent_url)
+    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
+    inspection_center_response = await inspection_center.inspect_agent_card(inspection_center_request)
+
+    result = inspection_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
 
     return response
 
+@app.post("/inspectionCenter/inspectA2AConnection")
+async def inspect_a2a_connection(request: Request):
+    inspection_center = InspectionCenter()
+    request_data = await request.json()
+    agent_url = request_data.get('agent_url')
 
-# Agents Collection - REST Compliant
-@app.post("/agents")
-async def create_agent(agent_data: Dict[str, Any] = Body(...)):
-    """Create a new agent"""
-    agent_service = AgentService()
-    agent = Agent(**agent_data)
-    return await agent_service.create_agent(agent)
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    
+    logger.info("inspectionCenter/inspectA2AConnection request: {}", agent_url)
 
-@app.get("/agents")
-async def get_all_agents():
-    """Get all agents"""
-    agent_service = AgentService()
-    return await agent_service.get_all_agents()
+    inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
+    inspection_center_response = await inspection_center.inspect_a2a_connection(inspection_center_request)
+    result = inspection_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
 
-@app.post("/agents/search")
-async def search_agents(search_params: Dict[str, Any] = Body(...)):
-    """Search agents with complex filters"""
-    agent_service = AgentService()
-    return await agent_service.query_matched_agents_by_text(search_params["query_text"], search_params["count"])
+    return response
 
-@app.get("/agents/{agent_id}")
-async def get_agent(agent_id: str):
-    """Get a specific agent by ID"""
-    agent_service = AgentService()
-    return await agent_service.get_agent(agent_id)
+ # Chat endpoints
+@app.post("/chat/sendMessage")
+async def send_message(request: Request):
+    request_data = await request.json()
+    user_name = request_data.get('user_name')
+    user_input = request_data.get('user_input')
+    session_id = request_data.get('session_id')
 
-@app.put("/agents/{agent_id}")
-async def update_agent(agent_id: str, agent_data: Dict[str, Any] = Body(...)):
-    """Update an existing agent"""
-    agent_service = AgentService()
-    return await agent_service.update_agent(agent_id, agent_data)
+    chat_request = ChatRequest(
+        user_name=user_name,
+        user_input=user_input,
+        session_id=session_id
+    )
 
-@app.delete("/agents/{agent_id}")
-async def delete_agent(agent_id: str):
-    """Delete an agent"""
-    agent_service = AgentService()
-    return await agent_service.delete_agent(agent_id)
+    logger.info("chat/sendMessage request: {}", chat_request)
 
-# Task Endpoints
-@app.get("/tasks/{task_id}")
-async def get_task(task_id: str):
-    """Get a task by its ID"""
-    task_service = TaskService()
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-    return await task_service.get_task(task_id)
+    host_agent = HostAgent()
+    chat_response = await host_agent.send_message(chat_request)
 
-@app.get("/tasks/{task_id}/subtasks")
-async def get_sub_tasks(task_id: str):
-    """Get all subtasks of a parent task"""
-    task_service = TaskService()
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-    return await task_service.get_child_tasks_by_parent(task_id)
+    response = chat_response.model_dump_json(exclude_none=False)
+    return response
+    
+# Agent endpoints
+@app.post("/agent/registerAgent")
+async def register_agent(request: Request):
+    request_data = await request.json()
+    agent_url = request_data.get('agent_url')
 
-@app.get("/session/{session_id}")
-async def get_session(session_id: str):
-    """Get a session by its ID"""  
-    task_service = TaskService()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    return await task_service.get_task_session(session_id)
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+    
+    agent_center = AgentCenter()
+    agent_center_request = AgentCenterRequest(agent_url=agent_url)
+    agent_center_response = await agent_center.register_agent(agent_center_request)
 
-@app.get("/sessions/{user_name}")
-async def get_all_sessions(user_name: str):
-    """Get all sessions"""
-    task_service = TaskService()
-    return await task_service.get_task_session_by_user_name(user_name)
+    result = agent_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+
+    return response
+
+@app.post("/agent/getAgent")
+async def get_agent(request: Request):
+    request_data = await request.json()
+    agent_id = request_data.get('agent_id')
+
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    
+    agent_center = AgentCenter()
+    agent_center_request = AgentCenterRequest(agent_id=agent_id)
+    agent_center_response = await agent_center.query_agent_by_agent_id(agent_center_request)
+
+    result = agent_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+
+    return response
+
+@app.post("/agent/deleteAgent")
+async def delete_agent(request: Request):
+    request_data = await request.json()
+    agent_id = request_data.get('agent_id')
+    
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    
+    agent_center = AgentCenter()
+    agent_center_request = AgentCenterRequest(agent_id=agent_id)
+    agent_center_response = await agent_center.remove_agent(agent_center_request)
+
+    result = agent_center_response.model_dump_json(exclude_none=False)
+    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+
+    return response
 
 
 # Fix the indentation of the uvicorn run command

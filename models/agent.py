@@ -1,60 +1,33 @@
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any, Union
 from enum import Enum
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 from a2a.types import AgentCard
 
 
+class AgentStatus(Enum):
+    active = "active"
+    inactive = "inactive"
+    deleted = "deleted"
+
 class Agent(BaseModel):
+
     # Primary identification field
     agent_id: str
 
-    # Main agent card containing all agent metadata and capabilities
-    agentCard: AgentCard
+    # Agent card
+    agent_card: AgentCard
 
-    # Deployment related fields
-    is_remote: bool = False
-    ragUrl: Optional[str] = None
+    # Agent status
+    agent_status: AgentStatus = AgentStatus.active
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Agent":
-        """Create agent from dictionary"""
-        return cls(**data)
+    # Count for agent usage
+    call_count: int = 0
 
-    def to_agent_card(self) -> AgentCard:
-        """Return the agent card directly"""
-        return self.agentCard
+    # Count for agent success usage
+    call_success_count: int = 0
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "agent_id": "math-solver-1",
-                "agentCard": {
-                    "name": "Math Problem Solver",
-                    "description": "Expert at solving complex mathematical problems",
-                    "url": "http://localhost:10000",
-                    "provider": {
-                        "organization": "MathSolvers Inc",
-                        "url": "https://mathsolvers.example.com",
-                    },
-                    "version": "1.0",
-                    "capabilities": {
-                        "streaming": True,
-                        "pushNotifications": False,
-                        "stateTransitionHistory": False,
-                    },
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "skills": [
-                        {
-                            "id": "algebra-solving",
-                            "name": "Algebra Solver",
-                            "description": "Solves algebraic equations",
-                            "tags": ["algebra", "equations"],
-                        }
-                    ],
-                },
-                "is_remote": False,
-                "ragUrl": "http://localhost:11000/rag",
-            }
-        }
-    )
+    # Like count from user
+    like_count: int = 0
+
+    # Dislike count from user   
+    dislike_count: int = 0

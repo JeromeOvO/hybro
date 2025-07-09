@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 import uuid
-from models.task import RootTask, ChildTask
+from models.task import BaseTask, MetaTask
 from dotenv import load_dotenv
 import os
 load_dotenv()
@@ -35,12 +35,12 @@ class OpenAIService:
         return embedding
     
 
-    async def decompose_rootTask(self, root_task: RootTask) -> str:
+    async def decompose_rootTask(self, root_task: BaseTask) -> str:
         """
         Get OpenAI completion for task decomposition
         
         Args:
-            root_task: The RootTask to decompose
+            root_task: The BaseTask to decompose
             
         Returns:
             str: The JSON content from OpenAI
@@ -48,7 +48,7 @@ class OpenAIService:
         
         try:
             # Get user input from task description
-            user_input = root_task.description
+            user_input = root_task.task.description
             
             # Call the AI to decompose the task
             system_prompt = """You are a task decomposition AI that breaks complex tasks into specific subtasks.
