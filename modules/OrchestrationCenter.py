@@ -14,8 +14,72 @@ import json
 logger = logging.getLogger(__name__)
 
 class OrchestrationCenter:
+    """
+    OrchestrationCenter - Multi-Agent Task Orchestration and Workflow Management Service
+    
+    OrchestrationCenter serves as the central hub for orchestrating complex multi-agent workflows,
+    task decomposition, agent assignment, and result synthesis in the multi-agent system.
+    It provides comprehensive orchestration capabilities and acts as a controller layer for
+    external interface requests.
+    
+    Key Responsibilities:
+    1. Task Decomposition and Planning:
+       - Analyzes complex tasks and breaks them into manageable subtasks
+       - Uses AI to create structured execution plans
+       - Generates MetaTasks with proper execution order
+       - Ensures logical task flow and dependencies
+       
+    2. Agent Assignment and Matching:
+       - Matches appropriate agents to specific subtasks
+       - Uses semantic similarity for optimal agent selection
+       - Manages agent availability and capability matching
+       - Ensures balanced workload distribution
+       
+    3. Workflow Orchestration:
+       - Coordinates task execution across multiple agents
+       - Manages task dependencies and execution order
+       - Handles task state transitions and progress tracking
+       - Ensures workflow completion and quality
+       
+    4. Result Synthesis and Integration:
+       - Collects and synthesizes results from multiple agents
+       - Generates comprehensive final answers
+       - Integrates diverse perspectives and solutions
+       - Maintains result quality and coherence
+       
+    5. External Interface Controller:
+       - Provides RESTful API endpoints for orchestration operations
+       - Handles orchestration request validation and response formatting
+       - Manages cross-service communication and coordination
+       
+    6. Quality Assurance and Monitoring:
+       - Monitors task execution progress and quality
+       - Handles errors and recovery mechanisms
+       - Ensures system reliability and performance
+       - Provides detailed orchestration analytics
+       
+    Service Dependencies:
+    - TaskService: For task lifecycle management and persistence
+    - OpenAIService: For AI-powered task decomposition and synthesis
+    - AgentService: For agent discovery and capability matching
+    - A2AService: For agent communication and protocol handling
+    
+    Usage:
+    This center is typically used by external clients, other centers (like TaskCenter),
+    and internal services that need to orchestrate complex multi-agent workflows.
+    The center enables sophisticated problem-solving through coordinated agent collaboration.
+    """
+
 
     def __init__(self):
+
+        """
+        Initialize OrchestrationCenter with required service dependencies.
+        
+        Sets up the task service for task management, OpenAI service for AI operations,
+        agent service for agent management, and A2A service for agent communication.
+        """
+
         self.task_service = TaskService()
         self.openai_service = OpenAIService()
         self.agent_service = AgentService()
@@ -23,18 +87,40 @@ class OrchestrationCenter:
 
 
     async def decompose_task(self, request: OrchestrationCenterRequest) -> OrchestrationCenterResponse:
-
         """
-        Decompose a root task into subtasks using OpenAI.
+        Decompose a complex root task into structured subtasks using AI.
+        
+        This method orchestrates the complete task decomposition process:
+        1. Retrieves the base task and validates its existence
+        2. Uses OpenAI to analyze and decompose the task into execution steps
+        3. Creates structured MetaTasks for each execution step
+        4. Assigns proper execution order and dependencies
+        5. Returns comprehensive orchestration results
+        
+        The decomposition process includes:
+        - Task goal analysis and understanding
+        - AI-powered step generation and planning
+        - MetaTask creation with detailed descriptions
+        - Execution order assignment and validation
+        - Error handling and quality assurance
         
         Args:
-            task_id: The ID of the root task to decompose
-            
+            request: OrchestrationCenterRequest containing:
+                - task_id: The ID of the root task to decompose
+                - decomposition_parameters: Optional parameters for decomposition
+                
         Returns:
-            List[str]: List of subtask IDs
-            
+            OrchestrationCenterResponse containing:
+                - task_id: The original root task ID
+                - success: Boolean indicating success/failure
+                - meta_task_ids: List of created MetaTask IDs
+                - status_code: HTTP status code
+                - error: Error message if applicable
+                
         Raises:
-            RuntimeError: If task not found or decomposition fails
+            TaskIdRequiredError: If task_id is missing
+            TaskNotFoundError: If the specified task is not found
+            DecompositionError: If AI decomposition fails
         """
         root_task_id = request.task_id
         if root_task_id is None:
@@ -161,6 +247,41 @@ class OrchestrationCenter:
         
 
     async def assign_agent_to_meta_task(self, request: OrchestrationCenterRequest) -> OrchestrationCenterResponse:
+        """
+        Assign the most suitable agent to a specific MetaTask.
+        
+        This method performs intelligent agent assignment:
+        1. Retrieves the MetaTask and validates its current state
+        2. Uses semantic similarity to find the best matching agent
+        3. Validates agent availability and capability
+        4. Assigns the agent to the MetaTask
+        5. Updates the MetaTask with agent assignment
+        
+        The assignment process includes:
+        - MetaTask validation and state checking
+        - Agent capability analysis and matching
+        - Semantic similarity calculation
+        - Assignment validation and confirmation
+        - Error handling and fallback mechanisms
+        
+        Args:
+            request: OrchestrationCenterRequest containing:
+                - task_id: The MetaTask ID to assign an agent to
+                - assignment_parameters: Optional assignment preferences
+                
+        Returns:
+            OrchestrationCenterResponse containing:
+                - task_id: The MetaTask ID
+                - success: Boolean indicating success/failure
+                - assigned_agent_id: The ID of the assigned agent
+                - status_code: HTTP status code
+                - error: Error message if applicable
+                
+        Raises:
+            TaskIdRequiredError: If task_id is missing
+            TaskNotFoundError: If the MetaTask is not found
+            AgentNotAssignedError: If agent assignment fails
+        """
         meta_task_id = request.task_id
         
         if meta_task_id is None:
@@ -211,6 +332,43 @@ class OrchestrationCenter:
             )
 
     async def process_meta_task(self, request: OrchestrationCenterRequest) -> OrchestrationCenterResponse:
+        """
+        Execute a MetaTask by sending it to the assigned agent.
+        
+        This method orchestrates the MetaTask execution process:
+        1. Validates the MetaTask and its agent assignment
+        2. Prepares the task message for the agent
+        3. Sends the task to the assigned agent via A2A protocol
+        4. Processes the agent's response and updates task state
+        5. Handles task completion and result collection
+        
+        The execution process includes:
+        - Task validation and state checking
+        - Agent communication setup and message preparation
+        - A2A protocol message exchange
+        - Response processing and task state updates
+        - Error handling and recovery mechanisms
+        
+        Args:
+            request: OrchestrationCenterRequest containing:
+                - task_id: The MetaTask ID to process
+                - execution_parameters: Optional execution preferences
+                
+        Returns:
+            OrchestrationCenterResponse containing:
+                - task_id: The MetaTask ID
+                - success: Boolean indicating success/failure
+                - task_state: Current state of the MetaTask
+                - agent_response: Response from the assigned agent
+                - status_code: HTTP status code
+                - error: Error message if applicable
+                
+        Raises:
+            TaskIdRequiredError: If task_id is missing
+            TaskNotFoundError: If the MetaTask is not found
+            AgentNotAssignedError: If no agent is assigned
+            AgentNotFoundError: If the assigned agent is not available
+        """
         meta_task_id = request.task_id
         
         if meta_task_id is None:
@@ -296,6 +454,43 @@ class OrchestrationCenter:
 
 
     async def summarize_meta_task_for_base_task(self, request: OrchestrationCenterRequest) -> OrchestrationCenterResponse:
+        """
+        Synthesize results from multiple MetaTasks into a comprehensive final answer.
+        
+        This method orchestrates the result synthesis process:
+        1. Collects all MetaTask results and their execution histories
+        2. Analyzes the original base task goal and requirements
+        3. Synthesizes diverse agent responses into a coherent answer
+        4. Generates a comprehensive final response
+        5. Updates the base task with the final result
+        
+        The synthesis process includes:
+        - Result collection and validation
+        - Goal analysis and requirement understanding
+        - Multi-agent response synthesis
+        - Final answer generation and formatting
+        - Quality assurance and validation
+        
+        Args:
+            request: OrchestrationCenterRequest containing:
+                - task_id: The base task ID to synthesize results for
+                - synthesis_parameters: Optional synthesis preferences
+                
+        Returns:
+            OrchestrationCenterResponse containing:
+                - task_id: The base task ID
+                - success: Boolean indicating success/failure
+                - final_answer: The synthesized comprehensive answer
+                - synthesis_summary: Summary of the synthesis process
+                - status_code: HTTP status code
+                - error: Error message if applicable
+                
+        Raises:
+            TaskIdRequiredError: If task_id is missing
+            TaskNotFoundError: If the base task is not found
+            SynthesisError: If result synthesis fails
+        """
+        
         base_task_id = request.task_id
         if base_task_id is None:
             raise TaskIdRequiredError()

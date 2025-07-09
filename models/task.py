@@ -9,7 +9,7 @@ class TaskDefaultValue(Enum):
 
 
 class MetaTask(BaseModel):
-    """A meta task model in the system and also represent a subtask created from decomposition, design for a2a agent communication"""
+    """A meta task model represents the smallest atomic tasks in the system, usually subtasks from decomposition. It is designed for convenient a2a agent communication. """
 
     task_id: str
     parent_task_id: str
@@ -21,7 +21,7 @@ class MetaTask(BaseModel):
 
 
 class BaseTask(BaseModel):
-    """A base task mode for one request from user"""
+    """A base task model for one request from user"""
 
     task_id: str
     session_id: str
