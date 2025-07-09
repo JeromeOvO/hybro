@@ -9,7 +9,11 @@ from models.task import BaseTask, MetaTask
 from dotenv import load_dotenv
 import os
 load_dotenv()
+import logging
+import json
+import re
 
+logger = logging.getLogger(__name__)
 
 class OpenAIService:
     def __init__(self):
@@ -35,66 +39,92 @@ class OpenAIService:
         return embedding
     
 
-    async def decompose_rootTask(self, root_task: BaseTask) -> str:
+    async def decompose_task(self, base_task: BaseTask) -> str:
         """
-        Get OpenAI completion for task decomposition
+        Decompose a base task into subtasks using OpenAI.
+        Returns a JSON string with structured execution steps.
+        """
+        system_prompt = """You are an AI tasked with decomposing a base task into detailed execution steps.
+        Analyze the task goal and create a structured execution plan with specific steps.
         
-        Args:
-            root_task: The BaseTask to decompose
-            
-        Returns:
-            str: The JSON content from OpenAI
+        Return the response in the following JSON format:
+        {
+            "execution_steps": [
+                {
+                    "step_number": 1,
+                    "step_description": "Detailed description of what this step accomplishes",
+                    "execution_content": "Specific actions, queries, or reasoning needed to complete this step",
+                    "expected_output": "What this step should produce or determine"
+                }
+            ]
+        }
+        
+        Each step should be:
+        1. Specific and actionable
+        2. Clear enough for an AI to understand and execute
+        3. Include reasoning or analysis if needed
+        4. Build upon previous steps when applicable
         """
+
+        task_goal = base_task.task.history[0].parts[0].root.text if base_task.task.history else "No task goal provided"
+        
+        prompt = f"""Task Goal: {task_goal}
+
+Please decompose this task into a structured execution plan with specific steps.
+Each step should be detailed enough for an AI agent to understand and execute.
+Consider the logical flow and dependencies between steps.
+"""
+
+        messages = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt)
+        ]
         
         try:
-            # Get user input from task description
-            user_input = root_task.task.description
-            
-            # Call the AI to decompose the task
-            system_prompt = """You are a task decomposition AI that breaks complex tasks into specific subtasks.
-            Always respond with a JSON object containing an array of subtasks."""
-            
-            prompt = f"""
-            Please decompose the following user task into specific subtasks:
-            
-            User task: {user_input}
-            
-            Based on task complexity, decompose into an appropriate number of subtasks (no limit on quantity).
-            Return in JSON format with this structure:
-            {{
-              "subtasks": [
-                {{
-                  "description": "detailed subtask description",
-                  "step": execution_order (starting from 1, where lower numbers execute before higher numbers),
-                  "priority": priority_level (1-4, 1 lowest, 4 highest),
-                  "dependencies": [step_numbers_of_subtasks_this_depends_on, ...] 
-                }},
-                ...
-              ]
-            }}
-            """
-            
-            messages = [
-                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
-                ChatCompletionUserMessageParam(role="user", content=prompt)
-            ]
-            
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
-                response_format={"type": "json_object"}
+                temperature=0.3,  # Lower temperature for more consistent structured output
+                max_tokens=5000
             )
             
-            return response.choices[0].message.content if response.choices[0].message.content else ""
-        except Exception as e:
-            print(f"Error in task decomposition process: {str(e)}")
+            content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
+            
+            # Validate that the response is valid JSON
+            try:
 
-            error_message = f"Failed to decompose task: {str(e)}"
-            # Return error information for host agent
+                json.loads(content)
+                return content
+            except json.JSONDecodeError:
+                # If the response is not valid JSON, try to extract JSON from the response
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    return json_match.group(0)
+                else:
+                    # Fallback: create a simple structured response
+                    return json.dumps({
+                        "execution_steps": [
+                            {
+                                "step_number": 1,
+                                "step_description": "Analyze the task goal",
+                                "execution_content": f"Review and understand the task goal: {task_goal}",
+                                "expected_output": "Clear understanding of what needs to be accomplished"
+                            }
+                        ]
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Error decomposing task: {str(e)}")
+            # Return a fallback structured response
             return json.dumps({
-                "error": True,
-                "task_id": root_task.task_id,
-                "error_message": error_message
+                "execution_steps": [
+                    {
+                        "step_number": 1,
+                        "step_description": "Error occurred during task decomposition",
+                        "execution_content": f"Original task goal: {task_goal}",
+                        "expected_output": "Manual intervention required"
+                    }
+                ]
             })
 
     async def select_best_agent_for_task(self, child_task_description: str, agents: List[Dict[str, Any]]) -> str:
@@ -169,35 +199,66 @@ Based on the task description and agent capabilities, which agent (by ID) would 
             # If no exact match found, return first agent ID
             return agents[0]["agent_id"]
         except Exception as e:
-            print(f"Error selecting best agent: {str(e)}")
+            logger.error(f"Error selecting best agent: {str(e)}")
             return agents[0]["agent_id"]  # Default to first agent
 
-    async def summarize_subtask_answers(self, original_question: str, subtask_answers: List[Dict[str, Any]]) -> str:
+    async def summarize_meta_task_for_base_task(self, base_task_goal: str, meta_task_summaries: List[str], meta_task_descriptions: List[str]) -> str:
         """
-        Summarize the answers from multiple subtasks into a cohesive response
+        Summarize the meta task results for a base task using OpenAI.
         
         Args:
-            original_question: Original user question
-            subtask_answers: List of answers from each subtask
+            base_task_goal: The original goal/objective of the base task
+            meta_task_summaries: List of summaries from each meta task
+            meta_task_execution_contents: List of execution contents from each meta task
+            meta_task_descriptions: List of task descriptions from each meta task
+            meta_task_histories: List of conversation histories from each meta task
             
         Returns:
-            Summarized final answer
+            Comprehensive summary that addresses the original base task goal
         """
-        system_prompt = """You are an AI tasked with synthesizing answers from multiple subtasks into a cohesive response.
-        Create a comprehensive yet concise summary that directly addresses the original question while incorporating
-        all relevant information from the subtask answers."""
+        system_prompt = """You are an expert AI agent tasked with synthesizing results from multiple subtasks into a comprehensive final answer.
         
-        # Prepare subtask answers for the prompt
-        answers_text = ""
-        for i, answer in enumerate(subtask_answers):
-            answers_text += f"Subtask {i+1} Answer:\n{answer}\n\n"
+        Your role is to:
+        1. Analyze the original task goal
+        2. Review all the subtask execution steps and their results
+        3. Consider the conversation histories between agents and users
+        4. Create a cohesive, comprehensive summary that directly addresses the original goal
         
-        prompt = f"""Original Question: {original_question}
+        The summary should:
+        - Be well-structured and easy to understand
+        - Include key insights from each subtask
+        - Address the original goal comprehensively
+        - Highlight any important findings or conclusions
+        - Maintain logical flow and coherence
+        """
+        
+        # Prepare detailed information for each meta task
+        detailed_meta_task_info = []
+        for i, (summary, description) in enumerate(zip(
+            meta_task_summaries, meta_task_descriptions
+        )):
+            task_info = f"Subtask {i+1}:\n"
+            task_info += f"Description: {description}\n"
+            task_info += f"Summary: {summary}\n"
+            
+            detailed_meta_task_info.append(task_info)
+        
+        # Combine all information
+        all_task_info = "\n\n".join(detailed_meta_task_info)
+        
+        prompt = f"""Original Task Goal: {base_task_goal}
 
-Subtask Answers:
-{answers_text}
+Detailed Subtask Information:
+{all_task_info}
 
-Please provide a comprehensive final answer that addresses the original question based on these subtask results.
+Please provide a comprehensive final answer that:
+1. Directly addresses the original task goal
+2. Synthesizes the key findings from all subtasks
+3. Presents a coherent and complete response
+4. Highlights the most important insights and conclusions
+5. Maintains logical structure and flow
+
+Your response should be the final, comprehensive answer to the original task goal based on all the subtask results.
 """
         
         messages = [
@@ -208,13 +269,23 @@ Please provide a comprehensive final answer that addresses the original question
         try:
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
-                messages=messages
+                messages=messages,
+                temperature=0.3,  # Lower temperature for more consistent and focused output
+                max_tokens=10000   # Allow for comprehensive summary
             )
             
-            return response.choices[0].message.content if response.choices[0].message.content else ""
+            content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
+            
+            if not content:
+                return "Unable to generate summary due to empty response from AI model."
+            
+            return content
+            
         except Exception as e:
-            print(f"Error summarizing subtask answers: {str(e)}")
-            return f"Error generating final answer: {str(e)}"
+            print(f"Error summarizing meta task for base task: {str(e)}")
+            return f"Error generating comprehensive summary: {str(e)}"
+    
+
 
     async def short_debate_with_openai(self, original_userinput: str, other_agent_answer: str) -> str:
         """

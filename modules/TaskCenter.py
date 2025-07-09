@@ -30,21 +30,17 @@ class TaskCenter:
         """Create a new meta task linked to a parent task."""
         return await self.task_service.create_new_meta_task(request)
 
-
     async def query_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         """Query a meta task by its task ID."""
         return await self.task_service.query_meta_task_by_task_id(request)
 
-
-    async def query_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+    async def query_meta_tasks_by_parent_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         """Query meta tasks by their parent task ID (duplicate method name, should be renamed)."""
         return await self.task_service.query_meta_tasks_by_parent_task_id(request)
 
-
-    async def query_meta_tasks_by_parent_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
-        """Query all meta tasks associated with a given parent task ID."""
-        return await self.task_service.query_meta_tasks_by_parent_task_id(request)
-
+    async def query_base_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        """Query a base task by its task ID."""
+        return await self.task_service.query_base_task_by_task_id(request)
 
     async def delete_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         """Delete a meta task by its task ID."""
