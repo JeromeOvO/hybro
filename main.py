@@ -82,10 +82,7 @@ async def inspect_agent(request: Request):
     inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
     inspection_center_response = await inspection_center.inspect_agent_card(inspection_center_request)
 
-    result = inspection_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
-
-    return response
+    return inspection_center_response
 
 @app.post("/inspectionCenter/inspectA2AConnection")
 async def inspect_a2a_connection(request: Request):
@@ -100,10 +97,8 @@ async def inspect_a2a_connection(request: Request):
 
     inspection_center_request = InspectionCenterRequest(agent_url=agent_url)
     inspection_center_response = await inspection_center.inspect_a2a_connection(inspection_center_request)
-    result = inspection_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=inspection_center_response.status_code)
 
-    return response
+    return inspection_center_response
 
  # Chat endpoints
 @app.post("/chat/sendMessage")
@@ -124,15 +119,12 @@ async def send_message(request: Request):
     host_agent = HostAgent()
     chat_response = await host_agent.send_message(chat_request)
 
-    response = chat_response.model_dump_json(exclude_none=False)
-    return response
+    return chat_response
 
 # Task endpoints
-@app.post("/task/queryTask")
-async def query_task(request: Request):
+@app.get("/task/queryTask/{task_id}")
+async def query_task(task_id: str):
     task_center = TaskCenter()
-    request_data = await request.json()
-    task_id = request_data.get('task_id')
 
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
@@ -140,9 +132,7 @@ async def query_task(request: Request):
     task_center_request = TaskCenterRequest(task_id=task_id)
     task_center_response = await task_center.query_meta_task_by_task_id(task_center_request)
 
-    result = task_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=task_center_response.status_code)
-    return response
+    return task_center_response
 
 # Agent endpoints
 @app.post("/agent/registerAgent")
@@ -157,15 +147,10 @@ async def register_agent(request: Request):
     agent_center_request = AgentCenterRequest(agent_url=agent_url)
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
-    result = agent_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+    return agent_center_response
 
-    return response
-
-@app.post("/agent/getAgent")
-async def get_agent(request: Request):
-    request_data = await request.json()
-    agent_id = request_data.get('agent_id')
+@app.get("/agent/getAgent/{agent_id}")
+async def get_agent(agent_id: str):
 
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
@@ -174,10 +159,7 @@ async def get_agent(request: Request):
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.query_agent_by_agent_id(agent_center_request)
 
-    result = agent_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
-
-    return response
+    return agent_center_response
 
 @app.post("/agent/deleteAgent")
 async def delete_agent(request: Request):
@@ -191,21 +173,22 @@ async def delete_agent(request: Request):
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)
 
-    result = agent_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+    return agent_center_response
 
-    return response
-
-@app.post("/agent/getAgentList")
+@app.get("/agent/getAllAgents")
 async def get_agent_list(request: Request):    
     agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_all_agents(agent_center_request)
+    return agent_center_response
 
-    result = agent_center_response.model_dump_json(exclude_none=False)
-    response = JSONResponse(content=result, status_code=agent_center_response.status_code)
+@app.post("/agent/getAgentListWithConditions")
+async def get_agent_list_with_conditions(request: Request):
+    agent_center = AgentCenter()
+    agent_center_request = AgentCenterRequest()
+    agent_center_response = await agent_center.get_agents_with_conditions(agent_center_request)
 
-    return response
+    return agent_center_response
 
 # Orchestration Center Endpoints
 @app.post("/orchestrationCenter/decomposeTask")
@@ -220,7 +203,7 @@ async def decompose_task(request: Request):
     orchestration_center_request = OrchestrationCenterRequest(task_id=task_id)
     orchestration_center_response = await orchestration_center.decompose_task(orchestration_center_request)
 
-    return JSONResponse(content=orchestration_center_response.model_dump_json(exclude_none=False), status_code=orchestration_center_response.status_code)
+    return orchestration_center_response
 
 @app.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
 async def summarize_meta_task_for_base_task(request: Request):
@@ -234,7 +217,7 @@ async def summarize_meta_task_for_base_task(request: Request):
     orchestration_center_request = OrchestrationCenterRequest(task_id=task_id)
     orchestration_center_response = await orchestration_center.summarize_meta_task_for_base_task(orchestration_center_request)
 
-    return JSONResponse(content=orchestration_center_response.model_dump_json(exclude_none=False), status_code=orchestration_center_response.status_code)
+    return orchestration_center_response
 
 # Fix the indentation of the uvicorn run command
 if __name__ == "__main__":

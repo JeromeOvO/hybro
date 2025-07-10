@@ -158,6 +158,12 @@ class AgentCenter:
         """
         return await self.agent_service.get_all_agents(request)
     
+    async def get_agents_with_conditions(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Get agents with conditions from the database.
+        """
+        return await self.agent_service.get_agents_with_conditions(request)
+    
     async def query_similar_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
         """
         Find agents similar to a given query or criteria.

@@ -169,6 +169,24 @@ class AgentService:
             status_code=200
         )
     
+    async def get_agents_with_conditions(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        try:
+            agents = await self.database_service.get_agents_with_conditions(request.query, request.limit)
+        except Exception as e:
+            logging.error(f"AgentCenter: Failed to get agents with conditions in database: {str(e)}")
+            return AgentCenterResponse(
+                success=False,
+                error=str(e),
+                status_code=500
+            )
+        
+        return AgentCenterResponse(
+            agents=agents,
+            success=True,
+            error=None,
+            status_code=200
+        )
+    
     async def query_similar_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
         query_text = request.query_text
         if query_text is None:

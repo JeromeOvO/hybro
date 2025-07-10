@@ -25,22 +25,14 @@ export type TaskState =
   | "unknown";
 
 /**
- * Model for a subtask created from AI decomposition.
- *
- * Contains a Task from common/types.py and adds fields
- * for task decomposition relationships.
+ * A base task model for one request from user
  */
-export interface ChildTask {
-  task_id?: string;
-  agent_id?: string;
-  description?: string | null;
+export interface BaseTask {
+  task_id: string;
+  session_id: string;
+  user_name: string;
   task: Task;
-  parent_id: string;
-  order?: number;
-  priority?: number;
-  dependencies?: number[];
-  subtasks?: ChildTask[];
-  depth?: number;
+  extend_info?: unknown;
 }
 export interface Task {
   artifacts?: Artifact[] | null;
@@ -135,7 +127,6 @@ export interface Message {
   referenceTaskIds?: string[] | null;
   role: Role;
   taskId?: string | null;
-  [k: string]: unknown;
 }
 /**
  * TaskState and accompanying message.
@@ -147,23 +138,26 @@ export interface TaskStatus {
   [k: string]: unknown;
 }
 /**
- * Enhanced Task model for MongoDB storage.
- *
- * Contains a Task from common/types.py and adds task_id and subtasks fields
- * for storing AI-decomposed subtasks.
+ * A meta task model represents the smallest atomic tasks in the system, usually subtasks from decomposition. It is designed for convenient a2a agent communication.
  */
-export interface RootTask {
-  task_id?: string;
+export interface MetaTask {
+  task_id: string;
+  parent_task_id: string;
+  agent_id?: string;
+  task_description?: string | null;
   task?: Task | null;
-  description?: string | null;
-  subtasks?: ChildTask[];
+  execution_order?: number;
+  extend_info?: unknown;
 }
+/**
+ * Model for a task session. One meta session for one chat session
+ */
 export interface TaskSession {
-  user_name?: string;
   session_id: string;
+  user_name: string;
   session_name: string;
   session_description?: string | null;
   session_created_at?: string;
   session_updated_at?: string;
-  rootTasks?: string[];
+  extend_info?: unknown;
 }

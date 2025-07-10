@@ -14,17 +14,7 @@ export type SecurityScheme =
  * The location of the API key. Valid values are "query", "header", or "cookie".
  */
 export type In = "cookie" | "header" | "query";
-export type AgentStatus = "active" | "inactive" | "deleted";
 
-export interface Agent {
-  agent_id: string;
-  agent_card: AgentCard;
-  agent_status?: AgentStatus;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
-}
 /**
  * An AgentCard conveys key information:
  * - Overall details (version, name, description, uses)
@@ -189,4 +179,16 @@ export interface AgentSkill {
   outputModes?: string[] | null;
   tags: string[];
   [k: string]: unknown;
+}
+export interface Error {
+  status_code: number;
+  error_code: string;
+  error_message: string;
+  error_data?: unknown;
+}
+export interface ErrorResponse {
+  status_code: number;
+  error_code: string;
+  error_message: string;
+  error_data?: unknown;
 }

@@ -9,74 +9,70 @@ class Error(BaseModel):
     error_message: str
     error_data: Optional[Any] = None
 
-class AgentNotFoundError(Error):
-    status_code: int = 200
-    error_code: str = "agent_not_found"
-    error_message: str = "Agent not found"
-    error_data: Optional[Any] = None
+# 修复：创建正确的异常类
+class AgentNotFoundError(Exception):
+    def __init__(self, message: str = "Agent not found"):
+        self.message = message
+        super().__init__(self.message)
 
-class AgentNotAssignedError(Error):
-    status_code: int = 200
-    error_code: str = "agent_not_assigned"
-    error_message: str = "Agent not assigned"
-    error_data: Optional[Any] = None
+class AgentNotAssignedError(Exception):
+    def __init__(self, message: str = "Agent not assigned"):
+        self.message = message
+        super().__init__(self.message)
 
-class AgentCardRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "agent_card_required"
-    error_message: str = "Agent card is required"
-    error_data: Optional[Any] = None
+class AgentCardRequiredError(Exception):
+    def __init__(self, message: str = "Agent card is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class AgentIdRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "agent_id_required"
-    error_message: str = "Agent ID is required"
-    error_data: Optional[Any] = None
+class AgentIdRequiredError(Exception):
+    def __init__(self, message: str = "Agent ID is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class QueryTextRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "query_text_required"
-    error_message: str = "Query text is required"
-    error_data: Optional[Any] = None
+class QueryTextRequiredError(Exception):
+    def __init__(self, message: str = "Query text is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class TaskIdRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "task_id_required"
-    error_message: str = "Task ID is required"
-    error_data: Optional[Any] = None
+class TaskIdRequiredError(Exception):
+    def __init__(self, message: str = "Task ID is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class ParentTaskIdRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "parent_task_id_required"
-    error_message: str = "Parent task ID is required"
-    error_data: Optional[Any] = None
+class ParentTaskIdRequiredError(Exception):
+    def __init__(self, message: str = "Parent task ID is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class SessionIdRequiredError(Error):
-    status_code: int = 200
-    error_code: str = "session_id_required"
-    error_message: str = "Session ID is required"
-    error_data: Optional[Any] = None
+class SessionIdRequiredError(Exception):
+    def __init__(self, message: str = "Session ID is required"):
+        self.message = message
+        super().__init__(self.message)
 
-class IllgalParameterError(Error):
-    status_code: int = 200
-    error_code: str = "illgal_parameter"
-    error_message: str = "Illegal parameter"
-    error_data: Optional[Any] = None
+class IllgalParameterError(Exception):
+    def __init__(self, message: str = "Illegal parameter"):
+        self.message = message
+        super().__init__(self.message)
 
-class A2AServiceError(Error):
-    status_code: int = 200
-    error_code: str = "a2a_service_error"
-    error_message: str = "A2A service error"
-    error_data: Optional[Any] = None
+class A2AServiceError(Exception):
+    def __init__(self, message: str = "A2A service error"):
+        self.message = message
+        super().__init__(self.message)
 
-class TaskNotFoundError(Error):
-    status_code: int = 200
-    error_code: str = "task_not_found"
-    error_message: str = "Task not found"
-    error_data: Optional[Any] = None
+class TaskNotFoundError(Exception):
+    def __init__(self, message: str = "Task not found"):
+        self.message = message
+        super().__init__(self.message)
 
-class AgentAlreadyAssignedError(Error):
-    status_code: int = 200
-    error_code: str = "agent_already_assigned"
-    error_message: str = "Agent already assigned"
+class AgentAlreadyAssignedError(Exception):
+    def __init__(self, message: str = "Agent already assigned"):
+        self.message = message
+        super().__init__(self.message)
+
+# 保留原有的 Pydantic 模型用于响应
+class ErrorResponse(BaseModel):
+    status_code: int
+    error_code: str
+    error_message: str
     error_data: Optional[Any] = None
