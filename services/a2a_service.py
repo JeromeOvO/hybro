@@ -22,7 +22,6 @@ from models.request import TaskCenterRequest
 from models.response import TaskCenterResponse
 from models.error import TaskIdRequiredError
 from models.error import IllgalParameterError
-from services.task_service import TaskService
 
 import logging
 from typing import Any
@@ -40,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class A2AService:
     def __init__(self):
-        self.task_service = TaskService()
+        pass
 
     async def get_agent_card_from_url(self, agent_url: str) -> AgentCard:
         if not agent_url:

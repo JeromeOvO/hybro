@@ -234,6 +234,18 @@ class TaskCenter:
                 - error: Error message if applicable
         """
         return await self.task_service.query_base_task_by_task_id(request)
+    
+    async def query_all_sessions(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        """
+        Query all sessions.
+        """
+        return await self.task_service.query_all_sessions(request)
+    
+    async def query_base_tasks_by_session_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        """
+        Query a base task by its session ID.
+        """
+        return await self.task_service.query_base_tasks_by_session_id(request)
 
     async def delete_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
         """
