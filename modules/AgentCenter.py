@@ -66,6 +66,12 @@ class AgentCenter:
         self.agent_service = AgentService()
         self.a2a_service = A2AService()
 
+    async def get_agent_card_from_url(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Get an agent from a URL.
+        """ 
+        return await self.agent_service.get_agent_card_from_url(request)
+    
     async def register_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
         """
         Register a new agent in the system.

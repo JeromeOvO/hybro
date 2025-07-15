@@ -8,11 +8,35 @@ from services.openai_service import OpenAIService
 from models.error import AgentCardRequiredError, AgentIdRequiredError, AgentNotFoundError, QueryTextRequiredError, IllgalParameterError
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
+from services.a2a_service import A2AService
 
 class AgentService:
     def __init__(self):
         self.database_service = DatabaseService()
         self.openai_service = OpenAIService()
+        self.a2a_service = A2AService()
+        
+    async def get_agent_card_from_url(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        agent_url = request.agent_url
+        if not agent_url:
+            raise IllgalParameterError()
+        
+        try:    
+            agent_card = await self.a2a_service.get_agent_card_from_url(agent_url)
+        except Exception as e:
+            logging.error(f"AgentCenter: Failed to get agent card from url: {str(e)}")
+            return AgentCenterResponse(
+                success=False,
+                error=str(e),
+                status_code=500
+            )
+
+        return AgentCenterResponse(
+            agent_card=agent_card,
+            success=True,
+            error=None,
+            status_code=200
+        )
 
     async def register_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
 

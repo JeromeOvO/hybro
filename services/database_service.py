@@ -223,7 +223,7 @@ class DatabaseService:
 
 
 
-    # tassk management
+    # task management
     async def add_base_task(self, base_task: BaseTask) -> bool:
         """
         Add a base task to the database

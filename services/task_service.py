@@ -197,15 +197,13 @@ class TaskService:
                 error="Failed to query meta tasks",
                 status_code=500
             )
-    
-    async def delete_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
-        if request.task_id is None:
-            raise TaskIdRequiredError()
         
-        task_id = request.task_id
-        success = await self.database_service.delete_meta_task_by_task_id(task_id)
-        if success:
+    async def query_all_sessions(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        user_name = request.user_name
+        sessions = await self.database_service.get_task_sessions_by_user_name(user_name)
+        if sessions:
             return TaskCenterResponse(
+                task_sessions=sessions,
                 success=True,
                 error=None,
                 status_code=200
@@ -213,7 +211,42 @@ class TaskService:
         else:
             return TaskCenterResponse(
                 success=False,
-                error="Failed to delete meta task",
+                error="Failed to query all sessions",
+                status_code=500
+            )
+    
+    async def delete_meta_task_by_task_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        """
+        Delete a meta task by its task ID
+        """
+        try:
+            task_id = request.task_id
+            if not task_id:
+                raise TaskIdRequiredError()
+            
+            # Execute actual deletion logic
+            success = await self.database_service.delete_meta_task_by_task_id(task_id)
+            
+            if success:
+                return TaskCenterResponse(
+                    task_id=task_id,
+                    success=True,
+                    error=None,
+                    status_code=200
+                )
+            else:
+                return TaskCenterResponse(
+                    task_id=task_id,
+                    success=False,
+                    error="Failed to delete meta task from database",
+                    status_code=500
+                )
+            
+        except Exception as e:
+            return TaskCenterResponse(
+                task_id=request.task_id,
+                success=False,
+                error=str(e),
                 status_code=500
             )
     
@@ -361,4 +394,24 @@ class TaskService:
                 status_code=500
             )
 
+    async def query_base_tasks_by_session_id(self, request: TaskCenterRequest) -> TaskCenterResponse:
+        if request.session_id is None:
+            raise SessionIdRequiredError()
+        
+        session_id = request.session_id
+        base_tasks = await self.database_service.get_base_tasks_by_session_id(session_id)
+        if base_tasks:
+            return TaskCenterResponse(
+                base_tasks=base_tasks,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return TaskCenterResponse(
+                success=False,
+                error="Failed to query base tasks by session id",
+                status_code=500
+            )
+    
 task_service = TaskService()

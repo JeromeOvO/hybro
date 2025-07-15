@@ -9,7 +9,7 @@ class Error(BaseModel):
     error_message: str
     error_data: Optional[Any] = None
 
-# 修复：创建正确的异常类
+# Fix: Create proper exception classes
 class AgentNotFoundError(Exception):
     def __init__(self, message: str = "Agent not found"):
         self.message = message
@@ -70,7 +70,7 @@ class AgentAlreadyAssignedError(Exception):
         self.message = message
         super().__init__(self.message)
 
-# 保留原有的 Pydantic 模型用于响应
+# Keep original Pydantic models for response
 class ErrorResponse(BaseModel):
     status_code: int
     error_code: str
