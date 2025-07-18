@@ -25,7 +25,6 @@ export default function AgentPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
 
   const loadAgents = async () => {
     try {
@@ -111,7 +110,7 @@ export default function AgentPage() {
           </Button>
           <Button variant="outline" onClick={() => router.push('/agent/registry')}>
             <Plus className="h-4 w-4 mr-2" />
-            Register Agent
+            Join Network
           </Button>
         </div>
       </div>
@@ -136,50 +135,12 @@ export default function AgentPage() {
             <SelectTrigger className="w-[120px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="bg-background/80 backdrop-blur-md border shadow-lg">
               <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="active">Active</SelectItem>
               <SelectItem value="inactive">Inactive</SelectItem>
             </SelectContent>
           </Select>
-          
-          {providers.length > 0 && (
-            <Select value={providers.find(p => p === (agents.find(a => a.agent_id === agents[0]?.agent_id)?.agent_card.provider?.organization || "")) || "all"} onValueChange={(value) => {
-              const selectedProvider = providers.find(p => p === value);
-              if (selectedProvider) {
-                setStatusFilter("all"); // Reset status filter when provider changes
-              }
-            }}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Providers</SelectItem>
-                {providers.map(provider => (
-                  <SelectItem key={provider} value={provider}>
-                    {provider}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          
-          <div className="flex border rounded-md">
-            <Button
-              variant={viewMode === "grid" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("grid")}
-            >
-              <Grid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "list" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("list")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -201,16 +162,9 @@ export default function AgentPage() {
         )}
       </div>
 
-      <div className={`grid gap-6 ${
-        viewMode === "grid" 
-          ? "grid-cols-1 md:grid-cols-2 lg:grid-cols-3" 
-          : "grid-cols-1"
-      }`}>
+      <div className="flex flex-row flex-wrap gap-5">
         {filteredAgents.map((agent) => (
-          <AgentCard
-            key={agent.agent_id}
-            agent={agent}
-          />
+          <AgentCard key={agent.agent_id} agent={agent} />
         ))}
       </div>
 
@@ -225,7 +179,7 @@ export default function AgentPage() {
           {agents.length === 0 ? (
             <Button onClick={() => router.push('/agent/registry')}>
               <Plus className="h-4 w-4 mr-2" />
-              Register First Agent
+              Join Network
             </Button>
           ) : (
             <Button
