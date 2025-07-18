@@ -131,10 +131,7 @@ export default function RegisterAgentPage() {
       {/* Page title */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Register New Agent</h1>
-          <p className="text-muted-foreground mt-1">
-            Register a new A2A AI agent to the network
-          </p>
+          <h1 className="text-3xl font-bold">Register Agent</h1>
         </div>
       </div>
 
@@ -279,7 +276,7 @@ export default function RegisterAgentPage() {
                     key={index} 
                     variant="outline" 
                     size="sm"
-                    className="text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100 dark:text-blue-400 dark:border-blue-700 dark:bg-blue-950 dark:hover:bg-blue-900"
+                    className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
                   >
                     {skill.name}
                   </Button>
@@ -295,7 +292,7 @@ export default function RegisterAgentPage() {
                     key={index} 
                     variant="outline" 
                     size="sm"
-                    className="text-purple-600 border-purple-300 bg-purple-50 hover:bg-purple-100 dark:text-purple-400 dark:border-purple-700 dark:bg-purple-950 dark:hover:bg-purple-900"
+                    className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
                   >
                     {mode}
                   </Button>
@@ -311,7 +308,7 @@ export default function RegisterAgentPage() {
                     key={index} 
                     variant="outline" 
                     size="sm"
-                    className="text-orange-600 border-orange-300 bg-orange-50 hover:bg-orange-100 dark:text-orange-400 dark:border-orange-700 dark:bg-orange-950 dark:hover:bg-orange-900"
+                    className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
                   >
                     {mode}
                   </Button>
@@ -322,7 +319,6 @@ export default function RegisterAgentPage() {
         </Card>
       )}
 
-      {/* Check results */}
       {agentData?.result && (
         <Card>
           <CardHeader>
@@ -349,6 +345,7 @@ export default function RegisterAgentPage() {
         <div className="flex justify-end">
           <Button 
             onClick={registerAgentHandler}
+            variant="outline"
             disabled={registering}
             size="lg"
           >
@@ -358,7 +355,7 @@ export default function RegisterAgentPage() {
                 Registering...
               </>
             ) : (
-              "Register Agent"
+              "Register"
             )}
           </Button>
         </div>
