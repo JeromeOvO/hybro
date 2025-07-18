@@ -2,13 +2,11 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { 
   Bot, 
   Zap, 
   Users, 
   Grid3X3,
-  Check,
   ArrowRight,
   Network,
   Workflow,
@@ -52,56 +50,6 @@ export default function AboutPage() {
     }
   ]
 
-  const pricingPlans = [
-    {
-      name: "Basic",
-      description: "For individuals and small projects.",
-      price: "Free",
-      period: "/month",
-      features: [
-        "Full source code",
-        "100% Open-source",
-        "Community support",
-        "Free forever",
-        "No credit card required"
-      ],
-      buttonText: "Get Started",
-      buttonVariant: "outline" as const,
-      popular: false
-    },
-    {
-      name: "Pro",
-      description: "Ideal for growing teams and businesses.",
-      price: "$0.00",
-      period: "/month",
-      features: [
-        "Full source code",
-        "100% Open-source",
-        "Community support",
-        "Free forever",
-        "No credit card required"
-      ],
-      buttonText: "Upgrade to Pro",
-      buttonVariant: "default" as const,
-      popular: true
-    },
-    {
-      name: "Enterprise",
-      description: "For large organizations.",
-      price: "Still Free",
-      period: "/month",
-      features: [
-        "Full source code",
-        "100% Open-source",
-        "Community support",
-        "Free forever",
-        "No credit card required"
-      ],
-      buttonText: "Contact Us",
-      buttonVariant: "outline" as const,
-      popular: false
-    }
-  ]
 
   return (
     <div className="min-h-screen bg-background">

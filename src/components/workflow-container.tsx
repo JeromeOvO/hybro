@@ -1,14 +1,14 @@
 "use client"
 
-import { useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { WorkflowMessage } from './workflow-message'
 import { useWorkflow } from '@/hooks/useWorkflow'
-import type { BaseTask } from '@/lib/types'
+import type { BaseTask, MetaTask } from '@/lib/types'
 
 interface WorkflowContainerProps {
   baseTaskId: string
-  metaTasks?: any[] // Initial meta tasks from API
-  onWorkflowComplete?: (baseTask: BaseTask) => void // Modify callback parameter
+  metaTasks?: MetaTask[]
+  onWorkflowComplete?: (baseTask: BaseTask) => void
   className?: string
 }
 
@@ -29,10 +29,7 @@ export function WorkflowContainer({
     handleRetryMetaTask
   } = useWorkflow({ baseTaskId, onWorkflowComplete })
 
-  // Use useMemo to stabilize onWorkflowComplete reference
-  const stableOnWorkflowComplete = useMemo(() => onWorkflowComplete, [onWorkflowComplete])
 
-  // If there are initial meta tasks, set them (but don't override hook's auto-initialization)
   useEffect(() => {
     if (initialMetaTasks.length > 0 && metaTasks.length === 0) {
       console.log('Setting initial meta tasks:', initialMetaTasks.length)

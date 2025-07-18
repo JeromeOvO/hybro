@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Bot, CheckCircle, RefreshCw, ExternalLink, Calendar, Users, Star } from "lucide-react"
+import { ArrowLeft, Bot, RefreshCw, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -19,7 +19,6 @@ export default function AgentProfilePage() {
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Get status color
   const getStatusColor = (status: Agent['agent_status']) => {
     switch (status) {
       case 'active':
@@ -59,11 +58,8 @@ export default function AgentProfilePage() {
           description: errorMessage
         })
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Network error occurred"
-      toast.error("Failed to load agent details", {
-        description: errorMessage
-      })
+    } catch { 
+      toast.error("Failed to load agent details")
     } finally {
       setLoading(false)
     }
@@ -93,7 +89,7 @@ export default function AgentProfilePage() {
           <div className="text-center">
             <h2 className="text-lg font-semibold mb-2">Agent not found</h2>
             <p className="text-muted-foreground mb-4">
-              The agent you're looking for doesn't exist or has been removed.
+              The agent you&nbsp;are looking for does&nbsp;not&nbsp;exist or has been removed.
             </p>
           </div>
           <Button onClick={() => router.push('/agent')} variant="outline">
@@ -275,7 +271,7 @@ export default function AgentProfilePage() {
                                 size="sm"
                                 className="text-xs h-6 px-2"
                               >
-                                "{example}"
+                                {example}
                               </Button>
                             ))}
                           </div>

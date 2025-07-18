@@ -5,10 +5,9 @@ import { Bot, User, Copy, ThumbsUp, ThumbsDown, RotateCcw } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { MessageData, Role, BaseTask } from "@/lib/types"
+import type { MessageData, BaseTask } from "@/lib/types"
 import { WorkflowContainer } from "./workflow-container"
 
-// Export MessageData type for other components to use
 export type { MessageData }
 
 interface MessageProps {

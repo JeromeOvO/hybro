@@ -35,25 +35,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
     baseTaskId: null
   })
 
-  // Poll workflow status
-  const pollWorkflowStatus = useCallback(async () => {
-    try {
-      const response = await queryBaseTask(baseTaskId)
-      const baseTask = response.base_task
-      
-      if (baseTask && baseTask.task.status.state === 'completed') {
-        // Workflow completed, automatically call summarize
-        console.log('Workflow completed, calling summarize...')
-        await handleSummarizeResults()
-        return true // Indicates completion
-      }
-      
-      return false // Indicates still in progress
-    } catch (error) {
-      console.error('Error polling workflow status:', error)
-      return false
-    }
-  }, [baseTaskId])
+
 
   // Load all available agents
   const loadAgents = useCallback(async () => {
@@ -314,7 +296,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
     }
 
     initializeWorkflow()
-  }, [baseTaskId]) // Only depends on baseTaskId
+  }, [baseTaskId])
 
   // Reset initialization state when baseTaskId changes
   useEffect(() => {

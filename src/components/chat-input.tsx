@@ -3,14 +3,9 @@
 import * as React from "react"
 import { 
   Plus, 
-  Settings, 
-  Mic, 
-  Volume2, 
   Send, 
   Paperclip, 
   Image as ImageIcon,
-  Code,
-  Smile
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -46,15 +41,13 @@ export function ChatInput({
   disabled = false,
   className,
   showTools = true,
-  showVoice = true,
   showSend = true,
   maxRows = 6,
-  maxHeight = 300, // Increase default max height
+  maxHeight = 300,
   onFileUpload,
   onImageUpload,
 }: ChatInputProps) {
   const [internalValue, setInternalValue] = React.useState("")
-  const [isRecording, setIsRecording] = React.useState(false)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const imageInputRef = React.useRef<HTMLInputElement>(null)
@@ -62,7 +55,6 @@ export function ChatInput({
   const currentValue = value !== undefined ? value : internalValue
   const handleValueChange = value !== undefined ? onChange : setInternalValue
 
-  // Auto-resize textarea
   React.useEffect(() => {
     const textarea = textareaRef.current
     if (textarea) {
@@ -108,10 +100,6 @@ export function ChatInput({
       onImageUpload(files)
     }
     e.target.value = ""
-  }
-
-  const handleVoiceClick = () => {
-    setIsRecording(!isRecording)
   }
 
   const hasContent = currentValue.trim().length > 0

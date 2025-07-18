@@ -3,8 +3,6 @@
 import * as React from "react"
 import { Message, type MessageData } from "@/components/message"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Button } from "@/components/ui/button"
-import { RefreshCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { BaseTask } from "@/lib/types"
 
@@ -26,7 +24,6 @@ interface ChatSessionProps {
 export function ChatSession({
   messages,
   isLoading = false,
-  onClearChat,
   onRegenerateMessage,
   onRetryMessage,
   onLikeMessage,
@@ -34,8 +31,6 @@ export function ChatSession({
   onCopyMessage,
   onWorkflowComplete,
   className,
-  showHeader = true,
-  title = "Chat Session"
 }: ChatSessionProps) {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
