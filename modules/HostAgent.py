@@ -37,7 +37,7 @@ class HostAgent:
         
         # create a new session if not exists
         if session_id is None:
-            create_session_response = await self.task_service.create_new_session(TaskCenterRequest(user_name=user_name))
+            create_session_response = await self.task_service.create_new_session(TaskCenterRequest(user_name=user_name, user_input=user_input))
             if create_session_response.success:
                 session_id = create_session_response.session_id
             else:

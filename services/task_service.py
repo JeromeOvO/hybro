@@ -41,8 +41,8 @@ class TaskService:
 
         session_id = str(uuid4())
         user_name = request.user_name
-        session_name = "New Session"
-        session_description = "New Session Description"
+        session_name = request.user_input
+        session_description = request.user_input
 
         new_task_session = TaskSession(
             session_id=session_id,
