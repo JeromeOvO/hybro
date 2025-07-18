@@ -110,7 +110,7 @@ export default function AgentPage() {
           </Button>
           <Button variant="outline" onClick={() => router.push('/agent/registry')}>
             <Plus className="h-4 w-4 mr-2" />
-            Join Network
+            Register Agent
           </Button>
         </div>
       </div>
@@ -179,7 +179,7 @@ export default function AgentPage() {
           {agents.length === 0 ? (
             <Button onClick={() => router.push('/agent/registry')}>
               <Plus className="h-4 w-4 mr-2" />
-              Join Network
+              Register Agent
             </Button>
           ) : (
             <Button

@@ -131,7 +131,7 @@ export default function RegisterAgentPage() {
       {/* Page title */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Join Network</h1>
+          <h1 className="text-3xl font-bold">Register Agent</h1>
         </div>
       </div>
 
@@ -355,7 +355,7 @@ export default function RegisterAgentPage() {
                 Registering...
               </>
             ) : (
-              "Join Network"
+              "Register"
             )}
           </Button>
         </div>
