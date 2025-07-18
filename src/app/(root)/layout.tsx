@@ -1,11 +1,9 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Inter } from "next/font/google"
 import "@/app/globals.css"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Toaster } from "@/components/ui/sonner"
-const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Hybro AI",

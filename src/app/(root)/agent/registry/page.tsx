@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { Bot, CheckCircle, XCircle, AlertCircle, Loader2, ExternalLink } from "lucide-react"
+import { Bot, CheckCircle, Loader2, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -12,7 +12,6 @@ import { getAgentCardFromUrl, registerAgent } from "@/lib/api"
 import type { 
   InspectionCenterResponse, 
   AgentCenterRequest,
-  AgentCenterResponse 
 } from "@/lib/types"
 
 export default function RegisterAgentPage() {
@@ -23,7 +22,6 @@ export default function RegisterAgentPage() {
   const [agentData, setAgentData] = useState<InspectionCenterResponse | null>(null)
   const [urlError, setUrlError] = useState("")
 
-  // URL validation function
   const validateUrl = (inputUrl: string): boolean => {
     try {
       const urlObj = new URL(inputUrl)

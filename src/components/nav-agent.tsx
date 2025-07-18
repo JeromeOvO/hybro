@@ -7,11 +7,9 @@ import {
 
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar"
 
 export function NavAgent({
@@ -23,11 +21,9 @@ export function NavAgent({
     icon: LucideIcon
   }[]
 }) {
-  const { isMobile } = useSidebar()
 
   return (
     <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-      {/* <SidebarGroupLabel>Agents</SidebarGroupLabel> */}
       <SidebarMenu>
         {navAgents.map((item) => (
           <SidebarMenuItem key={item.name}>

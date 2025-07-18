@@ -27,19 +27,15 @@ export default function ChatSessionPage() {
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const baseTasksRef = useRef<BaseTask[]>([])
 
   const { 
     startPolling, 
     stopPolling,
     stopAllPolling, 
-    getPollingTaskIds, 
     needsPolling,
-    isBaseTaskComplete 
   } = useTaskPolling()
 
-  // Convert Message to MessageData
   const convertMessageToMessageData = useCallback((message: Message, taskId: string): MessageData => {
     const textParts = message.parts.filter(part => part.kind === 'text') as TextPart[]
     const content = textParts.length > 0 ? textParts[0].text : ''
@@ -54,19 +50,15 @@ export default function ChatSessionPage() {
     }
   }, [])
 
-  // Check if workflow message should be created
   const shouldCreateWorkflowMessage = useCallback((baseTask: BaseTask): boolean => {
-    // If task status is working or submitted, and may require multi-agent collaboration
     return baseTask.task.status.state === 'working' || 
            baseTask.task.status.state === 'submitted'
   }, [])
 
-  // Create workflow message
   const createWorkflowMessage = useCallback(async (baseTask: BaseTask): Promise<MessageData> => {
     let metaTasks: MetaTask[] = []
     
     try {
-      // Use new API function to get metaTasks
       const metaTasksResponse = await getMetaTasksByParentId(baseTask.task_id)
       metaTasks = metaTasksResponse.meta_tasks || []
     } catch (error) {
@@ -87,7 +79,6 @@ export default function ChatSessionPage() {
     }
   }, [])
 
-  // Callback when workflow completes
   const handleWorkflowComplete = useCallback((baseTask: BaseTask) => {
     console.log('Workflow completed for baseTask:', baseTask.task_id)
     
@@ -148,7 +139,6 @@ export default function ChatSessionPage() {
   const handleTaskUpdate = useCallback(async (baseTask: BaseTask) => {
     console.log('Task updated:', baseTask.task_id, baseTask.task.status.state)
     
-    // Update baseTasksRef
     baseTasksRef.current = baseTasksRef.current.map(task => 
       task.task_id === baseTask.task_id ? baseTask : task
     )

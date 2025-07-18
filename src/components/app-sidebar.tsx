@@ -2,18 +2,9 @@
 
 import * as React from "react"
 import {
-  AudioWaveform,
   BookOpen,
-  Bot,
-  Command,
-  Frame,
   Cable,
-  GalleryVerticalEnd,
   VectorSquare,
-  Map,
-  PieChart,
-  Settings2,
-  SquareTerminal,
   MessageCircle,
   History
 } from "lucide-react"
@@ -29,13 +20,11 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { ThemeToggle } from "./theme-toggle"
 import { getAllSessions } from "@/lib/api"
 import type { TaskSession, TaskCenterResponse } from "@/lib/types"
 
-// Static navigation data
 const staticNavAgents = [
   {
     name: "Start a new Chat",

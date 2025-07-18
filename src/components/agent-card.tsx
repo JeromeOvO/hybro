@@ -1,10 +1,8 @@
 import { Bot, CircleCheck, CircleMinus, PartyPopper, XCircle } from "lucide-react"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -59,16 +57,7 @@ export function AgentCard({
     }
   };
 
-  const getStatusText = (status: Agent['agent_status']) => {
-    switch (status) {
-      case 'active':
-        return 'Active'
-      case 'inactive':
-        return 'Inactive'
-      default:
-        return 'Unknown'
-    }
-  }
+
   const statusConfig = getStatusIcon(agent.agent_status)
   const StatusIcon = statusConfig.icon
 

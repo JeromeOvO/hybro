@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Plus, Search, Grid, List, RefreshCw } from "lucide-react"
+import { Plus, Search, RefreshCw } from "lucide-react"
 import { AgentCard, StatsCards } from "@/components/agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,14 +15,13 @@ import {
 } from "@/components/ui/select"
 import { toast } from "sonner"
 import { getAllAgents } from "@/lib/api"
-import type { Agent, AgentCenterResponse } from "@/lib/types"
-import type { AgentProvider } from "@/lib/types"
+import type { Agent } from "@/lib/types"
 
 export default function AgentPage() {
   const router = useRouter()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
 
@@ -35,14 +34,13 @@ export default function AgentPage() {
       } else {
         toast.error(response.error || 'Failed to load agents')
       }
-    } catch (error) {
+    } catch {
       toast.error('Failed to load agents')
     } finally {
       setLoading(false)
     }
   }
 
-  // Initial load
   useEffect(() => {
     loadAgents()
   }, [])

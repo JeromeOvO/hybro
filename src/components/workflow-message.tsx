@@ -18,7 +18,6 @@ import {
 import type { MetaTask, Agent } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-// Workflow stages
 export type WorkflowStage = 'decomposed' | 'agents_assigned' | 'running' | 'completed'
 
 interface WorkflowMessageProps {
@@ -34,7 +33,6 @@ interface WorkflowMessageProps {
 }
 
 export function WorkflowMessage({
-  baseTaskId,
   metaTasks,
   agents = [],
   stage,

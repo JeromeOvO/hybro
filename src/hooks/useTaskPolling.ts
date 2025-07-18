@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { queryBaseTask } from '@/lib/api'
-import { toast } from 'sonner'
-import type { BaseTask, MessageData } from '@/lib/types'
+import type { BaseTask } from '@/lib/types'
 
 interface PollingTask {
   taskId: string
