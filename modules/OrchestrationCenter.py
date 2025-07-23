@@ -906,7 +906,7 @@ class OrchestrationCenter:
         
         logger.info(f"OrchestrationCenter: meta task summaries: {meta_task_summaries}")
 
-        meta_task_descriptions = [meta_task.task_description for meta_task in meta_tasks]
+        meta_task_descriptions = [meta_task.task_description or "No description" for meta_task in meta_tasks]
 
         if base_task.task and base_task.task.history and len(base_task.task.history) > 0 and base_task.task.history[0].parts and len(base_task.task.history[0].parts) > 0:
             first_part = base_task.task.history[0].parts[0].root
