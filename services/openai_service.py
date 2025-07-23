@@ -85,7 +85,7 @@ Consider the logical flow and dependencies between steps.
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent structured output
-                max_tokens=5000
+                max_tokens=4096
             )
             
             content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
@@ -271,7 +271,7 @@ Your response should be the final, comprehensive answer to the original task goa
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent and focused output
-                max_tokens=10000   # Allow for comprehensive summary
+                max_tokens=4096   # Allow for comprehensive summary
             )
             
             content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""

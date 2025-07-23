@@ -155,7 +155,7 @@ class MongoDB:
         """
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent_card.model_dump(exclude_unset=True)}
+            {"$set": agent_card.model_dump(exclude_unset=True, mode="json")}
         )
         return result.modified_count > 0
 
@@ -168,7 +168,7 @@ class MongoDB:
         
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent.model_dump(exclude_unset=True)}
+            {"$set": agent.model_dump(exclude_unset=True, mode="json")}
         )
 
         return result.modified_count > 0
@@ -283,21 +283,21 @@ class MongoDB:
         """
         Update a base task by task_id
         """
-        result = await self.base_tasks_collection.update_one({"task_id": task_id}, {"$set": base_task.model_dump(exclude_unset=True)})
+        result = await self.base_tasks_collection.update_one({"task_id": task_id}, {"$set": base_task.model_dump(exclude_unset=True, mode="json")})
         return result.modified_count > 0
     
     async def update_meta_task_by_task_id(self, task_id: str, meta_task: MetaTask) -> bool:
         """
         Update a meta task by task_id
         """
-        result = await self.meta_tasks_collection.update_one({"task_id": task_id}, {"$set": meta_task.model_dump(exclude_unset=True)})
+        result = await self.meta_tasks_collection.update_one({"task_id": task_id}, {"$set": meta_task.model_dump(exclude_unset=True, mode="json")})
         return result.modified_count > 0
     
     async def update_task_session_by_session_id(self, session_id: str, task_session: TaskSession) -> bool:
         """
         Update a task session by session_id
         """
-        result = await self.task_sessions_collection.update_one({"session_id": session_id}, {"$set": task_session.model_dump(exclude_unset=True)})
+        result = await self.task_sessions_collection.update_one({"session_id": session_id}, {"$set": task_session.model_dump(exclude_unset=True, mode="json")})
         return result.modified_count > 0
     
 mongodb = MongoDB() 
