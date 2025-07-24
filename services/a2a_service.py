@@ -147,7 +147,7 @@ class A2AService:
 
             return InsepectionCenterConnectionValidationResponse(
                 agent_url="",
-                result=[error_data],
+                result=[str(error_data)],
                 is_valid=False,
                 status_code=500
             )
@@ -284,6 +284,9 @@ class A2AService:
                         raise A2AServiceError()
                     last_result = response
                     logger.info(f"a2a_service: last_result: {last_result}")
+
+                if last_result is None:
+                    raise A2AServiceError("No response received from streaming")
                 return last_result
             else:
                 send_message_request = SendMessageRequest(
@@ -292,7 +295,7 @@ class A2AService:
                     jsonrpc='2.0',
                     params=payload,
                 )
-                response = a2a_client.send_message(send_message_request)
+                response = await a2a_client.send_message(send_message_request)
                 return response
 
         except Exception as e:

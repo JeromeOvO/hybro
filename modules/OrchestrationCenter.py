@@ -6,7 +6,7 @@ from services.task_service import TaskService
 from services.openai_service import OpenAIService
 from services.agent_service import AgentService
 from services.a2a_service import A2AService
-from a2a.types import Message, Role, TextPart, TaskState, TaskStatus, Task
+from a2a.types import Message, Role, TextPart, Part, TaskState, TaskStatus, Task
 import uuid
 import logging
 import json
@@ -215,6 +215,8 @@ class OrchestrationCenter:
                 
                 # Create a new Task for the meta task
                 meta_task_task = await self.task_service.create_a2a_task()
+                if meta_task_task.history is None:
+                    meta_task_task.history = []
                 new_message = await self.task_service.create_a2a_message(Role.user, task_description)
                 meta_task_task.history.append(new_message)
                 
@@ -675,13 +677,34 @@ class OrchestrationCenter:
             message = Message(
                 role=Role.user,
                 messageId=str(uuid.uuid4()),
-                parts=[TextPart(text=meta_task.task_description)],
+                parts=[Part(root=TextPart(text=meta_task.task_description or ""))],
              )
 
             send_response = await self.a2a_service.send_message_to_agent(agent_query_result.agent.agent_card.url, message)
             logger.info(f"OrchestrationCenter: send response: {send_response}")
+            
+            # Add null check for send_response
+            if send_response is None:
+                logger.error(f"OrchestrationCenter: send_message_to_agent returned None for meta task {meta_task_id}")
+                return OrchestrationCenterResponse(
+                    task_id=meta_task_id,
+                    success=False,
+                    error="Failed to send message to agent - no response received",
+                    status_code=500
+                )
+            
             process_response = await self.a2a_service.process_a2a_response(send_response)
             logger.info(f"OrchestrationCenter: process response: {process_response}")
+
+            # Add null check for process_response
+            if process_response is None:
+                logger.error(f"OrchestrationCenter: process_a2a_response returned None for meta task {meta_task_id}")
+                return OrchestrationCenterResponse(
+                    task_id=meta_task_id,
+                    success=False,
+                    error="Failed to process agent response - no valid response data",
+                    status_code=500
+                )
 
             if process_response.kind == 'task':
                 meta_task.task = process_response
@@ -706,7 +729,10 @@ class OrchestrationCenter:
                 
             elif process_response.kind == 'message':
 
-                meta_task.task.history.append(process_response)
+                if meta_task.task:
+                    if meta_task.task.history is None:
+                        meta_task.task.history = []
+                    meta_task.task.history.append(process_response)
 
                 update_response = await self.task_service.update_task_of_meta_task(TaskCenterRequest(
                         task_id=meta_task_id,
@@ -726,6 +752,77 @@ class OrchestrationCenter:
                         error="Failed to update task",
                         status_code=500
                     )
+            
+            elif process_response.kind == 'status-update':
+                # Handle status update responses - update task status and potentially add message
+                if hasattr(process_response, 'status') and hasattr(process_response.status, 'state'):
+                    if meta_task.task and meta_task.task.status is None:
+                        meta_task.task.status = TaskStatus(state=TaskState.submitted)
+                    if meta_task.task:
+                        meta_task.task.status.state = process_response.status.state
+                    
+                    # If there's a message in the status update, add it to history
+                    if hasattr(process_response.status, 'message') and process_response.status.message and meta_task.task:
+                        if meta_task.task.history is None:
+                            meta_task.task.history = []
+                        meta_task.task.history.append(process_response.status.message)
+                
+                update_response = await self.task_service.update_task_of_meta_task(TaskCenterRequest(
+                    task_id=meta_task_id,
+                    task=meta_task.task
+                ))
+                
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        task_id=meta_task_id,
+                        success=True,
+                        error=None,
+                        status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        task_id=meta_task_id,
+                        success=False,
+                        error="Failed to update task with status update",
+                        status_code=500
+                    )
+            
+            elif process_response.kind == 'artifact-update':
+                # Handle artifact update responses - add artifacts to task
+                if hasattr(process_response, 'artifact') and meta_task.task:
+                    if meta_task.task.artifacts is None:
+                        meta_task.task.artifacts = []
+                    meta_task.task.artifacts.append(process_response.artifact)
+                
+                update_response = await self.task_service.update_task_of_meta_task(TaskCenterRequest(
+                    task_id=meta_task_id,
+                    task=meta_task.task
+                ))
+                
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        task_id=meta_task_id,
+                        success=True,
+                        error=None,
+                        status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        task_id=meta_task_id,
+                        success=False,
+                        error="Failed to update task with artifact",
+                        status_code=500
+                    )
+            
+            # Handle case where process_response doesn't have expected kind
+            else:
+                logger.error(f"OrchestrationCenter: Unexpected response kind '{getattr(process_response, 'kind', 'unknown')}' for meta task {meta_task_id}")
+                return OrchestrationCenterResponse(
+                    task_id=meta_task_id,
+                    success=False,
+                    error=f"Unexpected response type from agent: {getattr(process_response, 'kind', 'unknown')}",
+                    status_code=500
+                )
 
                 
         except Exception as e:
@@ -799,25 +896,36 @@ class OrchestrationCenter:
         
         meta_task_summaries = []
         for meta_task in meta_tasks:
-            meta_task_history = meta_task.task.history
+            meta_task_history = meta_task.task.history if meta_task.task and meta_task.task.history else []
             for message in meta_task_history:
                 for part in message.parts:
-                    if part.root.text is not None:
+                    if part.root.kind == 'text' and part.root.text is not None:
                         meta_task_summaries.append(
                             meta_task.task_id + ": " + message.role.value + ": " + part.root.text
                         )
         
         logger.info(f"OrchestrationCenter: meta task summaries: {meta_task_summaries}")
 
-        meta_task_descriptions = [meta_task.task_description for meta_task in meta_tasks]
+        meta_task_descriptions = [meta_task.task_description or "No description" for meta_task in meta_tasks]
 
-        summary_response = await self.openai_service.summarize_meta_task_for_base_task(base_task.task.history[0].parts[0].root.text, meta_task_summaries, meta_task_descriptions)
+        if base_task.task and base_task.task.history and len(base_task.task.history) > 0 and base_task.task.history[0].parts and len(base_task.task.history[0].parts) > 0:
+            first_part = base_task.task.history[0].parts[0].root
+            if first_part.kind == 'text':
+                first_message_text = first_part.text
+            else:
+                first_message_text = "No text description available"
+        else:
+            first_message_text = "No task description available"
+
+        summary_response = await self.openai_service.summarize_meta_task_for_base_task(first_message_text, meta_task_summaries, meta_task_descriptions)
         logger.info(f"OrchestrationCenter: summary response: {summary_response}")
 
+        if base_task.task.history is None:
+            base_task.task.history = []
         base_task.task.history.append(Message(
             role=Role.agent,
             messageId=str(uuid.uuid4()),
-            parts=[TextPart(text=summary_response)]
+            parts=[Part(root=TextPart(text=summary_response))]
         ))
 
         base_task.task.status = TaskStatus(state=TaskState.completed)

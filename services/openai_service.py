@@ -66,7 +66,11 @@ class OpenAIService:
         4. Build upon previous steps when applicable
         """
 
-        task_goal = base_task.task.history[0].parts[0].root.text if base_task.task.history else "No task goal provided"
+        if base_task.task.history and len(base_task.task.history) > 0 and len(base_task.task.history[0].parts) > 0:
+            first_part = base_task.task.history[0].parts[0].root
+            task_goal = first_part.text if first_part.kind == 'text' else "No text content available"
+        else:
+            task_goal = "No task goal provided"
         
         prompt = f"""Task Goal: {task_goal}
 
@@ -85,7 +89,7 @@ Consider the logical flow and dependencies between steps.
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent structured output
-                max_tokens=5000
+                max_tokens=int(os.getenv("SUBTASK_MAX_TOKENS", "4096"))   # Configurable max tokens
             )
             
             content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
@@ -271,7 +275,7 @@ Your response should be the final, comprehensive answer to the original task goa
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 temperature=0.3,  # Lower temperature for more consistent and focused output
-                max_tokens=10000   # Allow for comprehensive summary
+                max_tokens=int(os.getenv("SUMMARY_MAX_TOKENS", "4096"))   # Allow for comprehensive summary
             )
             
             content = response.choices[0].message.content.strip() if response.choices[0].message.content else ""
