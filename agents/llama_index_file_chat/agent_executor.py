@@ -1,15 +1,11 @@
-import asyncio
 import logging
 import traceback
 
-from typing import cast
-
 from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import Event, EventQueue
+from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import (
     FilePart,
-    FileWithBytes,
     InternalError,
     InvalidParamsError,
     Part,
@@ -20,14 +16,13 @@ from a2a.types import (
 )
 from a2a.utils import are_modalities_compatible, new_agent_text_message
 from a2a.utils.errors import ServerError
+
 from agents.llama_index_file_chat.agent import (
     ChatResponseEvent,
     InputEvent,
     LogEvent,
     ParseAndChat,
 )
-from typing_extensions import override
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +32,13 @@ class LlamaIndexAgentExecutor(AgentExecutor):
 
     # Technically supports basically anything, but we'll limit to some common types
     SUPPORTED_INPUT_TYPES = [
-        'text/plain',
-        'application/pdf',
-        'application/msword',
-        'image/png',
-        'image/jpeg',
+        "text/plain",
+        "application/pdf",
+        "application/msword",
+        "image/png",
+        "image/jpeg",
     ]
-    SUPPORTED_OUTPUT_TYPES = ['text', 'text/plain']
+    SUPPORTED_OUTPUT_TYPES = ["text", "text/plain"]
 
     def __init__(
         self,
@@ -71,12 +66,12 @@ class LlamaIndexAgentExecutor(AgentExecutor):
             handler = None
 
             # Check if we have a saved context state for this session
-            print(f'Len of ctx_states: {len(self.ctx_states)}', flush=True)
+            print(f"Len of ctx_states: {len(self.ctx_states)}", flush=True)
             saved_ctx_state = self.ctx_states.get(context_id, None)
 
             if saved_ctx_state is not None:
                 # Resume with existing context
-                logger.info(f'Resuming session {context_id} with saved context')
+                logger.info(f"Resuming session {context_id} with saved context")
                 ctx = Context.from_dict(self.agent, saved_ctx_state)
                 handler = self.agent.run(
                     start_event=input_event,
@@ -84,7 +79,7 @@ class LlamaIndexAgentExecutor(AgentExecutor):
                 )
             else:
                 # New session!
-                logger.info(f'Starting new session {context_id}')
+                logger.info(f"Starting new session {context_id}")
                 handler = self.agent.run(
                     start_event=input_event,
                 )
@@ -106,7 +101,7 @@ class LlamaIndexAgentExecutor(AgentExecutor):
                 content = final_response.response
                 metadata = (
                     final_response.citations
-                    if hasattr(final_response, 'citations')
+                    if hasattr(final_response, "citations")
                     else None
                 )
                 if metadata is not None:
@@ -118,15 +113,15 @@ class LlamaIndexAgentExecutor(AgentExecutor):
 
                 updater.add_artifact(
                     [Part(root=TextPart(text=content))],
-                    name='llama_summary',
+                    name="llama_summary",
                     metadata=metadata,
                 )
                 updater.complete()
             else:
-                updater.failed(f'Unexpected completion {final_response}')
+                updater.failed(f"Unexpected completion {final_response}")
 
         except Exception as e:
-            logger.error(f'An error occurred while streaming the response: {e}')
+            logger.error(f"An error occurred while streaming the response: {e}")
             logger.error(traceback.format_exc())
 
             # Clean up context in case of error
@@ -134,7 +129,7 @@ class LlamaIndexAgentExecutor(AgentExecutor):
                 del self.ctx_states[context_id]
             raise ServerError(
                 error=InternalError(
-                    message=f'An error occurred while streaming the response: {e}'
+                    message=f"An error occurred while streaming the response: {e}"
                 )
             )
 
@@ -161,14 +156,14 @@ class LlamaIndexAgentExecutor(AgentExecutor):
                 file_data = part.file.bytes
                 file_name = part.file.name
                 if file_data is None:
-                    raise ValueError('File data is missing!')
+                    raise ValueError("File data is missing!")
             elif isinstance(part, TextPart):
                 text_parts.append(part.text)
             else:
-                raise ValueError(f'Unsupported part type: {type(part)}')
+                raise ValueError(f"Unsupported part type: {type(part)}")
 
         return InputEvent(
-            msg='\n'.join(text_parts),
+            msg="\n".join(text_parts),
             attachment=file_data,
             file_name=file_name,
         )
@@ -179,16 +174,14 @@ class LlamaIndexAgentExecutor(AgentExecutor):
         supportedTypes: list[str],
     ) -> bool:
         acceptedOutputModes = (
-            context.configuration.acceptedOutputModes
-            if context.configuration
-            else []
+            context.configuration.acceptedOutputModes if context.configuration else []
         )
         if not are_modalities_compatible(
             acceptedOutputModes,
             supportedTypes,
         ):
             logger.warning(
-                'Unsupported output mode. Received %s, Support %s',
+                "Unsupported output mode. Received %s, Support %s",
                 acceptedOutputModes,
                 supportedTypes,
             )
@@ -205,7 +198,7 @@ class LlamaIndexAgentExecutor(AgentExecutor):
             else None
         )
         if pushNotificationConfig and not pushNotificationConfig.url:
-            logger.warning('Push notification URL is missing')
+            logger.warning("Push notification URL is missing")
             return True
 
         return False

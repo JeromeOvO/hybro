@@ -1,6 +1,8 @@
 import base64
 import os
-from typing import Any, Optional
+from typing import Any
+
+from llama_cloud_services.parse import LlamaParse
 from llama_index.core.llms import ChatMessage
 from llama_index.core.workflow import (
     Context,
@@ -11,10 +13,7 @@ from llama_index.core.workflow import (
     step,
 )
 from llama_index.llms.google_genai import GoogleGenAI
-from llama_cloud_services.parse import LlamaParse
-from llama_index.llms.google_genai import GoogleGenAI
 from pydantic import BaseModel, Field
-
 
 ## Workflow Events
 
@@ -51,10 +50,10 @@ class Citation(BaseModel):
     """A citation to specific line(s) in the document."""
 
     citation_number: int = Field(
-        description='The specific in-line citation number used in the response text.'
+        description="The specific in-line citation number used in the response text."
     )
     line_numbers: list[int] = Field(
-        description='The line numbers in the document that are being cited.'
+        description="The line numbers in the document that are being cited."
     )
 
 
@@ -62,26 +61,26 @@ class ChatResponse(BaseModel):
     """A response to the user with in-line citations (if any)."""
 
     response: str = Field(
-        description='The response to the user including in-line citations (if any).'
+        description="The response to the user including in-line citations (if any)."
     )
     citations: list[Citation] = Field(
         default=list,
-        description='A list of citations, where each citation is an object to map the citation number to the line numbers in the document that are being cited.',
+        description="A list of citations, where each citation is an object to map the citation number to the line numbers in the document that are being cited.",
     )
 
 
 class ParseAndChat(Workflow):
     def __init__(
         self,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         verbose: bool = False,
         **workflow_kwargs: Any,
     ):
         super().__init__(timeout=timeout, verbose=verbose, **workflow_kwargs)
         self._sllm = GoogleGenAI(
-            model='gemini-2.0-flash', api_key=os.getenv('GOOGLE_API_KEY')
+            model="gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY")
         ).as_structured_llm(ChatResponse)
-        self._parser = LlamaParse(api_key=os.getenv('LLAMA_CLOUD_API_KEY'))
+        self._parser = LlamaParse(api_key=os.getenv("LLAMA_CLOUD_API_KEY"))
         self._system_prompt_template = """\
 You are a helpful assistant that can answer questions about a document, provide citations, and engage in a conversation.
 
@@ -110,12 +109,12 @@ When citing content from the document:
 
     @step
     async def parse(self, ctx: Context, ev: ParseEvent) -> ChatEvent:
-        ctx.write_event_to_stream(LogEvent(msg='Parsing document...'))
+        ctx.write_event_to_stream(LogEvent(msg="Parsing document..."))
         results = await self._parser.aparse(
             base64.b64decode(ev.attachment),
-            extra_info={'file_name': ev.file_name},
+            extra_info={"file_name": ev.file_name},
         )
-        ctx.write_event_to_stream(LogEvent(msg='Document parsed successfully.'))
+        ctx.write_event_to_stream(LogEvent(msg="Document parsed successfully."))
 
         documents = await results.aget_markdown_documents(split_by_page=False)
 
@@ -124,31 +123,27 @@ When citing content from the document:
 
         # split the document into lines and add line numbers
         # this will be used for citations
-        document_text = ''
-        for idx, line in enumerate(document.text.split('\n')):
+        document_text = ""
+        for idx, line in enumerate(document.text.split("\n")):
             document_text += f"<line idx='{idx}'>{line}</line>\n"
 
-        await ctx.set('document_text', document_text)
+        await ctx.set("document_text", document_text)
         return ChatEvent(msg=ev.msg)
 
     @step
     async def chat(self, ctx: Context, event: ChatEvent) -> ChatResponseEvent:
-        current_messages = await ctx.get('messages', default=[])
-        current_messages.append(ChatMessage(role='user', content=event.msg))
+        current_messages = await ctx.get("messages", default=[])
+        current_messages.append(ChatMessage(role="user", content=event.msg))
         ctx.write_event_to_stream(
-            LogEvent(
-                msg=f'Chatting with {len(current_messages)} initial messages.'
-            )
+            LogEvent(msg=f"Chatting with {len(current_messages)} initial messages.")
         )
 
-        document_text = await ctx.get('document_text', default='')
+        document_text = await ctx.get("document_text", default="")
         if document_text:
-            ctx.write_event_to_stream(
-                LogEvent(msg='Inserting system prompt...')
-            )
+            ctx.write_event_to_stream(LogEvent(msg="Inserting system prompt..."))
             input_messages = [
                 ChatMessage(
-                    role='system',
+                    role="system",
                     content=self._system_prompt_template.format(
                         document_text=document_text
                     ),
@@ -161,13 +156,13 @@ When citing content from the document:
         response = await self._sllm.achat(input_messages)
         response_obj: ChatResponse = response.raw
         ctx.write_event_to_stream(
-            LogEvent(msg='LLM response received, parsing citations...')
+            LogEvent(msg="LLM response received, parsing citations...")
         )
 
         current_messages.append(
-            ChatMessage(role='assistant', content=response_obj.response)
+            ChatMessage(role="assistant", content=response_obj.response)
         )
-        await ctx.set('messages', current_messages)
+        await ctx.set("messages", current_messages)
 
         # parse out the citations from the document text
         citations = {}
@@ -175,18 +170,13 @@ When citing content from the document:
             for citation in response_obj.citations:
                 line_numbers = citation.line_numbers
                 for line_number in line_numbers:
-                    start_idx = document_text.find(
-                        f"<line idx='{line_number}'>"
-                    )
-                    end_idx = document_text.find(
-                        f"<line idx='{line_number + 1}'>"
-                    )
+                    start_idx = document_text.find(f"<line idx='{line_number}'>")
+                    end_idx = document_text.find(f"<line idx='{line_number + 1}'>")
                     citation_text = (
                         document_text[
-                            start_idx
-                            + len(f"<line idx='{line_number}'>") : end_idx
+                            start_idx + len(f"<line idx='{line_number}'>") : end_idx
                         ]
-                        .replace('</line>', '')
+                        .replace("</line>", "")
                         .strip()
                     )
 
@@ -194,9 +184,7 @@ When citing content from the document:
                         citations[citation.citation_number] = []
                     citations[citation.citation_number].append(citation_text)
 
-        return ChatResponseEvent(
-            response=response_obj.response, citations=citations
-        )
+        return ChatResponseEvent(response=response_obj.response, citations=citations)
 
 
 async def main():
@@ -206,14 +194,14 @@ async def main():
 
     # run `wget https://arxiv.org/pdf/1706.03762 -O attention.pdf` to get the file
     # Or use your own file
-    with open('attention.pdf', 'rb') as f:
+    with open("attention.pdf", "rb") as f:
         attachment = f.read()
 
     handler = agent.run(
         start_event=InputEvent(
-            msg='Hello! What can you tell me about the document?',
+            msg="Hello! What can you tell me about the document?",
             attachment=attachment,
-            file_name='test.pdf',
+            file_name="test.pdf",
         ),
         ctx=ctx,
     )
@@ -226,18 +214,18 @@ async def main():
 
     print(response.response)
     for citation_number, citation_texts in response.citations.items():
-        print(f'Citation {citation_number}: {citation_texts}')
+        print(f"Citation {citation_number}: {citation_texts}")
 
     # test context persistence
     handler = agent.run(
-        'What was the last thing I asked you?',
+        "What was the last thing I asked you?",
         ctx=ctx,
     )
     response: ChatResponseEvent = await handler
     print(response.response)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import asyncio
 
     asyncio.run(main())

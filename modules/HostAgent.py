@@ -1,21 +1,22 @@
 # host_agent.py
 import logging
-import asyncio
 
-from services.task_service import TaskService
-from services.openai_service import OpenAIService
-from services.database_service import DatabaseService
-from services.agent_service import AgentService
-from services.a2a_service import A2AService
-from models.request import ChatRequest, TaskCenterRequest, OrchestrationCenterRequest
-from models.response import ChatResponse, TaskCenterResponse, OrchestrationCenterResponse
-from models.task import BaseTask, MetaTask, TaskDefaultValue
-from a2a.types import Task, Message, TextPart, Role
+from a2a.types import Role
+
+from models.request import ChatRequest, OrchestrationCenterRequest, TaskCenterRequest
+from models.response import (
+    ChatResponse,
+)
 from modules.OrchestrationCenter import OrchestrationCenter
+from services.a2a_service import A2AService
+from services.agent_service import AgentService
+from services.database_service import DatabaseService
+from services.openai_service import OpenAIService
+from services.task_service import TaskService
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,12 @@ class HostAgent:
         user_name = request.user_name
         user_input = request.user_input
         session_id = request.session_id
-        
+
         # create a new session if not exists
         if session_id is None:
-            create_session_response = await self.task_service.create_new_session(TaskCenterRequest(user_name=user_name, user_input=user_input))
+            create_session_response = await self.task_service.create_new_session(
+                TaskCenterRequest(user_name=user_name, user_input=user_input)
+            )
             if create_session_response.success:
                 session_id = create_session_response.session_id
             else:
@@ -45,27 +48,33 @@ class HostAgent:
                     user_name=user_name,
                     success=False,
                     error="Failed to create session",
-                    status_code=500
+                    status_code=500,
                 )
-        
+
         # create a new base task
         # todo: multi turn conversation
         new_a2a_task = await self.task_service.create_a2a_task()
-        new_a2a_task.history.append(await self.task_service.create_a2a_message(Role.user, user_input))
+        new_a2a_task.history.append(
+            await self.task_service.create_a2a_message(Role.user, user_input)
+        )
 
-        create_base_task_response = await self.task_service.create_new_base_task(TaskCenterRequest(user_name=user_name, session_id=session_id, task=new_a2a_task))
+        create_base_task_response = await self.task_service.create_new_base_task(
+            TaskCenterRequest(
+                user_name=user_name, session_id=session_id, task=new_a2a_task
+            )
+        )
         if not create_base_task_response.success:
             return ChatResponse(
                 user_name=user_name,
                 success=False,
                 error="Failed to create base task",
-                status_code=500
+                status_code=500,
             )
-        
+
         # Start async task processing without waiting for result
         # task_id = create_base_task_response.task_id
         # asyncio.create_task(self._process_task_async(task_id))
-        
+
         # Return result immediately to frontend
         return ChatResponse(
             user_name=user_name,
@@ -74,7 +83,7 @@ class HostAgent:
             session_id=session_id,
             success=True,
             error=None,
-            status_code=200
+            status_code=200,
         )
 
     async def _process_task_async(self, task_id: str) -> None:
@@ -85,56 +94,83 @@ class HostAgent:
             logger.info(f"HostAgent: Starting async processing for task: {task_id}")
 
             # decompose the task
-            decompose_task_response = await self.orchestration_center.decompose_task(OrchestrationCenterRequest(task_id=task_id))
-            
+            decompose_task_response = await self.orchestration_center.decompose_task(
+                OrchestrationCenterRequest(task_id=task_id)
+            )
+
             if not decompose_task_response.success:
-                logger.error(f"HostAgent: Failed to decompose task {task_id}: {decompose_task_response.error}")
+                logger.error(
+                    f"HostAgent: Failed to decompose task {task_id}: {decompose_task_response.error}"
+                )
                 return
-            
-            logger.info(f"HostAgent: decompose task response: {decompose_task_response.meta_task_ids}")
-            
+
+            logger.info(
+                f"HostAgent: decompose task response: {decompose_task_response.meta_task_ids}"
+            )
+
             meta_task_ids = decompose_task_response.meta_task_ids
             for meta_task_id in meta_task_ids:
                 # assign agent to meta task
-                assign_agent_to_meta_task_response = await self.orchestration_center.assign_agent_to_meta_task(OrchestrationCenterRequest(task_id=meta_task_id))
+                assign_agent_to_meta_task_response = (
+                    await self.orchestration_center.assign_agent_to_meta_task(
+                        OrchestrationCenterRequest(task_id=meta_task_id)
+                    )
+                )
 
                 if not assign_agent_to_meta_task_response.success:
-                    logger.error(f"HostAgent: Failed to assign agent to meta task {meta_task_id}: {assign_agent_to_meta_task_response.error}")
+                    logger.error(
+                        f"HostAgent: Failed to assign agent to meta task {meta_task_id}: {assign_agent_to_meta_task_response.error}"
+                    )
                     return
-                
-                logger.info(f"HostAgent: assign agent to meta task {meta_task_id} : {assign_agent_to_meta_task_response.agent_id}")
-                
+
+                logger.info(
+                    f"HostAgent: assign agent to meta task {meta_task_id} : {assign_agent_to_meta_task_response.agent_id}"
+                )
+
                 # send the task to the a2a agent
-                process_meta_task_response = await self.orchestration_center.process_meta_task(OrchestrationCenterRequest(task_id=meta_task_id))
+                process_meta_task_response = (
+                    await self.orchestration_center.process_meta_task(
+                        OrchestrationCenterRequest(task_id=meta_task_id)
+                    )
+                )
 
                 if not process_meta_task_response.success:
-                    logger.error(f"HostAgent: Failed to process meta task {meta_task_id}: {process_meta_task_response.error}")
+                    logger.error(
+                        f"HostAgent: Failed to process meta task {meta_task_id}: {process_meta_task_response.error}"
+                    )
                     return
 
             # summarize the meta task
-            summarize_meta_task_response = await self.orchestration_center.summarize_meta_task_for_base_task(OrchestrationCenterRequest(task_id=task_id))
+            summarize_meta_task_response = (
+                await self.orchestration_center.summarize_meta_task_for_base_task(
+                    OrchestrationCenterRequest(task_id=task_id)
+                )
+            )
 
             if not summarize_meta_task_response.success:
-                logger.error(f"HostAgent: Failed to summarize meta task for {task_id}: {summarize_meta_task_response.error}")
+                logger.error(
+                    f"HostAgent: Failed to summarize meta task for {task_id}: {summarize_meta_task_response.error}"
+                )
                 return
-            
+
             # Update task status to completed
             logger.info(f"HostAgent: Task {task_id} completed successfully")
-            
-        except Exception as e:
-            logger.error(f"HostAgent: Unexpected error processing task {task_id}: {str(e)}")
 
+        except Exception as e:
+            logger.error(
+                f"HostAgent: Unexpected error processing task {task_id}: {str(e)}"
+            )
 
     # async def decompose_task(self, task_id: str) -> List[str]:
     #     """
     #     Decompose a root task into subtasks using OpenAI.
-        
+
     #     Args:
     #         task_id: The ID of the root task to decompose
-            
+
     #     Returns:
     #         List[str]: List of subtask IDs
-            
+
     #     Raises:
     #         RuntimeError: If task not found or decomposition fails
     #     """
@@ -157,13 +193,13 @@ class HostAgent:
     # async def process_child_task(self, child_task_id: str) -> Dict[str, Any]:
     #     """
     #     Send a child task to the appropriate remote agent.
-        
+
     #     Args:
     #         child_task_id: The ID of the child task to send
-            
+
     #     Returns:
     #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
-            
+
     #     Raises:
     #         ValueError: If child task or agent not found
     #     """
@@ -230,13 +266,13 @@ class HostAgent:
     # ) -> Dict[str, Any]:
     #     """
     #     Send task to agent using synchronous mode.
-        
+
     #     Args:
     #         client: The remote agent connection client
     #         payload: The task parameters to send
     #         child_task_id: The ID of the child task
     #         agent_id: The ID of the agent
-            
+
     #     Returns:
     #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
     #     """
@@ -261,13 +297,13 @@ class HostAgent:
     # ) -> Dict[str, Any]:
     #     """
     #     Send task to agent using streaming mode.
-        
+
     #     Args:
     #         client: The remote agent connection client
     #         payload: The task parameters to send
     #         child_task_id: The ID of the child task
     #         agent_id: The ID of the agent
-            
+
     #     Returns:
     #         Dict[str, Any]: Result containing task_id, agent_id, state, and result_text
     #     """
@@ -294,10 +330,10 @@ class HostAgent:
     #         elif name == "TaskStatusUpdateEvent":
     #             if hasattr(evt, "status") and evt.status.state == "input-required":
     #                 buffer_text.append("[ERROR] Agent paused for input — not yet supported")
-                
+
     #             # Check if this is a final event and has the necessary attributes
     #             is_final = hasattr(evt, "final") and evt.final
-                
+
     #             # Store the event itself as we may not have a task attribute
     #             if is_final:
     #                 final_task = evt  # Store the event itself
@@ -307,11 +343,11 @@ class HostAgent:
     #         await client.send_task(payload, _cb)
     #         # Set a timeout for waiting
     #         await asyncio.wait_for(done_evt.wait(), timeout=30.0)  # 30 second timeout
-            
+
     #         if final_task:
     #             # Extract text from buffer or try to get it from the event
     #             result_text = "".join(buffer_text) if buffer_text else "Task completed but no text was returned"
-                
+
     #             # Update the task in the database
     #             await self.database_service.update_child_task(
     #                 child_task_id,
@@ -319,12 +355,12 @@ class HostAgent:
     #                     "agent_id": agent_id,
     #                     "task.status.state": TaskState.completed,
     #                     "task.status.message": {
-    #                         "role": "agent", 
+    #                         "role": "agent",
     #                         "parts": [{"type": "text", "text": result_text}]
     #                     }
     #                 },
     #             )
-                
+
     #             return {
     #                 "task_id": child_task_id,
     #                 "agent_id": agent_id,
@@ -336,14 +372,14 @@ class HostAgent:
     #             error_message = "Task execution timed out or failed to complete"
     #             if buffer_text:
     #                 error_message = "".join(buffer_text)
-                
+
     #             await self.database_service.update_child_task(
-    #                 child_task_id, 
+    #                 child_task_id,
     #                 {
     #                     "agent_id": agent_id,
     #                     "task.status.state": TaskState.failed,
     #                     "task.status.message": {
-    #                         "role": "agent", 
+    #                         "role": "agent",
     #                         "parts": [{"type": "text", "text": error_message}]
     #                     }
     #                 }
@@ -354,7 +390,7 @@ class HostAgent:
     #                 "state": TaskState.failed,
     #                 "result_text": error_message,
     #             }
-                
+
     #     except asyncio.TimeoutError:
     #         return await self._fail_and_return(
     #             child_task_id,
@@ -370,7 +406,7 @@ class HostAgent:
     # ) -> None:
     #     """
     #     Persist task results to the database.
-        
+
     #     Args:
     #         child_task_id: The ID of the child task
     #         agent_id: The ID of the agent
@@ -391,12 +427,12 @@ class HostAgent:
     # ) -> Dict[str, Any]:
     #     """
     #     Handle task failure by updating database and returning error.
-        
+
     #     Args:
     #         child_task_id: The ID of the child task
     #         agent_id: The ID of the agent
     #         error_message: The error message to record
-            
+
     #     Returns:
     #         Dict[str, Any]: Result containing task_id, agent_id, failed state, and error message
     #     """
@@ -422,12 +458,12 @@ class HostAgent:
     # def _extract_text(task_obj) -> str:
     #     """
     #     Extract text from task response, supporting multiple return formats.
-        
+
     #     Compatible with multiple return formats: artifacts → output → messages
-        
+
     #     Args:
     #         task_obj: The task object containing response data
-            
+
     #     Returns:
     #         str: The extracted text content
     #     """
@@ -463,11 +499,11 @@ class HostAgent:
     # async def find_best_agent_for_task(self, child_task_id: str, top_k: int = 5) -> str:
     #     """
     #     Find the most suitable agents for a child task using Pinecone vector search
-        
+
     #     Args:
     #         child_task_id: ID of the child task
     #         top_k: Number of top agents to return
-            
+
     #     Returns:
     #         List[Dict]: List of agent details sorted by relevance
     #     """
@@ -475,10 +511,10 @@ class HostAgent:
     #     child_task = await self.database_service.get_child_task(child_task_id)
     #     if not child_task:
     #         raise ValueError(f"Child task with ID {child_task_id} not found")
-        
+
     #     # Get the task description
     #     task_description = child_task["description"]
-        
+
     #     # Query Pinecone for similar agents
     #     try:
     #         best_agents = await self.database_service.query_similar_agents(task_description, top_k)
@@ -489,19 +525,19 @@ class HostAgent:
     #     best_agent_id = await self.openai_service.select_best_agent_for_task(task_description, best_agents)
 
     #     await self.database_service.update_child_task(child_task_id, {"agent_id": best_agent_id})
-        
+
     #     return best_agent_id
 
     # async def summarize_subtask_answers(self, root_task_id: str) -> str:
     #     """
     #     Collect answers from all subtasks and generate a final summarized answer.
-        
+
     #     Args:
     #         root_task_id: The ID of the root task
-            
+
     #     Returns:
     #         str: Summarized answer to the original question
-            
+
     #     Raises:
     #         ValueError: If root task not found or no subtasks exist
     #     """
@@ -509,12 +545,12 @@ class HostAgent:
     #     root_task = await self.task_service.get_task(root_task_id)
     #     if not root_task:
     #         raise ValueError(f"Root task {root_task_id!r} not found")
-        
+
     #     # Get all child tasks
     #     child_tasks = await self.task_service.get_child_tasks_by_parent(root_task_id)
     #     if not child_tasks:
     #         raise ValueError(f"No subtasks found for root task {root_task_id!r}")
-        
+
     #     # Collect answers from completed subtasks
     #     subtask_answers = []
     #     for child in child_tasks:
@@ -527,16 +563,16 @@ class HostAgent:
     #                     "task_description": child.description,
     #                     "answer": answer
     #                 })
-        
+
     #     if not subtask_answers:
     #         raise ValueError("No completed subtasks with answers found")
-        
+
     #     # Use OpenAI to generate final summary
     #     final_answer = await self.openai_service.summarize_subtask_answers(
     #         original_question=root_task.task.history[0].parts[0].text,
     #         subtask_answers=subtask_answers
     #     )
-        
+
     #     # Update root task with final answer
     #     await self.database_service.update_task(
     #         root_task_id,
@@ -548,10 +584,9 @@ class HostAgent:
     #             }
     #         }
     #     )
-        
+
     #     return final_answer
-    
-        
+
     # async def handle_input(self, user_name: str, user_input: str, session_id: str | None = None):
 
     #     try:
@@ -591,9 +626,9 @@ class HostAgent:
     #         return UserResponse(
     #             session_id=current_session_id,
     #             task_id=root_task_id,
-    #             result="success" 
+    #             result="success"
     #         )
-        
+
     #     except Exception as e:
     #         print(f"Error handling input: {e}")
     #         return UserResponse(
@@ -601,5 +636,6 @@ class HostAgent:
     #             task_id="",
     #             result="error"
     #         )
+
 
 host_agent = HostAgent()

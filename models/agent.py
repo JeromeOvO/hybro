@@ -1,7 +1,7 @@
 from enum import Enum
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
+
 from a2a.types import AgentCard
+from pydantic import BaseModel
 
 
 class AgentStatus(Enum):
@@ -9,8 +9,8 @@ class AgentStatus(Enum):
     inactive = "inactive"
     deleted = "deleted"
 
-class Agent(BaseModel):
 
+class Agent(BaseModel):
     # Primary identification field
     agent_id: str
 
@@ -29,5 +29,5 @@ class Agent(BaseModel):
     # Like count from user
     like_count: int = 0
 
-    # Dislike count from user   
+    # Dislike count from user
     dislike_count: int = 0

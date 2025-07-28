@@ -1,11 +1,14 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import AIMessage, ToolMessage
+from collections.abc import AsyncIterable
+from typing import Any, Literal
+
 import httpx
-from typing import Any, Dict, AsyncIterable, Literal
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
 
 memory = MemorySaver()
 
@@ -25,7 +28,7 @@ def get_exchange_rate(
 
     Returns:
         A dictionary containing the exchange rate data, or an error message if the request fails.
-    """    
+    """
     try:
         response = httpx.get(
             f"https://api.frankfurter.app/{currency_date}",
@@ -45,11 +48,12 @@ def get_exchange_rate(
 
 class ResponseFormat(BaseModel):
     """Respond to the user in this format."""
+
     status: Literal["input_required", "completed", "error"] = "input_required"
     message: str
 
-class CurrencyAgent:
 
+class CurrencyAgent:
     SYSTEM_INSTRUCTION = (
         "You are a specialized assistant for currency conversions. "
         "Your sole purpose is to use the 'get_exchange_rate' tool to answer questions about currency exchange rates. "
@@ -60,21 +64,25 @@ class CurrencyAgent:
         "Set response status to error if there is an error while processing the request."
         "Set response status to completed if the request is complete."
     )
-     
+
     def __init__(self):
         self.model = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
         self.tools = [get_exchange_rate]
 
         self.graph = create_react_agent(
-            self.model, tools=self.tools, checkpointer=memory, prompt = self.SYSTEM_INSTRUCTION, response_format=ResponseFormat
+            self.model,
+            tools=self.tools,
+            checkpointer=memory,
+            prompt=self.SYSTEM_INSTRUCTION,
+            response_format=ResponseFormat,
         )
 
     def invoke(self, query, sessionId) -> str:
         config = {"configurable": {"thread_id": sessionId}}
-        self.graph.invoke({"messages": [("user", query)]}, config)        
+        self.graph.invoke({"messages": [("user", query)]}, config)
         return self.get_agent_response(config)
 
-    async def stream(self, query, sessionId) -> AsyncIterable[Dict[str, Any]]:
+    async def stream(self, query, sessionId) -> AsyncIterable[dict[str, Any]]:
         inputs = {"messages": [("user", query)]}
         config = {"configurable": {"thread_id": sessionId}}
 
@@ -95,32 +103,31 @@ class CurrencyAgent:
                     "is_task_complete": False,
                     "require_user_input": False,
                     "content": "Processing the exchange rates..",
-                }            
-        
+                }
+
         yield self.get_agent_response(config)
 
-        
     def get_agent_response(self, config):
-        current_state = self.graph.get_state(config)        
-        structured_response = current_state.values.get('structured_response')
-        if structured_response and isinstance(structured_response, ResponseFormat): 
+        current_state = self.graph.get_state(config)
+        structured_response = current_state.values.get("structured_response")
+        if structured_response and isinstance(structured_response, ResponseFormat):
             if structured_response.status == "input_required":
                 return {
                     "is_task_complete": False,
                     "require_user_input": True,
-                    "content": structured_response.message
+                    "content": structured_response.message,
                 }
             elif structured_response.status == "error":
                 return {
                     "is_task_complete": False,
                     "require_user_input": True,
-                    "content": structured_response.message
+                    "content": structured_response.message,
                 }
             elif structured_response.status == "completed":
                 return {
                     "is_task_complete": True,
                     "require_user_input": False,
-                    "content": structured_response.message
+                    "content": structured_response.message,
                 }
 
         return {

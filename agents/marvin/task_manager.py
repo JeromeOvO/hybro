@@ -166,7 +166,8 @@ class AgentTaskManager(InMemoryTaskManager):
     ) -> JSONRPCResponse | None:
         task_send_params: TaskSendParams = request.params
         if task_send_params.acceptedOutputModes and not utils.are_modalities_compatible(
-            task_send_params.acceptedOutputModes, ExtractorAgent.SUPPORTED_CONTENT_TYPES
+            task_send_params.acceptedOutputModes,
+            ExtractorAgent.SUPPORTED_CONTENT_TYPES,
         ):
             logger.warning(
                 "Unsupported output mode. Received %s, Support %s",
