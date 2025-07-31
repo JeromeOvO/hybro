@@ -1,14 +1,16 @@
-import logging
 import uuid
 from typing import Any
 
 from a2a.types import AgentCard
 
+from common.utils.logger import get_logger
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
 from services.openai_service import openai_service
+
+logger = get_logger(__name__)
 
 # Database Service designed for:
 # - consistent and available both in different databases
@@ -78,9 +80,7 @@ class DatabaseService:
                 except Exception as delete_error:
                     print(f"Rollback failed: {delete_error}")
 
-            logging.error(
-                f"Failed to add agent {agent.agent_id} to databases: {str(e)}"
-            )
+            logger.error(f"Failed to add agent {agent.agent_id} to databases: {str(e)}")
             return False
 
     async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
@@ -111,7 +111,7 @@ class DatabaseService:
             return mongo_success and pinecone_success
 
         except Exception as e:
-            logging.error(f"Failed to delete agent {agent_id} from databases: {str(e)}")
+            logger.error(f"Failed to delete agent {agent_id} from databases: {str(e)}")
             return False
 
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
@@ -204,7 +204,7 @@ class DatabaseService:
             self.pinecone.upsert([vector_data])
             return mongo_success
         except Exception as e:
-            logging.error(f"Failed to update agent {agent_id} in databases: {str(e)}")
+            logger.error(f"Failed to update agent {agent_id} in databases: {str(e)}")
             return False
 
     async def update_agent_by_agent_id(self, agent_id: str, agent: Agent) -> bool:
@@ -234,7 +234,7 @@ class DatabaseService:
             self.pinecone.upsert([vector_data])
             return mongo_success
         except Exception as e:
-            logging.error(f"Failed to update agent {agent_id} in databases: {str(e)}")
+            logger.error(f"Failed to update agent {agent_id} in databases: {str(e)}")
             return False
 
     # task management
@@ -251,7 +251,7 @@ class DatabaseService:
             await self.mongo.add_base_task(base_task)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to add base task {base_task.task_id} to databases: {str(e)}"
             )
             return False
@@ -269,7 +269,7 @@ class DatabaseService:
             await self.mongo.add_meta_task(meta_task)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to add meta task {meta_task.task_id} to databases: {str(e)}"
             )
             return False
@@ -287,7 +287,7 @@ class DatabaseService:
             await self.mongo.add_task_session(task_session)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to add task session {task_session.session_id} to databases: {str(e)}"
             )
             return False
@@ -309,7 +309,7 @@ class DatabaseService:
             await self.mongo.delete_base_task_by_task_id(task_id)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to delete base task {task_id} from databases: {str(e)}"
             )
             return False
@@ -323,7 +323,7 @@ class DatabaseService:
             await self.mongo.delete_meta_task_by_task_id(task_id)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to delete meta task {task_id} from databases: {str(e)}"
             )
             return False
@@ -339,7 +339,7 @@ class DatabaseService:
             await self.mongo.delete_task_session_by_session_id(session_id)
             return True
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Failed to delete task session {session_id} from databases: {str(e)}"
             )
             return False

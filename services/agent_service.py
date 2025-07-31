@@ -1,7 +1,7 @@
-import logging
 import uuid
 from typing import Any
 
+from common.utils.logger import get_logger
 from models.agent import Agent
 from models.error import (
     AgentCardRequiredError,
@@ -15,6 +15,8 @@ from models.response import AgentCenterResponse
 from services.a2a_service import A2AService
 from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
+
+logger = get_logger(__name__)
 
 
 class AgentService:
@@ -33,7 +35,7 @@ class AgentService:
         try:
             agent_card = await self.a2a_service.get_agent_card_from_url(agent_url)
         except Exception as e:
-            logging.error(f"AgentCenter: Failed to get agent card from url: {str(e)}")
+            logger.error(f"AgentCenter: Failed to get agent card from url: {str(e)}")
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
 
         return AgentCenterResponse(
@@ -53,7 +55,7 @@ class AgentService:
         try:
             agent_add_result = await self.database_service.add_agent(agent)
         except Exception as e:
-            logging.error(f"AgentCenter: Failed to add agent to database: {str(e)}")
+            logger.error(f"AgentCenter: Failed to add agent to database: {str(e)}")
             return AgentCenterResponse(
                 agent_id=new_agent_id, success=False, error=str(e), status_code=500
             )
@@ -82,7 +84,7 @@ class AgentService:
                     )
                 )
             except Exception as e:
-                logging.error(
+                logger.error(
                     f"AgentCenter: Failed to update agent in database: {str(e)}"
                 )
                 return AgentCenterResponse(
@@ -108,7 +110,7 @@ class AgentService:
                     )
                 )
             except Exception as e:
-                logging.error(
+                logger.error(
                     f"AgentCenter: Failed to update agent card in database: {str(e)}"
                 )
                 return AgentCenterResponse(
@@ -133,7 +135,7 @@ class AgentService:
                 agent_id
             )
         except Exception as e:
-            logging.error(f"AgentCenter: Failed to delete agent in database: {str(e)}")
+            logger.error(f"AgentCenter: Failed to delete agent in database: {str(e)}")
             return AgentCenterResponse(
                 agent_id=agent_id, success=False, error=str(e), status_code=500
             )
@@ -154,7 +156,7 @@ class AgentService:
             if not agent:
                 raise AgentNotFoundError()
         except Exception as e:
-            logging.error(f"AgentCenter: Failed to get agent in database: {str(e)}")
+            logger.error(f"AgentCenter: Failed to get agent in database: {str(e)}")
             return AgentCenterResponse(
                 agent_id=agent_id, success=False, error=str(e), status_code=500
             )
@@ -171,9 +173,7 @@ class AgentService:
         try:
             agents = await self.database_service.get_all_agents()
         except Exception as e:
-            logging.error(
-                f"AgentCenter: Failed to get all agents in database: {str(e)}"
-            )
+            logger.error(f"AgentCenter: Failed to get all agents in database: {str(e)}")
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
 
         return AgentCenterResponse(
@@ -188,7 +188,7 @@ class AgentService:
                 request.query, request.limit
             )
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"AgentCenter: Failed to get agents with conditions in database: {str(e)}"
             )
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
@@ -215,7 +215,7 @@ class AgentService:
             else:
                 agents = await self.database_service.query_similar_agents(query_text, 5)
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"AgentCenter: Failed to get similar agents in database: {str(e)}"
             )
             return AgentCenterResponse(success=False, error=str(e), status_code=500)

@@ -114,12 +114,17 @@ class TaskService:
         task = request.task
         user_input = request.user_input
 
+        depends_on_tasks = getattr(request, "depends_on_tasks", [])
+        execution_order = getattr(request, "execution_order", 0)
+
         new_meta_task = MetaTask(
             task_id=task_id,
             task_description=user_input,
             agent_id=TaskDefaultValue.NOT_ASSIGNED.value,
             parent_task_id=parent_task_id,
             task=task,
+            execution_order=execution_order,
+            depends_on_tasks=depends_on_tasks,
         )
 
         success = await self.database_service.add_meta_task(new_meta_task)

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 from typing import Any
@@ -11,11 +10,12 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
 )
 
+from common.utils.logger import get_logger
 from models.task import BaseTask
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAIService:
@@ -48,26 +48,29 @@ class OpenAIService:
         Decompose a base task into subtasks using OpenAI.
         Returns a JSON string with structured execution steps.
         """
-        system_prompt = """You are an AI tasked with decomposing a base task into detailed execution steps.
-        Analyze the task goal and create a structured execution plan with specific steps.
+        system_prompt = """You are a task decomposition assistant. Your job is
+        to break down complex tasks into smaller, manageable steps that can 
+        be solved more easily and effectively.
+        Your goal is to create a structured execution plan for all steps.
         
         Return the response in the following JSON format:
         {
             "execution_steps": [
                 {
                     "step_number": 1,
-                    "step_description": "Detailed description of what this step accomplishes",
-                    "execution_content": "Specific actions, queries, or reasoning needed to complete this step",
-                    "expected_output": "What this step should produce or determine"
+                    "step_description": "Concise description of what this step does",
+                    "execution_context": "Context needed for the step",
+                    "expected_output": "What this step should produce",
+                    "depends_on_steps": []  # List of step numbers this step depends on
                 }
             ]
         }
         
         Each step should be:
         1. Specific and actionable
-        2. Clear enough for an AI to understand and execute
-        3. Include reasoning or analysis if needed
-        4. Build upon previous steps when applicable
+        2. Clear enough for an AI agent to understand and solve
+        3. Independent or minimal dependencies on other steps
+        4. If a step needs results from previous steps, list those step numbers in depends_on_steps
         """
 
         if (
@@ -86,9 +89,9 @@ class OpenAIService:
 
         prompt = f"""Task Goal: {task_goal}
 
-Please decompose this task into a structured execution plan with specific steps.
-Each step should be detailed enough for an AI agent to understand and execute.
-Consider the logical flow and dependencies between steps.
+Please decompose this task into a structured execution plan with all necessary steps.
+
+IMPORTANT: Do not include any other text in your response. Only return the JSON object.
 """
 
         messages = [
@@ -129,8 +132,9 @@ Consider the logical flow and dependencies between steps.
                                 {
                                     "step_number": 1,
                                     "step_description": "Analyze the task goal",
-                                    "execution_content": f"Review and understand the task goal: {task_goal}",
-                                    "expected_output": "Clear understanding of what needs to be accomplished",
+                                    "execution_context": f"The task goal: {task_goal}",
+                                    "expected_output": "What this step should produce",
+                                    "depends_on_steps": [],
                                 }
                             ]
                         }
@@ -145,8 +149,9 @@ Consider the logical flow and dependencies between steps.
                         {
                             "step_number": 1,
                             "step_description": "Error occurred during task decomposition",
-                            "execution_content": f"Original task goal: {task_goal}",
+                            "execution_context": f"Original task goal: {task_goal}",
                             "expected_output": "Manual intervention required",
+                            "depends_on_steps": [],
                         }
                     ]
                 }
@@ -247,29 +252,25 @@ Based on the task description and agent capabilities, which agent (by ID) would 
         Args:
             base_task_goal: The original goal/objective of the base task
             meta_task_summaries: List of summaries from each meta task
-            meta_task_execution_contents: List of execution contents from each meta task
+            meta_task_execution_contexts: List of execution contexts from each meta task
             meta_task_descriptions: List of task descriptions from each meta task
             meta_task_histories: List of conversation histories from each meta task
 
         Returns:
             Comprehensive summary that addresses the original base task goal
         """
-        system_prompt = """You are an expert AI agent tasked with combining the actual detailed results from multiple subtasks into a comprehensive final answer.
+        system_prompt = """You are an expert AI agent tasked with combining the output from multiple subtasks into a comprehensive final answer.
         
-        IMPORTANT: Do NOT summarize what each subtask did or how it was accomplished. Instead, extract and combine the actual detailed content, answers, and results from each subtask.
+        IMPORTANT: Extract and combine the output from each subtask.
         
         Your role is to:
-        1. Extract the actual detailed answers and results from each subtask
-        2. Combine these actual results into a coherent, comprehensive response
-        3. Present the specific information, data, recommendations, and details that answer the original goal
-        4. Focus on the actual content and answers, not on describing the process
+        1. Extract the output from each subtask
+        2. Combine these outputs into a coherent, comprehensive response
         
         The final answer should:
         - Contain the actual detailed information from each subtask (specific recommendations, data, plans, etc.)
-        - Be the complete answer the user is looking for, not a description of what was found
+        - Be the complete answer the user is looking for
         - Include specific details, numbers, recommendations, and concrete information
-        - Be actionable and comprehensive with real content
-        - Combine all the actual results seamlessly
         """
 
         # Prepare detailed information for each meta task
@@ -291,16 +292,14 @@ Based on the task description and agent capabilities, which agent (by ID) would 
 Detailed Subtask Information:
 {all_task_info}
 
-IMPORTANT: Extract and combine the actual detailed content, answers, and results from each subtask above. Do NOT describe what each subtask did or provide meta-summaries.
+IMPORTANT: Extract and combine the output from each subtask above. Do NOT describe what each subtask did or provide meta-summaries.
 
 Please provide the comprehensive final answer that:
-1. Contains the actual detailed information, recommendations, and specific content from all subtasks
-2. Combines the real results (specific data, plans, recommendations, numbers, etc.) into one complete answer
-3. Gives the user the actual information they need, not descriptions of what was found
-4. Is the complete, actionable answer to the original goal with all the specific details
-5. Includes concrete information like actual prices, specific recommendations, detailed plans, exact dates, etc.
+1. Contains the output from all subtasks
+2. Combines the output into one complete answer
+3. Gives the user the actual information they need
 
-Your response should be the actual complete answer with all the specific details the user is looking for, extracted directly from the subtask results.
+Your response should be an complete answer with all the specific details the user is looking for, extracted directly from the subtask outputs.
 """
 
         messages = [

@@ -1,12 +1,9 @@
 # host_agent.py
-import logging
-
 from a2a.types import Role
 
+from common.utils.logger import get_logger
 from models.request import ChatRequest, OrchestrationCenterRequest, TaskCenterRequest
-from models.response import (
-    ChatResponse,
-)
+from models.response import ChatResponse
 from modules.OrchestrationCenter import OrchestrationCenter
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
@@ -14,11 +11,7 @@ from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # for bussiness logic

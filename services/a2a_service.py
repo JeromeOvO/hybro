@@ -1,4 +1,3 @@
-import logging
 from typing import Any
 from uuid import uuid4
 
@@ -18,14 +17,11 @@ from a2a.types import (
     TextPart,
 )
 
+from common.utils.logger import get_logger
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class A2AService:
@@ -251,10 +247,10 @@ class A2AService:
                         logger.error(f"a2a_service: error: {response.root.error}")
                         raise A2AServiceError()
                     last_result = response
-                    logger.info(f"a2a_service: last_result: {last_result}")
 
                 if last_result is None:
                     raise A2AServiceError("No response received from streaming")
+                logger.info(f"a2a_service: last_result: {last_result}")
                 return last_result
             else:
                 send_message_request = SendMessageRequest(

@@ -1,9 +1,10 @@
 import json
-import logging
 import uuid
+from typing import Any
 
 from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
 
+from common.utils.logger import get_logger
 from models.error import (
     AgentNotAssignedError,
     AgentNotFoundError,
@@ -16,13 +17,13 @@ from models.request import (
     TaskCenterRequest,
 )
 from models.response import OrchestrationCenterResponse
-from models.task import TaskDefaultValue
+from models.task import MetaTask, TaskDefaultValue
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OrchestrationCenter:
@@ -247,7 +248,8 @@ class OrchestrationCenter:
                     status_code=500,
                 )
 
-            created_meta_task_ids = []
+            # Store created meta tasks to establish dependencies
+            created_meta_tasks = {}
 
             for step in response_data["execution_steps"]:
                 # Validate step structure
@@ -256,7 +258,7 @@ class OrchestrationCenter:
                     for key in [
                         "step_number",
                         "step_description",
-                        "execution_content",
+                        "execution_context",
                         "expected_output",
                     ]
                 ):
@@ -266,8 +268,9 @@ class OrchestrationCenter:
                 # Combine step information into task description
                 task_description = (
                     f"Step Description: {step['step_description']}\n"
-                    f"Execution Content: {step['execution_content']}\n"
-                    f"Expected Output: {step['expected_output']}"
+                    f"Execution Context: {step['execution_context']}\n"
+                    f"Expected Output: {step['expected_output']}\n"
+                    f"Depends On Steps: {step['depends_on_steps']}"
                 )
 
                 # Create a new Task for the meta task
@@ -279,7 +282,16 @@ class OrchestrationCenter:
                 )
                 meta_task_task.history.append(new_message)
 
-                # Create MetaTask
+                # Extract dependencies
+                depends_on_steps = step.get("depends_on_steps", [])
+                depends_on_task_ids = []
+
+                # Convert step numbers to task IDs
+                for dep_step_num in depends_on_steps:
+                    if dep_step_num in created_meta_tasks:
+                        depends_on_task_ids.append(created_meta_tasks[dep_step_num])
+
+                # Create MetaTask with dependencies
                 create_meta_task_response = (
                     await self.task_service.create_new_meta_task(
                         TaskCenterRequest(
@@ -287,66 +299,28 @@ class OrchestrationCenter:
                             user_name=base_task.user_name,
                             task=meta_task_task,
                             user_input=task_description,
+                            execution_order=step["step_number"],
+                            depends_on_tasks=depends_on_task_ids,  # NEW
                         )
                     )
                 )
 
+                # Store the mapping for dependency resolution
                 if create_meta_task_response.success:
-                    # Update the execution_order for the meta task
-                    meta_task_id = create_meta_task_response.task_id
-                    meta_task_query_result = (
-                        await self.task_service.query_meta_task_by_task_id(
-                            TaskCenterRequest(task_id=meta_task_id)
-                        )
+                    created_meta_tasks[step["step_number"]] = (
+                        create_meta_task_response.task_id
                     )
 
-                    if (
-                        meta_task_query_result.success
-                        and meta_task_query_result.meta_task
-                    ):
-                        meta_task = meta_task_query_result.meta_task
-                        meta_task.execution_order = step["step_number"]
-
-                        # Update the meta task with execution order
-                        update_response = (
-                            await self.task_service.update_meta_task_by_task_id(
-                                TaskCenterRequest(
-                                    task_id=meta_task_id, meta_task=meta_task
-                                )
-                            )
-                        )
-
-                        if update_response.success:
-                            created_meta_task_ids.append(meta_task_id)
-                            logger.info(
-                                "Created meta task %s with execution order %s",
-                                meta_task_id,
-                                step["step_number"],
-                            )
-                        else:
-                            logger.error(
-                                "Failed to update meta task %s with execution order",
-                                meta_task_id,
-                            )
-                    else:
-                        logger.error(
-                            "Failed to query created meta task %s", meta_task_id
-                        )
-                else:
-                    logger.error(
-                        "Failed to create meta task for step %s", step["step_number"]
-                    )
-
-            logger.info(
-                "Successfully created %s meta tasks", len(created_meta_task_ids)
-            )
+            logger.info("Successfully created %s meta tasks", len(created_meta_tasks))
 
             return OrchestrationCenterResponse(
                 task_id=root_task_id,
                 success=True,
                 error=None,
                 status_code=200,
-                meta_task_ids=created_meta_task_ids,  # Add this field to response if needed
+                meta_task_ids=list(
+                    created_meta_tasks.values()
+                ),  # Add this field to response if needed
             )
 
         except json.JSONDecodeError as e:
@@ -669,6 +643,9 @@ class OrchestrationCenter:
             base_task_id,
         )
 
+        # Track completed task results for context passing
+        completed_task_results = {}
+
         # Execute each meta task sequentially
         for i, meta_task in enumerate(meta_tasks):
             try:
@@ -680,6 +657,23 @@ class OrchestrationCenter:
                     meta_task.execution_order,
                 )
 
+                # Collect context from dependent tasks
+                if meta_task.depends_on_tasks:
+                    context_from_previous = {}
+                    for dep_task_id in meta_task.depends_on_tasks:
+                        if dep_task_id in completed_task_results:
+                            context_from_previous[dep_task_id] = completed_task_results[
+                                dep_task_id
+                            ]
+
+                    # Update meta task with context
+                    meta_task.context_from_previous = context_from_previous
+                    await self.task_service.update_meta_task_by_task_id(
+                        TaskCenterRequest(
+                            task_id=meta_task.task_id, meta_task=meta_task
+                        )
+                    )
+
                 # Process meta task - wait for completion before proceeding
                 process_response = await self.process_meta_task(
                     OrchestrationCenterRequest(task_id=meta_task.task_id)
@@ -687,6 +681,12 @@ class OrchestrationCenter:
 
                 if process_response.success:
                     processed_meta_task_ids.append(meta_task.task_id)
+
+                    # Store the completed task result for future context
+                    completed_task_results[
+                        meta_task.task_id
+                    ] = await self._extract_task_result(meta_task.task_id)
+
                     logger.info(
                         "OrchestrationCenter: Successfully processed meta task %s (%s/%s)",
                         meta_task.task_id,
@@ -847,10 +847,15 @@ class OrchestrationCenter:
             raise AgentNotFoundError()
 
         try:
+            # Build enhanced task description with context
+            task_description_with_context = (
+                await self._build_task_description_with_context(meta_task)
+            )
+
             message = Message(
                 role=Role.user,
                 messageId=str(uuid.uuid4()),
-                parts=[Part(root=TextPart(text=meta_task.task_description or ""))],
+                parts=[Part(root=TextPart(text=task_description_with_context))],
             )
 
             send_response = await self.a2a_service.send_message_to_agent(
@@ -1009,6 +1014,108 @@ class OrchestrationCenter:
                 task_id=meta_task_id, success=False, error=str(e), status_code=500
             )
 
+    async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
+        """Extract the result from a completed meta task for context passing."""
+        query_result = await self.task_service.query_meta_task_by_task_id(
+            TaskCenterRequest(task_id=meta_task_id)
+        )
+
+        if not query_result.success or not query_result.meta_task:
+            return {"error": "Failed to retrieve task result"}
+
+        meta_task = query_result.meta_task
+        result = {
+            "task_id": meta_task_id,
+            "task_description": meta_task.task_description,
+            "messages": [],
+            "artifacts": [],
+        }
+
+        # Extract messages from task history - be more flexible with filtering
+        if meta_task.task and meta_task.task.history:
+            for message in meta_task.task.history:
+                # Don't filter by role - include all messages except the initial user message
+                if hasattr(message, "role") and message.role != Role.user:
+                    message_content = []
+                    if hasattr(message, "parts") and message.parts:
+                        for part in message.parts:
+                            # Handle different part structures
+                            if hasattr(part, "root"):
+                                # Current structure: part.root.text
+                                if hasattr(part.root, "text") and part.root.text:
+                                    message_content.append(part.root.text)
+                            elif hasattr(part, "text") and part.text:
+                                # Alternative structure: part.text
+                                message_content.append(part.text)
+                            elif isinstance(part, str):
+                                # Simple string
+                                message_content.append(part)
+
+                    if message_content:
+                        result["messages"].extend(message_content)
+                # Handle responses that don't have role attribute
+                elif not hasattr(message, "role"):
+                    # This might be a processed A2A response - try to extract text content
+                    if hasattr(message, "text") and message.text:
+                        result["messages"].append(message.text)
+                    elif hasattr(message, "content") and message.content:
+                        result["messages"].append(message.content)
+
+        # Extract artifacts if available
+        if meta_task.task and meta_task.task.artifacts:
+            for artifact in meta_task.task.artifacts:
+                artifact_content = []
+                if hasattr(artifact, "parts") and artifact.parts:
+                    for part in artifact.parts:
+                        if (
+                            hasattr(part, "root")
+                            and hasattr(part.root, "text")
+                            and part.root.text
+                        ):
+                            artifact_content.append(part.root.text)
+                        elif hasattr(part, "text") and part.text:
+                            artifact_content.append(part.text)
+                if artifact_content:
+                    result["artifacts"].extend(artifact_content)
+
+        return result
+
+    async def _build_task_description_with_context(self, meta_task: MetaTask) -> str:
+        """Build task description including context from previous tasks."""
+        base_description = meta_task.task_description or ""
+
+        if not meta_task.context_from_previous:
+            return base_description
+
+        # Build context section
+        context_section = "\n\n=== CONTEXT FROM PREVIOUS STEPS ===\n"
+
+        for task_id, result in meta_task.context_from_previous.items():
+            context_section += (
+                f"\nResults from {result.get('task_description', 'Previous Task')}:\n"
+            )
+
+            # Add messages (agent responses)
+            if result.get("messages"):
+                for message in result["messages"]:
+                    context_section += f"- {message}\n"
+
+            # Add artifacts if available
+            if result.get("artifacts"):
+                for artifact in result["artifacts"]:
+                    context_section += f"- {artifact}\n"
+
+        context_section += "\n=== END CONTEXT ===\n\n"
+
+        # Combine with instructions
+        enhanced_description = f"""{base_description}
+
+{context_section}
+
+IMPORTANT: Use the context from previous steps above to inform your response. Reference and build upon the previous results as needed to complete this step effectively."""
+
+        return enhanced_description
+
     async def summarize_meta_task_for_base_task(
         self, request: OrchestrationCenterRequest
     ) -> OrchestrationCenterResponse:
@@ -1076,21 +1183,29 @@ class OrchestrationCenter:
 
         meta_task_summaries = []
         for meta_task in meta_tasks:
-            meta_task_history = (
-                meta_task.task.history
-                if meta_task.task and meta_task.task.history
-                else []
+            # Use the existing _extract_task_result method instead of raw history
+            task_result = await self._extract_task_result(meta_task.task_id)
+
+            summary_parts = []
+            summary_parts.append(
+                f"Task: {task_result.get('task_description', 'No description')}"
             )
-            for message in meta_task_history:
-                for part in message.parts:
-                    if part.root.kind == "text" and part.root.text is not None:
-                        meta_task_summaries.append(
-                            meta_task.task_id
-                            + ": "
-                            + message.role.value
-                            + ": "
-                            + part.root.text
-                        )
+
+            # Add actual results (agent responses)
+            if task_result.get("messages"):
+                summary_parts.append("Results:")
+                for message in task_result["messages"]:
+                    summary_parts.append(f"- {message}")
+
+            # Add artifacts if available
+            if task_result.get("artifacts"):
+                summary_parts.append("Additional outputs:")
+                for artifact in task_result["artifacts"]:
+                    summary_parts.append(f"- {artifact}")
+
+            meta_task_summaries.append(
+                f"{meta_task.task_id}: {' | '.join(summary_parts)}"
+            )
 
         logger.info("OrchestrationCenter: meta task summaries: %s", meta_task_summaries)
 

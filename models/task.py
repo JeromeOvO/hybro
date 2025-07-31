@@ -11,7 +11,11 @@ class TaskDefaultValue(Enum):
 
 
 class MetaTask(BaseModel):
-    """A meta task model represents the smallest atomic tasks in the system, usually subtasks from decomposition. It is designed for convenient a2a agent communication."""
+    """
+    A MetaTask represents an atomic subtask created from decomposing a larger user request(BaseTask).
+    These are the individual work units assigned to specific agents in the multi-agent system.
+    Each MetaTask contains a Task object with the actual agent communication data.
+    """
 
     task_id: str
     parent_task_id: str
@@ -19,11 +23,18 @@ class MetaTask(BaseModel):
     task_description: str | None = Field(default="")
     task: Task | None = None
     execution_order: int = 0
+    # Track dependencies and context
+    depends_on_tasks: list[str] = Field(default_factory=list)
+    context_from_previous: dict[str, Any] = Field(default_factory=dict)
     extend_info: Any | None = None
 
 
 class BaseTask(BaseModel):
-    """A base task model for one request from user"""
+    """
+    A BaseTask represents a complete user request and serves as the top-level container.
+    It wraps a Task object and includes session/user metadata for tracking purposes.
+    This is the main task that gets decomposed into MetaTasks for multi-agent processing.
+    """
 
     task_id: str
     session_id: str
@@ -33,7 +44,11 @@ class BaseTask(BaseModel):
 
 
 class TaskSession(BaseModel):
-    """Model for a task session. One meta session for one chat session"""
+    """
+    A TaskSession represents a chat conversation between a user and the multi-agent system.
+    It tracks session metadata like creation time, user info, and session description.
+    Multiple BaseTask objects can belong to one TaskSession during a conversation.
+    """
 
     session_id: str
     user_name: str

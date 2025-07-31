@@ -1,19 +1,14 @@
-import logging
-
 import httpx
 from a2a.client.client import A2ACardResolver, A2AClient
 
+from common.utils.logger import get_logger
 from models.error import AgentNotFoundError
 from models.request import InspectionCenterRequest
 from models.response import InspectionCenterResponse
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class InspectionCenter:
