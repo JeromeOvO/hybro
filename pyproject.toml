@@ -356,6 +356,26 @@ dependencies = [
     "zstandard>=0.23.0",
 ]
 
+[tool.ruff]
+line-length = 88
+target-version = 'py312'
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache"
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP", "C90"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
 [tool.setuptools]
 packages = [
     "agents",

@@ -1,12 +1,17 @@
-from typing import Union, Any
-from pydantic import BaseModel, Field, TypeAdapter
-from typing import Literal, List, Annotated, Optional
 from datetime import datetime
-from pydantic import model_validator, ConfigDict, field_serializer
+from typing import Annotated, Any, Literal, Self
 from uuid import uuid4
-from typing_extensions import Self
 
-from a2a.types import TaskState, TextPart, FilePart, DataPart
+from a2a.types import DataPart, FilePart, TaskState, TextPart
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_serializer,
+    model_validator,
+)
+
 
 class FileContent(BaseModel):
     name: str | None = None
@@ -25,13 +30,13 @@ class FileContent(BaseModel):
         return self
 
 
-
-Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="kind")]
+Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator="kind")]
 
 
 class Message(BaseModel):
     role: Literal["user", "agent"]
-    parts: List[Part]
+    kind: str = "message"  # Add kind attribute for proper processing
+    parts: list[Part]
     metadata: dict[str, Any] | None = None
 
 
@@ -48,7 +53,7 @@ class TaskStatus(BaseModel):
 class Artifact(BaseModel):
     name: str | None = None
     description: str | None = None
-    parts: List[Part]
+    parts: list[Part]
     metadata: dict[str, Any] | None = None
     index: int = 0
     append: bool | None = None
@@ -57,15 +62,17 @@ class Artifact(BaseModel):
 
 class Task(BaseModel):
     id: str
+    kind: str = "task"  # Add kind attribute to match TypeScript definition
     sessionId: str | None = None
     status: TaskStatus
-    artifacts: List[Artifact] | None = None
-    history: List[Message] | None = None
+    artifacts: list[Artifact] | None = None
+    history: list[Message] | None = None
     metadata: dict[str, Any] | None = None
 
 
 class TaskStatusUpdateEvent(BaseModel):
     id: str
+    kind: str = "status-update"  # Add kind attribute for proper processing
     status: TaskStatus
     final: bool = False
     metadata: dict[str, Any] | None = None
@@ -73,14 +80,15 @@ class TaskStatusUpdateEvent(BaseModel):
 
 class TaskArtifactUpdateEvent(BaseModel):
     id: str
-    artifact: Artifact    
+    kind: str = "artifact-update"  # Add kind attribute for proper processing
+    artifact: Artifact
     metadata: dict[str, Any] | None = None
 
 
 class AuthenticationInfo(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    schemes: List[str]
+    schemes: list[str]
     credentials: str | None = None
 
 
@@ -103,7 +111,7 @@ class TaskSendParams(BaseModel):
     id: str
     sessionId: str = Field(default_factory=lambda: uuid4().hex)
     message: Message
-    acceptedOutputModes: Optional[List[str]] = None
+    acceptedOutputModes: list[str] | None = None
     pushNotification: PushNotificationConfig | None = None
     historyLength: int | None = None
     metadata: dict[str, Any] | None = None
@@ -140,7 +148,11 @@ class JSONRPCResponse(JSONRPCMessage):
 
 class SendTaskRequest(JSONRPCRequest):
     method: Literal["tasks/send"] = "tasks/send"
-    params: TaskSendParams = Field(default_factory=lambda: TaskSendParams(id="", message=Message(role="user", parts=[])))
+    params: TaskSendParams = Field(
+        default_factory=lambda: TaskSendParams(
+            id="", message=Message(role="user", parts=[])
+        )
+    )
 
 
 class SendTaskResponse(JSONRPCResponse):
@@ -149,7 +161,11 @@ class SendTaskResponse(JSONRPCResponse):
 
 class SendTaskStreamingRequest(JSONRPCRequest):
     method: Literal["tasks/sendSubscribe"] = "tasks/sendSubscribe"
-    params: TaskSendParams = Field(default_factory=lambda: TaskSendParams(id="", message=Message(role="user", parts=[])))
+    params: TaskSendParams = Field(
+        default_factory=lambda: TaskSendParams(
+            id="", message=Message(role="user", parts=[])
+        )
+    )
 
 
 class SendTaskStreamingResponse(JSONRPCResponse):
@@ -176,7 +192,11 @@ class CancelTaskResponse(JSONRPCResponse):
 
 class SetTaskPushNotificationRequest(JSONRPCRequest):
     method: Literal["tasks/pushNotification/set",] = "tasks/pushNotification/set"
-    params: TaskPushNotificationConfig = Field(default_factory=lambda: TaskPushNotificationConfig(id="", pushNotificationConfig=PushNotificationConfig(url="")))
+    params: TaskPushNotificationConfig = Field(
+        default_factory=lambda: TaskPushNotificationConfig(
+            id="", pushNotificationConfig=PushNotificationConfig(url="")
+        )
+    )
 
 
 class SetTaskPushNotificationResponse(JSONRPCResponse):
@@ -199,15 +219,13 @@ class TaskResubscriptionRequest(JSONRPCRequest):
 
 A2ARequest = TypeAdapter(
     Annotated[
-        Union[
-            SendTaskRequest,
-            GetTaskRequest,
-            CancelTaskRequest,
-            SetTaskPushNotificationRequest,
-            GetTaskPushNotificationRequest,
-            TaskResubscriptionRequest,
-            SendTaskStreamingRequest,
-        ],
+        SendTaskRequest
+        | GetTaskRequest
+        | CancelTaskRequest
+        | SetTaskPushNotificationRequest
+        | GetTaskPushNotificationRequest
+        | TaskResubscriptionRequest
+        | SendTaskStreamingRequest,
         Field(discriminator="method"),
     ]
 )
@@ -287,7 +305,7 @@ class AgentCapabilities(BaseModel):
 
 
 class AgentAuthentication(BaseModel):
-    schemes: List[str]
+    schemes: list[str]
     credentials: str | None = None
 
 
@@ -295,10 +313,10 @@ class AgentSkill(BaseModel):
     id: str
     name: str
     description: str | None = None
-    tags: List[str] | None = None
-    examples: List[str] | None = None
-    inputModes: List[str] | None = None
-    outputModes: List[str] | None = None
+    tags: list[str] | None = None
+    examples: list[str] | None = None
+    inputModes: list[str] | None = None
+    outputModes: list[str] | None = None
 
 
 class AgentCard(BaseModel):
@@ -310,9 +328,9 @@ class AgentCard(BaseModel):
     documentationUrl: str | None = None
     capabilities: AgentCapabilities
     authentication: AgentAuthentication | None = None
-    defaultInputModes: List[str] = ["text"]
-    defaultOutputModes: List[str] = ["text"]
-    skills: List[AgentSkill]
+    defaultInputModes: list[str] = ["text"]
+    defaultOutputModes: list[str] = ["text"]
+    skills: list[AgentSkill]
 
 
 class A2AClientError(Exception):

@@ -1,11 +1,14 @@
-from common.server.server import A2AServer
-from common.types import AgentCard, AgentCapabilities, AgentSkill, MissingAPIKeyError
-from .task_manager import AgentTaskManager
-from .agent import ReimbursementAgent
-import click
-import os
 import logging
+import os
+
+import click
 from dotenv import load_dotenv
+
+from common.server.server import A2AServer
+from common.types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError
+
+from .agent import ReimbursementAgent
+from .task_manager import AgentTaskManager
 
 load_dotenv()
 
@@ -19,8 +22,8 @@ logger = logging.getLogger(__name__)
 def main(host, port):
     try:
         if not os.getenv("GOOGLE_API_KEY"):
-                raise MissingAPIKeyError("GOOGLE_API_KEY environment variable not set.")
-        
+            raise MissingAPIKeyError("GOOGLE_API_KEY environment variable not set.")
+
         capabilities = AgentCapabilities(streaming=True)
         skill = AgentSkill(
             id="process_reimbursement",
@@ -52,6 +55,7 @@ def main(host, port):
     except Exception as e:
         logger.error(f"An error occurred during server startup: {e}")
         exit(1)
-    
+
+
 if __name__ == "__main__":
     main()
