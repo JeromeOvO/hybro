@@ -24,8 +24,8 @@ class MetaTask(BaseModel):
     task: Task | None = None
     execution_order: int = 0
     # Track dependencies and context
-    depends_on_tasks: list[str] = Field(default_factory=list)
-    context_from_previous: dict[str, Any] = Field(default_factory=dict)
+    depends_on_tasks: list[str] | None = None
+    context_from_previous: dict[str, Any] | None = None
     extend_info: Any | None = None
 
 

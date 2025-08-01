@@ -108,8 +108,8 @@ class TaskCenterRequest(BaseModel):
     message: Message | None = None
     user_input: str | None = None
     execution_order: int = 0
-    depends_on_tasks: list[str] = Field(default_factory=list)
-    context_from_previous: dict[str, Any] = Field(default_factory=dict)
+    depends_on_tasks: list[str] | None = None
+    context_from_previous: dict[str, Any] | None = None
 
 
 class ChatRequest(BaseModel):
