@@ -26,6 +26,7 @@ export default function ChatPage() {
 
         if (!user?.id) {
             toast.error("Please sign in to continue")
+            router.push('/sign-in?redirect_url=/chat')
             return
         }
 
@@ -67,11 +68,6 @@ export default function ChatPage() {
                 <Loader2 className="h-8 w-8 animate-spin" />
             </div>
         )
-    }
-
-    if (!user) {
-        router.push('/sign-in')
-        return null
     }
 
     if (hasError) {

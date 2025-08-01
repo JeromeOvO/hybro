@@ -10,12 +10,13 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
+import { useUser } from "@clerk/nextjs"
 
 export default function AgentProfilePage() {
   const params = useParams()
   const router = useRouter()
   const agentId = params.id as string
-  
+  const { user } = useUser()
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -70,6 +71,12 @@ export default function AgentProfilePage() {
       loadAgentDetail()
     }
   }, [agentId])
+
+  if (!user?.id) {
+    toast.error("Please sign in to continue")
+    router.push('/sign-in?redirect_url=/agent/profile/' + agentId)
+    return
+}
 
   if (loading) {
     return (
