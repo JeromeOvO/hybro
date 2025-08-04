@@ -383,9 +383,3 @@ async def summarize_meta_task_for_base_task(request: Request):
 
     return orchestration_center_response
 
-
-# Fix the indentation of the uvicorn run command
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -281,7 +281,7 @@ dependencies = [
     "pyopenssl>=25.1.0",
     "pyparsing>=3.2.3",
     "pypdf>=5.6.0",
-    "pypdfium2>=4.30.1",
+    "pypdfium2<4.30.1",
     "pypika>=0.48.9",
     "pyproject-hooks>=1.2.0",
     "python-dateutil>=2.9.0.post0",
@@ -355,6 +355,9 @@ dependencies = [
     "zope-interface>=7.2",
     "zstandard>=0.23.0",
 ]
+
+[project.scripts]
+multi-agents-backend = "main:main"
 
 [tool.ruff]
 line-length = 88
