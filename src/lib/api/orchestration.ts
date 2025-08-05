@@ -1,13 +1,14 @@
 // Orchestration-related API functions
 import type { OrchestrationCenterResponse } from '@/lib/types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+// Using Next.js API routes as proxy to avoid CORS issues
+const API_BASE_URL = '/api/orchestrationCenter'
 
 // Decompose task
 export async function decomposeTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
   console.log('Calling decomposeTask with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/decomposeTask`, {
+  const response = await fetch(`${API_BASE_URL}/decomposeTask`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -28,7 +29,7 @@ export async function decomposeTask(data: { task_id: string }): Promise<Orchestr
 export async function assignAgentsToMetaTasks(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentsToMetaTasks with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/assignAgentsToMetaTasks`, {
+  const response = await fetch(`${API_BASE_URL}/assignAgentsToMetaTasks`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -51,7 +52,7 @@ export async function assignAgentToMetaTask(data: {
 }): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentToMetaTask with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/assignAgentToMetaTask`, {
+  const response = await fetch(`${API_BASE_URL}/assignAgentToMetaTask`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -72,7 +73,7 @@ export async function assignAgentToMetaTask(data: {
 export async function runWorkflow(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
   console.log('Calling runWorkflow with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/runWorkflow`, {
+  const response = await fetch(`${API_BASE_URL}/runWorkflow`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -93,7 +94,7 @@ export async function runWorkflow(data: { task_id: string }): Promise<Orchestrat
 export async function retryMetaTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
   console.log('Calling retryMetaTask with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/retryMetaTask`, {
+  const response = await fetch(`${API_BASE_URL}/retryMetaTask`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -114,7 +115,7 @@ export async function retryMetaTask(data: { task_id: string }): Promise<Orchestr
 export async function summarizeMetaTaskForBaseTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
   console.log('Calling summarizeMetaTaskForBaseTask with data:', data)
   
-  const response = await fetch(`${API_BASE_URL}/orchestrationCenter/summarizeMetaTaskForBaseTask`, {
+  const response = await fetch(`${API_BASE_URL}/summarizeMetaTaskForBaseTask`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
