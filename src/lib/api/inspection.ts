@@ -5,11 +5,12 @@ import type {
   InsepectionCenterConnectionValidationResponse 
 } from '@/lib/types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+// Using Next.js API routes as proxy to avoid CORS issues
+const API_BASE_URL = '/api/inspectionCenter'
 
 // Inspect agent card
 export async function inspectAgentCard(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/inspectionCenter/inspectAgentCard`, {
+  const response = await fetch(`${API_BASE_URL}/inspectAgentCard`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -26,7 +27,7 @@ export async function inspectAgentCard(request: InspectionCenterRequest): Promis
 
 // Inspect A2A connection
 export async function inspectA2AConnection(request: InspectionCenterRequest): Promise<InsepectionCenterConnectionValidationResponse> {
-  const response = await fetch(`${API_BASE_URL}/inspectionCenter/inspectA2AConnection`, {
+  const response = await fetch(`${API_BASE_URL}/inspectA2AConnection`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

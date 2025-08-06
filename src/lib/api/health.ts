@@ -1,10 +1,11 @@
 // Health-related API functions
 import type { HealthCheckResponse } from '@/lib/types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+// Using Next.js API routes as proxy to avoid CORS issues
 
+// Health check
 export async function healthCheck(): Promise<HealthCheckResponse> {
-  const response = await fetch(`${API_BASE_URL}/health`, {
+  const response = await fetch('/api/health', {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',

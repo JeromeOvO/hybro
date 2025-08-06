@@ -6,52 +6,64 @@
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
   
-  /* 基础颜色 */
-  --color-background: 0 0% 100%;
-  --color-foreground: 240 10% 3.9%;
-  --color-card: 0 0% 100%;
-  --color-card-foreground: 240 10% 3.9%;
-  --color-popover: 0 0% 100%;
-  --color-popover-foreground: 240 10% 3.9%;
-  --color-primary: 240 5.9% 10%;
-  --color-primary-foreground: 0 0% 98%;
-  --color-secondary: 240 4.8% 95.9%;
-  --color-secondary-foreground: 240 5.9% 10%;
-  --color-muted: 240 4.8% 95.9%;
-  --color-muted-foreground: 240 3.8% 46.1%;
-  --color-accent: 240 4.8% 95.9%;
-  --color-accent-foreground: 240 5.9% 10%;
-  --color-destructive: 0 84.2% 60.2%;
-  --color-destructive-foreground: 0 0% 98%;
-  --color-border: 240 5.9% 90%;
-  --color-input: 240 5.9% 90%;
-  --color-ring: 240 5.9% 10%;
+  /* Futuristic Light Mode - Cool tones with depth */
+  --color-background: 210 25% 97%;
+  --color-foreground: 215 25% 15%;
+  --color-card: 210 30% 98%;
+  --color-card-foreground: 215 25% 15%;
+  --color-popover: 210 30% 98%;
+  --color-popover-foreground: 215 25% 15%;
   
-  /* Chart colors */
-  --color-chart-1: 12 76% 61%;
-  --color-chart-2: 173 58% 39%;
-  --color-chart-3: 197 37% 24%;
-  --color-chart-4: 43 74% 66%;
-  --color-chart-5: 27 87% 67%;
+  /* Vibrant cyan-blue primary */
+  --color-primary: 195 100% 50%;
+  --color-primary-foreground: 210 30% 98%;
   
-  /* Sidebar colors */
-  --color-sidebar-background: 0 0% 98%;
-  --color-sidebar-foreground: 240 5.3% 26.1%;
-  --color-sidebar-primary: 240 5.9% 10%;
-  --color-sidebar-primary-foreground: 0 0% 98%;
-  --color-sidebar-accent: 240 4.8% 95.9%;
-  --color-sidebar-accent-foreground: 240 5.9% 10%;
-  --color-sidebar-border: 220 13% 91%;
-  --color-sidebar-ring: 217.2 91.2% 59.8%;
+  /* Cool secondary with purple hints */
+  --color-secondary: 240 20% 92%;
+  --color-secondary-foreground: 240 25% 20%;
   
-  /* Border radius */
-  --radius: 0.5rem;
+  /* Sophisticated muted tones */
+  --color-muted: 220 15% 90%;
+  --color-muted-foreground: 215 20% 45%;
+  
+  /* Electric accent */
+  --color-accent: 280 60% 85%;
+  --color-accent-foreground: 280 40% 25%;
+  
+  /* Modern destructive - coral red */
+  --color-destructive: 0 75% 60%;
+  --color-destructive-foreground: 210 30% 98%;
+  
+  /* Refined borders with cool tones */
+  --color-border: 220 20% 85%;
+  --color-input: 220 20% 88%;
+  --color-ring: 195 100% 50%;
+  
+  /* Futuristic chart colors */
+  --color-chart-1: 195 100% 50%;
+  --color-chart-2: 160 80% 40%;
+  --color-chart-3: 280 70% 60%;
+  --color-chart-4: 45 90% 55%;
+  --color-chart-5: 320 80% 65%;
+  
+  /* Modern sidebar */
+  --color-sidebar-background: 210 30% 95%;
+  --color-sidebar-foreground: 215 25% 25%;
+  --color-sidebar-primary: 195 100% 50%;
+  --color-sidebar-primary-foreground: 210 30% 98%;
+  --color-sidebar-accent: 240 20% 88%;
+  --color-sidebar-accent-foreground: 240 25% 20%;
+  --color-sidebar-border: 220 20% 82%;
+  --color-sidebar-ring: 195 100% 50%;
+  
+  /* Modern border radius */
+  --radius: 0.875rem;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
   
-  /* Animations */
+  /* Smooth animations */
   --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-spin: spin 1s linear infinite;
   --animate-ping: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -59,45 +71,58 @@
 }
 
 @theme dark {
-  --color-background: 240 10% 3.9%;
-  --color-foreground: 0 0% 98%;
-  --color-card: 240 10% 3.9%;
-  --color-card-foreground: 0 0% 98%;
-  --color-popover: 240 10% 3.9%;
-  --color-popover-foreground: 0 0% 98%;
-  --color-primary: 0 0% 98%;
-  --color-primary-foreground: 240 5.9% 10%;
-  --color-secondary: 240 3.7% 15.9%;
-  --color-secondary-foreground: 0 0% 98%;
-  --color-muted: 240 3.7% 15.9%;
-  --color-muted-foreground: 240 5% 64.9%;
-  --color-accent: 240 3.7% 15.9%;
-  --color-accent-foreground: 0 0% 98%;
-  --color-destructive: 0 62.8% 30.6%;
-  --color-destructive-foreground: 0 0% 98%;
-  --color-border: 240 3.7% 15.9%;
-  --color-input: 240 3.7% 15.9%;
-  --color-ring: 240 4.9% 83.9%;
+  /* Futuristic Dark Mode - Deep space theme with neon accents */
+  --color-background: 230 25% 8%;
+  --color-foreground: 210 30% 88%;
+  --color-card: 230 20% 10%;
+  --color-card-foreground: 210 30% 88%;
+  --color-popover: 230 20% 10%;
+  --color-popover-foreground: 210 30% 88%;
   
-  /* Chart colors for dark mode */
-  --color-chart-1: 220 70% 50%;
-  --color-chart-2: 160 60% 45%;
-  --color-chart-3: 30 80% 55%;
-  --color-chart-4: 280 65% 60%;
-  --color-chart-5: 340 75% 55%;
+  /* Bright neon cyan primary */
+  --color-primary: 180 100% 60%;
+  --color-primary-foreground: 230 25% 8%;
   
-  /* Sidebar colors for dark mode */
-  --color-sidebar-background: 240 5.9% 10%;
-  --color-sidebar-foreground: 240 4.8% 95.9%;
-  --color-sidebar-primary: 224.3 76.3% 48%;
-  --color-sidebar-primary-foreground: 0 0% 100%;
-  --color-sidebar-accent: 240 3.7% 15.9%;
-  --color-sidebar-accent-foreground: 240 4.8% 95.9%;
-  --color-sidebar-border: 240 3.7% 15.9%;
-  --color-sidebar-ring: 217.2 91.2% 59.8%;
+  /* Deep purple secondary */
+  --color-secondary: 240 15% 18%;
+  --color-secondary-foreground: 210 30% 88%;
+  
+  /* Dark muted with blue tints */
+  --color-muted: 235 20% 15%;
+  --color-muted-foreground: 215 25% 65%;
+  
+  /* Electric purple accent */
+  --color-accent: 270 80% 70%;
+  --color-accent-foreground: 230 25% 8%;
+  
+  /* Neon red destructive */
+  --color-destructive: 0 80% 65%;
+  --color-destructive-foreground: 230 25% 8%;
+  
+  /* Glowing borders */
+  --color-border: 240 25% 20%;
+  --color-input: 240 25% 18%;
+  --color-ring: 180 100% 60%;
+  
+  /* Neon chart colors */
+  --color-chart-1: 180 100% 60%;
+  --color-chart-2: 120 100% 50%;
+  --color-chart-3: 300 100% 70%;
+  --color-chart-4: 60 100% 60%;
+  --color-chart-5: 330 100% 65%;
+  
+  /* Dark sidebar with neon accents */
+  --color-sidebar-background: 235 25% 12%;
+  --color-sidebar-foreground: 210 30% 85%;
+  --color-sidebar-primary: 180 100% 60%;
+  --color-sidebar-primary-foreground: 230 25% 8%;
+  --color-sidebar-accent: 240 15% 18%;
+  --color-sidebar-accent-foreground: 210 30% 88%;
+  --color-sidebar-border: 240 25% 22%;
+  --color-sidebar-ring: 180 100% 60%;
 }
 
-/* 定义 keyframes */
+/* Keyframes remain the same */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -131,10 +156,24 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Futuristic grid pattern */
+    background-image: 
+      linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 50px 50px;
+    transition: all 0.3s ease;
+  }
+  
+  /* Dark mode with neon grid */
+  .dark body {
+    background-image: 
+      linear-gradient(rgba(0, 255, 255, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 40px 40px;
   }
 }
 
-/* 自定义样式 */
+/* Futuristic enhancements */
 .skeleton {
   * {
     pointer-events: none !important;
@@ -154,67 +193,127 @@
   }
 }
 
+/* Glowing message bubbles */
+.message-bubble {
+  @apply backdrop-blur-md border border-border/60;
+  box-shadow: 
+    0 4px 6px -1px rgb(0 0 0 / 0.1), 
+    0 2px 4px -2px rgb(0 0 0 / 0.1),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.message-bubble:hover {
+  box-shadow: 
+    0 8px 25px -5px rgb(0 255 255 / 0.1), 
+    0 4px 6px -2px rgb(0 0 0 / 0.05),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+.dark .message-bubble {
+  box-shadow: 
+    0 4px 6px -1px rgb(0 0 0 / 0.3), 
+    0 2px 4px -2px rgb(0 0 0 / 0.2),
+    inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
+    0 0 0 1px rgba(0, 255, 255, 0.1);
+}
+
+.dark .message-bubble:hover {
+  box-shadow: 
+    0 8px 25px -5px rgb(0 255 255 / 0.3), 
+    0 4px 6px -2px rgb(0 0 0 / 0.1),
+    inset 0 1px 0 0 rgba(0, 255, 255, 0.2),
+    0 0 0 1px rgba(0, 255, 255, 0.2);
+}
+
+/* Futuristic buttons */
+.btn-futuristic {
+  @apply relative overflow-hidden;
+  background: linear-gradient(135deg, hsl(var(--color-primary)) 0%, hsl(var(--color-accent)) 100%);
+  transition: all 0.3s ease;
+}
+
+.btn-futuristic::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.btn-futuristic:hover::before {
+  left: 100%;
+}
+
 .ProseMirror {
   outline: none;
 }
 
-/* CodeMirror 样式 - 使用直接的 CSS 属性替代 @apply !important */
+/* Enhanced CodeMirror with futuristic theme */
 .cm-editor,
 .cm-gutters {
-  background-color: hsl(var(--color-background)) !important;
+  background-color: hsl(var(--color-muted)) !important;
   outline: none !important;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: calc(var(--radius) - 2px);
 }
 
 .dark .cm-editor,
 .dark .cm-gutters {
-  background-color: hsl(240 3.7% 15.9%) !important;
+  background-color: hsl(235 20% 12%) !important;
+  border-color: hsl(var(--color-border));
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
 }
 
-.cm-editor ::selection,
-.cm-gutters ::selection {
-  background-color: hsl(240 5.9% 10%) !important;
+/* Futuristic syntax highlighting */
+@import 'highlight.js/styles/atom-one-light.css';
+
+.dark {
+  @import 'highlight.js/styles/atom-one-dark.css';
 }
 
-.dark .cm-editor ::selection,
-.dark .cm-gutters ::selection {
-  background-color: hsl(240 5% 64.9%) !important;
+.hljs {
+  background: hsl(var(--color-muted)) !important;
+  color: hsl(var(--color-foreground)) !important;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(var(--color-border));
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
 }
 
-.ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
-.ͼo.cm-selectionBackground,
-.ͼo.cm-content::selection {
-  background-color: hsl(240 5.9% 90%) !important;
+.dark .hljs {
+  background: hsl(235 20% 12%) !important;
+  color: hsl(var(--color-muted-foreground)) !important;
+  border-color: hsl(var(--color-border));
+  box-shadow: 
+    inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
+    0 0 15px rgba(0, 255, 255, 0.05);
 }
 
-.dark .ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
-.dark .ͼo.cm-selectionBackground,
-.dark .ͼo.cm-content::selection {
-  background-color: hsl(240 5% 64.9%) !important;
+/* Glowing scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-.cm-activeLine,
-.cm-activeLineGutter {
-  background-color: transparent !important;
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
 }
 
-.cm-activeLine {
-  border-top-right-radius: 0.125rem !important;
-  border-bottom-right-radius: 0.125rem !important;
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, hsl(var(--color-primary)), hsl(var(--color-accent)));
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
 }
 
-.cm-lineNumbers {
-  min-width: 1.75rem;
+.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, hsl(var(--color-primary)), hsl(var(--color-accent)));
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
 }
 
-.cm-foldGutter {
-  min-width: 0.75rem;
-}
-
-.cm-lineNumbers .cm-activeLineGutter {
-  border-top-left-radius: 0.125rem !important;
-  border-bottom-left-radius: 0.125rem !important;
-}
-
-.suggestion-highlight {
-  @apply bg-blue-200 hover:bg-blue-300 dark:hover:bg-blue-400/50 dark:text-blue-50 dark:bg-blue-500/40;
+::-webkit-scrollbar-thumb:hover {
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
 }

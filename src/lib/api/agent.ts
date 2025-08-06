@@ -6,11 +6,12 @@ import type {
   InspectionCenterResponse,
 } from '@/lib/types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+// Using Next.js API routes as proxy to avoid CORS issues
+const API_BASE_URL = '/api/agent'
 
 // Get agent card from URL
 export async function getAgentCardFromUrl(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/getAgentCardFromUrl`, {
+  const response = await fetch(`${API_BASE_URL}/getAgentCardFromUrl`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -27,7 +28,7 @@ export async function getAgentCardFromUrl(request: InspectionCenterRequest): Pro
 
 // Register agent
 export async function registerAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/registerAgent`, {
+  const response = await fetch(`${API_BASE_URL}/registerAgent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -44,7 +45,7 @@ export async function registerAgent(request: AgentCenterRequest): Promise<AgentC
 
 // Get agent by ID
 export async function getAgent(agentId: string): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/getAgent/${agentId}`, {
+  const response = await fetch(`${API_BASE_URL}/getAgent/${agentId}`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -60,7 +61,7 @@ export async function getAgent(agentId: string): Promise<AgentCenterResponse> {
 
 // Get all agents
 export async function getAllAgents(): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/getAllAgents`, {
+  const response = await fetch(`${API_BASE_URL}/getAllAgents`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -76,7 +77,7 @@ export async function getAllAgents(): Promise<AgentCenterResponse> {
 
 // Delete agent
 export async function deleteAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/deleteAgent`, {
+  const response = await fetch(`${API_BASE_URL}/deleteAgent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -93,7 +94,7 @@ export async function deleteAgent(request: AgentCenterRequest): Promise<AgentCen
 
 // Get agent list with conditions
 export async function getAgentListWithConditions(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/agent/getAgentListWithConditions`, {
+  const response = await fetch(`${API_BASE_URL}/getAgentListWithConditions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

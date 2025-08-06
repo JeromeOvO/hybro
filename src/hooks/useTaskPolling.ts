@@ -69,8 +69,8 @@ export function useTaskPolling() {
     // Delay polling start
     const delayTimeout = setTimeout(() => {
       const startTime = Date.now()
-      const POLLING_INTERVAL = 5000 // 5 second polling interval
-      const POLLING_TIMEOUT = 60000 // 60 second timeout
+      const POLLING_INTERVAL = 10000 // Increased from 5000 to 10000 (10 seconds)
+      const POLLING_TIMEOUT = 300000 // Increased from 60000 to 300000 (5 minutes)
 
       const pollTask = async () => {
         try {
