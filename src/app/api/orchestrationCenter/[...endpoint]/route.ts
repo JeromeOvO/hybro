@@ -4,7 +4,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { endpoint: string[] } }
+  { params }: { params: Promise<{ endpoint: string[] }> }
 ) {
   try {
     const body = await request.json()
@@ -43,7 +43,7 @@ export async function POST(
 // Support other HTTP methods if needed
 export async function GET(
   request: NextRequest,
-  { params }: { params: { endpoint: string[] } }
+  { params }: { params: Promise<{ endpoint: string[] }> }
 ) {
   try {
     const endpoint = (await params).endpoint.join('/')
