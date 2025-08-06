@@ -2,6 +2,9 @@
 
 import * as React from "react"
 import { Bot, User, Copy, ThumbsUp, ThumbsDown, RotateCcw } from "lucide-react"
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -113,11 +116,48 @@ export function Message({
       )
     }
 
-    return (
-      <div className="whitespace-pre-wrap break-words">
-        {message.content}
-      </div>
-    )
+    // Render markdown for assistant messages, plain text for user messages
+    if (isUser) {
+      return (
+        <div className="whitespace-pre-wrap break-words">
+          {message.content}
+        </div>
+      )
+    } else {
+      return (
+        <div className="prose prose-sm max-w-none dark:prose-invert">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={{
+              // Customize code blocks
+              code: ({ className, children, ...props }) => {
+                const match = /language-(\w+)/.exec(className || '')
+                const isInline = !match
+                return isInline ? (
+                  <code className="bg-muted px-1 py-0.5 rounded text-sm" {...props}>
+                    {children}
+                  </code>
+                ) : (
+                  <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+                    <code className={className} {...props}>
+                      {children}
+                    </code>
+                  </pre>
+                )
+              },
+              // Customize paragraphs to reduce spacing
+              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              // Customize lists
+              ul: ({ children }) => <ul className="mb-2 ml-4">{children}</ul>,
+              ol: ({ children }) => <ol className="mb-2 ml-4">{children}</ol>,
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        </div>
+      )
+    }
   }
 
   return (
@@ -170,12 +210,12 @@ export function Message({
             {renderWorkflowContent()}
           </div>
         ) : (
-          // Text message - Use bubble style
+          // Text message - Use bubble style with enhanced styling
           <div className={cn(
-            "relative max-w-[80%] rounded-2xl px-4 py-3 text-sm border",
+            "message-bubble relative max-w-[80%] rounded-2xl px-4 py-3 text-sm",
             isUser 
               ? "bg-primary text-primary-foreground border-primary/20" 
-              : "bg-card text-card-foreground border-border shadow-sm",
+              : "bg-card/80 text-card-foreground border-border/50 shadow-sm",
             message.error && "border-destructive bg-destructive/10 text-destructive"
           )}>
             {renderTextContent()}

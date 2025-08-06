@@ -1,11 +1,12 @@
 // Chat-related API functions
 import type { ChatRequest, ChatResponse } from '@/lib/types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+// Using Next.js API routes as proxy to avoid CORS issues
+const API_BASE_URL = '/api/chat'
 
 // Send message
 export async function sendMessage(request: ChatRequest): Promise<ChatResponse> {
-  const response = await fetch(`${API_BASE_URL}/chat/sendMessage`, {
+  const response = await fetch(`${API_BASE_URL}/sendMessage`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
