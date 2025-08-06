@@ -299,12 +299,12 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--color-muted));
+  background: transparent;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-primary));
+  background: linear-gradient(135deg, hsl(var(--color-primary)), hsl(var(--color-accent)));
   border-radius: 4px;
   box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
 }
