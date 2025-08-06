@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// Set longer timeout duration (maximum 5 minutes)
+export const maxDuration = 300
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 export async function POST(
@@ -12,13 +15,20 @@ export async function POST(
     
     console.log(`Proxying request to: ${API_BASE_URL}/orchestrationCenter/${endpoint}`)
     
+    // Add fetch timeout
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 300000) // 5 minutes timeout
+    
     const response = await fetch(`${API_BASE_URL}/orchestrationCenter/${endpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: controller.signal
     })
+
+    clearTimeout(timeoutId)
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -33,6 +43,12 @@ export async function POST(
     return NextResponse.json(data)
   } catch (error) {
     console.error('Proxy error:', error)
+    if (error instanceof Error && error.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'Request timeout' },
+        { status: 504 }
+      )
+    }
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -40,7 +56,6 @@ export async function POST(
   }
 }
 
-// Support other HTTP methods if needed
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ endpoint: string[] }> }
