@@ -13,9 +13,11 @@ import type {
   InspectionCenterResponse, 
   AgentCenterRequest,
 } from "@/lib/types"
+import { useUser } from "@clerk/nextjs"
 
 export default function RegisterAgentPage() {
   const router = useRouter()
+  const { user } = useUser()
   const [url, setUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [registering, setRegistering] = useState(false)
@@ -78,6 +80,12 @@ export default function RegisterAgentPage() {
       toast.error("Please load agent information first")
       return
     }
+
+    if (!user?.id) {
+      toast.error("Please sign in to continue")
+      router.push('/sign-in?redirect_url=/agent/registry')
+      return
+  }
 
     setRegistering(true)
 
