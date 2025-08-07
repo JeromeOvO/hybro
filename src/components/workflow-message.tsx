@@ -96,7 +96,7 @@ export function WorkflowMessage({
   const sortedMetaTasks = [...metaTasks].sort((a, b) => (a.execution_order || 0) - (b.execution_order || 0))
 
   return (
-    <Card className={cn("border-l-4 border-l-primary", className)}>
+    <Card className={cn("bg-transparent border-0 shadow-none rounded-none p-0", className)}>
       <CardHeader className="pb-4">
         <div className="flex items-center gap-3">
           {stageInfo.icon}
@@ -119,7 +119,7 @@ export function WorkflowMessage({
             const isExpanded = expandedTasks.has(metaTask.task_id)
             
             return (
-              <Card key={metaTask.task_id} className="border border-border/50">
+              <Card key={metaTask.task_id} className="bg-transparent border-0 shadow-none rounded-none">
                 <CardHeader 
                   className="pb-3 cursor-pointer hover:bg-muted/30 transition-colors"
                   onClick={() => toggleTaskExpansion(metaTask.task_id)}
@@ -186,7 +186,7 @@ export function WorkflowMessage({
                       {agent && (
                         <div>
                           <span className="font-medium">Assigned Agent:</span>
-                          <div className="mt-1 p-2 bg-muted/30 rounded border">
+                          <div className="mt-1 p-2 bg-muted/30 rounded">
                             <div className="font-medium text-xs break-words">{agent.agent_card.name}</div>
                             <div className="text-xs text-muted-foreground mt-1 break-words">
                               {agent.agent_card.description}

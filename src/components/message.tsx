@@ -69,7 +69,7 @@ export function Message({
     }
     
     return (
-      <div className="w-full max-w-4xl">
+      <div className="w-full">
         <WorkflowContainer
           baseTaskId={message.workflowData.baseTask.task_id}
           metaTasks={message.workflowData.metaTasks}
@@ -119,13 +119,13 @@ export function Message({
     // Render markdown for assistant messages, plain text for user messages
     if (isUser) {
       return (
-        <div className="whitespace-pre-wrap break-words">
+        <div className="whitespace-pre-wrap break-words text-[15px] md:text-base leading-relaxed">
           {message.content}
         </div>
       )
     } else {
       return (
-        <div className="prose prose-sm max-w-none dark:prose-invert">
+        <div className="prose prose-sm md:prose-base max-w-none dark:prose-invert leading-relaxed">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
@@ -139,7 +139,7 @@ export function Message({
                     {children}
                   </code>
                 ) : (
-                  <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+                  <pre className="bg-muted p-4 rounded-md overflow-x-auto">
                     <code className={className} {...props}>
                       {children}
                     </code>
@@ -147,10 +147,10 @@ export function Message({
                 )
               },
               // Customize paragraphs to reduce spacing
-              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+              p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
               // Customize lists
-              ul: ({ children }) => <ul className="mb-2 ml-4">{children}</ul>,
-              ol: ({ children }) => <ol className="mb-2 ml-4">{children}</ol>,
+              ul: ({ children }) => <ul className="mb-3 ml-5">{children}</ul>,
+              ol: ({ children }) => <ol className="mb-3 ml-5">{children}</ol>,
             }}
           >
             {message.content}
@@ -162,7 +162,7 @@ export function Message({
 
   return (
     <div className={cn(
-      "group flex gap-4 p-4 hover:bg-muted/30 transition-colors",
+      "group flex gap-5 p-5 md:p-6 hover:bg-muted/30 transition-colors",
       isUser && "flex-row-reverse",
       className
     )}>
@@ -212,11 +212,11 @@ export function Message({
         ) : (
           // Text message - Use bubble style with enhanced styling
           <div className={cn(
-            "message-bubble relative max-w-[80%] rounded-2xl px-4 py-3 text-sm",
+            "message-bubble relative max-w-[72ch] rounded-2xl px-5 py-4 text-[15px] md:text-base leading-relaxed",
             isUser 
-              ? "bg-primary text-primary-foreground border-primary/20" 
-              : "bg-card/80 text-card-foreground border-border/50 shadow-sm",
-            message.error && "border-destructive bg-destructive/10 text-destructive"
+              ? "bg-primary text-primary-foreground" 
+              : "bg-card/80 text-card-foreground shadow-sm",
+            message.error && "bg-destructive/10 text-destructive"
           )}>
             {renderTextContent()}
           </div>

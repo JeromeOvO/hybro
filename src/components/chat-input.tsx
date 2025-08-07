@@ -170,12 +170,12 @@ export function ChatInput({
                     <Plus className="h-5 w-5" /> {/* Increase icon size */}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent 
+            <DropdownMenuContent 
                   align="start" 
                   side="bottom" // Change to prefer downward expansion
                   sideOffset={12} // Increase offset
                   alignOffset={-4}
-                  className="w-52 bg-background/95 backdrop-blur-sm border-border shadow-lg" // Non-transparent background, follow theme
+              className="w-52 bg-background/95 backdrop-blur-sm shadow-lg"
                   avoidCollisions={true}
                   collisionPadding={16} // Increase collision padding
                 >

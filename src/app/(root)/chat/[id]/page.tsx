@@ -270,11 +270,12 @@ export default function ChatSessionPage() {
           isLoading={isLoading}
           onWorkflowComplete={handleWorkflowComplete}
           showHeader={false}
+          className="w-full max-w-4xl mx-auto px-4 sm:px-6"
         />
       </div>
       
-      <div className="border-t bg-background p-4">
-        <div className="max-w-4xl mx-auto">
+      <div className="bg-background p-4">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6">
           <ChatInput
             onSubmit={handleSendMessage}
             disabled={isSubmitting}
