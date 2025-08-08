@@ -1,9 +1,6 @@
 "use client"
 
-import {
-  MoreHorizontal,
-  type LucideIcon,
-} from "lucide-react"
+import { type LucideIcon } from "lucide-react"
 
 import {
   SidebarGroup,
@@ -24,13 +21,13 @@ export function NavAgent({
 
   return (
     <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-      <SidebarMenu>
+      <SidebarMenu className="gap-1.5">
         {navAgents.map((item) => (
           <SidebarMenuItem key={item.name}>
-            <SidebarMenuButton asChild>
+            <SidebarMenuButton asChild size="lg" className="text-base">
               <a href={item.url}>
                 <item.icon />
-                <span>{item.name}</span>
+                <span className="leading-7">{item.name}</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>
