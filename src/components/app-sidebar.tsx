@@ -3,7 +3,6 @@
 import * as React from "react"
 import {
   BookOpen,
-  Cable,
   VectorSquare,
   MessageCircle,
   History
@@ -35,11 +34,6 @@ const staticNavAgents = [
     name: "Agent Network",
     url: "/agent",
     icon: VectorSquare,
-  },
-  {
-    name: "Agent Registry",
-    url: "/agent/registry",
-    icon: Cable,
   },
   {
     name: "About Hybro",
@@ -105,19 +99,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ],
         isLoading: isLoadingSessions,
       },
-      {
-        title: "Agent Debate",
-        url: "#",
-        icon: MessageCircle,
-        isActive: true,
-        items: [
-          {
-            title: "Debate",
-            url: "#",
-            id: "debate", // Add unique id for this item
-          }
-        ],
-      }
     ]
   }, [chatSessions, isLoadingSessions])
 
