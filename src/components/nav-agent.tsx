@@ -1,6 +1,7 @@
 "use client"
 
 import { type LucideIcon } from "lucide-react"
+import Link from "next/link"
 
 import {
   SidebarGroup,
@@ -25,10 +26,10 @@ export function NavAgent({
         {navAgents.map((item) => (
           <SidebarMenuItem key={item.name}>
             <SidebarMenuButton asChild size="lg" className="text-base">
-              <a href={item.url}>
+              <Link href={item.url} prefetch={false} scroll={false}>
                 <item.icon />
                 <span className="leading-7">{item.name}</span>
-              </a>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}

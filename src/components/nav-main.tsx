@@ -1,6 +1,7 @@
 "use client"
 
 import { ChevronRight, RefreshCw, type LucideIcon } from "lucide-react"
+import Link from "next/link"
 
 import {
   Collapsible,
@@ -78,9 +79,9 @@ export function NavMain({
                     <SidebarMenuSubItem key={subItem.id || subItem.title || index}>
                       <SidebarMenuSubButton asChild={subItem.url !== "#"} className="h-8 text-[0.95rem]">
                         {subItem.url !== "#" ? (
-                        <a href={subItem.url}>
+                        <Link href={subItem.url} prefetch={false} scroll={false}>
                           <span>{subItem.title}</span>
-                        </a>
+                        </Link>
                         ) : (
                           <span className="text-muted-foreground">{subItem.title}</span>
                         )}
