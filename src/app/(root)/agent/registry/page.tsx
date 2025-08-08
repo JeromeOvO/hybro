@@ -133,7 +133,8 @@ export default function RegisterAgentPage() {
   }
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="px-4 sm:px-6 py-8">
+      <div className="w-full max-w-4xl mx-auto space-y-6">
       {/* Page title */}
       <div className="flex items-center justify-between">
         <div>
@@ -366,6 +367,7 @@ export default function RegisterAgentPage() {
           </Button>
         </div>
       )}
+      </div>
     </div>
   )
 } 

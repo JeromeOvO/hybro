@@ -50,7 +50,7 @@ export function ChatSession({
 
   return (
     <div className={cn(
-      "flex flex-col h-full bg-background border rounded-lg",
+      "flex flex-col h-full bg-transparent",
       className
     )}>
       {/* Messages Area */}

@@ -3,7 +3,6 @@
 import * as React from "react"
 import {
   BookOpen,
-  Cable,
   VectorSquare,
   MessageCircle,
   History
@@ -35,11 +34,6 @@ const staticNavAgents = [
     name: "Agent Network",
     url: "/agent",
     icon: VectorSquare,
-  },
-  {
-    name: "Agent Registry",
-    url: "/agent/registry",
-    icon: Cable,
   },
   {
     name: "About Hybro",
@@ -84,7 +78,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
-    const chatHistoryItems = chatSessions.map(session => ({
+    const chatHistoryItems = [...chatSessions].reverse().map(session => ({
       title: session.session_name,
       url: `/chat/${session.session_id}`,
       id: session.session_id, // Add id field
@@ -105,19 +99,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ],
         isLoading: isLoadingSessions,
       },
-      {
-        title: "Agent Debate",
-        url: "#",
-        icon: MessageCircle,
-        isActive: true,
-        items: [
-          {
-            title: "Debate",
-            url: "#",
-            id: "debate", // Add unique id for this item
-          }
-        ],
-      }
     ]
   }, [chatSessions, isLoadingSessions])
 

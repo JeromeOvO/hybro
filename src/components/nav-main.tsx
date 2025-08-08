@@ -52,7 +52,7 @@ export function NavMain({
           </Button>
         )}
       </div>
-      <SidebarMenu>
+      <SidebarMenu className="gap-1.5">
         {items.map((item) => (
           <Collapsible
             key={item.title}
@@ -62,7 +62,7 @@ export function NavMain({
           >
             <SidebarMenuItem>
               <CollapsibleTrigger asChild>
-                <SidebarMenuButton tooltip={item.title}>
+                <SidebarMenuButton tooltip={item.title} size="lg" className="text-base">
                   {item.icon && <item.icon />}
                   <span>{item.title}</span>
                   {item.isLoading ? (
@@ -73,10 +73,10 @@ export function NavMain({
                 </SidebarMenuButton>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <SidebarMenuSub>
+                <SidebarMenuSub className="gap-1.5">
                   {item.items?.map((subItem, index) => (
                     <SidebarMenuSubItem key={subItem.id || subItem.title || index}>
-                      <SidebarMenuSubButton asChild={subItem.url !== "#"}>
+                      <SidebarMenuSubButton asChild={subItem.url !== "#"} className="h-8 text-[0.95rem]">
                         {subItem.url !== "#" ? (
                         <a href={subItem.url}>
                           <span>{subItem.title}</span>
