@@ -78,7 +78,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
-    const chatHistoryItems = chatSessions.map(session => ({
+    const chatHistoryItems = [...chatSessions].reverse().map(session => ({
       title: session.session_name,
       url: `/chat/${session.session_id}`,
       id: session.session_id, // Add id field
