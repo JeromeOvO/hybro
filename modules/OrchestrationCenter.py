@@ -523,7 +523,7 @@ class OrchestrationCenter:
             raise TaskNotFoundError()
 
         agents_matched_response = await self.agent_service.query_similar_agents(
-            AgentCenterRequest(query_text=meta_task.task_description, agent_count=1)
+            AgentCenterRequest(query_text=meta_task.task_description, agent_count=3)
         )
 
         if (
@@ -537,7 +537,11 @@ class OrchestrationCenter:
                 status_code=200,
             )
 
-        meta_task.agent_id = agents_matched_response.agents[0].agent_id
+        best_agent_id = await self.openai_service.select_best_agent_for_task(
+            meta_task.task_description, agents_matched_response.agents
+        )
+
+        meta_task.agent_id = best_agent_id
         update_response = await self.task_service.update_meta_task_by_task_id(
             TaskCenterRequest(task_id=meta_task_id, meta_task=meta_task)
         )
@@ -547,7 +551,7 @@ class OrchestrationCenter:
                 task_id=meta_task_id,
                 success=True,
                 error=None,
-                agent_id=agents_matched_response.agents[0].agent_id,
+                agent_id=best_agent_id,
                 status_code=200,
             )
         else:

@@ -11,6 +11,7 @@ from openai.types.chat import (
 )
 
 from common.utils.logger import get_logger
+from models.agent import Agent
 from models.task import BaseTask
 
 load_dotenv()
@@ -36,7 +37,7 @@ class OpenAIService:
         """
         response = await self.client.embeddings.create(
             input=text,
-            model="text-embedding-ada-002",  # Keep using the same model
+            model=os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small",
         )
 
         embedding = response.data[0].embedding
@@ -50,7 +51,8 @@ class OpenAIService:
         """
         system_prompt = """You are a task decomposition assistant. Your job is
         to break down complex tasks into smaller, manageable steps that can 
-        be solved more easily and effectively.
+        be solved more easily and effectively. 
+        Important: Max 8 steps.
         Your goal is to create a structured execution plan for all steps.
         
         Return the response in the following JSON format:
@@ -100,18 +102,24 @@ IMPORTANT: Do not include any other text in your response. Only return the JSON 
         ]
 
         try:
-            response = await self.client.chat.completions.create(
+            # response = await self.client.chat.completions.create(
+            #     model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+            #     messages=messages,
+            #     temperature=0.3,  # Lower temperature for more consistent structured output
+            #     max_tokens=int(
+            #         os.getenv("SUBTASK_MAX_TOKENS", "4096")
+            #     ),  # Configurable max tokens
+            # )
+
+            response = await self.client.responses.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
-                messages=messages,
-                temperature=0.3,  # Lower temperature for more consistent structured output
-                max_tokens=int(
-                    os.getenv("SUBTASK_MAX_TOKENS", "4096")
-                ),  # Configurable max tokens
+                reasoning={"effort": "low"},
+                input=messages,
             )
 
             content = (
-                response.choices[0].message.content.strip()
-                if response.choices[0].message.content
+                response.output_text.strip()
+                if response.output_text
                 else ""
             )
 
@@ -158,13 +166,13 @@ IMPORTANT: Do not include any other text in your response. Only return the JSON 
             )
 
     async def select_best_agent_for_task(
-        self, child_task_description: str, agents: list[dict[str, Any]]
+        self, meta_task_description: str, agents: list[Agent]
     ) -> str:
         """
         Use LLM to select the best agent for a child task from candidate agents
 
         Args:
-            child_task_description: Description of the child task
+            meta_task_description: Description of the meta task
             agents: List of candidate agents with their details
 
         Returns:
@@ -176,35 +184,42 @@ IMPORTANT: Do not include any other text in your response. Only return the JSON 
 
         # Prepare agent descriptions
         agent_descriptions = []
+
         for i, agent in enumerate(agents):
             agent_desc = f"Agent {i + 1}:\n"
-            agent_desc += f"ID: {agent['agent_id']}\n"
-            agent_desc += f"Name: {agent.get('agentCard', {}).get('name', 'Unknown')}\n"
-            agent_desc += f"Description: {agent.get('agentCard', {}).get('description', 'No description')}\n"
 
-            # Handle capabilities - in Agent model it's a dict, not a list
-            capabilities = agent.get("agentCard", {}).get("capabilities", {})
+            agent_id = agent.agent_id
+            card = agent.agent_card
+
+            name = card.name
+            description = card.description
+
+            capabilities = card.capabilities
             if isinstance(capabilities, dict):
                 cap_strings = [f"{k}: {v}" for k, v in capabilities.items()]
             else:
-                cap_strings = capabilities if isinstance(capabilities, list) else []
-            agent_desc += f"Capabilities: {', '.join(cap_strings)}\n"
+                cap_strings = []
 
-            # Add skills if available
-            skills = agent.get("agentCard", {}).get("skills", [])
-            if skills:
+            skills = card.skills
+            if isinstance(skills, list):
                 skill_names = [
-                    skill.get("name", skill.get("id", "Unknown")) for skill in skills
+                    (s.name or s.id or "Unknown") if isinstance(s, dict) else str(s)
+                    for s in skills
                 ]
-                agent_desc += f"Skills: {', '.join(skill_names)}\n"
+            else:
+                skill_names = []
 
-            agent_desc += f"Similarity Score: {agent.get('score', 0)}\n"
-            agent_desc += f"Remote: {agent.get('is_remote', False)}\n"
+            agent_desc += f"ID: {agent_id}\n"
+            agent_desc += f"Name: {name}\n"
+            agent_desc += f"Description: {description}\n"
+            agent_desc += f"Capabilities: {', '.join(cap_strings)}\n"
+            agent_desc += f"Skills: {', '.join(skill_names)}\n"
+
             agent_descriptions.append(agent_desc)
 
         agents_text = "\n\n".join(agent_descriptions)
 
-        prompt = f"""Task Description: {child_task_description}
+        prompt = f"""Task Description: {meta_task_description}
 
 Available Agents:
 {agents_text}
@@ -231,14 +246,14 @@ Based on the task description and agent capabilities, which agent (by ID) would 
 
             # Extract agent ID
             for agent in agents:
-                if agent["agent_id"] in content:
-                    return agent["agent_id"]
+                if agent.agent_id in content:
+                    return agent.agent_id
 
             # If no exact match found, return first agent ID
-            return agents[0]["agent_id"]
+            return agents[0].agent_id
         except Exception as e:
             logger.error(f"Error selecting best agent: {str(e)}")
-            return agents[0]["agent_id"]  # Default to first agent
+            return agents[0].agent_id  # Default to first agent
 
     async def summarize_meta_task_for_base_task(
         self,
@@ -308,18 +323,23 @@ Your response should be an complete answer with all the specific details the use
         ]
 
         try:
-            response = await self.client.chat.completions.create(
+            # response = await self.client.chat.completions.create(
+            #     model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+            #     messages=messages,
+            #     temperature=0.3,  # Lower temperature for more consistent and focused output
+            #     max_tokens=int(
+            #         os.getenv("SUMMARY_MAX_TOKENS", "4096")
+            #     ),  # Allow for comprehensive summary
+            # )
+            response = await self.client.responses.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
-                messages=messages,
-                temperature=0.3,  # Lower temperature for more consistent and focused output
-                max_tokens=int(
-                    os.getenv("SUMMARY_MAX_TOKENS", "4096")
-                ),  # Allow for comprehensive summary
+                reasoning={"effort": "low"},
+                input=messages,
             )
 
             content = (
-                response.choices[0].message.content.strip()
-                if response.choices[0].message.content
+                response.output_text.strip()
+                if response.output_text
                 else ""
             )
 
