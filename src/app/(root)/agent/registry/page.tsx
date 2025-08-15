@@ -439,11 +439,6 @@ export default function RegisterAgentPage() {
                 <p className="text-sm text-muted-foreground">{inspectionData.agent_url}</p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">Status Code:</Label>
-                <p className="text-sm text-muted-foreground">{inspectionData.status_code}</p>
-              </div>
-
               {inspectionData.result && inspectionData.result.length > 0 && (
                 <div>
                   <Label className="text-sm font-medium">Validation Results:</Label>
