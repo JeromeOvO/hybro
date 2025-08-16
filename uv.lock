@@ -3821,6 +3821,7 @@ dependencies = [
     { name = "pydantic-evals" },
     { name = "pydantic-graph" },
     { name = "pydantic-settings" },
+    { name = "pydantic-to-typescript" },
     { name = "pydispatcher" },
     { name = "pyee" },
     { name = "pygments" },
@@ -4171,6 +4172,7 @@ requires-dist = [
     { name = "pydantic-evals", specifier = ">=0.2.18" },
     { name = "pydantic-graph", specifier = ">=0.2.18" },
     { name = "pydantic-settings", specifier = ">=2.9.1" },
+    { name = "pydantic-to-typescript", specifier = ">=2.0.0" },
     { name = "pydispatcher", specifier = ">=2.0.7" },
     { name = "pyee", specifier = ">=13.0.0" },
     { name = "pygments", specifier = ">=2.19.1" },
@@ -5750,6 +5752,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/68/85/1ea668bbab3c50071ca613c6ab30047fb36ab0da1b92fa8f17bbc38fd36c/pydantic_settings-2.10.1.tar.gz", hash = "sha256:06f0062169818d0f5524420a360d632d5857b83cffd4d42fe29597807a1614ee", size = 172583, upload-time = "2025-06-24T13:26:46.841Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/58/f0/427018098906416f580e3cf1366d3b1abfb408a0652e9f31600c24a1903c/pydantic_settings-2.10.1-py3-none-any.whl", hash = "sha256:a60952460b99cf661dc25c29c0ef171721f98bfcb52ef8d9ea4c943d7c8cc796", size = 45235, upload-time = "2025-06-24T13:26:45.485Z" },
+]
+
+[[package]]
+name = "pydantic-to-typescript"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/ac/8dc13be6720267b5edffb3b0d8c1abdcccc5743d7bda4257ab0a5dccc7b9/pydantic_to_typescript-2.0.0.tar.gz", hash = "sha256:06e92e8d10759ffebe3abdd4de14015bbf80809fa9960273be6041d8509662be", size = 35484, upload-time = "2024-11-22T03:33:59.026Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/9c/f51312f3063a8b6e1e09e6527a81d3b1828ad5fc8a65c14376f85cf65502/pydantic_to_typescript-2.0.0-py3-none-any.whl", hash = "sha256:5bc5e1a940c1a39e4e3a6124bd3bda1b0fc6df85c673a4781b94a1f4150cae15", size = 9693, upload-time = "2024-11-22T03:33:57.199Z" },
 ]
 
 [[package]]

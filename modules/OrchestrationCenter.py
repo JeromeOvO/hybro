@@ -15,6 +15,7 @@ from models.request import (
     AgentCenterRequest,
     OrchestrationCenterRequest,
     TaskCenterRequest,
+    ChatMemoryRequest,
 )
 from models.response import OrchestrationCenterResponse
 from models.task import MetaTask, TaskDefaultValue
@@ -22,6 +23,7 @@ from services.a2a_service import A2AService
 from services.agent_service import AgentService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
+from services.memory_service import ChatMemoryService
 
 logger = get_logger(__name__)
 
@@ -95,6 +97,7 @@ class OrchestrationCenter:
         self.openai_service = OpenAIService()
         self.agent_service = AgentService()
         self.a2a_service = A2AService()
+        self.chat_memory_service = ChatMemoryService()
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -144,6 +147,20 @@ class OrchestrationCenter:
             TaskCenterRequest(task_id=root_task_id)
         )
         base_task = query_result.base_task
+
+
+        # get chat context
+        chat_context_response = await self.chat_memory_service.get_chat_context_by_session_id(
+            ChatMemoryRequest(user_name=base_task.user_name, session_id=base_task.session_id)
+        )
+
+        if not chat_context_response.success:
+            return OrchestrationCenterResponse(
+                task_id=root_task_id,
+                success=False,
+                error="Failed to get chat context",
+                status_code=500,
+            )
 
         if base_task is None:
             raise TaskNotFoundError()
@@ -217,7 +234,7 @@ class OrchestrationCenter:
             )
 
         # Proceed with task decomposition
-        decompose_task_response = await self.openai_service.decompose_task(base_task)
+        decompose_task_response = await self.openai_service.decompose_task(base_task, chat_context_response.chat_context.context_data)
         logger.info(
             "OrchestrationCenter: decompose task response: %s", decompose_task_response
         )
@@ -1236,6 +1253,28 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             first_message_text, meta_task_summaries, meta_task_descriptions
         )
         logger.info("OrchestrationCenter: summary response: %s", summary_response)
+
+
+        # update chat context
+        chat_context_response = await self.chat_memory_service.update_chat_context_by_session_id(
+            ChatMemoryRequest(user_name=base_task.user_name, session_id=base_task.session_id, user_input=first_message_text, agent_response=summary_response)
+        )
+
+        if not chat_context_response.success:
+            return OrchestrationCenterResponse(
+                task_id=base_task_id,
+                success=False,
+                error="Failed to update chat context",
+                status_code=500,
+            )
+
+        if not chat_context_response.success:
+            return OrchestrationCenterResponse(
+                task_id=base_task_id,
+                success=False,
+                error="Failed to update chat context",
+                status_code=500,
+            )
 
         if base_task.task.history is None:
             base_task.task.history = []
