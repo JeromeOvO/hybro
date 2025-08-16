@@ -23,7 +23,7 @@ class ChatMemoryService:
 
         try:
             new_chat_context = ChatContext(
-                context_id=str(uuid4()),  # Generate a unique context_id
+                memory_id=str(uuid4()),  # Generate a unique memory_id
                 user_name=request.user_name,
                 session_id=request.session_id,
                 context_data=ContextData(
@@ -113,7 +113,7 @@ class ChatMemoryService:
         
         try:
             chat_context = ChatContext(
-                context_id=chat_context.context_id,  # Generate a unique context_id
+                memory_id=chat_context.memory_id,  # Generate a unique memory_id
                 user_name=request.user_name,
                 session_id=request.session_id,
                 context_data=ContextData(

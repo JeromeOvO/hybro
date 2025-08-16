@@ -14,7 +14,7 @@ class ChatContext(BaseModel):
     Multiple ChatContext objects can belong to one TaskSession during a conversation.
     """
 
-    context_id: str
+    memory_id: str
     user_name: str
     session_id: str
     context_data: ContextData | None = Field(default=None)

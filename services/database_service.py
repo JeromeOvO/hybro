@@ -413,13 +413,13 @@ class DatabaseService:
         """
         Add a chat context to the database
         """
-        if chat_context.context_id == "":
-            chat_context.context_id = str(uuid.uuid4())
+        if chat_context.memory_id == "":
+            chat_context.memory_id = str(uuid.uuid4())
         try:
             await self.mongo.add_chat_context(chat_context)
             return True
         except Exception as e:
-            logger.error(f"Failed to add chat context {chat_context.context_id} to databases: {str(e)}")
+            logger.error(f"Failed to add chat context {chat_context.memory_id} to databases: {str(e)}")
             return False
     
     async def get_chat_context_by_session_id(self, session_id: str) -> ChatContext | None:
