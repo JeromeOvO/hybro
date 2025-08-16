@@ -11,7 +11,7 @@
  * Multiple ChatContext objects can belong to one TaskSession during a conversation.
  */
 export interface ChatContext {
-  context_id: string;
+  memory_id: string;
   user_name: string;
   session_id: string;
   context_data?: ContextData | null;
