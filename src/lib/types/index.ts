@@ -37,6 +37,7 @@ export type {
   InspectionCenterRequest,
   TaskCenterRequest,
   UserInput,
+  ChatMemoryRequest,
 } from './request'
 
 export type {
@@ -48,6 +49,7 @@ export type {
   OrchestrationCenterResponse,
   TaskResponse,
   UserResponse,
+  ChatMemoryResponse,
 } from './response'
 
 export * from './error'

@@ -6,4 +6,4 @@ export * from './chat'
 export * from './inspection'
 export * from './orchestration'
 export * from './health'
-
+export * from './memory'
