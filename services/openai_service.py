@@ -12,6 +12,7 @@ from openai.types.chat import (
 
 from common.utils.logger import get_logger
 from models.agent import Agent
+from models.memory import ChatContext, ContextData
 from models.task import BaseTask
 
 load_dotenv()
@@ -44,7 +45,7 @@ class OpenAIService:
 
         return embedding
 
-    async def decompose_task(self, base_task: BaseTask) -> str:
+    async def decompose_task(self, base_task: BaseTask, context_data: ContextData) -> str:
         """
         Decompose a base task into subtasks using OpenAI.
         Returns a JSON string with structured execution steps.
@@ -90,6 +91,7 @@ class OpenAIService:
             task_goal = "No task goal provided"
 
         prompt = f"""Task Goal: {task_goal}
+        Chat Context: {context_data}
 
 Please decompose this task into a structured execution plan with all necessary steps.
 
@@ -440,5 +442,75 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in summarize_debate_answer: {str(e)}")
             return f"Error: {str(e)}"
 
+    async def generate_chat_context(self, user_input: str, agent_response: str, context_data: ContextData) -> str:
+        """
+        Generate a precise context summary for maintaining conversation state.
+        """
+        
+        system_prompt = """You are an expert context summarizer for multi-agent conversations. Your goal is to maintain a comprehensive, evolving context summary that preserves essential information across conversation turns.
+
+OBJECTIVES:
+1. Update and refine the existing context with new information
+2. Preserve key entities, decisions, and user preferences
+3. Maintain important technical details and specifications
+4. Track the conversation's progression and current state
+5. Remove outdated or contradicted information
+6. Synthesize related information into coherent summaries
+
+APPROACH:
+- If previous context exists, intelligently merge it with new information
+- Prioritize recent developments while retaining relevant historical context
+- Identify and resolve any contradictions between old and new information
+- Focus on actionable information and user goals
+- Maintain clarity and logical organization
+
+OUTPUT: Return a comprehensive, well-organized context summary that captures the complete conversation state."""
+
+        prompt_parts = [
+            "**NEW INTERACTION:**",
+            f"User Input: {user_input}",
+            f"Agent Response: {agent_response}",
+        ]
+        
+        if context_data and context_data.context_content and context_data.context_content.strip():
+            prompt_parts.extend([
+                "",
+                "**EXISTING CONTEXT:**",
+                context_data.context_content,
+                "",
+                "**TASK:** Update and refine the existing context by intelligently incorporating the new interaction. Merge related information, resolve contradictions, and ensure the summary reflects the current conversation state."
+            ])
+        else:
+            prompt_parts.extend([
+                "",
+                "**TASK:** Create a comprehensive initial context summary based on this first interaction."
+            ])
+        
+        prompt = "\n".join(prompt_parts)
+        
+        messages = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt),
+        ]
+        
+        try:
+            response = await self.client.responses.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                reasoning={"effort": "low"},
+                input=messages  
+            )
+            
+            context_summary = response.output_text.strip() if response.output_text else ""
+            
+            if not context_summary:
+                context_summary = f"User discussed: {user_input}. Agent provided: {agent_response[:200]}..."
+            
+            return context_summary
+            
+        except Exception as e:
+            print(f"Error in generate_chat_context: {str(e)}")
+            existing_context = context_data.context_content if context_data and context_data.context_content else ""
+            fallback = f"{existing_context}\n\nLatest: User: {user_input} | Agent: {agent_response[:200]}..."
+            return fallback.strip()
 
 openai_service = OpenAIService()

@@ -11,17 +11,17 @@ export type SecurityScheme =
   | OAuth2SecurityScheme
   | OpenIdConnectSecurityScheme;
 /**
- * The location of the API key. Valid values are "query", "header", or "cookie".
+ * The location of the API key.
  */
 export type In = "cookie" | "header" | "query";
 export type AgentStatus = "active" | "inactive" | "deleted";
 export type Part = TextPart | FilePart | DataPart;
 /**
- * Message sender's role
+ * Identifies the sender of the message. `user` for the client, `agent` for the service.
  */
 export type Role = "agent" | "user";
 /**
- * Represents the possible states of a Task.
+ * Defines the lifecycle states of a Task.
  */
 export type TaskState =
   | "submitted"
@@ -44,13 +44,12 @@ export interface Agent {
   dislike_count?: number;
 }
 /**
- * An AgentCard conveys key information:
- * - Overall details (version, name, description, uses)
- * - Skills: A set of capabilities the agent can perform
- * - Default modalities/content types supported by the agent.
- * - Authentication requirements
+ * The AgentCard is a self-describing manifest for an agent. It provides essential
+ * metadata including the agent's identity, capabilities, skills, supported
+ * communication methods, and security requirements.
  */
 export interface AgentCard {
+  additionalInterfaces?: AgentInterface[] | null;
   capabilities: AgentCapabilities;
   defaultInputModes: string[];
   defaultOutputModes: string[];
@@ -58,6 +57,8 @@ export interface AgentCard {
   documentationUrl?: string | null;
   iconUrl?: string | null;
   name: string;
+  preferredTransport?: string | null;
+  protocolVersion?: string | null;
   provider?: AgentProvider | null;
   security?:
     | {
@@ -73,6 +74,14 @@ export interface AgentCard {
   version: string;
 }
 /**
+ * Declares a combination of a target URL and a transport protocol for interacting with the agent.
+ */
+export interface AgentInterface {
+  transport: string;
+  url: string;
+  [k: string]: unknown;
+}
+/**
  * Defines optional capabilities supported by an agent.
  */
 export interface AgentCapabilities {
@@ -83,7 +92,7 @@ export interface AgentCapabilities {
   [k: string]: unknown;
 }
 /**
- * A declaration of an extension supported by an Agent.
+ * A declaration of a protocol extension supported by an Agent.
  */
 export interface AgentExtension {
   description?: string | null;
@@ -103,7 +112,7 @@ export interface AgentProvider {
   [k: string]: unknown;
 }
 /**
- * API Key security scheme.
+ * Defines a security scheme using an API key.
  */
 export interface APIKeySecurityScheme {
   description?: string | null;
@@ -113,7 +122,7 @@ export interface APIKeySecurityScheme {
   [k: string]: unknown;
 }
 /**
- * HTTP Authentication security scheme.
+ * Defines a security scheme using HTTP authentication.
  */
 export interface HTTPAuthSecurityScheme {
   bearerFormat?: string | null;
@@ -123,7 +132,7 @@ export interface HTTPAuthSecurityScheme {
   [k: string]: unknown;
 }
 /**
- * OAuth2.0 security scheme configuration.
+ * Defines a security scheme using OAuth 2.0.
  */
 export interface OAuth2SecurityScheme {
   description?: string | null;
@@ -132,7 +141,7 @@ export interface OAuth2SecurityScheme {
   [k: string]: unknown;
 }
 /**
- * Allows configuration of the supported OAuth Flows
+ * Defines the configuration for the supported OAuth 2.0 flows.
  */
 export interface OAuthFlows {
   authorizationCode?: AuthorizationCodeOAuthFlow | null;
@@ -142,7 +151,7 @@ export interface OAuthFlows {
   [k: string]: unknown;
 }
 /**
- * Configuration details for a supported OAuth Flow
+ * Defines configuration details for the OAuth 2.0 Authorization Code flow.
  */
 export interface AuthorizationCodeOAuthFlow {
   authorizationUrl: string;
@@ -154,7 +163,7 @@ export interface AuthorizationCodeOAuthFlow {
   [k: string]: unknown;
 }
 /**
- * Configuration details for a supported OAuth Flow
+ * Defines configuration details for the OAuth 2.0 Client Credentials flow.
  */
 export interface ClientCredentialsOAuthFlow {
   refreshUrl?: string | null;
@@ -165,7 +174,7 @@ export interface ClientCredentialsOAuthFlow {
   [k: string]: unknown;
 }
 /**
- * Configuration details for a supported OAuth Flow
+ * Defines configuration details for the OAuth 2.0 Implicit flow.
  */
 export interface ImplicitOAuthFlow {
   authorizationUrl: string;
@@ -176,7 +185,7 @@ export interface ImplicitOAuthFlow {
   [k: string]: unknown;
 }
 /**
- * Configuration details for a supported OAuth Flow
+ * Defines configuration details for the OAuth 2.0 Resource Owner Password flow.
  */
 export interface PasswordOAuthFlow {
   refreshUrl?: string | null;
@@ -187,7 +196,7 @@ export interface PasswordOAuthFlow {
   [k: string]: unknown;
 }
 /**
- * OpenID Connect security scheme configuration.
+ * Defines a security scheme using OpenID Connect.
  */
 export interface OpenIdConnectSecurityScheme {
   description?: string | null;
@@ -196,7 +205,7 @@ export interface OpenIdConnectSecurityScheme {
   [k: string]: unknown;
 }
 /**
- * Represents a unit of capability that an agent can perform.
+ * Represents a distinct capability or function that an agent can perform.
  */
 export interface AgentSkill {
   description: string;
@@ -218,7 +227,9 @@ export interface AgentCenterResponse {
   status_code?: number;
 }
 /**
- * A base task model for one request from user
+ * A BaseTask represents a complete user request and serves as the top-level container.
+ * It wraps a Task object and includes session/user metadata for tracking purposes.
+ * This is the main task that gets decomposed into MetaTasks for multi-agent processing.
  */
 export interface BaseTask {
   task_id: string;
@@ -227,6 +238,9 @@ export interface BaseTask {
   task: Task;
   extend_info?: unknown;
 }
+/**
+ * Represents a single, stateful operation or conversation between a client and an agent.
+ */
 export interface Task {
   artifacts?: Artifact[] | null;
   contextId: string;
@@ -239,7 +253,7 @@ export interface Task {
   status: TaskStatus;
 }
 /**
- * Represents an artifact generated for a task.
+ * Represents a file, data structure, or other resource generated by an agent during a task.
  */
 export interface Artifact {
   artifactId: string;
@@ -253,7 +267,7 @@ export interface Artifact {
   [k: string]: unknown;
 }
 /**
- * Represents a text segment within parts.
+ * Represents a text segment within a message or artifact.
  */
 export interface TextPart {
   kind?: "text";
@@ -264,7 +278,8 @@ export interface TextPart {
   [k: string]: unknown;
 }
 /**
- * Represents a File segment within parts.
+ * Represents a file segment within a message or artifact. The file content can be
+ * provided either directly as bytes or as a URI.
  */
 export interface FilePart {
   file: FileWithBytes | FileWithUri;
@@ -275,7 +290,7 @@ export interface FilePart {
   [k: string]: unknown;
 }
 /**
- * Define the variant where 'bytes' is present and 'uri' is absent
+ * Represents a file with its content provided directly as a base64-encoded string.
  */
 export interface FileWithBytes {
   bytes: string;
@@ -284,7 +299,7 @@ export interface FileWithBytes {
   [k: string]: unknown;
 }
 /**
- * Define the variant where 'uri' is present and 'bytes' is absent
+ * Represents a file with its content located at a specific URI.
  */
 export interface FileWithUri {
   mimeType?: string | null;
@@ -293,7 +308,7 @@ export interface FileWithUri {
   [k: string]: unknown;
 }
 /**
- * Represents a structured data segment within a message part.
+ * Represents a structured data segment (e.g., JSON) within a message or artifact.
  */
 export interface DataPart {
   data: {
@@ -306,7 +321,7 @@ export interface DataPart {
   [k: string]: unknown;
 }
 /**
- * Represents a single message exchanged between user and agent.
+ * Represents a single message in the conversation between a user and an agent.
  */
 export interface Message {
   contextId?: string | null;
@@ -320,15 +335,41 @@ export interface Message {
   referenceTaskIds?: string[] | null;
   role: Role;
   taskId?: string | null;
+  [k: string]: unknown;
 }
 /**
- * TaskState and accompanying message.
+ * Represents the status of a task at a specific point in time.
  */
 export interface TaskStatus {
   message?: Message | null;
   state: TaskState;
   timestamp?: string | null;
   [k: string]: unknown;
+}
+/**
+ * A ChatContext represents a chat context between a user and the multi-agent system.
+ * It tracks session metadata like creation time, user info, and context content.
+ * Multiple ChatContext objects can belong to one TaskSession during a conversation.
+ */
+export interface ChatContext {
+  context_id: string;
+  user_name: string;
+  session_id: string;
+  context_data?: ContextData | null;
+  created_at?: string;
+  updated_at?: string;
+  extend_info?: unknown;
+}
+export interface ContextData {
+  context_content?: string | null;
+  [k: string]: unknown;
+}
+export interface ChatMemoryResponse {
+  user_name: string;
+  chat_context?: ChatContext | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
 }
 export interface ChatResponse {
   user_name: string;
@@ -361,7 +402,9 @@ export interface InspectionCenterResponse {
   status_code?: number;
 }
 /**
- * A meta task model represents the smallest atomic tasks in the system, usually subtasks from decomposition. It is designed for convenient a2a agent communication.
+ * A MetaTask represents an atomic subtask created from decomposing a larger user request(BaseTask).
+ * These are the individual work units assigned to specific agents in the multi-agent system.
+ * Each MetaTask contains a Task object with the actual agent communication data.
  */
 export interface MetaTask {
   task_id: string;
@@ -370,6 +413,10 @@ export interface MetaTask {
   task_description?: string | null;
   task?: Task | null;
   execution_order?: number;
+  depends_on_tasks?: string[] | null;
+  context_from_previous?: {
+    [k: string]: unknown;
+  } | null;
   extend_info?: unknown;
 }
 export interface OrchestrationCenterResponse {
@@ -411,7 +458,9 @@ export interface TaskCenterResponse {
   status_code?: number;
 }
 /**
- * Model for a task session. One meta session for one chat session
+ * A TaskSession represents a chat conversation between a user and the multi-agent system.
+ * It tracks session metadata like creation time, user info, and session description.
+ * Multiple BaseTask objects can belong to one TaskSession during a conversation.
  */
 export interface TaskSession {
   session_id: string;

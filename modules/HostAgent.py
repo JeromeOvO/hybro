@@ -2,9 +2,16 @@
 from a2a.types import Role
 
 from common.utils.logger import get_logger
-from models.request import ChatRequest, OrchestrationCenterRequest, TaskCenterRequest
+from models.request import (
+    ChatRequest,
+    OrchestrationCenterRequest,
+    TaskCenterRequest,
+    ChatMemoryRequest,
+)
 from models.response import ChatResponse
 from modules.OrchestrationCenter import OrchestrationCenter
+
+from services.memory_service import ChatMemoryService
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
 from services.database_service import DatabaseService
@@ -23,6 +30,7 @@ class HostAgent:
         self.agent_service = AgentService()
         self.a2a_service = A2AService()
         self.orchestration_center = OrchestrationCenter()
+        self.chat_memory_service = ChatMemoryService()
 
     async def send_message(self, request: ChatRequest) -> ChatResponse:
         user_name = request.user_name
@@ -36,6 +44,20 @@ class HostAgent:
             )
             if create_session_response.success:
                 session_id = create_session_response.session_id
+            
+                # create a new chat context
+                chat_context = await self.chat_memory_service.create_chat_context(
+                    ChatMemoryRequest(user_name=user_name, session_id=session_id, user_input=user_input)
+                )
+
+                if not chat_context.success:
+                    return ChatResponse(
+                        user_name=user_name,
+                        success=False,
+                        error="Failed to create chat context",
+                        status_code=500,
+                    )
+
             else:
                 return ChatResponse(
                     user_name=user_name,
@@ -43,6 +65,7 @@ class HostAgent:
                     error="Failed to create session",
                     status_code=500,
                 )
+
 
         # create a new base task
         # todo: multi turn conversation

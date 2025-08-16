@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from models.agent import Agent
+from models.memory import ChatContext
 from models.task import BaseTask, MetaTask, TaskSession
 
 load_dotenv()
@@ -79,6 +80,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.task_sessions
+
+    @property
+    def chat_contexts_collection(self):
+        """Get chat contexts collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.chat_contexts
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -343,6 +353,40 @@ class MongoDB:
             {"$set": task_session.model_dump(exclude_unset=True, mode="json")},
         )
         return result.modified_count > 0
+
+    # chat context management
+    async def add_chat_context(self, chat_context: ChatContext) -> str:
+        """
+        Add a chat context to the database
+        """
+        result = await self.chat_contexts_collection.insert_one(
+            chat_context.model_dump(mode="json")
+        )
+        return str(result.inserted_id)
+
+    async def get_chat_context_by_session_id(self, session_id: str) -> ChatContext | None:
+        """
+        Get a chat context by session_id
+        """
+        result = await self.chat_contexts_collection.find_one({"session_id": session_id})
+        return ChatContext(**result) if result else None
+    
+    async def update_chat_context_by_session_id(self, session_id: str, chat_context: ChatContext) -> bool:
+        """
+        Update a chat context by session_id
+        """
+        result = await self.chat_contexts_collection.update_one(
+            {"session_id": session_id},
+            {"$set": chat_context.model_dump(exclude_unset=True, mode="json")},
+        )
+        return result.modified_count >= 0
+    
+    async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
+        """
+        Delete a chat context by session_id
+        """
+        result = await self.chat_contexts_collection.delete_one({"session_id": session_id})
+        return result.deleted_count > 0
 
 
 mongodb = MongoDB()

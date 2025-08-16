@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
+from models.memory import ChatContext
 
 
 class Step(BaseModel):
@@ -101,6 +102,13 @@ class ChatResponse(BaseModel):
     user_input: str
     session_id: str | None = None
     task_id: str | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class ChatMemoryResponse(BaseModel):
+    user_name: str
+    chat_context: ChatContext | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
