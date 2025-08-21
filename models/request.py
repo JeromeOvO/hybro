@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional, Set
 from uuid import uuid4
 
 from a2a.types import AgentCard, Message, Task, TextPart
@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
+from datetime import datetime
 
 
 class TaskRequest(BaseModel):
@@ -124,3 +125,41 @@ class ChatMemoryRequest(BaseModel):
     user_input: str | None = None
     agent_response: str | None = None
     chat_context: ChatContext | None = None
+
+
+class RoomCenterRoomSettingRequest(BaseModel):
+    room_id: str | None = None
+    room_name: str | None = None
+    room_owner_id: str | None = None
+    room_owner_name: str | None = None
+    room_agent_set: Set[str] | None = None
+    room_created_at: datetime | None = None
+    extend_info: dict[str, Any] | None = None
+
+
+class RoomCenterUserMessageRequest(BaseModel):
+    room_id: str | None = None
+    message_id: str | None = None
+    related_message_id: Optional[str] = None
+    user_id: str | None = None
+    user_name: str | None = None
+    user_input: str | None = None
+    message_created_at: datetime | None = None
+    extend_info: dict[str, Any] | None = None
+
+class RoomCenterAgentMessageRequest(BaseModel):
+    room_id: str | None = None
+    message_id: str | None = None
+    related_message_id: Optional[str] = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    agent_message_content: Task | None = None
+    message_created_at: datetime | None = None
+    extend_info: dict[str, Any] | None = None
+
+class RoomCenterMemoryRequest(BaseModel):
+    room_id: str | None = None
+    memory_id: str | None = None
+    memory_content: str | None = None
+    memory_created_at: datetime | None = None
+    extend_info: dict[str, Any] | None = None
