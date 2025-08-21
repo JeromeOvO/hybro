@@ -9,6 +9,7 @@ from database.pinecone_db import pinecone_db
 from models.agent import Agent
 from models.memory import ChatContext
 from models.task import BaseTask, MetaTask, TaskSession
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
@@ -448,5 +449,211 @@ class DatabaseService:
             return True
         except Exception as e:
             logger.error(f"Failed to delete chat context {session_id} from databases: {str(e)}")
+            return False
+    
+    # room management
+    async def add_room(self, room: Room) -> bool:
+        """
+        Add a room to the database
+        """
+        if room.room_id == "":
+            room.room_id = str(uuid.uuid4())
+        try:
+            await self.mongo.add_room(room)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add room {room.room_id} to databases: {str(e)}")
+            return False
+    
+    async def get_room_by_room_id(self, room_id: str) -> Room | None:
+        """
+        Get a room by room_id
+        """
+        try:
+            return await self.mongo.get_room_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to get room {room_id} from databases: {str(e)}")
+            return None
+    
+    async def get_rooms_by_room_owner_id(self, room_owner_id: str) -> list[Room]:
+        """
+        Get rooms by room_owner_id
+        """
+        try:
+            return await self.mongo.get_rooms_by_room_owner_id(room_owner_id)
+        except Exception as e:
+            logger.error(f"Failed to get rooms by room owner id {room_owner_id} from databases: {str(e)}")
+            return []
+    
+    async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
+        """
+        Update a room by room_id
+        """
+        try:
+            return await self.mongo.update_room_by_room_id(room_id, room)
+        except Exception as e:
+            logger.error(f"Failed to update room {room_id} in databases: {str(e)}")
+            return False
+    
+    async def delete_room_by_room_id(self, room_id: str) -> bool:
+        """
+        Delete a room by room_id
+        """
+        try:
+            return await self.mongo.delete_room_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to delete room {room_id} from databases: {str(e)}")
+            return False
+        
+    # room user message management
+    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> bool:
+        """
+        Add a room user message to the database
+        """
+        if room_user_message.message_id == "":
+            room_user_message.message_id = str(uuid.uuid4())
+        try:
+            await self.mongo.add_room_user_message(room_user_message)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add room user message {room_user_message.message_id} to databases: {str(e)}")
+            return False
+    
+    async def get_room_user_messages_by_room_id(self, room_id: str) -> list[RoomUserMessage]:
+        """
+        Get room user messages by room_id
+        """
+        try:
+            return await self.mongo.get_room_user_messages_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to get room user messages by room id {room_id} from databases: {str(e)}")
+            return []
+    
+    async def get_room_user_message_by_message_id(self, message_id: str) -> RoomUserMessage | None:
+        """
+        Get a room user message by message_id
+        """
+        try:
+            return await self.mongo.get_room_user_message_by_message_id(message_id)
+        except Exception as e:
+            logger.error(f"Failed to get room user message by message id {message_id} from databases: {str(e)}")
+            return None
+    
+    async def update_room_user_message_by_message_id(self, message_id: str, room_user_message: RoomUserMessage) -> bool:
+        """
+        Update a room user message by message_id
+        """
+        try:
+            return await self.mongo.update_room_user_message_by_message_id(message_id, room_user_message)
+        except Exception as e:
+            logger.error(f"Failed to update room user message {message_id} in databases: {str(e)}")
+            return False
+
+    # room agent message management
+    async def add_room_agent_message(self, room_agent_message: RoomAgentMessage) -> bool:
+        """
+        Add a room agent message to the database
+        """
+        if room_agent_message.message_id == "":
+            room_agent_message.message_id = str(uuid.uuid4())
+        try:
+            await self.mongo.add_room_agent_message(room_agent_message)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add room agent message {room_agent_message.message_id} to databases: {str(e)}")
+            return False
+    
+    async def get_room_agent_messages_by_room_id(self, room_id: str) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages by room_id
+        """
+        try:
+            return await self.mongo.get_room_agent_messages_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to get room agent messages by room id {room_id} from databases: {str(e)}")
+            return []
+        
+    async def get_room_agent_message_by_message_id(self, message_id: str) -> RoomAgentMessage | None:
+        """
+        Get a room agent message by message_id
+        """
+        try:
+            return await self.mongo.get_room_agent_message_by_message_id(message_id)
+        except Exception as e:
+            logger.error(f"Failed to get room agent message by message id {message_id} from databases: {str(e)}")
+            return None
+    
+    async def update_room_agent_message_by_message_id(self, message_id: str, room_agent_message: RoomAgentMessage) -> bool:
+        """
+        Update a room agent message by message_id
+        """
+        try:
+            return await self.mongo.update_room_agent_message_by_message_id(message_id, room_agent_message)
+        except Exception as e:
+            logger.error(f"Failed to update room agent message {message_id} in databases: {str(e)}")
+            return False
+    
+    async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
+        """
+        Delete a room agent message by message_id
+        """
+        try:
+            return await self.mongo.delete_room_agent_message_by_message_id(message_id)
+        except Exception as e:
+            logger.error(f"Failed to delete room agent message {message_id} from databases: {str(e)}")
+            return False
+    
+    # room memory management
+    async def add_room_memory(self, room_memory: RoomMemory) -> bool:
+        """
+        Add a room memory to the database
+        """
+        if room_memory.memory_id == "":
+            room_memory.memory_id = str(uuid.uuid4())
+        try:
+            await self.mongo.add_room_memory(room_memory)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add room memory {room_memory.memory_id} to databases: {str(e)}")
+            return False
+    
+    async def get_room_memories_by_room_id(self, room_id: str) -> list[RoomMemory]:
+        """
+        Get room memories by room_id
+        """
+        try:
+            return await self.mongo.get_room_memories_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to get room memories by room id {room_id} from databases: {str(e)}")
+            return []
+    
+    async def get_room_memory_by_memory_id(self, memory_id: str) -> RoomMemory | None:
+        """
+        Get a room memory by memory_id
+        """
+        try:
+            return await self.mongo.get_room_memory_by_memory_id(memory_id)
+        except Exception as e:
+            logger.error(f"Failed to get room memory by memory id {memory_id} from databases: {str(e)}")
+            return None
+    
+    async def update_room_memory_by_memory_id(self, memory_id: str, room_memory: RoomMemory) -> bool:
+        """
+        Update a room memory by memory_id
+        """
+        try:
+            return await self.mongo.update_room_memory_by_memory_id(memory_id, room_memory)
+        except Exception as e:
+            logger.error(f"Failed to update room memory {memory_id} in databases: {str(e)}")
+            return False
+    
+    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
+        """
+        Delete a room memory by memory_id
+        """
+        try:
+            return await self.mongo.delete_room_memory_by_memory_id(memory_id)
+        except Exception as e:
+            logger.error(f"Failed to delete room memory {memory_id} from databases: {str(e)}")
             return False
     

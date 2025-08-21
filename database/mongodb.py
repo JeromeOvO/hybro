@@ -8,6 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from models.agent import Agent
 from models.memory import ChatContext
 from models.task import BaseTask, MetaTask, TaskSession
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
 
 load_dotenv()
 
@@ -89,6 +90,43 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.chat_contexts
+
+
+    @property
+    def rooms_collection(self):
+        """Get rooms collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.rooms
+
+    @property
+    def room_user_messages_collection(self):
+        """Get room user messages collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.room_user_messages
+
+    @property
+    def room_agent_messages_collection(self):
+        """Get room agent messages collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.room_agent_messages
+
+    @property
+    def room_memories_collection(self):
+        """Get room memories collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.room_memories
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -388,5 +426,159 @@ class MongoDB:
         result = await self.chat_contexts_collection.delete_one({"session_id": session_id})
         return result.deleted_count > 0
 
+    # room management
+    async def add_room(self, room: Room) -> str:
+        """
+        Add a room to the database
+        """
+        result = await self.rooms_collection.insert_one(room.model_dump(mode="json"))
+        return str(result.inserted_id)
+
+    async def get_room_by_room_id(self, room_id: str) -> Room | None:
+        """
+        Get a room by room_id
+        """
+        result = await self.rooms_collection.find_one({"room_id": room_id})
+        return Room(**result) if result else None
+
+    async def get_rooms_by_room_owner_id(self, room_owner_id: str) -> list[Room]:
+        """
+        Get rooms by room_owner_id
+        """
+        results = self.rooms_collection.find({"room_owner_id": room_owner_id})
+        rooms = []
+        async for room in results:
+            rooms.append(Room(**room))
+        return rooms
+
+    async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
+        """
+        Update a room by room_id
+        """
+        result = await self.rooms_collection.update_one({"room_id": room_id}, {"$set": room.model_dump(exclude_unset=True, mode="json")})
+        return result.modified_count > 0
+    
+    async def delete_room_by_room_id(self, room_id: str) -> bool:
+        """
+        Delete a room by room_id
+        """
+        result = await self.rooms_collection.delete_one({"room_id": room_id})
+        return result.deleted_count > 0
+    
+    # room user message management
+    async def add_room_user_message(self, room_user_message: RoomUserMessage) -> str:
+        """
+        Add a room user message to the database
+        """
+        result = await self.room_user_messages_collection.insert_one(room_user_message.model_dump(mode="json"))
+        return str(result.inserted_id)
+    
+    async def get_room_user_messages_by_room_id(self, room_id: str) -> list[RoomUserMessage]:
+        """
+        Get room user messages by room_id
+        """
+        results = self.room_user_messages_collection.find({"room_id": room_id})
+        room_user_messages = []
+        async for room_user_message in results:
+            room_user_messages.append(RoomUserMessage(**room_user_message))
+        return room_user_messages
+    
+    async def get_room_user_message_by_message_id(self, message_id: str) -> RoomUserMessage | None:
+        """
+        Get a room user message by message_id
+        """
+        result = await self.room_user_messages_collection.find_one({"message_id": message_id})
+        return RoomUserMessage(**result) if result else None
+    
+    async def update_room_user_message_by_message_id(self, message_id: str, room_user_message: RoomUserMessage) -> bool:
+        """
+        Update a room user message by message_id
+        """
+        result = await self.room_user_messages_collection.update_one({"message_id": message_id}, {"$set": room_user_message.model_dump(exclude_unset=True, mode="json")})
+        return result.modified_count > 0
+    
+    async def delete_room_user_message_by_message_id(self, message_id: str) -> bool:
+        """
+        Delete a room user message by message_id
+        """
+        result = await self.room_user_messages_collection.delete_one({"message_id": message_id})
+        return result.deleted_count > 0
+    
+    # room agent message management
+    async def add_room_agent_message(self, room_agent_message: RoomAgentMessage) -> str:
+        """
+        Add a room agent message to the database
+        """
+        result = await self.room_agent_messages_collection.insert_one(room_agent_message.model_dump(mode="json"))
+        return str(result.inserted_id)
+    
+    async def get_room_agent_messages_by_room_id(self, room_id: str) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages by room_id
+        """
+        results = self.room_agent_messages_collection.find({"room_id": room_id})
+        room_agent_messages = []
+        async for room_agent_message in results:
+            room_agent_messages.append(RoomAgentMessage(**room_agent_message))
+        return room_agent_messages
+    
+    async def get_room_agent_message_by_message_id(self, message_id: str) -> RoomAgentMessage | None:
+        """
+        Get a room agent message by message_id
+        """
+        result = await self.room_agent_messages_collection.find_one({"message_id": message_id})
+        return RoomAgentMessage(**result) if result else None
+    
+    async def update_room_agent_message_by_message_id(self, message_id: str, room_agent_message: RoomAgentMessage) -> bool:
+        """
+        Update a room agent message by message_id
+        """
+        result = await self.room_agent_messages_collection.update_one({"message_id": message_id}, {"$set": room_agent_message.model_dump(exclude_unset=True, mode="json")})
+        return result.modified_count > 0
+    
+    async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
+        """
+        Delete a room agent message by message_id
+        """
+        result = await self.room_agent_messages_collection.delete_one({"message_id": message_id})
+        return result.deleted_count > 0
+
+    # room memory management
+    async def add_room_memory(self, room_memory: RoomMemory) -> str:
+        """
+        Add a room memory to the database
+        """
+        result = await self.room_memories_collection.insert_one(room_memory.model_dump(mode="json"))
+        return str(result.inserted_id)
+
+    async def get_room_memories_by_room_id(self, room_id: str) -> list[RoomMemory]:
+        """
+        Get room memories by room_id
+        """
+        results = self.room_memories_collection.find({"room_id": room_id})
+        room_memories = []
+        async for room_memory in results:
+            room_memories.append(RoomMemory(**room_memory))
+
+    async def get_room_memory_by_memory_id(self, memory_id: str) -> RoomMemory | None:
+        """
+        Get a room memory by memory_id
+        """
+        result = await self.room_memories_collection.find_one({"memory_id": memory_id})
+        return RoomMemory(**result) if result else None
+
+    async def update_room_memory_by_memory_id(self, memory_id: str, room_memory: RoomMemory) -> bool:
+        """
+        Update a room memory by memory_id
+        """
+        result = await self.room_memories_collection.update_one({"memory_id": memory_id}, {"$set": room_memory.model_dump(exclude_unset=True, mode="json")})
+        return result.modified_count > 0
+
+    async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
+        """
+        Delete a room memory by memory_id
+        """
+        result = await self.room_memories_collection.delete_one({"memory_id": memory_id})
+        return result.deleted_count > 0
 
 mongodb = MongoDB()
