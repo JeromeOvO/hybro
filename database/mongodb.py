@@ -551,20 +551,18 @@ class MongoDB:
         result = await self.room_memories_collection.insert_one(room_memory.model_dump(mode="json"))
         return str(result.inserted_id)
 
-    async def get_room_memories_by_room_id(self, room_id: str) -> list[RoomMemory]:
-        """
-        Get room memories by room_id
-        """
-        results = self.room_memories_collection.find({"room_id": room_id})
-        room_memories = []
-        async for room_memory in results:
-            room_memories.append(RoomMemory(**room_memory))
-
     async def get_room_memory_by_memory_id(self, memory_id: str) -> RoomMemory | None:
         """
         Get a room memory by memory_id
         """
         result = await self.room_memories_collection.find_one({"memory_id": memory_id})
+        return RoomMemory(**result) if result else None
+
+    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None:
+        """
+        Get a room memory by room_id
+        """
+        result = await self.room_memories_collection.find_one({"room_id": room_id})
         return RoomMemory(**result) if result else None
 
     async def update_room_memory_by_memory_id(self, memory_id: str, room_memory: RoomMemory) -> bool:

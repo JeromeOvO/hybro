@@ -617,15 +617,15 @@ class DatabaseService:
             logger.error(f"Failed to add room memory {room_memory.memory_id} to databases: {str(e)}")
             return False
     
-    async def get_room_memories_by_room_id(self, room_id: str) -> list[RoomMemory]:
+    async def get_room_memory_by_room_id(self, room_id: str) -> RoomMemory | None:
         """
-        Get room memories by room_id
+        Get a room memory by room_id
         """
         try:
-            return await self.mongo.get_room_memories_by_room_id(room_id)
+            return await self.mongo.get_room_memory_by_room_id(room_id)
         except Exception as e:
-            logger.error(f"Failed to get room memories by room id {room_id} from databases: {str(e)}")
-            return []
+            logger.error(f"Failed to get room memory by room id {room_id} from databases: {str(e)}")
+            return None
     
     async def get_room_memory_by_memory_id(self, memory_id: str) -> RoomMemory | None:
         """
