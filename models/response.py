@@ -4,6 +4,7 @@ from a2a.types import AgentCard, Task, TaskState
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
 from datetime import datetime
@@ -115,12 +116,8 @@ class ChatMemoryResponse(BaseModel):
 
 class RoomCenterRoomSettingResponse(BaseModel):
     room_id: str | None = None
-    room_name: str | None = None
-    room_owner_id: str | None = None
-    room_owner_name: str | None = None
     room_agent_set: list[str] | None = None
-    room_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
+    room: Room | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
@@ -128,12 +125,9 @@ class RoomCenterRoomSettingResponse(BaseModel):
 class RoomCenterUserMessageResponse(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
-    related_message_id: Optional[str] = None
     user_id: str | None = None
     user_name: str | None = None
-    user_input: str | None = None
-    message_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
+    message: RoomUserMessage | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
@@ -141,22 +135,16 @@ class RoomCenterUserMessageResponse(BaseModel):
 class RoomCenterAgentMessageResponse(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
-    related_message_id: Optional[str] = None
     agent_id: str | None = None
     agent_name: str | None = None
-    agent_message_content: Task | None = None
-    message_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
-    success: bool
+    message: RoomAgentMessage | None = None
     error: str | None = None
     status_code: int = 200
 
 class RoomCenterMemoryResponse(BaseModel):  
     room_id: str | None = None
     memory_id: str | None = None
-    memory_content: str | None = None
-    memory_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
+    memory: RoomMemory | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
