@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional, Set
+from typing import Any, Optional, Dict
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -11,7 +11,7 @@ class Room(BaseModel):
     room_name: str
     room_owner_id: str
     room_owner_name: str
-    room_agent_set: Set[str] = Field(default_factory=set)
+    room_agent_set: Dict[str, str] = Field(default_factory=dict) # key: agent_id, value: agent_name
     room_created_at: datetime = Field(default_factory=datetime.now)
     extend_info: Optional[Any] = None
 

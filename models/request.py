@@ -8,6 +8,7 @@ from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
 from datetime import datetime
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
 
 
 class TaskRequest(BaseModel):
@@ -135,6 +136,7 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_agent_set: Set[str] | None = None
     room_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
+    room: Room | None = None
 
 
 class RoomCenterUserMessageRequest(BaseModel):
@@ -146,6 +148,7 @@ class RoomCenterUserMessageRequest(BaseModel):
     user_input: str | None = None
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
+    message: RoomUserMessage | None = None
 
 class RoomCenterAgentMessageRequest(BaseModel):
     room_id: str | None = None
@@ -156,6 +159,7 @@ class RoomCenterAgentMessageRequest(BaseModel):
     agent_message_content: Task | None = None
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
+    message: RoomAgentMessage | None = None
 
 class RoomCenterMemoryRequest(BaseModel):
     room_id: str | None = None
@@ -163,3 +167,4 @@ class RoomCenterMemoryRequest(BaseModel):
     memory_content: str | None = None
     memory_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
+    memory: RoomMemory | None = None

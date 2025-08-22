@@ -118,6 +118,7 @@ class RoomCenterRoomSettingResponse(BaseModel):
     room_id: str | None = None
     room_agent_set: list[str] | None = None
     room: Room | None = None
+    room_list: list[Room] | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
