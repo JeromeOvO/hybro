@@ -1,4 +1,4 @@
-from typing import Any, Optional, Set
+from typing import Any, Optional, Dict
 from uuid import uuid4
 
 from a2a.types import AgentCard, Message, Task, TextPart
@@ -133,7 +133,7 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_name: str | None = None
     room_owner_id: str | None = None
     room_owner_name: str | None = None
-    room_agent_set: Set[str] | None = None
+    room_agent_set: Dict[str, str] | None = None
     room_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
