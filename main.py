@@ -484,13 +484,3 @@ async def update_room_name(request: Request):
     room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, room_name=room_name)
     room_center_response = await room_center.update_room_name(room_center_request)
     return room_center_response
-
-@app.post("/roomCenter/sendUserMessage")
-async def send_user_message(request: Request):
-    room_center = RoomCenter()
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-    message = request_data.get("message")
-    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
-    room_center_response = await room_center.send_user_message(room_center_request)
-    return room_center_response

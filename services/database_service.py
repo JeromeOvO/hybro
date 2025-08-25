@@ -583,6 +583,16 @@ class DatabaseService:
             logger.error(f"Failed to get room agent message by message id {message_id} from databases: {str(e)}")
             return None
     
+    async def get_room_agent_messages_by_related_message_id(self, related_message_id: str) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages by related_message_id
+        """
+        try:
+            return await self.mongo.get_room_agent_messages_by_related_message_id(related_message_id)
+        except Exception as e:
+            logger.error(f"Failed to get room agent messages by related message id {related_message_id} from databases: {str(e)}")
+            return []
+    
     async def update_room_agent_message_by_message_id(self, message_id: str, room_agent_message: RoomAgentMessage) -> bool:
         """
         Update a room agent message by message_id

@@ -11,18 +11,21 @@ from models.request import (
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
     RoomCenterAgentMessageRequest,
-    RoomCenterMemoryRequest
+    RoomCenterMemoryRequest,
+    AgentCenterRequest,
+    RoomCenterAgentMessageRequest
 )
 from models.response import (
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
     RoomCenterAgentMessageResponse,
-    RoomCenterMemoryResponse
+    RoomCenterMemoryResponse,
+    RoomCenterAgentMessageResponse,
 )
-from services.agent_service import AgentService
 from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
-
+from services.a2a_service import A2AService
+from services.agent_service import AgentService
 import re
 from uuid import uuid4
 from datetime import datetime
@@ -34,6 +37,7 @@ class RoomServices:
         self.database_service = DatabaseService()
         self.agent_service = AgentService()
         self.openai_service = OpenAIService()
+        self.a2a_service = A2AService()
 
     # room setting management
     async def create_new_room(self, room_create_request: RoomCenterRoomSettingRequest) -> RoomCenterRoomSettingResponse:
@@ -139,7 +143,7 @@ class RoomServices:
         
         Args:
             message_text: User input text, e.g., "Hey <@agent_id|agent_name> help me"
-            room_agent_set: Agent set in the room {agent_id: agent_name}
+            room_agent_set: Agent set in the room {agent_name: agent_id}
             
         Returns:
             list[dict]: Parsed mentions [{"agent_id": "xxx", "agent_name": "yyy", "mention_text": "<@xxx|yyy>"}]
@@ -154,9 +158,9 @@ class RoomServices:
             agent_name = match.group(2).strip()
             
             # Verify agent exists in room (optional validation)
-            if agent_id in room_agent_set:
+            if agent_name in room_agent_set:
                 mentions.append({
-                    "agent_id": agent_id,
+                    "agent_id": room_agent_set[agent_name],
                     "agent_name": agent_name,
                     "mention_text": match.group(0),
                     "position": match.start()
@@ -164,7 +168,7 @@ class RoomServices:
             else:
                 # Optional: still process even if not in room, or skip
                 mentions.append({
-                    "agent_id": agent_id,
+                    "agent_id": room_agent_set[agent_name],
                     "agent_name": agent_name,
                     "mention_text": match.group(0),
                     "position": match.start(),
@@ -408,7 +412,7 @@ class RoomServices:
         
         return tasks
 
-    async def send_user_message(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+    async def create_and_parse_user_message(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
         """Send user message and handle @agent parsing with context grouping"""
         
         if request.room_id is None:
@@ -468,9 +472,98 @@ class RoomServices:
         
         return RoomCenterUserMessageResponse(
             message_id=message.message_id, 
-            message=message, 
+            message=message,
             success=True, 
             error=None, 
             status_code=200
         )
         
+    async def process_agent_message(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+        message = request.message
+        if message is None:
+            return RoomCenterAgentMessageResponse(message_id=None, message=None, success=False, error="Agent Message is required", status_code=400)
+        
+        agent_id = message.agent_id
+        query_agent_url_response = await self.agent_service.get_agent_url_by_agent_id(
+            AgentCenterRequest(agent_id=agent_id)
+        )
+        if query_agent_url_response.agent_url is None:
+            return RoomCenterAgentMessageResponse(message_id=None, message=None, success=False, error="Agent url is not found", status_code=400)
+        
+        agent_url = query_agent_url_response.agent_url
+
+        agent_message = message.message_content.history[0]
+
+        send_response = await self.a2a_service.send_message_to_agent(agent_url, agent_message)
+
+        if send_response.success:
+            return RoomCenterAgentMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=True,
+                error=None,
+                status_code=200
+            )
+        else:
+            return RoomCenterAgentMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=False,
+                error=send_response.error,
+                status_code=500
+            )
+
+    async def update_agent_message_by_message_id(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+        if request.message_id is None:
+            return RoomCenterAgentMessageResponse(message=None, success=False, error="Message id is required", status_code=400)
+        
+        message_id = request.message_id
+        message = request.message
+        if message is None:
+            return RoomCenterAgentMessageResponse(message=None, success=False, error="Message is required", status_code=400)
+        
+        update_message_success = await self.database_service.update_room_agent_message_by_message_id(message_id, message)
+        if update_message_success:
+            return RoomCenterAgentMessageResponse(message=message, success=True, error=None, status_code=200)
+        else:
+            return RoomCenterAgentMessageResponse(message=None, success=False, error="Failed to update message", status_code=500)
+
+    async def inquiry_user_messages_by_room_id(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        if request.room_id is None:
+            return RoomCenterUserMessageResponse(message_list=None, success=False, error="Room id is required", status_code=400)
+        
+        room_id = request.room_id
+        messages = await self.database_service.get_room_user_messages_by_room_id(room_id)
+        return RoomCenterUserMessageResponse(message_list=messages, success=True, error=None, status_code=200)
+    
+    async def inquiry_agent_messages_by_room_id(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+        if request.room_id is None:
+            return RoomCenterAgentMessageResponse(message_list=None, success=False, error="Room id is required", status_code=400)
+        
+        room_id = request.room_id
+        messages = await self.database_service.get_room_agent_messages_by_room_id(room_id)
+        return RoomCenterAgentMessageResponse(message_list=messages, success=True, error=None, status_code=200)
+    
+    async def inquiry_agent_message_by_message_id(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+        if request.message_id is None:
+            return RoomCenterAgentMessageResponse(message=None, success=False, error="Message id is required", status_code=400)
+        
+        message_id = request.message_id
+        message = await self.database_service.get_room_agent_message_by_message_id(message_id)
+        return RoomCenterAgentMessageResponse(message=message, success=True, error=None, status_code=200)
+    
+    async def inquiry_user_message_by_message_id(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        if request.message_id is None:
+            return RoomCenterUserMessageResponse(message=None, success=False, error="Message id is required", status_code=400)
+        
+        message_id = request.message_id
+        message = await self.database_service.get_room_user_message_by_message_id(message_id)
+        return RoomCenterUserMessageResponse(message=message, success=True, error=None, status_code=200)
+    
+    async def inquiry_agent_messages_by_related_message_id(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+        if request.related_message_id is None:
+            return RoomCenterAgentMessageResponse(message_list=None, success=False, error="Related message id is required", status_code=400)
+        
+        related_message_id = request.related_message_id
+        messages = await self.database_service.get_room_agent_messages_by_related_message_id(related_message_id)
+        return RoomCenterAgentMessageResponse(message_list=messages, success=True, error=None, status_code=200)

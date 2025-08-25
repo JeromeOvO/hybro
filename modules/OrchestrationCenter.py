@@ -16,14 +16,18 @@ from models.request import (
     OrchestrationCenterRequest,
     TaskCenterRequest,
     ChatMemoryRequest,
+    RoomCenterUserMessageRequest,
+    RoomCenterAgentMessageRequest
 )
-from models.response import OrchestrationCenterResponse
+from models.response import OrchestrationCenterResponse, RoomCenterUserMessageResponse
 from models.task import MetaTask, TaskDefaultValue
+from models.room import RoomUserMessage, RoomAgentMessage
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
 from services.memory_service import ChatMemoryService
+from services.room_services import RoomServices
 
 logger = get_logger(__name__)
 
@@ -98,6 +102,7 @@ class OrchestrationCenter:
         self.agent_service = AgentService()
         self.a2a_service = A2AService()
         self.chat_memory_service = ChatMemoryService()
+        self.room_services = RoomServices()
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1303,3 +1308,198 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error="Failed to update base task",
                 status_code=500,
             )
+
+    # room services
+    async def process_room_user_message(self, request: OrchestrationCenterRequest) -> OrchestrationCenterResponse:
+        if request.room_id is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        room_user_message_id = request.room_user_message_id
+        room_related_message_id = request.room_related_message_id
+
+        if room_user_message_id is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room user message id is required",
+                status_code=400,
+            )
+
+        inquiry_user_message_response = await self.room_services.inquiry_user_message_by_message_id(RoomCenterUserMessageRequest(message_id=room_user_message_id))
+        if not inquiry_user_message_response.success:
+            return OrchestrationCenterResponse(
+                success=False,
+                error=inquiry_user_message_response.error,
+                status_code=500,
+            )
+
+        room_user_message = inquiry_user_message_response.message
+
+        inquiry_agent_messages_response = await self.room_services.inquiry_agent_messages_by_related_message_id(RoomCenterAgentMessageRequest(related_message_id=room_user_message_id))
+        if not inquiry_agent_messages_response.success:
+            return OrchestrationCenterResponse(
+                success=False,
+                error=inquiry_agent_messages_response.error,
+                status_code=500,
+            )
+        
+        room_agent_messages = inquiry_agent_messages_response.message_list
+        if room_agent_messages is None or len(room_agent_messages) == 0:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="No agent messages found",
+                status_code=200,
+            )
+        
+
+        for room_agent_message in room_agent_messages:
+            process_agent_message_response = await self.room_services.process_agent_message(RoomCenterAgentMessageRequest(message=room_agent_message))
+            if not process_agent_message_response.success:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error=process_agent_message_response.error,
+                    status_code=500,
+                )
+            
+            message_data = await self.a2a_service.process_a2a_response(process_agent_message_response.message)
+
+            logger.info("OrchestrationCenter: process response: %s", message_data)
+
+            # Add null check for process_response
+            if message_data is None:
+                logger.error(
+                    "OrchestrationCenter: process_a2a_response returned None for agent message %s",
+                    room_agent_message.message_id,
+                )
+                return OrchestrationCenterResponse(
+                    room_id=room_id,
+                    success=False,
+                    error="Failed to process agent response - no valid response data",
+                    status_code=500,
+                )
+
+            if message_data.kind == "task":
+                room_agent_message.message_content = message_data
+                update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id, success=True, error=None, status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Failed to update agent message",
+                        status_code=500,
+                    )
+
+            elif message_data.kind == "message":
+                if room_agent_message.message_content:
+                    if room_agent_message.message_content.history is None:
+                        room_agent_message.message_content.history = []
+                    room_agent_message.message_content.history.append(message_data)
+
+                update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
+                
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id, success=True, error=None, status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Failed to update agent message",
+                        status_code=500,
+                    )
+
+            elif message_data.kind == "status-update":
+                # Handle status update responses - update task status and potentially add message
+                if hasattr(message_data, "status") and hasattr(
+                    message_data.status, "state"
+                ):
+                    if room_agent_message.message_content and room_agent_message.message_content.status is None:
+                        room_agent_message.message_content.status = TaskStatus(state=TaskState.submitted)
+                    if room_agent_message.message_content:
+                        room_agent_message.message_content.status.state = message_data.status.state
+
+                    # If there's a message in the status update, add it to history
+                    if (
+                        hasattr(message_data.status, "message")
+                        and message_data.status.message
+                        and room_agent_message.message_content
+                    ):
+                        if room_agent_message.message_content.history is None:
+                            room_agent_message.message_content.history = []
+                        room_agent_message.message_content.history.append(message_data.status.message)
+
+                update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
+
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id, success=True, error=None, status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Failed to update agent message with status update",
+                        status_code=500,
+                    )
+
+            elif message_data.kind == "artifact-update":
+                # Handle artifact update responses - add artifacts to task
+                if hasattr(message_data, "artifact") and room_agent_message.message_content:
+                    if room_agent_message.message_content.artifacts is None:
+                        room_agent_message.message_content.artifacts = []
+                    room_agent_message.message_content.artifacts.append(message_data.artifact)
+
+                update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
+
+                if update_response.success:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id, success=True, error=None, status_code=200
+                    )
+                else:
+                    return OrchestrationCenterResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Failed to update agent message with artifact",
+                        status_code=500,
+                    )
+
+            # Handle case where process_response doesn't have expected kind
+            else:
+                logger.error(
+                    "OrchestrationCenter: Unexpected response kind '%s' for agent message %s",
+                    getattr(message_data, "kind", "unknown"),
+                    room_agent_message.message_id,
+                )
+                return OrchestrationCenterResponse(
+                    room_id=room_id,
+                    success=False,
+                    error=(
+                        f"Unexpected response type from agent: "
+                        f"{getattr(message_data, 'kind', 'unknown')}"
+                    ),
+                    status_code=500,
+                )
+
+        query_response = await self.room_services.inquiry_agent_messages_by_related_message_id(RoomCenterAgentMessageRequest(related_message_id=room_user_message_id))
+        if not query_response.success:
+            return OrchestrationCenterResponse(
+                room_id=room_id,
+                success=False,
+                error=query_response.error,
+                status_code=500,                
+            )
+            
+        room_agent_messages = query_response.message_list
+
+        return OrchestrationCenterResponse(
+            room_id=room_id, room_agent_message_list=room_agent_messages, success=True, error=None, status_code=200
+        )

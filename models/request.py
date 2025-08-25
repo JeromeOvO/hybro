@@ -78,8 +78,11 @@ class InspectionCenterRequest(BaseModel):
 
 
 class OrchestrationCenterRequest(BaseModel):
-    task_id: str
-
+    task_id: str | None = None
+    room_id: str | None = None
+    room_user_message_id: str | None = None
+    room_agent_message_id: str | None = None
+    room_related_message_id: str | None = None
 
 class DebatationCenterRequest(BaseModel):
     task_id: str

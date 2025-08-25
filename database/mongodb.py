@@ -528,6 +528,16 @@ class MongoDB:
         """
         result = await self.room_agent_messages_collection.find_one({"message_id": message_id})
         return RoomAgentMessage(**result) if result else None
+
+    async def get_room_agent_messages_by_related_message_id(self, related_message_id: str) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages by related_message_id
+        """
+        results = self.room_agent_messages_collection.find({"related_message_id": related_message_id})
+        room_agent_messages = []
+        async for room_agent_message in results:
+            room_agent_messages.append(RoomAgentMessage(**room_agent_message))
+        return room_agent_messages
     
     async def update_room_agent_message_by_message_id(self, message_id: str, room_agent_message: RoomAgentMessage) -> bool:
         """

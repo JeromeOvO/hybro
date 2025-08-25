@@ -24,5 +24,6 @@ class RoomCenter:
     def update_room_name(self, request: RoomCenterRoomSettingRequest) -> RoomCenterRoomSettingResponse:
         return self.room_services.update_room_name(request)
 
-    def send_user_message(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
-        return self.room_services.send_user_message(request)
+    def create_and_parse_user_message(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        return self.room_services.create_and_parse_user_message(request)
+    

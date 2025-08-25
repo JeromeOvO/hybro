@@ -4,7 +4,7 @@ from a2a.types import AgentCard, Task, TaskState
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory, RoomAgentMessage
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
 from datetime import datetime
@@ -55,7 +55,9 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
 
 class OrchestrationCenterResponse(BaseModel):
     task_id: str | None = None
+    room_id: str | None = None
     meta_task_ids: list[str] | None = None
+    room_agent_message_list: list[RoomAgentMessage] | None = None
     agent_id: str | None = None
     success: bool
     error: str | None = None
@@ -72,6 +74,7 @@ class DebatationCenterResponse(BaseModel):
 
 
 class AgentCenterResponse(BaseModel):
+    agent_url: str | None = None
     agent_id: str | None = None
     agent_card: AgentCard | None = None
     agent: Agent | None = None
@@ -139,6 +142,7 @@ class RoomCenterAgentMessageResponse(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     message: RoomAgentMessage | None = None
+    message_list: list[RoomAgentMessage] | None = None
     error: str | None = None
     status_code: int = 200
 
