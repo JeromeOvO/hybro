@@ -5,6 +5,7 @@ import {
   BookOpen,
   VectorSquare,
   MessageCircle,
+  HousePlus,
   History
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
@@ -29,6 +30,11 @@ const staticNavAgents = [
     name: "Start a new Chat",
     url: "/chat",
     icon: MessageCircle,
+  },
+  {
+    name: "Create a new Room",
+    url: "/room",
+    icon: HousePlus,
   },
   {
     name: "Agent Network",
