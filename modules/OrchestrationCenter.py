@@ -1365,7 +1365,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     status_code=500,
                 )
             
-            message_data = await self.a2a_service.process_a2a_response(process_agent_message_response.message)
+            message_data = await self.a2a_service.process_a2a_response(process_agent_message_response.a2a_response)
 
             logger.info("OrchestrationCenter: process response: %s", message_data)
 
@@ -1385,11 +1385,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             if message_data.kind == "task":
                 room_agent_message.message_content = message_data
                 update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
-                if update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id, success=True, error=None, status_code=200
-                    )
-                else:
+                if not update_response.success:
                     return OrchestrationCenterResponse(
                         room_id=room_id,
                         success=False,
@@ -1405,11 +1401,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
                 update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
                 
-                if update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id, success=True, error=None, status_code=200
-                    )
-                else:
+                if not update_response.success:
                     return OrchestrationCenterResponse(
                         room_id=room_id,
                         success=False,
@@ -1439,11 +1431,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
                 update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
 
-                if update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id, success=True, error=None, status_code=200
-                    )
-                else:
+                if not update_response.success:
                     return OrchestrationCenterResponse(
                         room_id=room_id,
                         success=False,
@@ -1460,11 +1448,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
                 update_response = await self.room_services.update_agent_message_by_message_id(RoomCenterAgentMessageRequest(message_id=room_agent_message.message_id, message=room_agent_message))
 
-                if update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id, success=True, error=None, status_code=200
-                    )
-                else:
+                if not update_response.success:
                     return OrchestrationCenterResponse(
                         room_id=room_id,
                         success=False,

@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from a2a.types import AgentCard, Task, TaskState
+from a2a.types import AgentCard, SendMessageResponse, SendStreamingMessageResponse, Task, TaskState
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
@@ -142,7 +142,9 @@ class RoomCenterAgentMessageResponse(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     message: RoomAgentMessage | None = None
+    a2a_response: SendMessageResponse | SendStreamingMessageResponse | None = None
     message_list: list[RoomAgentMessage] | None = None
+    success: bool
     error: str | None = None
     status_code: int = 200
 

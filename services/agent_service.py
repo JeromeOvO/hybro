@@ -292,7 +292,7 @@ class AgentService:
             return AgentCenterResponse(success=False, error="Agent not found", status_code=404)
         
         return AgentCenterResponse(
-            agent_url=agent_query_result.agent.agent_card.url, success=True, error=None, status_code=200
+            agent_url=agent_query_result.agent_card.url, success=True, error=None, status_code=200
         )
 
 

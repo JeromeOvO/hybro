@@ -496,10 +496,11 @@ class RoomServices:
 
         send_response = await self.a2a_service.send_message_to_agent(agent_url, agent_message)
 
-        if send_response.success:
+        if send_response is not None:
             return RoomCenterAgentMessageResponse(
                 message_id=message.message_id,
                 message=message,
+                a2a_response=send_response,
                 success=True,
                 error=None,
                 status_code=200
@@ -508,8 +509,9 @@ class RoomServices:
             return RoomCenterAgentMessageResponse(
                 message_id=message.message_id,
                 message=message,
+                a2a_response=None,
                 success=False,
-                error=send_response.error,
+                error="Failed to send message",
                 status_code=500
             )
 
