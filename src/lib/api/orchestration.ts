@@ -131,3 +131,24 @@ export async function summarizeMetaTaskForBaseTask(data: { task_id: string }): P
 
   return await response.json()
 } 
+
+
+export async function processRoomUserMessage(data: { room_id: string, room_user_message_id: string, room_related_message_id : string }): Promise<OrchestrationCenterResponse> {
+  console.log('Calling processRoomUserMessage with data:', data)
+  
+  const response = await fetch(`${API_BASE_URL}/processRoomUserMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error('processRoomUserMessage error:', response.status, errorText)
+    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  }
+
+  return await response.json()
+}
