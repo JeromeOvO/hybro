@@ -11,18 +11,18 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.request import (
     AgentCenterRequest,
+    ChatMemoryRequest,
     ChatRequest,
     InspectionCenterRequest,
     OrchestrationCenterRequest,
     TaskCenterRequest,
-    ChatMemoryRequest,
 )
 from modules.AgentCenter import AgentCenter
 from modules.HostAgent import HostAgent
 from modules.InspectionCenter import InspectionCenter
+from modules.MemoryCenter import MemoryCenter
 from modules.OrchestrationCenter import OrchestrationCenter
 from modules.TaskCenter import TaskCenter
-from modules.MemoryCenter import MemoryCenter
 
 load_dotenv()
 
@@ -385,6 +385,7 @@ async def summarize_meta_task_for_base_task(request: Request):
 
     return orchestration_center_response
 
+
 # Memory Center Endpoints
 @app.post("/memoryCenter/addChatContext")
 async def add_chat_context(request: Request):
@@ -393,9 +394,12 @@ async def add_chat_context(request: Request):
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
     user_input = request_data.get("user_input")
-    memory_center_request = ChatMemoryRequest(user_name=user_name, session_id=session_id, user_input=user_input)
+    memory_center_request = ChatMemoryRequest(
+        user_name=user_name, session_id=session_id, user_input=user_input
+    )
     memory_center_response = await memory_center.add_chat_context(memory_center_request)
     return memory_center_response
+
 
 @app.post("/memoryCenter/getChatContextBySessionId")
 async def get_chat_context_by_session_id(request: Request):
@@ -403,9 +407,14 @@ async def get_chat_context_by_session_id(request: Request):
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
-    memory_center_request = ChatMemoryRequest(user_name=user_name, session_id=session_id)
-    memory_center_response = await memory_center.get_chat_context_by_session_id(memory_center_request)
+    memory_center_request = ChatMemoryRequest(
+        user_name=user_name, session_id=session_id
+    )
+    memory_center_response = await memory_center.get_chat_context_by_session_id(
+        memory_center_request
+    )
     return memory_center_response
+
 
 @app.post("/memoryCenter/updateChatContextBySessionId")
 async def update_chat_context_by_session_id(request: Request):
@@ -416,9 +425,18 @@ async def update_chat_context_by_session_id(request: Request):
     user_input = request_data.get("user_input")
     agent_response = request_data.get("agent_response")
     chat_context = request_data.get("chat_context")
-    memory_center_request = ChatMemoryRequest(user_name=user_name, session_id=session_id, user_input=user_input, agent_response=agent_response, chat_context=chat_context)
-    memory_center_response = await memory_center.update_chat_context_by_session_id(memory_center_request)
+    memory_center_request = ChatMemoryRequest(
+        user_name=user_name,
+        session_id=session_id,
+        user_input=user_input,
+        agent_response=agent_response,
+        chat_context=chat_context,
+    )
+    memory_center_response = await memory_center.update_chat_context_by_session_id(
+        memory_center_request
+    )
     return memory_center_response
+
 
 @app.post("/memoryCenter/deleteChatContextBySessionId")
 async def delete_chat_context_by_session_id(request: Request):
@@ -426,6 +444,10 @@ async def delete_chat_context_by_session_id(request: Request):
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
-    memory_center_request = ChatMemoryRequest(user_name=user_name, session_id=session_id)    
-    memory_center_response = await memory_center.delete_chat_context_by_session_id(memory_center_request)
+    memory_center_request = ChatMemoryRequest(
+        user_name=user_name, session_id=session_id
+    )
+    memory_center_response = await memory_center.delete_chat_context_by_session_id(
+        memory_center_request
+    )
     return memory_center_response

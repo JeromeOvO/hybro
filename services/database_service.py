@@ -9,7 +9,6 @@ from database.pinecone_db import pinecone_db
 from models.agent import Agent
 from models.memory import ChatContext
 from models.task import BaseTask, MetaTask, TaskSession
-from services.openai_service import openai_service
 
 logger = get_logger(__name__)
 
@@ -19,11 +18,13 @@ logger = get_logger(__name__)
 # - One for all DB services implementation
 
 
-
 class DatabaseService:
     def __init__(self):
         self.mongo = mongodb
         self.pinecone = pinecone_db
+        # Import here to avoid circular import
+        from services.openai_service import openai_service
+
         self.ai_service = openai_service
 
     # agent management
@@ -419,16 +420,22 @@ class DatabaseService:
             await self.mongo.add_chat_context(chat_context)
             return True
         except Exception as e:
-            logger.error(f"Failed to add chat context {chat_context.memory_id} to databases: {str(e)}")
+            logger.error(
+                f"Failed to add chat context {chat_context.memory_id} to databases: {str(e)}"
+            )
             return False
-    
-    async def get_chat_context_by_session_id(self, session_id: str) -> ChatContext | None:
+
+    async def get_chat_context_by_session_id(
+        self, session_id: str
+    ) -> ChatContext | None:
         """
         Get a chat context by session_id
         """
         return await self.mongo.get_chat_context_by_session_id(session_id)
-    
-    async def update_chat_context_by_session_id(self, session_id: str, chat_context: ChatContext) -> bool:
+
+    async def update_chat_context_by_session_id(
+        self, session_id: str, chat_context: ChatContext
+    ) -> bool:
         """
         Update a chat context by session_id
         """
@@ -436,9 +443,11 @@ class DatabaseService:
             await self.mongo.update_chat_context_by_session_id(session_id, chat_context)
             return True
         except Exception as e:
-            logger.error(f"Failed to update chat context {session_id} in databases: {str(e)}")
+            logger.error(
+                f"Failed to update chat context {session_id} in databases: {str(e)}"
+            )
             return False
-    
+
     async def delete_chat_context_by_session_id(self, session_id: str) -> bool:
         """
         Delete a chat context by session_id
@@ -447,6 +456,7 @@ class DatabaseService:
             await self.mongo.delete_chat_context_by_session_id(session_id)
             return True
         except Exception as e:
-            logger.error(f"Failed to delete chat context {session_id} from databases: {str(e)}")
+            logger.error(
+                f"Failed to delete chat context {session_id} from databases: {str(e)}"
+            )
             return False
-    

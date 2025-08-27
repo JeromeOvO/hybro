@@ -1,7 +1,6 @@
 import json
 import os
 import re
-from typing import Any
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -12,7 +11,7 @@ from openai.types.chat import (
 
 from common.utils.logger import get_logger
 from models.agent import Agent
-from models.memory import ChatContext, ContextData
+from models.memory import ContextData
 from models.task import BaseTask
 
 load_dotenv()
@@ -45,14 +44,67 @@ class OpenAIService:
 
         return embedding
 
-    async def decompose_task(self, base_task: BaseTask, context_data: ContextData) -> str:
+    async def decompose_task(
+        self, base_task: BaseTask, context_data: ContextData, best_agent: Agent | None
+    ) -> str:
         """
         Decompose a base task into subtasks using OpenAI.
         Returns a JSON string with structured execution steps.
         """
+        # Extract task goal
+        if (
+            base_task.task.history
+            and len(base_task.task.history) > 0
+            and len(base_task.task.history[0].parts) > 0
+        ):
+            first_part = base_task.task.history[0].parts[0].root
+            task_goal = (
+                first_part.text
+                if first_part.kind == "text"
+                else "No text content available"
+            )
+        else:
+            task_goal = "No task goal provided"
+
+        # Check if a single agent can handle the task before decomposition
+        try:
+            # Use LLM to determine if the best matched agent can handle the task alone
+            can_handle_alone = await self._can_agent_handle_task_alone(
+                task_goal, best_agent
+            )
+
+            if can_handle_alone == "YES":
+                # Return the original task as a single subtask
+                return json.dumps(
+                    {
+                        "execution_steps": [
+                            {
+                                "step_number": 1,
+                                "step_description": task_goal,
+                                "execution_context": f"Task assigned to agent: {best_agent.agent_card.name}",
+                                "expected_output": "Complete task resolution",
+                                "depends_on_steps": [],
+                            }
+                        ]
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Error checking single agent capability: {str(e)}")
+            # Continue with normal decomposition if agent check fails
+
+        # Continue with normal decomposition logic
         system_prompt = """You are a task decomposition assistant. Your job is
-        to break down complex tasks into smaller, manageable steps that can 
-        be solved more easily and effectively. 
+        to break down tasks into subtasks using a hybrid strategy that combines:
+        1.	Recursive Least Commitment Decomposition (RLCD):
+        - Decompose tasks incrementally.
+        - Avoid overcommitting to specific methods too early.
+        - Keep steps abstract until details are necessary.
+        2.	Constraint-Based Decomposition (CBD):
+        - Apply explicit constraints from the task description (e.g., deadlines, resources, ordering rules).
+        - Use these constraints to validate or eliminate candidate subtasks.
+        3.	Merge-and-Prune:
+        - Merge overlapping or redundant subtasks.
+        - Prune infeasible, irrelevant, or duplicate branches. 
         Important: Max 8 steps.
         Your goal is to create a structured execution plan for all steps.
         
@@ -75,20 +127,6 @@ class OpenAIService:
         3. Independent or minimal dependencies on other steps
         4. If a step needs results from previous steps, list those step numbers in depends_on_steps
         """
-
-        if (
-            base_task.task.history
-            and len(base_task.task.history) > 0
-            and len(base_task.task.history[0].parts) > 0
-        ):
-            first_part = base_task.task.history[0].parts[0].root
-            task_goal = (
-                first_part.text
-                if first_part.kind == "text"
-                else "No text content available"
-            )
-        else:
-            task_goal = "No task goal provided"
 
         prompt = f"""Task Goal: {task_goal}
         Chat Context: {context_data}
@@ -119,11 +157,7 @@ IMPORTANT: Do not include any other text in your response. Only return the JSON 
                 input=messages,
             )
 
-            content = (
-                response.output_text.strip()
-                if response.output_text
-                else ""
-            )
+            content = response.output_text.strip() if response.output_text else ""
 
             # Validate that the response is valid JSON
             try:
@@ -166,6 +200,66 @@ IMPORTANT: Do not include any other text in your response. Only return the JSON 
                     ]
                 }
             )
+
+    async def _can_agent_handle_task_alone(self, task_goal: str, agent: Agent) -> str:
+        """
+        Use LLM to determine if a single agent can handle the task alone.
+        """
+        system_prompt = """You are an AI task assessment assistant. Your job is to determine 
+        if a given agent can handle a specific task completely by itself without requiring 
+        decomposition into multiple subtasks or coordination with other agents.
+
+        Consider the agent's capabilities, description, and the complexity of the task.
+        
+        Respond with only "YES" if the agent can handle the task alone, or "NO" if the task 
+        requires decomposition or multiple agents."""
+
+        # Format capabilities and skills properly
+        capabilities = agent.agent_card.capabilities
+        if isinstance(capabilities, dict):
+            cap_strings = [f"{k}: {v}" for k, v in capabilities.items()]
+        else:
+            cap_strings = []
+
+        skills = agent.agent_card.skills
+        if isinstance(skills, list):
+            skill_names = [
+                (s.name or s.id or "Unknown") if isinstance(s, dict) else str(s)
+                for s in skills
+            ]
+        else:
+            skill_names = []
+
+        user_prompt = f"""Task: {task_goal}
+
+Agent Name: {agent.agent_card.name}
+Agent Description: {agent.agent_card.description}
+Agent Capabilities: {", ".join(cap_strings)}
+Agent Skills: {", ".join(skill_names)}
+
+Can this agent handle the task completely by itself without requiring decomposition or help from other agents?"""
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                messages=[
+                    ChatCompletionSystemMessageParam(
+                        role="system", content=system_prompt
+                    ),
+                    ChatCompletionUserMessageParam(role="user", content=user_prompt),
+                ],
+                max_completion_tokens=2048,
+            )
+
+            content = response.choices[0].message.content.strip().upper()
+            logger.info(f"Agent capability assessment user prompt: {user_prompt}")
+            logger.info(f"Agent capability assessment response: {response}")
+            logger.info(f"Agent capability assessment response: {content}")
+            return content
+
+        except Exception as e:
+            logger.error(f"Error assessing agent capability: {str(e)}")
+            return "NO"  # Default to decomposition if assessment fails
 
     async def select_best_agent_for_task(
         self, meta_task_description: str, agents: list[Agent]
@@ -339,11 +433,7 @@ Your response should be an complete answer with all the specific details the use
                 input=messages,
             )
 
-            content = (
-                response.output_text.strip()
-                if response.output_text
-                else ""
-            )
+            content = response.output_text.strip() if response.output_text else ""
 
             if not content:
                 return "Unable to generate summary due to empty response from AI model."
@@ -442,11 +532,13 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in summarize_debate_answer: {str(e)}")
             return f"Error: {str(e)}"
 
-    async def generate_chat_context(self, user_input: str, agent_response: str, context_data: ContextData) -> str:
+    async def generate_chat_context(
+        self, user_input: str, agent_response: str, context_data: ContextData
+    ) -> str:
         """
         Generate a precise context summary for maintaining conversation state.
         """
-        
+
         system_prompt = """You are an expert context summarizer for multi-agent conversations. Your goal is to maintain a comprehensive, evolving context summary that preserves essential information across conversation turns.
 
 OBJECTIVES:
@@ -471,46 +563,61 @@ OUTPUT: Return a comprehensive, well-organized context summary that captures the
             f"User Input: {user_input}",
             f"Agent Response: {agent_response}",
         ]
-        
-        if context_data and context_data.context_content and context_data.context_content.strip():
-            prompt_parts.extend([
-                "",
-                "**EXISTING CONTEXT:**",
-                context_data.context_content,
-                "",
-                "**TASK:** Update and refine the existing context by intelligently incorporating the new interaction. Merge related information, resolve contradictions, and ensure the summary reflects the current conversation state."
-            ])
+
+        if (
+            context_data
+            and context_data.context_content
+            and context_data.context_content.strip()
+        ):
+            prompt_parts.extend(
+                [
+                    "",
+                    "**EXISTING CONTEXT:**",
+                    context_data.context_content,
+                    "",
+                    "**TASK:** Update and refine the existing context by intelligently incorporating the new interaction. Merge related information, resolve contradictions, and ensure the summary reflects the current conversation state.",
+                ]
+            )
         else:
-            prompt_parts.extend([
-                "",
-                "**TASK:** Create a comprehensive initial context summary based on this first interaction."
-            ])
-        
+            prompt_parts.extend(
+                [
+                    "",
+                    "**TASK:** Create a comprehensive initial context summary based on this first interaction.",
+                ]
+            )
+
         prompt = "\n".join(prompt_parts)
-        
+
         messages = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
             ChatCompletionUserMessageParam(role="user", content=prompt),
         ]
-        
+
         try:
             response = await self.client.responses.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 reasoning={"effort": "low"},
-                input=messages  
+                input=messages,
             )
-            
-            context_summary = response.output_text.strip() if response.output_text else ""
-            
+
+            context_summary = (
+                response.output_text.strip() if response.output_text else ""
+            )
+
             if not context_summary:
                 context_summary = f"User discussed: {user_input}. Agent provided: {agent_response[:200]}..."
-            
+
             return context_summary
-            
+
         except Exception as e:
             print(f"Error in generate_chat_context: {str(e)}")
-            existing_context = context_data.context_content if context_data and context_data.context_content else ""
+            existing_context = (
+                context_data.context_content
+                if context_data and context_data.context_content
+                else ""
+            )
             fallback = f"{existing_context}\n\nLatest: User: {user_input} | Agent: {agent_response[:200]}..."
             return fallback.strip()
+
 
 openai_service = OpenAIService()

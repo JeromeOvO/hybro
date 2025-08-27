@@ -4,8 +4,8 @@ from a2a.types import AgentCard, Task, TaskState
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
-from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
+from models.task import BaseTask, MetaTask, TaskSession
 
 
 class Step(BaseModel):
@@ -105,6 +105,7 @@ class ChatResponse(BaseModel):
     success: bool
     error: str | None = None
     status_code: int = 200
+
 
 class ChatMemoryResponse(BaseModel):
     user_name: str
