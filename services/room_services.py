@@ -5,7 +5,8 @@ from models.room import (
     RoomAgentMessage,
     RoomMemory,
     MessageContent,
-    MemoryContent
+    MemoryContent,
+    RoomMessage
 )
 from models.request import (
     RoomCenterRoomSettingRequest,
@@ -13,7 +14,8 @@ from models.request import (
     RoomCenterAgentMessageRequest,
     RoomCenterMemoryRequest,
     AgentCenterRequest,
-    RoomCenterAgentMessageRequest
+    RoomCenterAgentMessageRequest,
+    RoomCenterRoomMessageRequest
 )
 from models.response import (
     RoomCenterRoomSettingResponse,
@@ -21,6 +23,7 @@ from models.response import (
     RoomCenterAgentMessageResponse,
     RoomCenterMemoryResponse,
     RoomCenterAgentMessageResponse,
+    RoomCenterRoomMessageResponse,
 )
 from services.database_service import DatabaseService
 from services.openai_service import OpenAIService
@@ -569,3 +572,91 @@ class RoomServices:
         related_message_id = request.related_message_id
         messages = await self.database_service.get_room_agent_messages_by_related_message_id(related_message_id)
         return RoomCenterAgentMessageResponse(message_list=messages, success=True, error=None, status_code=200)
+    
+    async def inquiry_room_messages_by_room_id(self, request: RoomCenterRoomMessageRequest) -> RoomCenterRoomMessageResponse:
+        """
+        Retrieve all messages in a room, including user messages and agent messages.
+        For user messages: return message_text from message_content
+        For agent messages: return text part from the latest message with role "agent" in task.history
+        Sort by creation time and return
+        """
+        if request.room_id is None:
+            return RoomCenterRoomMessageResponse(
+                message_list=None, 
+                success=False, 
+                error="Room id is required", 
+                status_code=400
+            )
+        
+        try:
+            room_id = request.room_id
+            
+            # Get user messages
+            user_message_request = RoomCenterUserMessageRequest(room_id=room_id)
+            user_messages_response = await self.inquiry_user_messages_by_room_id(user_message_request)
+            
+            # Get agent messages
+            agent_message_request = RoomCenterAgentMessageRequest(room_id=room_id)
+            agent_messages_response = await self.inquiry_agent_messages_by_room_id(agent_message_request)
+            
+            combined_messages = []
+            
+            # Process user messages
+            if user_messages_response.success and user_messages_response.message_list:
+                for user_msg in user_messages_response.message_list:
+                    room_message = RoomMessage(
+                        message_id=user_msg.message_id,
+                        message_type="user",
+                        message_content=user_msg.message_content.message_text,
+                        message_created_at=user_msg.message_created_at,
+                        user_name=user_msg.user_name
+                    )
+                    combined_messages.append(room_message)
+            
+            # Process agent messages
+            if agent_messages_response.success and agent_messages_response.message_list:
+                for agent_msg in agent_messages_response.message_list:
+                    # Extract latest agent message from task.history
+                    agent_content = ""
+                    if agent_msg.message_content and agent_msg.message_content.history:
+                        # Find the latest message with role "agent"
+                        agent_messages = [
+                            msg for msg in agent_msg.message_content.history 
+                            if msg.role == Role.agent
+                        ]
+                        
+                        if agent_messages:
+                            # Get the latest agent message
+                            latest_agent_message = agent_messages[-1]
+                            
+                            # Extract text parts from message parts
+                            agent_content = latest_agent_message.parts[0].root.text
+                    
+                    room_message = RoomMessage(
+                        message_id=agent_msg.message_id,
+                        message_type="agent",
+                        message_content=agent_content,
+                        message_created_at=agent_msg.message_created_at,
+                        agent_name=agent_msg.agent_name
+                    )
+                    combined_messages.append(room_message)
+            
+            # Sort by creation time
+            combined_messages.sort(key=lambda x: x.message_created_at)
+            
+            return RoomCenterRoomMessageResponse(
+                room_id=room_id,
+                message_list=combined_messages,
+                success=True,
+                error=None,
+                status_code=200
+            )
+            
+        except Exception as e:
+            return RoomCenterRoomMessageResponse(
+                room_id=request.room_id,
+                message_list=None,
+                success=False,
+                error=str(e),
+                status_code=500
+            )

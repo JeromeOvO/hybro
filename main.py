@@ -18,6 +18,8 @@ from models.request import (
     ChatMemoryRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
+    RoomCenterAgentMessageRequest,
+    RoomCenterRoomMessageRequest,
 )
 from modules.AgentCenter import AgentCenter
 from modules.HostAgent import HostAgent
@@ -505,3 +507,12 @@ async def process_room_user_message(request: Request):
     orchestration_center_request = OrchestrationCenterRequest(room_id=room_id, room_user_message_id=room_user_message_id, room_related_message_id=room_related_message_id)
     orchestration_center_response = await orchestration_center.process_room_user_message(orchestration_center_request)
     return orchestration_center_response
+
+@app.post("/roomCenter/inquiryRoomMessagesByRoomId")
+async def inquiry_room_messages(request: Request):
+    room_center = RoomCenter()
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+    room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
+    room_center_response = await room_center.inquiry_room_messages_by_room_id(room_center_request)
+    return room_center_response

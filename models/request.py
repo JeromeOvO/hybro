@@ -8,7 +8,7 @@ from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
 from datetime import datetime
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory, RoomMessage
 
 
 class TaskRequest(BaseModel):
@@ -171,3 +171,12 @@ class RoomCenterMemoryRequest(BaseModel):
     memory_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     memory: RoomMemory | None = None
+
+class RoomCenterRoomMessageRequest(BaseModel):
+    room_id: str | None = None
+    message_id: str | None = None
+    message_type: str | None = None
+    message_content: str | None = None
+    message_created_at: datetime | None = None
+    extend_info: dict[str, Any] | None = None
+    message: RoomMessage | None = None

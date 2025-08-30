@@ -363,7 +363,7 @@ export interface TaskStatus {
  * Multiple ChatContext objects can belong to one TaskSession during a conversation.
  */
 export interface ChatContext {
-  context_id: string;
+  memory_id: string;
   user_name: string;
   session_id: string;
   context_data?: ContextData | null;
@@ -413,7 +413,129 @@ export interface MetaTask {
   extend_info?: unknown;
 }
 export interface OrchestrationCenterRequest {
-  task_id: string;
+  task_id?: string | null;
+  room_id?: string | null;
+  room_user_message_id?: string | null;
+  room_agent_message_id?: string | null;
+  room_related_message_id?: string | null;
+}
+export interface Room {
+  room_id?: string;
+  room_name: string;
+  room_owner_id: string;
+  room_owner_name: string;
+  room_agent_set?: {
+    [k: string]: string;
+  };
+  room_created_at?: string;
+  extend_info?: unknown;
+}
+export interface RoomAgentMessage {
+  room_id: string;
+  message_id: string;
+  related_message_id?: string | null;
+  agent_id: string;
+  agent_name: string;
+  message_content: Task;
+  message_created_at?: string;
+  extend_info?: unknown;
+}
+export interface RoomCenterAgentMessageRequest {
+  room_id?: string | null;
+  message_id?: string | null;
+  related_message_id?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  agent_message_content?: Task | null;
+  message_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  message?: RoomAgentMessage | null;
+}
+export interface RoomCenterMemoryRequest {
+  room_id?: string | null;
+  memory_id?: string | null;
+  memory_content?: string | null;
+  memory_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  memory?: RoomMemory | null;
+}
+export interface RoomMemory {
+  room_id: string;
+  memory_id: string;
+  memory_content: MemoryContent;
+  memory_created_at?: string;
+  extend_info?: unknown;
+}
+export interface MemoryContent {
+  memory_text: string;
+  [k: string]: unknown;
+}
+export interface RoomCenterRoomMessageRequest {
+  room_id?: string | null;
+  message_id?: string | null;
+  message_type?: string | null;
+  message_content?: string | null;
+  message_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  message?: RoomMessage | null;
+}
+/**
+ * Unified room message format for both user and agent messages
+ */
+export interface RoomMessage {
+  message_id: string;
+  message_type: string;
+  message_content: string;
+  message_created_at: string;
+  user_name?: string | null;
+  agent_name?: string | null;
+}
+export interface RoomCenterRoomSettingRequest {
+  room_id?: string | null;
+  room_name?: string | null;
+  room_owner_id?: string | null;
+  room_owner_name?: string | null;
+  room_agent_set?: {
+    [k: string]: string;
+  } | null;
+  room_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  room?: Room | null;
+}
+export interface RoomCenterUserMessageRequest {
+  room_id?: string | null;
+  message_id?: string | null;
+  related_message_id?: string | null;
+  user_id?: string | null;
+  user_name?: string | null;
+  user_input?: string | null;
+  message_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  message?: RoomUserMessage | null;
+}
+export interface RoomUserMessage {
+  room_id: string;
+  message_id: string;
+  related_message_id?: string | null;
+  user_id: string;
+  user_name: string;
+  message_content: MessageContent;
+  message_created_at?: string;
+  extend_info?: unknown;
+}
+export interface MessageContent {
+  message_text: string;
+  [k: string]: unknown;
 }
 export interface TaskCenterRequest {
   task_id?: string | null;

@@ -4,7 +4,7 @@ from a2a.types import AgentCard, SendMessageResponse, SendStreamingMessageRespon
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory, RoomAgentMessage
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory, RoomAgentMessage, RoomMessage
 from models.task import BaseTask, MetaTask, TaskSession
 from models.memory import ChatContext
 from datetime import datetime
@@ -132,6 +132,7 @@ class RoomCenterUserMessageResponse(BaseModel):
     user_id: str | None = None
     user_name: str | None = None
     message: RoomUserMessage | None = None
+    message_list: list[RoomUserMessage] | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
@@ -152,6 +153,13 @@ class RoomCenterMemoryResponse(BaseModel):
     room_id: str | None = None
     memory_id: str | None = None
     memory: RoomMemory | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterRoomMessageResponse(BaseModel):
+    room_id: str | None = None
+    message_list: list[RoomMessage] | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

@@ -56,3 +56,11 @@ class RoomMemory(BaseModel):
     memory_created_at: datetime = Field(default_factory=datetime.now)
     extend_info: Optional[Any] = None
 
+class RoomMessage(BaseModel):
+    """Unified room message format for both user and agent messages"""
+    message_id: str
+    message_type: str  # "user" or "agent"
+    message_content: str
+    message_created_at: datetime
+    user_name: str | None = None
+    agent_name: str | None = None

@@ -33,6 +33,8 @@ export type TaskState =
   | "rejected"
   | "auth-required"
   | "unknown";
+export type SendMessageResponse = JSONRPCErrorResponse | SendMessageSuccessResponse;
+export type SendStreamingMessageResponse = JSONRPCErrorResponse | SendStreamingMessageSuccessResponse;
 
 export interface Agent {
   agent_id: string;
@@ -218,6 +220,7 @@ export interface AgentSkill {
   [k: string]: unknown;
 }
 export interface AgentCenterResponse {
+  agent_url?: string | null;
   agent_id?: string | null;
   agent_card?: AgentCard | null;
   agent?: Agent | null;
@@ -352,7 +355,7 @@ export interface TaskStatus {
  * Multiple ChatContext objects can belong to one TaskSession during a conversation.
  */
 export interface ChatContext {
-  context_id: string;
+  memory_id: string;
   user_name: string;
   session_id: string;
   context_data?: ContextData | null;
@@ -421,11 +424,298 @@ export interface MetaTask {
 }
 export interface OrchestrationCenterResponse {
   task_id?: string | null;
+  room_id?: string | null;
   meta_task_ids?: string[] | null;
+  room_agent_message_list?: RoomAgentMessage[] | null;
   agent_id?: string | null;
   success: boolean;
   error?: string | null;
   status_code?: number;
+}
+export interface RoomAgentMessage {
+  room_id: string;
+  message_id: string;
+  related_message_id?: string | null;
+  agent_id: string;
+  agent_name: string;
+  message_content: Task;
+  message_created_at?: string;
+  extend_info?: unknown;
+}
+export interface Room {
+  room_id?: string;
+  room_name: string;
+  room_owner_id: string;
+  room_owner_name: string;
+  room_agent_set?: {
+    [k: string]: string;
+  };
+  room_created_at?: string;
+  extend_info?: unknown;
+}
+export interface RoomCenterAgentMessageResponse {
+  room_id?: string | null;
+  message_id?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  message?: RoomAgentMessage | null;
+  a2a_response?: SendMessageResponse | SendStreamingMessageResponse | null;
+  message_list?: RoomAgentMessage[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+/**
+ * Represents a JSON-RPC 2.0 Error Response object.
+ */
+export interface JSONRPCErrorResponse {
+  error:
+    | JSONRPCError
+    | JSONParseError
+    | InvalidRequestError
+    | MethodNotFoundError
+    | InvalidParamsError
+    | InternalError
+    | TaskNotFoundError
+    | TaskNotCancelableError
+    | PushNotificationNotSupportedError
+    | UnsupportedOperationError
+    | ContentTypeNotSupportedError
+    | InvalidAgentResponseError;
+  id?: string | number | null;
+  jsonrpc?: "2.0";
+  [k: string]: unknown;
+}
+/**
+ * Represents a JSON-RPC 2.0 Error object, included in an error response.
+ */
+export interface JSONRPCError {
+  code: number;
+  data?: unknown;
+  message: string;
+  [k: string]: unknown;
+}
+/**
+ * An error indicating that the server received invalid JSON.
+ */
+export interface JSONParseError {
+  code?: -32700;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An error indicating that the JSON sent is not a valid Request object.
+ */
+export interface InvalidRequestError {
+  code?: -32600;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An error indicating that the requested method does not exist or is not available.
+ */
+export interface MethodNotFoundError {
+  code?: -32601;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An error indicating that the method parameters are invalid.
+ */
+export interface InvalidParamsError {
+  code?: -32602;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An error indicating an internal error on the server.
+ */
+export interface InternalError {
+  code?: -32603;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating that the requested task ID was not found.
+ */
+export interface TaskNotFoundError {
+  code?: -32001;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating that the task is in a state where it cannot be canceled.
+ */
+export interface TaskNotCancelableError {
+  code?: -32002;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating that the agent does not support push notifications.
+ */
+export interface PushNotificationNotSupportedError {
+  code?: -32003;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating that the requested operation is not supported by the agent.
+ */
+export interface UnsupportedOperationError {
+  code?: -32004;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating an incompatibility between the requested
+ * content types and the agent's capabilities.
+ */
+export interface ContentTypeNotSupportedError {
+  code?: -32005;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * An A2A-specific error indicating that the agent returned a response that
+ * does not conform to the specification for the current method.
+ */
+export interface InvalidAgentResponseError {
+  code?: -32006;
+  data?: unknown;
+  message?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * Represents a successful JSON-RPC response for the `message/send` method.
+ */
+export interface SendMessageSuccessResponse {
+  id?: string | number | null;
+  jsonrpc?: "2.0";
+  result: Task | Message;
+  [k: string]: unknown;
+}
+/**
+ * Represents a successful JSON-RPC response for the `message/stream` method.
+ * The server may send multiple response objects for a single request.
+ */
+export interface SendStreamingMessageSuccessResponse {
+  id?: string | number | null;
+  jsonrpc?: "2.0";
+  result: Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent;
+  [k: string]: unknown;
+}
+/**
+ * An event sent by the agent to notify the client of a change in a task's status.
+ * This is typically used in streaming or subscription models.
+ */
+export interface TaskStatusUpdateEvent {
+  contextId: string;
+  final: boolean;
+  kind?: "status-update";
+  metadata?: {
+    [k: string]: unknown;
+  } | null;
+  status: TaskStatus;
+  taskId: string;
+  [k: string]: unknown;
+}
+/**
+ * An event sent by the agent to notify the client that an artifact has been
+ * generated or updated. This is typically used in streaming models.
+ */
+export interface TaskArtifactUpdateEvent {
+  append?: boolean | null;
+  artifact: Artifact;
+  contextId: string;
+  kind?: "artifact-update";
+  lastChunk?: boolean | null;
+  metadata?: {
+    [k: string]: unknown;
+  } | null;
+  taskId: string;
+  [k: string]: unknown;
+}
+export interface RoomCenterMemoryResponse {
+  room_id?: string | null;
+  memory_id?: string | null;
+  memory?: RoomMemory | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+export interface RoomMemory {
+  room_id: string;
+  memory_id: string;
+  memory_content: MemoryContent;
+  memory_created_at?: string;
+  extend_info?: unknown;
+}
+export interface MemoryContent {
+  memory_text: string;
+  [k: string]: unknown;
+}
+export interface RoomCenterRoomMessageResponse {
+  room_id?: string | null;
+  message_list?: RoomMessage[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+/**
+ * Unified room message format for both user and agent messages
+ */
+export interface RoomMessage {
+  message_id: string;
+  message_type: string;
+  message_content: string;
+  message_created_at: string;
+  user_name?: string | null;
+  agent_name?: string | null;
+}
+export interface RoomCenterRoomSettingResponse {
+  room_id?: string | null;
+  room_agent_set?: string[] | null;
+  room?: Room | null;
+  room_list?: Room[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+export interface RoomCenterUserMessageResponse {
+  room_id?: string | null;
+  message_id?: string | null;
+  user_id?: string | null;
+  user_name?: string | null;
+  message?: RoomUserMessage | null;
+  message_list?: RoomUserMessage[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+export interface RoomUserMessage {
+  room_id: string;
+  message_id: string;
+  related_message_id?: string | null;
+  user_id: string;
+  user_name: string;
+  message_content: MessageContent;
+  message_created_at?: string;
+  extend_info?: unknown;
+}
+export interface MessageContent {
+  message_text: string;
+  [k: string]: unknown;
 }
 export interface Step {
   step_id: string;
