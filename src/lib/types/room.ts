@@ -166,6 +166,17 @@ export interface RoomMemory {
   memory_created_at?: string;
   extend_info?: unknown;
 }
+/**
+ * Unified room message format for both user and agent messages
+ */
+export interface RoomMessage {
+  message_id: string;
+  message_type: string;
+  message_content: string;
+  message_created_at: string;
+  user_name?: string | null;
+  agent_name?: string | null;
+}
 export interface RoomUserMessage {
   room_id: string;
   message_id: string;

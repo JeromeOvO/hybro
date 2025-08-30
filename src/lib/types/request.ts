@@ -474,6 +474,28 @@ export interface MemoryContent {
   memory_text: string;
   [k: string]: unknown;
 }
+export interface RoomCenterRoomMessageRequest {
+  room_id?: string | null;
+  message_id?: string | null;
+  message_type?: string | null;
+  message_content?: string | null;
+  message_created_at?: string | null;
+  extend_info?: {
+    [k: string]: unknown;
+  } | null;
+  message?: RoomMessage | null;
+}
+/**
+ * Unified room message format for both user and agent messages
+ */
+export interface RoomMessage {
+  message_id: string;
+  message_type: string;
+  message_content: string;
+  message_created_at: string;
+  user_name?: string | null;
+  agent_name?: string | null;
+}
 export interface RoomCenterRoomSettingRequest {
   room_id?: string | null;
   room_name?: string | null;

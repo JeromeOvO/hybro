@@ -665,6 +665,24 @@ export interface MemoryContent {
   memory_text: string;
   [k: string]: unknown;
 }
+export interface RoomCenterRoomMessageResponse {
+  room_id?: string | null;
+  message_list?: RoomMessage[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+/**
+ * Unified room message format for both user and agent messages
+ */
+export interface RoomMessage {
+  message_id: string;
+  message_type: string;
+  message_content: string;
+  message_created_at: string;
+  user_name?: string | null;
+  agent_name?: string | null;
+}
 export interface RoomCenterRoomSettingResponse {
   room_id?: string | null;
   room_agent_set?: string[] | null;
@@ -680,6 +698,7 @@ export interface RoomCenterUserMessageResponse {
   user_id?: string | null;
   user_name?: string | null;
   message?: RoomUserMessage | null;
+  message_list?: RoomUserMessage[] | null;
   success: boolean;
   error?: string | null;
   status_code?: number;
