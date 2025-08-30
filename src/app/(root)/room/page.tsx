@@ -202,6 +202,7 @@ export default function RoomPage() {
             ref={formRef}
             onSubmit={handleFormSubmit}
             isSubmitting={isCreatingRoom}
+            isEditing={false}
             availableAgents={availableAgents}
             loadingAgents={loadingAgents}
             agentsError={agentsError}

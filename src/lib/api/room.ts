@@ -1,11 +1,15 @@
 // Room-related API functions
 import type { 
   RoomCenterRoomSettingResponse, 
-  RoomCenterUserMessageResponse 
+  RoomCenterUserMessageResponse,
+  RoomCenterRoomMessageResponse
 } from '@/lib/types/response'
 import type {
   RoomCenterRoomSettingRequest,
-  RoomCenterUserMessageRequest
+  RoomCenterUserMessageRequest,
+  RoomCenterRoomMessageRequest,
+  RoomUserMessage,
+  MessageContent
 } from '@/lib/types/request'
 
 // Using Next.js API routes as proxy to avoid CORS issues
@@ -110,10 +114,7 @@ export async function updateRoomAgentSet(
 }
 
 // Update room name
-export async function updateRoomName(
-  room_id: string,
-  room_name: string
-): Promise<RoomCenterRoomSettingResponse> {
+export async function updateRoomName(room_id: string, room_name: string): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id,
     room_name
@@ -141,14 +142,52 @@ export async function createAndParseUserMessage(
   user_id?: string,
   user_name?: string
 ): Promise<RoomCenterUserMessageResponse> {
+  // 生成一个临时的message_id（可以是空字符串或UUID）
+  const message_id = ""
+  
   const requestData: RoomCenterUserMessageRequest = {
     room_id,
-    user_input,
-    user_id,
-    user_name
+    message: {
+      room_id,
+      message_id,
+      related_message_id: null,
+      user_id: user_id || "",
+      user_name: user_name || "",
+      message_content: {
+        message_text: user_input
+      },
+      extend_info: null
+    }
   }
 
+  console.log('🚀 Sending createAndParseUserMessage request:', JSON.stringify(requestData, null, 2))
+
   const response = await fetch(`${API_BASE_URL}/createAndParseUserMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestData),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error('❌ API Error:', response.status, errorText)
+    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  }
+
+  const result = await response.json()
+  console.log('✅ API Response:', result)
+  return result
+}
+
+// Query room messages
+export async function inquiryRoomMessagesByRoomId(room_id: string): Promise<RoomCenterRoomMessageResponse> {
+  const requestData: RoomCenterRoomMessageRequest = {
+    room_id
+  }
+
+  const response = await fetch(`${API_BASE_URL}/inquiryRoomMessagesByRoomId`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -162,3 +201,5 @@ export async function createAndParseUserMessage(
 
   return await response.json()
 }
+
+

@@ -34,6 +34,7 @@ interface RoomSettingFormProps {
   availableAgents?: Agent[]
   loadingAgents?: boolean
   agentsError?: string | null
+  isEditing?: boolean
   onRetryLoadAgents?: () => void
 }
 
@@ -47,6 +48,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   availableAgents = [],
   loadingAgents = false,
   agentsError = null,
+  isEditing = false,
   onRetryLoadAgents
 }, ref) => {
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
@@ -127,7 +129,8 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
         <Separator />
 
         {/* Submit Button */}
-        <Button 
+        {!isEditing ? (
+          <Button 
           type="submit" 
           variant="outline"
           className="w-full"
@@ -135,6 +138,16 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
         >
           {isSubmitting ? "Creating Room..." : "Create Room"}
         </Button>
+        ) : (
+          <Button 
+            type="submit" 
+            variant="outline"
+            className="w-full"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Updating Room..." : "Update Room"}
+          </Button>
+        )}
       </form>
     </Form>
   )
