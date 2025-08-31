@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUser } from '@clerk/nextjs'
 import { useRouter } from 'next/navigation'
-import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -33,7 +32,7 @@ export default function RoomPage() {
   // State for room creation
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
   const [roomCreated, setRoomCreated] = useState(false) // New state for success
-  const [createdRoomName, setCreatedRoomName] = useState('')
+  const [, setCreatedRoomName] = useState('')
 
   // Load agents on component mount
   useEffect(() => {
@@ -148,12 +147,6 @@ export default function RoomPage() {
         <div className="text-center space-y-6">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
             <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
-          </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-semibold">Room Created Successfully!</h2>
-            <p className="text-muted-foreground">
-              Your room "{createdRoomName}" has been created. Redirecting to chat...
-            </p>
           </div>
           <div className="flex items-center justify-center">
             <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">

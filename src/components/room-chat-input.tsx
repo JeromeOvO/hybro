@@ -1,15 +1,9 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Plus, Paperclip, Image as ImageIcon } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 interface Agent {
   id: string
@@ -30,8 +24,6 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
   const [cursorPosition, setCursorPosition] = useState(0)
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0) // For keyboard navigation
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const imageInputRef = useRef<HTMLInputElement>(null)
 
   const filteredAgents = agents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
@@ -173,15 +165,6 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     }
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files) {
-      // Handle file upload logic
-      console.log('Files selected:', files)
-    }
-    e.target.value = ""
-  }
-
   return (
     <div className="relative">
       {/* Agent suggestions dropdown */}
@@ -206,20 +189,10 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
       <div className="relative flex flex-col rounded-3xl bg-background border border-border shadow-lg focus-within:border-primary/50 transition-all duration-200 hover:shadow-xl hover:border-primary/30">
         {/* Hidden file inputs */}
         <input
-          ref={fileInputRef}
           type="file"
           className="hidden"
-          onChange={handleFileSelect}
           multiple
-          accept=".pdf,.doc,.docx,.txt,.csv,.json"
-        />
-        <input
-          ref={imageInputRef}
-          type="file"
-          className="hidden"
-          onChange={handleFileSelect}
-          multiple
-          accept="image/*"
+          accept="*"
         />
 
         {/* Textarea */}

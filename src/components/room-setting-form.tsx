@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -30,10 +29,7 @@ const formSchema = z.object({
 
 interface RoomFormData {
   roomName: string
-  roomId: string
   selectedAgents: { [agentName: string]: string } // agent_name -> agent_id mapping
-  roomOwnerId: string
-  roomOwnerName: string
 }
 
 interface RoomSettingFormProps {
@@ -81,7 +77,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       
       // initialData.selectedAgents is { [agentName]: agentId }
       // We need to find the corresponding Agent objects
-      Object.entries(initialData.selectedAgents).forEach(([agentName, agentId]) => {
+      Object.entries(initialData.selectedAgents).forEach(([, agentId]) => {
         const agent = availableAgents.find(a => a.agent_id === agentId)
         if (agent) {
           agentMapping[agentId] = agent

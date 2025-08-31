@@ -8,8 +8,6 @@ import type {
   RoomCenterRoomSettingRequest,
   RoomCenterUserMessageRequest,
   RoomCenterRoomMessageRequest,
-  RoomUserMessage,
-  MessageContent
 } from '@/lib/types/request'
 
 // Using Next.js API routes as proxy to avoid CORS issues
