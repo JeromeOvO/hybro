@@ -13,6 +13,7 @@ from models.error import (
 )
 from models.request import (
     AgentCenterRequest,
+    ChatMemoryRequest,
     OrchestrationCenterRequest,
     TaskCenterRequest,
     ChatMemoryRequest,
@@ -26,9 +27,10 @@ from models.memory import RoomMemory, MemoryContent
 from models.room import RoomUserMessage, RoomAgentMessage
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
+from services.database_service import DatabaseService
+from services.memory_service import ChatMemoryService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
-from services.memory_service import ChatMemoryService
 from services.room_services import RoomServices, RoomMemoryService
 
 logger = get_logger(__name__)
@@ -106,6 +108,7 @@ class OrchestrationCenter:
         self.chat_memory_service = ChatMemoryService()
         self.room_services = RoomServices()
         self.room_memory_service = RoomMemoryService()
+        self.database_service = DatabaseService()
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -156,10 +159,13 @@ class OrchestrationCenter:
         )
         base_task = query_result.base_task
 
-
         # get chat context
-        chat_context_response = await self.chat_memory_service.get_chat_context_by_session_id(
-            ChatMemoryRequest(user_name=base_task.user_name, session_id=base_task.session_id)
+        chat_context_response = (
+            await self.chat_memory_service.get_chat_context_by_session_id(
+                ChatMemoryRequest(
+                    user_name=base_task.user_name, session_id=base_task.session_id
+                )
+            )
         )
 
         if not chat_context_response.success:
@@ -241,8 +247,37 @@ class OrchestrationCenter:
                 root_task_id,
             )
 
+        # Extract task goal/description from BaseTask
+        if (
+            base_task.task.history
+            and len(base_task.task.history) > 0
+            and len(base_task.task.history[0].parts) > 0
+        ):
+            first_part = base_task.task.history[0].parts[0].root
+            task_description = (
+                first_part.text
+                if first_part.kind == "text"
+                else "No text content available"
+            )
+        else:
+            task_description = "No task description available"
+
+        similar_agents = await self.database_service.query_similar_agents(
+            task_description, count=5
+        )
+
+        best_agent_id = await self.openai_service.select_best_agent_for_task(
+            task_description, similar_agents
+        )
+
+        best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
+
         # Proceed with task decomposition
-        decompose_task_response = await self.openai_service.decompose_task(base_task, chat_context_response.chat_context.context_data)
+        decompose_task_response = await self.openai_service.decompose_task(
+            base_task=base_task,
+            context_data=chat_context_response.chat_context.context_data,
+            best_agent=best_agent,
+        )
         logger.info(
             "OrchestrationCenter: decompose task response: %s", decompose_task_response
         )
@@ -1262,10 +1297,16 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
         logger.info("OrchestrationCenter: summary response: %s", summary_response)
 
-
         # update chat context
-        chat_context_response = await self.chat_memory_service.update_chat_context_by_session_id(
-            ChatMemoryRequest(user_name=base_task.user_name, session_id=base_task.session_id, user_input=first_message_text, agent_response=summary_response)
+        chat_context_response = (
+            await self.chat_memory_service.update_chat_context_by_session_id(
+                ChatMemoryRequest(
+                    user_name=base_task.user_name,
+                    session_id=base_task.session_id,
+                    user_input=first_message_text,
+                    agent_response=summary_response,
+                )
+            )
         )
 
         if not chat_context_response.success:

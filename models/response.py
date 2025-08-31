@@ -110,6 +110,7 @@ class ChatResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
+
 class ChatMemoryResponse(BaseModel):
     user_name: str
     chat_context: ChatContext | None = None
