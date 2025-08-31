@@ -22,3 +22,12 @@ class ChatContext(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
     extend_info: Any | None = None
 
+class MemoryContent(BaseModel):
+    memory_text: str
+
+class RoomMemory(BaseModel):
+    room_id: str
+    memory_id: str
+    memory_content: MemoryContent
+    memory_created_at: datetime = Field(default_factory=datetime.now)
+    extend_info: Any | None = None

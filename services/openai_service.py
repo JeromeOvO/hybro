@@ -12,8 +12,10 @@ from openai.types.chat import (
 
 from common.utils.logger import get_logger
 from models.agent import Agent
-from models.memory import ChatContext, ContextData
+from models.memory import ChatContext, ContextData, RoomMemory, MemoryContent
 from models.task import BaseTask
+from models.room import RoomAgentMessage
+from a2a.types import Role
 
 load_dotenv()
 
@@ -512,5 +514,115 @@ OUTPUT: Return a comprehensive, well-organized context summary that captures the
             existing_context = context_data.context_content if context_data and context_data.context_content else ""
             fallback = f"{existing_context}\n\nLatest: User: {user_input} | Agent: {agent_response[:200]}..."
             return fallback.strip()
+
+    async def generate_room_memory_content(self, messages: list[RoomAgentMessage], room_memory_content: MemoryContent) -> str:
+        """
+        Generate room memory content using OpenAI based on agent messages and existing memory content.
+        """
+        
+        # Comprehensive system prompt for room memory generation
+        system_prompt = """You are an expert room memory content generator for multi-agent conversation rooms. Your task is to create and maintain a comprehensive memory summary that captures the essential information from agent interactions.
+
+OBJECTIVES:
+1. Analyze agent messages and extract key information, decisions, and outcomes
+2. Update existing room memory with new information from recent messages
+3. Maintain continuity of important context across conversations
+4. Preserve critical technical details, user preferences, and agent capabilities
+5. Track the progression of tasks, problems solved, and current status
+6. Remove outdated or contradicted information
+
+APPROACH:
+- If existing memory exists, intelligently merge it with new information from messages
+- Prioritize recent developments while retaining relevant historical context
+- Focus on actionable information and collaborative outcomes
+- Maintain clear organization and logical flow
+- Identify patterns in agent collaboration and user interactions
+
+OUTPUT: Return a comprehensive, well-organized memory summary that captures the complete room state and conversation history."""
+
+        # Prepare message content for analysis
+        message_summaries = []
+        for msg in messages:
+            try:
+                # Extract agent message content
+                agent_content = ""
+                if msg.message_content and msg.message_content.history:
+                    # Get the latest agent message from history
+                    agent_messages = [
+                        m for m in msg.message_content.history 
+                        if m.role == Role.agent
+                    ]
+                    
+                    if agent_messages:
+                        latest_message = agent_messages[-1]
+                        if latest_message.parts and len(latest_message.parts) > 0:
+                            # Extract text from the first part
+                            agent_content = latest_message.parts[0].root.text
+                
+                if agent_content:
+                    message_summary = f"Agent {msg.agent_name} ({msg.agent_id}) at {msg.message_created_at}: {agent_content[:500]}..."
+                    message_summaries.append(message_summary)
+                    
+            except Exception as e:
+                print(f"Error processing message {msg.message_id}: {str(e)}")
+                continue
+        
+        # Build the prompt
+        prompt_parts = [
+            "**RECENT AGENT MESSAGES:**"
+        ]
+        
+        if message_summaries:
+            prompt_parts.extend(message_summaries)
+        else:
+            prompt_parts.append("No recent agent messages to process.")
+        
+        prompt_parts.append("")
+        
+        # Include existing memory if available
+        if room_memory_content and room_memory_content.memory_text and room_memory_content.memory_text.strip():
+            prompt_parts.extend([
+                "**EXISTING ROOM MEMORY:**",
+                room_memory_content.memory_text,
+                "",
+                "**TASK:** Update and enhance the existing room memory by incorporating the new agent messages above. Merge related information, resolve any contradictions, and ensure the memory reflects the current state of the room."
+            ])
+        else:
+            prompt_parts.extend([
+                "**TASK:** Create a comprehensive initial room memory summary based on the agent messages above."
+            ])
+        
+        prompt = "\n".join(prompt_parts)
+        
+        messages_for_ai = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=prompt),
+        ]
+        
+        try:
+            response = await self.client.responses.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                reasoning={"effort": "low"},
+                input=messages_for_ai  
+            )
+            
+            memory_content = response.output_text.strip() if response.output_text else ""
+            
+            # Basic validation
+            if not memory_content:
+                # Fallback if AI doesn't return content
+                existing_memory = room_memory_content.memory_text if room_memory_content and room_memory_content.memory_text else ""
+                fallback_content = f"{existing_memory}\n\nUpdated with {len(message_summaries)} new agent messages."
+                return fallback_content.strip()
+            
+            return memory_content
+            
+        except Exception as e:
+            print(f"Error in generate_room_memory_content: {str(e)}")
+            # Provide a useful fallback
+            existing_memory = room_memory_content.memory_text if room_memory_content and room_memory_content.memory_text else ""
+            fallback = f"{existing_memory}\n\nProcessed {len(message_summaries)} agent messages."
+            return fallback.strip()
+
 
 openai_service = OpenAIService()

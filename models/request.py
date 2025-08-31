@@ -6,9 +6,10 @@ from pydantic import BaseModel, Field
 
 from models.agent import Agent
 from models.task import BaseTask, MetaTask, TaskSession
-from models.memory import ChatContext
+from models.memory import ChatContext, RoomMemory
 from datetime import datetime
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory, RoomMessage
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMessage
+
 
 
 class TaskRequest(BaseModel):

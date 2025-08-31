@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from models.agent import Agent
-from models.memory import ChatContext
+from models.memory import ChatContext, RoomMemory
 from models.task import BaseTask, MetaTask, TaskSession
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
+from models.room import Room, RoomUserMessage, RoomAgentMessage
 
 load_dotenv()
 
@@ -587,6 +587,20 @@ class MongoDB:
         Delete a room memory by memory_id
         """
         result = await self.room_memories_collection.delete_one({"memory_id": memory_id})
+        return result.deleted_count > 0
+
+    async def update_room_memory_by_room_id(self, room_id: str, room_memory: RoomMemory) -> bool:
+        """
+        Update a room memory by room_id
+        """
+        result = await self.room_memories_collection.update_one({"room_id": room_id}, {"$set": room_memory.model_dump(exclude_unset=True, mode="json")})
+        return result.modified_count > 0
+    
+    async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
+        """
+        Delete a room memory by room_id
+        """
+        result = await self.room_memories_collection.delete_one({"room_id": room_id})
         return result.deleted_count > 0
 
 mongodb = MongoDB()

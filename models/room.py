@@ -45,17 +45,6 @@ class RoomAgentMessage(BaseModel):
     message_created_at: datetime = Field(default_factory=datetime.now)
     extend_info: Optional[Any] = None
 
-
-class MemoryContent(BaseModel):
-    memory_text: str
-
-class RoomMemory(BaseModel):
-    room_id: str
-    memory_id: str
-    memory_content: MemoryContent
-    memory_created_at: datetime = Field(default_factory=datetime.now)
-    extend_info: Optional[Any] = None
-
 class RoomMessage(BaseModel):
     """Unified room message format for both user and agent messages"""
     message_id: str

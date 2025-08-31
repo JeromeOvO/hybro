@@ -7,9 +7,9 @@ from common.utils.logger import get_logger
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.agent import Agent
-from models.memory import ChatContext
+from models.memory import ChatContext, RoomMemory
 from models.task import BaseTask, MetaTask, TaskSession
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomMemory
+from models.room import Room, RoomUserMessage, RoomAgentMessage
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
@@ -667,3 +667,12 @@ class DatabaseService:
             logger.error(f"Failed to delete room memory {memory_id} from databases: {str(e)}")
             return False
     
+    async def update_room_memory_by_room_id(self, room_id: str, room_memory: RoomMemory) -> bool:
+        """
+        Update a room memory by room_id
+        """
+        try:
+            return await self.mongo.update_room_memory_by_room_id(room_id, room_memory)
+        except Exception as e:
+            logger.error(f"Failed to update room memory {room_id} in databases: {str(e)}")
+            return False

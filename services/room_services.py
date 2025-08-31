@@ -1,18 +1,15 @@
 from pydantic import root_model
+from models.memory import MemoryContent, RoomMemory
 from models.room import (
     Room,
     RoomUserMessage,
     RoomAgentMessage,
-    RoomMemory,
-    MessageContent,
-    MemoryContent,
     RoomMessage
 )
 from models.request import (
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
     RoomCenterAgentMessageRequest,
-    RoomCenterMemoryRequest,
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
     RoomCenterRoomMessageRequest
@@ -21,7 +18,6 @@ from models.response import (
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
     RoomCenterAgentMessageResponse,
-    RoomCenterMemoryResponse,
     RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
 )
@@ -33,6 +29,10 @@ import re
 from uuid import uuid4
 from datetime import datetime
 from a2a.types import Message, Task, TaskStatus, TaskState, TextPart, Role
+from services.memory_service import RoomMemoryService
+from common.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RoomServices:
@@ -41,6 +41,7 @@ class RoomServices:
         self.agent_service = AgentService()
         self.openai_service = OpenAIService()
         self.a2a_service = A2AService()
+        self.room_memory_service = RoomMemoryService()
 
     # room setting management
     async def create_new_room(self, room_create_request: RoomCenterRoomSettingRequest) -> RoomCenterRoomSettingResponse:
@@ -359,7 +360,7 @@ class RoomServices:
         
         return task
     
-    def create_task_for_agents_group(self, user_message: RoomUserMessage, mentions_group: list, shared_content: str) -> list:
+    async def create_task_for_agents_group(self, user_message: RoomUserMessage, mentions_group: list, shared_content: str) -> list:
         """
         Create a2a Tasks for a group of agents sharing the same message content
         
@@ -430,7 +431,33 @@ class RoomServices:
         add_message_success = await self.database_service.add_room_user_message(message)
         if not add_message_success:
             return RoomCenterUserMessageResponse(message_id=None, message=None, success=False, error="Failed to add message", status_code=500)
+
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            room_memory = RoomMemory(
+                room_id=room_id,
+                memory_id=str(uuid4()),
+                memory_content=MemoryContent(
+                    memory_text=message.message_content.message_text
+                ),
+            )
+            add_room_memory_success = await self.database_service.add_room_memory(room_memory)
+            if not add_room_memory_success:
+                return RoomCenterUserMessageResponse(message_id=message.message_id, message=message, success=True, error="Failed to add room memory", status_code=500)
         
+        new_room_memory_content_text = room_memory.memory_content.memory_text + message.message_content.message_text
+        room_memory_response = await self.database_service.update_room_memory_by_room_id(room_id, RoomMemory(
+            room_id=room_id,
+            memory_id=room_memory.memory_id,
+            memory_content=MemoryContent(
+                memory_text=new_room_memory_content_text
+            ),
+        ))
+        
+        if not room_memory_response:
+            logger.error("RoomServices: Failed to update room memory")
+
+
         # 2. Get room information
         room = await self.database_service.get_room_by_room_id(room_id)
         if not room:
@@ -451,7 +478,7 @@ class RoomServices:
                 shared_content = self.create_shared_message_content(context_text, mentions_in_context)
                 
                 # Create tasks for all agents in this context
-                tasks_group = self.create_task_for_agents_group(message, mentions_in_context, shared_content)
+                tasks_group = await self.create_task_for_agents_group(message, mentions_in_context, shared_content)
                 
                 # Create RoomAgentMessage for each agent
                 for task_info in tasks_group:
@@ -481,7 +508,7 @@ class RoomServices:
             status_code=200
         )
         
-    async def process_agent_message(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
+    async def process_agent_message(self, request: RoomCenterAgentMessageRequest, room_memory_content_text: str) -> RoomCenterAgentMessageResponse:
         message = request.message
         if message is None:
             return RoomCenterAgentMessageResponse(message_id=None, message=None, success=False, error="Agent Message is required", status_code=400)
@@ -496,6 +523,8 @@ class RoomServices:
         agent_url = query_agent_url_response.agent_url
 
         agent_message = message.message_content.history[0]
+
+        agent_message.parts[0].root.text += room_memory_content_text
 
         send_response = await self.a2a_service.send_message_to_agent(agent_url, agent_message)
 

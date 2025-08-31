@@ -17,17 +17,19 @@ from models.request import (
     TaskCenterRequest,
     ChatMemoryRequest,
     RoomCenterUserMessageRequest,
-    RoomCenterAgentMessageRequest
+    RoomCenterAgentMessageRequest,
+    RoomCenterMemoryRequest
 )
 from models.response import OrchestrationCenterResponse, RoomCenterUserMessageResponse
 from models.task import MetaTask, TaskDefaultValue
+from models.memory import RoomMemory, MemoryContent
 from models.room import RoomUserMessage, RoomAgentMessage
 from services.a2a_service import A2AService
 from services.agent_service import AgentService
 from services.openai_service import OpenAIService
 from services.task_service import TaskService
 from services.memory_service import ChatMemoryService
-from services.room_services import RoomServices
+from services.room_services import RoomServices, RoomMemoryService
 
 logger = get_logger(__name__)
 
@@ -103,6 +105,7 @@ class OrchestrationCenter:
         self.a2a_service = A2AService()
         self.chat_memory_service = ChatMemoryService()
         self.room_services = RoomServices()
+        self.room_memory_service = RoomMemoryService()
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1322,6 +1325,42 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_user_message_id = request.room_user_message_id
         room_related_message_id = request.room_related_message_id
 
+
+        # get room memory
+        room_memory_response = await self.room_memory_service.get_room_memory_by_room_id(RoomCenterMemoryRequest(room_id=room_id))
+        if not room_memory_response.success:
+            return OrchestrationCenterResponse(
+                success=False,
+                error=room_memory_response.error,
+                status_code=500,
+            )
+
+        room_memory = room_memory_response.memory
+        if room_memory is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room memory not found",
+                status_code=404,
+            )
+
+        room_memory_content = room_memory.memory_content
+        if room_memory_content is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room memory content not found",
+                status_code=404,
+            )
+
+        room_memory_content_text = room_memory_content.memory_text
+        if room_memory_content_text is None or room_memory_content_text == "":
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room memory content text not found",
+                status_code=404,
+            )
+        
+        room_memory_content_text += "\n\n"
+
         if room_user_message_id is None:
             return OrchestrationCenterResponse(
                 success=False,
@@ -1357,7 +1396,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         
 
         for room_agent_message in room_agent_messages:
-            process_agent_message_response = await self.room_services.process_agent_message(RoomCenterAgentMessageRequest(message=room_agent_message))
+            process_agent_message_response = await self.room_services.process_agent_message(RoomCenterAgentMessageRequest(message=room_agent_message), room_memory_content_text)
             if not process_agent_message_response.success:
                 return OrchestrationCenterResponse(
                     success=False,
@@ -1481,9 +1520,21 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error=query_response.error,
                 status_code=500,                
             )
-            
-        room_agent_messages = query_response.message_list
+
+        # update room memory
+        new_room_memory_content_text = await self.openai_service.generate_room_memory_content(query_response.message_list, room_memory_content)
+
+        room_memory_response = await self.room_memory_service.update_room_memory_by_room_id(RoomCenterMemoryRequest(room_id=room_id, memory=RoomMemory(
+            room_id=room_id,
+            memory_id=room_memory.memory_id,
+            memory_content=MemoryContent(
+                memory_text=new_room_memory_content_text
+            ),
+        )))
+
+        if not room_memory_response.success:
+            logger.error("OrchestrationCenter: Failed to update room memory: %s", room_memory_response.error)
 
         return OrchestrationCenterResponse(
-            room_id=room_id, room_agent_message_list=room_agent_messages, success=True, error=None, status_code=200
+            room_id=room_id, success=True, error=None, status_code=200
         )
