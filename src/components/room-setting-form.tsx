@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useImperativeHandle, forwardRef } from "react"
+import React, { useState, useImperativeHandle, forwardRef, useEffect } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -28,6 +28,14 @@ const formSchema = z.object({
   }),
 })
 
+interface RoomFormData {
+  roomName: string
+  roomId: string
+  selectedAgents: { [agentName: string]: string } // agent_name -> agent_id mapping
+  roomOwnerId: string
+  roomOwnerName: string
+}
+
 interface RoomSettingFormProps {
   onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }) => void
   isSubmitting?: boolean
@@ -36,6 +44,7 @@ interface RoomSettingFormProps {
   agentsError?: string | null
   isEditing?: boolean
   onRetryLoadAgents?: () => void
+  initialData?: RoomFormData | null // Add initial data prop
 }
 
 export interface RoomSettingFormHandle {
@@ -49,7 +58,8 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   loadingAgents = false,
   agentsError = null,
   isEditing = false,
-  onRetryLoadAgents
+  onRetryLoadAgents,
+  initialData = null
 }, ref) => {
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
 
@@ -59,6 +69,33 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       roomName: "",
     },
   })
+
+  // Initialize form with room data
+  useEffect(() => {
+    if (initialData && availableAgents.length > 0) {
+      // Set room name
+      form.setValue('roomName', initialData.roomName)
+      
+      // Convert agent mapping back to selected agents
+      const agentMapping: { [agentId: string]: Agent } = {}
+      
+      // initialData.selectedAgents is { [agentName]: agentId }
+      // We need to find the corresponding Agent objects
+      Object.entries(initialData.selectedAgents).forEach(([agentName, agentId]) => {
+        const agent = availableAgents.find(a => a.agent_id === agentId)
+        if (agent) {
+          agentMapping[agentId] = agent
+        }
+      })
+      
+      setSelectedAgents(agentMapping)
+      console.log('Form initialized with data:', {
+        roomName: initialData.roomName,
+        selectedAgents: agentMapping,
+        originalAgentSet: initialData.selectedAgents
+      })
+    }
+  }, [initialData, availableAgents, form])
 
   const handleAddAgent = (agent: Agent) => {
     setSelectedAgents(prev => ({

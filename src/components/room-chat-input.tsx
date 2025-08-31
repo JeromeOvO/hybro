@@ -28,13 +28,19 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const [cursorPosition, setCursorPosition] = useState(0)
+  const [selectedAgentIndex, setSelectedAgentIndex] = useState(0) // For keyboard navigation
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
 
   const filteredAgents = agents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
-  )
+  ).slice(0, 5) // Limit to 5 agents
+
+  // Reset selected index when filtered agents change
+  useEffect(() => {
+    setSelectedAgentIndex(0)
+  }, [filteredAgents.length, mentionQuery])
 
   // Convert storage format to display format
   const convertToDisplayFormat = (content: string) => {
@@ -74,6 +80,7 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     } else {
       setShowAgentSuggestions(false)
       setMentionQuery('')
+      setSelectedAgentIndex(0)
     }
 
     // Sync update the actual stored message (convert back to storage format)
@@ -95,6 +102,7 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     
     setShowAgentSuggestions(false)
     setMentionQuery('')
+    setSelectedAgentIndex(0)
     
     // Calculate new cursor position (after @agent_name)
     const newCursorPosition = beforeMention.length + `@${agent.name} `.length
@@ -110,16 +118,47 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSubmit()
-    }
-    
-    if (showAgentSuggestions) {
-      if (e.key === 'Escape') {
-        setShowAgentSuggestions(false)
+    if (showAgentSuggestions && filteredAgents.length > 0) {
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault()
+          setSelectedAgentIndex(prev => 
+            prev < filteredAgents.length - 1 ? prev + 1 : 0
+          )
+          break
+        case 'ArrowUp':
+          e.preventDefault()
+          setSelectedAgentIndex(prev => 
+            prev > 0 ? prev - 1 : filteredAgents.length - 1
+          )
+          break
+        case 'Enter':
+          e.preventDefault()
+          if (filteredAgents[selectedAgentIndex]) {
+            insertMention(filteredAgents[selectedAgentIndex])
+          }
+          break
+        case 'Escape':
+          e.preventDefault()
+          setShowAgentSuggestions(false)
+          setSelectedAgentIndex(0)
+          break
+        case 'Tab':
+          e.preventDefault()
+          if (filteredAgents[selectedAgentIndex]) {
+            insertMention(filteredAgents[selectedAgentIndex])
+          }
+          break
+        default:
+          // Let other keys pass through
+          break
       }
-      // TODO: Can add up/down arrow selection logic
+    } else {
+      // Normal textarea behavior when suggestions are not shown
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        handleSubmit()
+      }
     }
   }
 
@@ -130,6 +169,7 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
       setMessage('')
       setDisplayMessage('')
       setShowAgentSuggestions(false)
+      setSelectedAgentIndex(0)
     }
   }
 
@@ -146,12 +186,16 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     <div className="relative">
       {/* Agent suggestions dropdown */}
       {showAgentSuggestions && filteredAgents.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-2 bg-card text-card-foreground border border-border rounded-lg shadow-lg max-h-32 overflow-y-auto z-10">
-          {filteredAgents.slice(0, 5).map((agent) => (
+        <div className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-32 overflow-y-auto z-50">
+          {filteredAgents.map((agent, index) => (
             <button
               key={agent.id}
               onClick={() => insertMention(agent)}
-              className="w-full text-left px-3 py-2 hover:bg-accent hover:text-accent-foreground text-sm"
+              className={`w-full text-left px-3 py-2 text-sm text-gray-900 dark:text-gray-100 transition-colors ${
+                index === selectedAgentIndex
+                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
             >
               @{agent.name}
             </button>

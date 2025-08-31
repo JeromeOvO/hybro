@@ -1,5 +1,6 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser } from '@clerk/nextjs'
 import { Settings } from 'lucide-react'
@@ -15,11 +16,19 @@ import { RoomSettingForm } from '@/components/room-setting-form'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
+import { getAllAgents } from '@/lib/api/agent'
+import type { Agent } from '@/lib/types/agent'
 
 export default function RoomChatPage() {
   const params = useParams()
   const roomId = params.id as string
   const { user } = useUser()
+  
+  // State for agents in dialog
+  const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
+  const [loadingAgents, setLoadingAgents] = useState(false)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
   
   const {
     room,
@@ -27,13 +36,43 @@ export default function RoomChatPage() {
     loading,
     sending,
     processing,
+    updatingRoom,
     sendUserMessage,
+    updateRoomSettings,
     getAgentList,
+    getRoomFormData,
   } = useRoomWebhook({
     roomId,
     userId: user?.id,
     userName: user?.firstName || user?.username || 'User'
   })
+
+  // Load agents when dialog opens
+  const loadAvailableAgents = async () => {
+    try {
+      setLoadingAgents(true)
+      setAgentsError(null)
+      const response = await getAllAgents()
+      
+      if (response.success && response.agents) {
+        setAvailableAgents(response.agents)
+      } else {
+        throw new Error(response.error || 'Failed to load agents')
+      }
+    } catch (error) {
+      console.error('Failed to load agents:', error)
+      setAgentsError(error instanceof Error ? error.message : 'Failed to load agents')
+    } finally {
+      setLoadingAgents(false)
+    }
+  }
+
+  // Load agents when dialog opens
+  useEffect(() => {
+    if (dialogOpen && availableAgents.length === 0) {
+      loadAvailableAgents()
+    }
+  }, [dialogOpen])
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string) => {
@@ -42,8 +81,19 @@ export default function RoomChatPage() {
     console.log('Message send result:', success)
   }
 
+  // Handle room settings update
+  const handleRoomSettingsUpdate = async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
+    const success = await updateRoomSettings(roomName, selectedAgents)
+    if (success) {
+      setDialogOpen(false) // Close dialog on success
+    }
+  }
+
   // Extract agent list for @mentions
   const agentList = getAgentList()
+
+  // Get room form data for initialization
+  const roomFormData = getRoomFormData()
 
   if (loading) {
     return (
@@ -62,9 +112,9 @@ export default function RoomChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <div className="h-screen w-full flex flex-col overflow-hidden">
+      {/* Fixed Header - Never scrolls */}
+      <header className="flex-shrink-0 flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
         <div>
           <h1 className="text-xl font-semibold">{room.room_name}</h1>
           <p className="text-sm text-muted-foreground">
@@ -75,39 +125,45 @@ export default function RoomChatPage() {
         </div>
         
         {/* Settings Button */}
-        <Dialog>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button variant="ghost" size="icon">
               <Settings className="h-5 w-5" />
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Room Settings</DialogTitle>
             </DialogHeader>
             <div className="mt-4">
               <RoomSettingForm
-                onSubmit={() => {}}
-                availableAgents={[]}
-                isSubmitting={false}
+                onSubmit={handleRoomSettingsUpdate}
+                availableAgents={availableAgents}
+                loadingAgents={loadingAgents}
+                agentsError={agentsError}
+                isSubmitting={updatingRoom}
                 isEditing={true}
+                onRetryLoadAgents={loadAvailableAgents}
+                initialData={roomFormData}
               />
             </div>
           </DialogContent>
         </Dialog>
-      </div>
+      </header>
 
-      {/* Messages Area */}
-      <RoomMessages messages={messages} loading={false} />
+      {/* Scrollable Messages Area - Only this area scrolls */}
+      <main className="flex-1 overflow-hidden">
+        <RoomMessages messages={messages} loading={false} />
+      </main>
 
-      {/* Chat Input */}
-      <div className="p-4 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      {/* Fixed Chat Input - Never scrolls */}
+      <footer className="flex-shrink-0 p-4 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
         <RoomChatInput
           onSubmit={handleSendMessage}
           disabled={sending || processing}
           agents={agentList}
         />
-      </div>
+      </footer>
     </div>
   )
 }

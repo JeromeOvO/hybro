@@ -2,13 +2,16 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { 
   inquiryRoomSetting,
   createAndParseUserMessage,
-  inquiryRoomMessagesByRoomId
+  inquiryRoomMessagesByRoomId,
+  updateRoomAgentSet,
+  updateRoomName
 } from '@/lib/api/room'
 
 import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { toast } from 'sonner'
 import type { Room, RoomMessage } from '@/lib/types/room'
 import type { MessageData } from '@/components/room-messages'
+import type { Agent } from '@/lib/types/agent'
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -22,6 +25,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [updatingRoom, setUpdatingRoom] = useState(false)
   
   // Ref to prevent duplicate calls
   const isProcessingRef = useRef(false)
@@ -93,6 +97,55 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     }
   }, [roomId, convertApiMessageToMessageData])
 
+  // Update room settings
+  const updateRoomSettings = useCallback(async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
+    if (!room) {
+      toast.error('Room data not available')
+      return false
+    }
+
+    try {
+      setUpdatingRoom(true)
+      
+      // Create agent set mapping: agent name -> agent id (same as creation)
+      const roomAgentSet = Object.fromEntries(
+        Object.entries(selectedAgents).map(([id, agent]) => [
+          agent.agent_card.name, // key: agent name
+          id                     // value: agent id
+        ])
+      )
+
+      // Update room name if changed
+      if (roomName !== room.room_name) {
+        console.log('Updating room name to:', roomName)
+        const nameResponse = await updateRoomName(roomId, roomName)
+        if (!nameResponse.success) {
+          throw new Error(`Failed to update room name: ${nameResponse.error}`)
+        }
+      }
+
+      // Update agent set
+      console.log('Updating room agent set:', roomAgentSet)
+      const agentResponse = await updateRoomAgentSet(roomId, roomAgentSet)
+      if (!agentResponse.success) {
+        throw new Error(`Failed to update room agents: ${agentResponse.error}`)
+      }
+
+      // Reload room settings to get updated data
+      await loadRoomSetting()
+      
+      toast.success('Room settings updated successfully')
+      return true
+      
+    } catch (error) {
+      console.error('Error updating room settings:', error)
+      toast.error(`Failed to update room settings: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      return false
+    } finally {
+      setUpdatingRoom(false)
+    }
+  }, [room, roomId, loadRoomSetting])
+
   // Complete user message sending workflow
   const sendUserMessage = useCallback(async (userInput: string) => {
     console.log('🚀 sendUserMessage called with input:', userInput)
@@ -108,6 +161,23 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       console.log('❌ Cannot send message - conditions not met')
       return false
     }
+
+    // Generate temporary message ID for optimistic update
+    const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const currentTime = new Date().toISOString()
+
+    // Step 0: Immediately add user message to UI (optimistic update)
+    const optimisticUserMessage: MessageData = {
+      id: tempMessageId,
+      type: 'user',
+      content: userInput,
+      sender_name: userName,
+      timestamp: currentTime,
+      user_id: userId,
+    }
+
+    console.log('📝 Step 0: Adding optimistic user message to UI')
+    setMessages(prevMessages => [...prevMessages, optimisticUserMessage])
 
     try {
       setSending(true)
@@ -168,6 +238,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       console.log('✅ Step 2 completed: Room user message processed successfully')
       
       // Step 3: Reload messages to get latest state (including agent replies)
+      // This will replace the optimistic message with the real one and add any agent responses
       console.log('🔄 Step 3: Reloading messages')
       await loadRoomMessages()
       
@@ -178,6 +249,10 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       
     } catch (error) {
       console.error('❌ Error in message workflow:', error)
+      
+      // Remove the optimistic message on error
+      setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
+      
       toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
       
       // Even if error occurs, try to reload messages to ensure UI sync
@@ -209,6 +284,19 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   const getAgentList = useCallback(() => {
     if (!room?.room_agent_set) return []
     return Object.entries(room.room_agent_set).map(([name, id]) => ({ id, name }))
+  }, [room])
+
+  // Get current room data for form initialization
+  const getRoomFormData = useCallback(() => {
+    if (!room) return null
+    
+    return {
+      roomName: room.room_name || '',
+      roomId: room.room_id || '',
+      selectedAgents: room.room_agent_set || {},
+      roomOwnerId: room.room_owner_id || '',
+      roomOwnerName: room.room_owner_name || ''
+    }
   }, [room])
 
   // Initialize room data
@@ -276,6 +364,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setLoading(true)
       setSending(false)
       setProcessing(false)
+      setUpdatingRoom(false)
     }
   }, [roomId])
 
@@ -298,12 +387,15 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     loading,
     sending,
     processing,
+    updatingRoom,
     
     // Actions
     sendUserMessage,
+    updateRoomSettings,
     refreshMessages,
     refreshRoomSetting,
     getAgentList,
+    getRoomFormData,
     
     // Utility functions
     loadRoomSetting,

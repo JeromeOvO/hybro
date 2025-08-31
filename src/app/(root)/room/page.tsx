@@ -11,11 +11,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { RoomSettingForm, type RoomSettingFormHandle } from "@/components/room-setting-form"
-import { CheckCircle, AlertCircle } from "lucide-react"
+import { CheckCircle, Loader2 } from "lucide-react"
 import { getAllAgents } from "@/lib/api/agent"
 import { createNewRoom } from "@/lib/api/room"
+import { toast } from "sonner"
 import type { Agent } from "@/lib/types/agent"
 
 export default function RoomPage() {
@@ -32,12 +32,8 @@ export default function RoomPage() {
 
   // State for room creation
   const [isCreatingRoom, setIsCreatingRoom] = useState(false)
-
-  // State for messages
-  const [message, setMessage] = useState<{
-    type: 'success' | 'error'
-    content: string
-  } | null>(null)
+  const [roomCreated, setRoomCreated] = useState(false) // New state for success
+  const [createdRoomName, setCreatedRoomName] = useState('')
 
   // Load agents on component mount
   useEffect(() => {
@@ -57,7 +53,9 @@ export default function RoomPage() {
       }
     } catch (error) {
       console.error('Failed to load agents:', error)
-      setAgentsError(error instanceof Error ? error.message : 'Failed to load agents')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load agents'
+      setAgentsError(errorMessage)
+      toast.error(errorMessage)
     } finally {
       setLoadingAgents(false)
     }
@@ -66,16 +64,12 @@ export default function RoomPage() {
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
     // Check if user is loaded and available
     if (!isLoaded || !user) {
-      setMessage({
-        type: 'error',
-        content: 'User information not available. Please try again.'
-      })
+      toast.error('User information not available. Please try again.')
       return
     }
 
     try {
       setIsCreatingRoom(true)
-      setMessage(null)
       
       // Create agent set mapping: agent name -> agent id
       const roomAgentSet = Object.fromEntries(
@@ -98,19 +92,20 @@ export default function RoomPage() {
       )
       
       if (response.success && response.room) {
-        // Show success message briefly
-        setMessage({
-          type: 'success',
-          content: `Room "${roomName}" created successfully! Redirecting to home...`
-        })
+        // Set success state and room name
+        setCreatedRoomName(roomName)
+        setRoomCreated(true)
+        
+        // Show success toast
+        toast.success(`Room "${roomName}" created successfully!`)
         
         // Reset form
         formRef.current?.reset()
         
-        // Redirect to home page after a short delay
+        // Redirect to room chat page after a short delay
         setTimeout(() => {
-          router.push('/')
-        }, 1500)
+          router.push(`/room/${response.room?.room_id}`)
+        }, 1000)
         
       } else {
         throw new Error(response.error || 'Failed to create room')
@@ -118,31 +113,17 @@ export default function RoomPage() {
     } catch (error) {
       console.error('Failed to create room:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create room'
-      setMessage({
-        type: 'error',
-        content: errorMessage
-      })
-      
-      // Auto-hide error message after 8 seconds
-      setTimeout(() => setMessage(null), 8000)
+      toast.error(errorMessage)
     } finally {
       setIsCreatingRoom(false)
     }
   }
 
-  const clearMessage = () => {
-    setMessage(null)
-  }
-
   // Show loading if user info is not loaded yet
   if (!isLoaded) {
     return (
-      <div className="container mx-auto items-center justify-center h-full p-4">
-        <Card>
-          <CardContent className="flex items-center justify-center py-8">
-            <div className="text-muted-foreground">Loading...</div>
-          </CardContent>
-        </Card>
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin" />
       </div>
     )
   }
@@ -160,35 +141,33 @@ export default function RoomPage() {
     )
   }
 
+  // Show success loading screen after room creation
+  if (roomCreated) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        <div className="text-center space-y-6">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
+            <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-semibold">Room Created Successfully!</h2>
+            <p className="text-muted-foreground">
+              Your room "{createdRoomName}" has been created. Redirecting to chat...
+            </p>
+          </div>
+          <div className="flex items-center justify-center">
+            <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Entering room...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="container mx-auto items-center justify-center h-full p-4">
-      {/* Success/Error Messages */}
-      {message && (
-        <div className="mb-6">
-          <Alert 
-            variant={message.type === 'error' ? 'destructive' : 'default'}
-            className={message.type === 'success' ? 'border-green-200 bg-green-50 text-green-700' : ''}
-          >
-            {message.type === 'success' ? (
-              <CheckCircle className="h-4 w-4" />
-            ) : (
-              <AlertCircle className="h-4 w-4" />
-            )}
-            <AlertDescription className="flex justify-between items-center">
-              {message.content}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={clearMessage}
-                className="h-auto p-1 text-current hover:text-current"
-              >
-                ×
-              </Button>
-            </AlertDescription>
-          </Alert>
-        </div>
-      )}
-
       {/* Room Creation Form */}
       <Card>
         <CardHeader>
@@ -198,6 +177,15 @@ export default function RoomPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {isCreatingRoom && (
+            <div className="flex items-center justify-center mb-6">
+              <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">Creating room...</span>
+              </div>
+            </div>
+          )}
+          
           <RoomSettingForm 
             ref={formRef}
             onSubmit={handleFormSubmit}

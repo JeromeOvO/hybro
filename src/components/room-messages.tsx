@@ -82,7 +82,7 @@ function MessageBubble({ message }: { message: MessageData }) {
           {message.sender_name} • {new Date(message.timestamp).toLocaleTimeString()}
         </div>
         <div className="text-sm leading-relaxed">
-          {renderContent(message.content)}
+          {renderContent(message.content != "" ? message.content : "No message content received")}
         </div>
       </div>
     </div>
@@ -104,29 +104,33 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="h-full flex items-center justify-center">
         <div className="text-muted-foreground">Loading messages...</div>
       </div>
     )
   }
 
   return (
-    <ScrollArea className="flex-1 p-4">
-      <div className="space-y-4">
-        {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center text-muted-foreground">
-              <p className="text-lg font-medium">No messages yet</p>
-              <p className="text-sm">Start the conversation by sending a message</p>
+    <div className="h-full w-full">
+      <ScrollArea className="h-full">
+        <div className="p-4 min-h-full">
+          {messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center text-muted-foreground">
+                <p className="text-lg font-medium">No messages yet</p>
+                <p className="text-sm">Start the conversation by sending a message</p>
+              </div>
             </div>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-    </ScrollArea>
+          ) : (
+            <div className="space-y-4">
+              {messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
   )
 }
