@@ -140,20 +140,20 @@ export async function createAndParseUserMessage(
   user_id?: string,
   user_name?: string
 ): Promise<RoomCenterUserMessageResponse> {
-  // 生成一个临时的message_id（可以是空字符串或UUID）
-  const message_id = ""
-  
   const requestData: RoomCenterUserMessageRequest = {
     room_id,
+    user_id: user_id || "",
+    user_name: user_name || "",
+    user_input,
     message: {
       room_id,
-      message_id,
+      message_id: "",
+      message_type: "user",
       related_message_id: null,
-      user_id: user_id || "",
-      user_name: user_name || "",
       message_content: {
         message_text: user_input
       },
+      user_id: user_id || "",
       extend_info: null
     }
   }

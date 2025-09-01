@@ -6,10 +6,13 @@ import {
   updateRoomAgentSet,
   updateRoomName
 } from '@/lib/api/room'
+import { getAgent } from '@/lib/api/agent'
 
 import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { toast } from 'sonner'
-import type { Room, RoomMessage } from '@/lib/types/room'
+import type { Room } from '@/lib/types/room'
+// Import the correct RoomMessage type from response.ts (API response format)
+import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
 import type { Agent } from '@/lib/types/agent'
 
@@ -27,6 +30,9 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   const [processing, setProcessing] = useState(false)
   const [updatingRoom, setUpdatingRoom] = useState(false)
   
+  // Cache for agent names to avoid repeated API calls
+  const agentNameCache = useRef<{ [agentId: string]: string }>({})
+  
   // Ref to prevent duplicate calls
   const isProcessingRef = useRef(false)
   const initializationRef = useRef<{
@@ -39,29 +45,94 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     roomId: null
   })
 
+  // Get agent name by agent ID with caching
+  const getAgentName = useCallback(async (agentId: string): Promise<string> => {
+    // Check cache first to avoid duplicate API calls
+    if (agentNameCache.current[agentId]) {
+      return agentNameCache.current[agentId]
+    }
+
+    try {
+      const response = await getAgent(agentId)
+      if (response.success && response.agent?.agent_card?.name) {
+        const agentName = response.agent.agent_card.name
+        // Cache the result for future use
+        agentNameCache.current[agentId] = agentName
+        return agentName
+      } else {
+        console.warn('Failed to get agent name for ID:', agentId, response.error)
+        return 'Agent'
+      }
+    } catch (error) {
+      console.error('Error fetching agent name for ID:', agentId, error)
+      return 'Agent'
+    }
+  }, [])
+
   // Convert API message format to component message format
-  const convertApiMessageToMessageData = useCallback((apiMessage: RoomMessage): MessageData => {
+  const convertApiMessageToMessageData = useCallback(async (apiMessage: RoomMessage): Promise<MessageData> => {
+    // Extract message content - both user and agent messages use message_text field
+    let content: string = ''
+    let senderName: string = ''
+    
+    // Extract content from MessageContent object
+    // For both user and agent messages, we use message_content.message_text as the display content
+    if (apiMessage.message_content?.message_text) {
+      content = apiMessage.message_content.message_text
+    } else {
+      // Fallback to empty string if message_text is not available
+      content = ''
+    }
+
+    // Determine sender name based on message type
+    if (apiMessage.message_type === 'user') {
+      // For user messages, use the provided userName or default to 'User'
+      senderName = userName || 'User'
+    } else if (apiMessage.message_type === 'agent') {
+      // For agent messages, extract agent_id and fetch the real agent name
+      let agentId: string | undefined
+      
+      // Try to get agent_id from different possible locations in the message
+      if (apiMessage.agent_id) {
+        agentId = apiMessage.agent_id
+      } else if (apiMessage.message_content?.message_task?.metadata?.agent_id) {
+        agentId = apiMessage.message_content.message_task.metadata.agent_id as string
+      }
+      
+      // Fetch agent name using the agent_id
+      if (agentId) {
+        try {
+          senderName = await getAgentName(agentId)
+        } catch (error) {
+          console.error('Failed to get agent name for ID:', agentId, error)
+          senderName = 'Agent'
+        }
+      } else {
+        console.warn('No agent_id found in agent message:', apiMessage)
+        senderName = 'Agent'
+      }
+    } else {
+      senderName = 'Unknown'
+    }
+
+    // Return the standardized message data format for the component
     return {
       id: apiMessage.message_id,
       type: apiMessage.message_type as 'user' | 'agent',
-      content: apiMessage.message_content,
-      sender_name: apiMessage.message_type === 'user' 
-        ? (apiMessage.user_name || 'User')
-        : (apiMessage.agent_name || 'Agent'),
-      timestamp: apiMessage.message_created_at,
+      content,
+      sender_name: senderName,
+      timestamp: apiMessage.message_created_at || new Date().toISOString(),
       user_id: apiMessage.message_type === 'user' ? userId : undefined,
-      agent_id: apiMessage.message_type === 'agent' ? 'agent_id' : undefined,
+      agent_id: apiMessage.message_type === 'agent' ? (apiMessage.agent_id || 'agent_id') : undefined,
     }
-  }, [userId])
+  }, [userId, userName, getAgentName])
 
   // Load room settings
   const loadRoomSetting = useCallback(async () => {
     try {
-      console.log('Loading room setting for room:', roomId)
       const response = await inquiryRoomSetting(roomId)
       if (response.success && response.room) {
         setRoom(response.room)
-        console.log('Room setting loaded:', response.room)
         return response.room
       } else {
         console.error('Failed to load room setting:', response.error)
@@ -75,15 +146,18 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     }
   }, [roomId])
 
-  // Load room messages
+  // Load room messages and convert them to display format
   const loadRoomMessages = useCallback(async () => {
     try {
-      console.log('Loading messages for room:', roomId)
+      // Fetch messages from the API
       const response = await inquiryRoomMessagesByRoomId(roomId)
       if (response.success && response.message_list) {
-        const convertedMessages = response.message_list.map(convertApiMessageToMessageData)
+        // Convert all messages with async agent name fetching
+        // This processes both user and agent messages uniformly
+        const convertedMessages = await Promise.all(
+          response.message_list.map(msg => convertApiMessageToMessageData(msg))
+        )
         setMessages(convertedMessages)
-        console.log('Messages loaded:', convertedMessages.length, 'messages')
         return convertedMessages
       } else {
         console.error('Failed to load messages:', response.error)
@@ -117,7 +191,6 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
 
       // Update room name if changed
       if (roomName !== room.room_name) {
-        console.log('Updating room name to:', roomName)
         const nameResponse = await updateRoomName(roomId, roomName)
         if (!nameResponse.success) {
           throw new Error(`Failed to update room name: ${nameResponse.error}`)
@@ -125,7 +198,6 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       }
 
       // Update agent set
-      console.log('Updating room agent set:', roomAgentSet)
       const agentResponse = await updateRoomAgentSet(roomId, roomAgentSet)
       if (!agentResponse.success) {
         throw new Error(`Failed to update room agents: ${agentResponse.error}`)
@@ -148,17 +220,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
 
   // Complete user message sending workflow
   const sendUserMessage = useCallback(async (userInput: string) => {
-    console.log('🚀 sendUserMessage called with input:', userInput)
-    console.log('🔍 Current state:', { 
-      userId: !!userId, 
-      userName: !!userName, 
-      room: !!room, 
-      sending, 
-      isProcessing: isProcessingRef.current 
-    })
-
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
-      console.log('❌ Cannot send message - conditions not met')
       return false
     }
 
@@ -176,28 +238,11 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       user_id: userId,
     }
 
-    console.log('📝 Step 0: Adding optimistic user message to UI')
     setMessages(prevMessages => [...prevMessages, optimisticUserMessage])
 
     try {
       setSending(true)
       isProcessingRef.current = true
-      
-      console.log('📤 Step 1: Creating and parsing user message')
-      console.log('📤 Request data will be:', {
-        room_id: roomId,
-        message: {
-          room_id: roomId,
-          message_id: "",
-          related_message_id: null,
-          user_id: userId,
-          user_name: userName,
-          message_content: {
-            message_text: userInput
-          },
-          extend_info: null
-        }
-      })
       
       // Step 1: Send user message to backend
       const createResponse = await createAndParseUserMessage(
@@ -207,20 +252,14 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         userName
       )
 
-      console.log('📤 Step 1 response:', createResponse)
-
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
       }
 
       // Extract message_id from createResponse
       const messageId = createResponse.message_id || createResponse.message?.message_id || ""
-      console.log('📤 Step 1 extracted message_id:', messageId)
 
-      console.log('✅ Step 1 completed: User message created successfully')
-      
       // Step 2: Call processRoomUserMessage to process the message using returned message_id
-      console.log('⚡ Step 2: Processing room user message with message_id:', messageId)
       setProcessing(true)
       
       const processResponse = await processRoomUserMessage({
@@ -228,27 +267,21 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         room_user_message_id: messageId,
         room_related_message_id: ""
       })
-      
-      console.log('⚡ Step 2 response:', processResponse)
 
       if (!processResponse.success) {
         throw new Error(`Failed to process user message: ${processResponse.error}`)
       }
       
-      console.log('✅ Step 2 completed: Room user message processed successfully')
-      
       // Step 3: Reload messages to get latest state (including agent replies)
       // This will replace the optimistic message with the real one and add any agent responses
-      console.log('🔄 Step 3: Reloading messages')
       await loadRoomMessages()
       
-      console.log('🎉 Complete workflow finished successfully')
       toast.success('Message sent successfully')
       
       return true
       
     } catch (error) {
-      console.error('❌ Error in message workflow:', error)
+      console.error('Error in message workflow:', error)
       
       // Remove the optimistic message on error
       setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
@@ -318,7 +351,6 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     const initializeRoom = async () => {
       try {
         setLoading(true)
-        console.log('Initializing room webhook for roomId:', roomId)
         
         // Load room settings and messages in parallel
         const [roomData, messagesData] = await Promise.all([
@@ -330,14 +362,12 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
           console.error('Failed to load room data')
         }
         if (!messagesData || messagesData.length === 0) {
-          console.log('No messages found or failed to load messages')
         }
         
         // Mark initialization complete
         initRef.initialized = true
         initRef.initializing = false
         
-        console.log('Room webhook initialization completed')
       } catch (error) {
         console.error('Error initializing room webhook:', error)
         toast.error('Failed to initialize room')
