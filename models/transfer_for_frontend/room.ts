@@ -39,7 +39,7 @@ export interface MessageContent {
 export interface Task {
   artifacts?: Artifact[] | null;
   contextId: string;
-  history?: Message1[] | null;
+  history?: A2AMessage[] | null;
   id: string;
   kind?: "task";
   metadata?: {
@@ -118,7 +118,7 @@ export interface DataPart {
 /**
  * Represents a single message in the conversation between a user and an agent.
  */
-export interface Message1 {
+export interface A2AMessage {
   contextId?: string | null;
   extensions?: string[] | null;
   kind?: "message";
@@ -136,7 +136,7 @@ export interface Message1 {
  * Represents the status of a task at a specific point in time.
  */
 export interface TaskStatus {
-  message?: Message1 | null;
+  message?: A2AMessage | null;
   state: TaskState;
   timestamp?: string | null;
   [k: string]: unknown;
