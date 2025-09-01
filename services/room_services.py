@@ -4,7 +4,8 @@ from models.room import (
     Room,
     RoomUserMessage,
     RoomAgentMessage,
-    RoomMessage
+    RoomMessage,
+    MessageContent
 )
 from models.request import (
     RoomCenterRoomSettingRequest,
@@ -336,11 +337,6 @@ class RoomServices:
             parts=[TextPart(text=agent_relevant_text)],  # Use filtered content
             context_id=user_message.room_id,
             metadata={
-                "sender_id": user_message.user_id,
-                "sender_name": user_message.user_name,
-                "room_id": user_message.room_id,
-                "target_agent": agent_name,
-                "original_message": original_text  # Keep original for reference
             }
         )
         
@@ -385,12 +381,6 @@ class RoomServices:
                 parts=[TextPart(text=shared_content)],
                 context_id=user_message.room_id,
                 metadata={
-                    "sender_id": user_message.user_id,
-                    "sender_name": user_message.user_name,
-                    "room_id": user_message.room_id,
-                    "target_agent": agent_name,
-                    "shared_context": True,  # Mark as shared content
-                    "context_agents": [m["agent_name"] for m in mentions_group]  # All agents in this context
                 }
             )
             
@@ -487,8 +477,7 @@ class RoomServices:
                         message_id=str(uuid4()),
                         related_message_id=message.message_id,
                         agent_id=task_info["agent_id"],
-                        agent_name=task_info["agent_name"],
-                        message_content=task_info["task"],
+                        message_content=MessageContent(message_task=task_info["task"]),  # 正确使用MessageContent包装Task
                         message_created_at=datetime.now()
                     )
                     
@@ -522,7 +511,13 @@ class RoomServices:
         
         agent_url = query_agent_url_response.agent_url
 
-        agent_message = message.message_content.history[0]
+        agent_msg = request.message
+        if (agent_msg.message_content and 
+            agent_msg.message_content.message_task and 
+            agent_msg.message_content.message_task.history):
+            agent_message = agent_msg.message_content.message_task.history[0]
+        else:
+            return RoomCenterAgentMessageResponse(message_id=None, message=None, success=False, error="No task content found", status_code=400)
 
         agent_message.parts[0].root.text += room_memory_content_text
 
@@ -634,11 +629,12 @@ class RoomServices:
             if user_messages_response.success and user_messages_response.message_list:
                 for user_msg in user_messages_response.message_list:
                     room_message = RoomMessage(
+                        room_id=user_msg.room_id,
                         message_id=user_msg.message_id,
                         message_type="user",
-                        message_content=user_msg.message_content.message_text,
+                        message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
-                        user_name=user_msg.user_name
+                        user_id=user_msg.user_id
                     )
                     combined_messages.append(room_message)
             
@@ -647,10 +643,12 @@ class RoomServices:
                 for agent_msg in agent_messages_response.message_list:
                     # Extract latest agent message from task.history
                     agent_content = ""
-                    if agent_msg.message_content and agent_msg.message_content.history:
+                    if (agent_msg.message_content and 
+                        agent_msg.message_content.message_task and 
+                        agent_msg.message_content.message_task.history):
                         # Find the latest message with role "agent"
                         agent_messages = [
-                            msg for msg in agent_msg.message_content.history 
+                            msg for msg in agent_msg.message_content.message_task.history 
                             if msg.role == Role.agent
                         ]
                         
@@ -662,11 +660,12 @@ class RoomServices:
                             agent_content = latest_agent_message.parts[0].root.text
                     
                     room_message = RoomMessage(
+                        room_id=agent_msg.room_id,
                         message_id=agent_msg.message_id,
                         message_type="agent",
-                        message_content=agent_content,
+                        message_content=MessageContent(message_text=agent_content),
                         message_created_at=agent_msg.message_created_at,
-                        agent_name=agent_msg.agent_name
+                        agent_id=agent_msg.agent_id
                     )
                     combined_messages.append(room_message)
             

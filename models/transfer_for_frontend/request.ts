@@ -433,12 +433,18 @@ export interface Room {
 export interface RoomAgentMessage {
   room_id: string;
   message_id: string;
-  related_message_id?: string | null;
-  agent_id: string;
-  agent_name: string;
-  message_content: Task;
   message_created_at?: string;
+  message_type?: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
   extend_info?: unknown;
+}
+export interface MessageContent {
+  message_text?: string | null;
+  message_task?: Task | null;
+  [k: string]: unknown;
 }
 export interface RoomCenterAgentMessageRequest {
   room_id?: string | null;
@@ -489,12 +495,14 @@ export interface RoomCenterRoomMessageRequest {
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
+  room_id: string;
   message_id: string;
+  message_created_at?: string;
   message_type: string;
-  message_content: string;
-  message_created_at: string;
-  user_name?: string | null;
-  agent_name?: string | null;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
 }
 export interface RoomCenterRoomSettingRequest {
   room_id?: string | null;
@@ -526,16 +534,13 @@ export interface RoomCenterUserMessageRequest {
 export interface RoomUserMessage {
   room_id: string;
   message_id: string;
-  related_message_id?: string | null;
-  user_id: string;
-  user_name: string;
-  message_content: MessageContent;
   message_created_at?: string;
+  message_type?: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
   extend_info?: unknown;
-}
-export interface MessageContent {
-  message_text: string;
-  [k: string]: unknown;
 }
 export interface TaskCenterRequest {
   task_id?: string | null;

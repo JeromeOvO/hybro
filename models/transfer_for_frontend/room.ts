@@ -24,32 +24,14 @@ export type TaskState =
   | "auth-required"
   | "unknown";
 
-export interface MemoryContent {
-  memory_text: string;
-}
-export interface MessageContent {
-  message_text: string;
-}
-export interface Room {
-  room_id?: string;
-  room_name: string;
-  room_owner_id: string;
-  room_owner_name: string;
-  room_agent_set?: {
-    [k: string]: string;
-  };
-  room_created_at?: string;
-  extend_info?: unknown;
-}
-export interface RoomAgentMessage {
+export interface Message {
   room_id: string;
   message_id: string;
-  related_message_id?: string | null;
-  agent_id: string;
-  agent_name: string;
-  message_content: Task;
   message_created_at?: string;
-  extend_info?: unknown;
+}
+export interface MessageContent {
+  message_text?: string | null;
+  message_task?: Task | null;
 }
 /**
  * Represents a single, stateful operation or conversation between a client and an agent.
@@ -57,7 +39,7 @@ export interface RoomAgentMessage {
 export interface Task {
   artifacts?: Artifact[] | null;
   contextId: string;
-  history?: Message[] | null;
+  history?: Message1[] | null;
   id: string;
   kind?: "task";
   metadata?: {
@@ -136,7 +118,7 @@ export interface DataPart {
 /**
  * Represents a single message in the conversation between a user and an agent.
  */
-export interface Message {
+export interface Message1 {
   contextId?: string | null;
   extensions?: string[] | null;
   kind?: "message";
@@ -154,36 +136,54 @@ export interface Message {
  * Represents the status of a task at a specific point in time.
  */
 export interface TaskStatus {
-  message?: Message | null;
+  message?: Message1 | null;
   state: TaskState;
   timestamp?: string | null;
   [k: string]: unknown;
 }
-export interface RoomMemory {
+export interface Room {
+  room_id?: string;
+  room_name: string;
+  room_owner_id: string;
+  room_owner_name: string;
+  room_agent_set?: {
+    [k: string]: string;
+  };
+  room_created_at?: string;
+  extend_info?: unknown;
+}
+export interface RoomAgentMessage {
   room_id: string;
-  memory_id: string;
-  memory_content: MemoryContent;
-  memory_created_at?: string;
+  message_id: string;
+  message_created_at?: string;
+  message_type?: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
   extend_info?: unknown;
 }
 /**
  * Unified room message format for both user and agent messages
  */
 export interface RoomMessage {
+  room_id: string;
   message_id: string;
+  message_created_at?: string;
   message_type: string;
-  message_content: string;
-  message_created_at: string;
-  user_name?: string | null;
-  agent_name?: string | null;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
 }
 export interface RoomUserMessage {
   room_id: string;
   message_id: string;
-  related_message_id?: string | null;
-  user_id: string;
-  user_name: string;
-  message_content: MessageContent;
   message_created_at?: string;
+  message_type?: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  related_message_id?: string | null;
+  message_content: MessageContent;
   extend_info?: unknown;
 }

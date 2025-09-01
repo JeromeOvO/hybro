@@ -15,41 +15,31 @@ class Room(BaseModel):
     room_created_at: datetime = Field(default_factory=datetime.now)
     extend_info: Optional[Any] = None
 
+
+class Message(BaseModel):
+    room_id: str
+    message_id: str
+    message_created_at: datetime = Field(default_factory=datetime.now)
+
 class MessageContent(BaseModel):
     #markdown
-    message_text: str
+    message_text: str | None = None
+    message_task: Task | None = None
 
-class RoomUserMessage(BaseModel):
-    room_id: str
-    message_id: str
+
+class RoomMessage(Message):
+    """Unified room message format for both user and agent messages"""
+    message_type: str  # "user" or "agent"
+    user_id: str | None = None
+    agent_id: str | None = None
     related_message_id: Optional[str] = None
-
-    user_id: str
-    user_name: str
-
     message_content: MessageContent
 
-    message_created_at: datetime = Field(default_factory=datetime.now)
+class RoomUserMessage(RoomMessage):
+    message_type: str = "user"
     extend_info: Optional[Any] = None
 
-
-class RoomAgentMessage(BaseModel):
-    room_id: str
-    message_id: str
-    related_message_id: Optional[str] = None
-    
-    agent_id: str
-    agent_name: str
-
-    message_content: Task
-    message_created_at: datetime = Field(default_factory=datetime.now)
+class RoomAgentMessage(RoomMessage):
+    message_type: str = "agent"
     extend_info: Optional[Any] = None
 
-class RoomMessage(BaseModel):
-    """Unified room message format for both user and agent messages"""
-    message_id: str
-    message_type: str  # "user" or "agent"
-    message_content: str
-    message_created_at: datetime
-    user_name: str | None = None
-    agent_name: str | None = None

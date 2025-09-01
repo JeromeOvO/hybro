@@ -652,10 +652,12 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             try:
                 # Extract agent message content
                 agent_content = ""
-                if msg.message_content and msg.message_content.history:
+                if (msg.message_content and 
+                    msg.message_content.message_task and 
+                    msg.message_content.message_task.history):
                     # Get the latest agent message from history
                     agent_messages = [
-                        m for m in msg.message_content.history 
+                        m for m in msg.message_content.message_task.history 
                         if m.role == Role.agent
                     ]
                     
