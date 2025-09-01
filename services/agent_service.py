@@ -281,6 +281,20 @@ class AgentService:
                 )
 
         return errors
+    
+    async def get_agent_url_by_agent_id(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        agent_id = request.agent_id
+        if agent_id is None:
+            raise AgentIdRequiredError()
+        
+        agent_query_result = await self.database_service.get_agent_by_agent_id(agent_id)
+        if agent_query_result is None:
+            return AgentCenterResponse(success=False, error="Agent not found", status_code=404)
+        
+        return AgentCenterResponse(
+            agent_url=agent_query_result.agent_card.url, success=True, error=None, status_code=200
+        )
+
 
 
 agent_service = AgentService()

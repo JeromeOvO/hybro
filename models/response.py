@@ -1,12 +1,13 @@
-from typing import Any
+from typing import Any, Optional
 
-from a2a.types import AgentCard, Task, TaskState
+from a2a.types import AgentCard, SendMessageResponse, SendStreamingMessageResponse, Task, TaskState
 from pydantic import BaseModel, Field
 
 from models.agent import Agent
-from models.memory import ChatContext
+from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomAgentMessage, RoomMessage
 from models.task import BaseTask, MetaTask, TaskSession
-
+from models.memory import ChatContext, RoomMemory
+from datetime import datetime
 
 class Step(BaseModel):
     step_id: str
@@ -54,7 +55,9 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
 
 class OrchestrationCenterResponse(BaseModel):
     task_id: str | None = None
+    room_id: str | None = None
     meta_task_ids: list[str] | None = None
+    room_agent_message_list: list[RoomAgentMessage] | None = None
     agent_id: str | None = None
     success: bool
     error: str | None = None
@@ -71,6 +74,7 @@ class DebatationCenterResponse(BaseModel):
 
 
 class AgentCenterResponse(BaseModel):
+    agent_url: str | None = None
     agent_id: str | None = None
     agent_card: AgentCard | None = None
     agent: Agent | None = None
@@ -110,6 +114,53 @@ class ChatResponse(BaseModel):
 class ChatMemoryResponse(BaseModel):
     user_name: str
     chat_context: ChatContext | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterRoomSettingResponse(BaseModel):
+    room_id: str | None = None
+    room_agent_set: list[str] | None = None
+    room: Room | None = None
+    room_list: list[Room] | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterUserMessageResponse(BaseModel):
+    room_id: str | None = None
+    message_id: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    message: RoomUserMessage | None = None
+    message_list: list[RoomUserMessage] | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterAgentMessageResponse(BaseModel):
+    room_id: str | None = None
+    message_id: str | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    message: RoomAgentMessage | None = None
+    a2a_response: SendMessageResponse | SendStreamingMessageResponse | None = None
+    message_list: list[RoomAgentMessage] | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterMemoryResponse(BaseModel):  
+    room_id: str | None = None
+    memory_id: str | None = None
+    memory: RoomMemory | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+class RoomCenterRoomMessageResponse(BaseModel):
+    room_id: str | None = None
+    message_list: list[RoomMessage] | None = None
     success: bool
     error: str | None = None
     status_code: int = 200
