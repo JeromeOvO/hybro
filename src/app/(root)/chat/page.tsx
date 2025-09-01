@@ -120,9 +120,6 @@ export default function ChatPage() {
                 <div className="w-full max-w-4xl">
                     <div className="text-center mb-8">
                         <h1 className="text-4xl font-bold mb-4">HYBRO AI</h1>
-                        <p className="text-xl text-muted-foreground">
-                            Start a conversation with our AI assistant
-                        </p>
                     </div>
                     
                     {isSubmitting && (

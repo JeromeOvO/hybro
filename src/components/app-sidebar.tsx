@@ -5,7 +5,9 @@ import {
   BookOpen,
   VectorSquare,
   MessageCircle,
-  History
+  HousePlus,
+  History,
+  Users
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -22,13 +24,20 @@ import {
 } from "@/components/ui/sidebar"
 import { ThemeToggle } from "./theme-toggle"
 import { getAllSessions } from "@/lib/api"
+import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { TaskSession, TaskCenterResponse } from "@/lib/types"
+import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
   {
     name: "Start a new Chat",
     url: "/chat",
     icon: MessageCircle,
+  },
+  {
+    name: "Create a new Room",
+    url: "/room",
+    icon: HousePlus,
   },
   {
     name: "Agent Network",
@@ -46,6 +55,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
   const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
+  const [rooms, setRooms] = React.useState<Room[]>([])
+  const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
 
   // Get user's chat session list
   const loadChatSessions = React.useCallback(async () => {
@@ -69,24 +80,67 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [isLoaded, isSignedIn, user?.id])
 
-  // Load sessions when user login status changes
+  // Get user's room list
+  const loadRooms = React.useCallback(async () => {
+    if (!isLoaded || !isSignedIn || !user?.id) return
+
+    try {
+      setIsLoadingRooms(true)
+      const response = await inquiryRoomsByRoomOwnerId(user.id)
+      
+      if (response.success && response.room_list) {
+        setRooms(response.room_list)
+      } else {
+        console.error('Failed to load rooms:', response.error)
+        setRooms([])
+      }
+    } catch (error) {
+      console.error('Error loading rooms:', error)
+      setRooms([])
+    } finally {
+      setIsLoadingRooms(false)
+    }
+  }, [isLoaded, isSignedIn, user?.id])
+
+  // Load sessions and rooms when user login status changes
   React.useEffect(() => {
     if (isLoaded && isSignedIn && user?.id) {
       loadChatSessions()
+      loadRooms()
     }
-  }, [isLoaded, isSignedIn, user?.id, loadChatSessions])
+  }, [isLoaded, isSignedIn, user?.id, loadChatSessions, loadRooms])
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
     const chatHistoryItems = [...chatSessions].reverse().map(session => ({
       title: session.session_name,
       url: `/chat/${session.session_id}`,
-      id: session.session_id, // Add id field
+      id: session.session_id,
+    }))
+
+    const roomItems = [...rooms].reverse().map(room => ({
+      title: room.room_name || 'Unnamed Room',
+      url: `/room/${room.room_id}`,
+      id: room.room_id,
     }))
 
     return [
       {
-        title: "Chat History",
+        title: "Rooms",
+        url: "#",
+        icon: Users,
+        isActive: true,
+        items: roomItems.length > 0 ? roomItems : [
+          {
+            title: isLoadingRooms ? "Loading..." : "No rooms yet",
+            url: "#",
+            id: "no-rooms",
+          }
+        ],
+        isLoading: isLoadingRooms,
+      },
+      {
+        title: "Chat Sessions",
         url: "#",
         icon: History,
         isActive: true,
@@ -94,13 +148,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           {
             title: isLoadingSessions ? "Loading..." : "No sessions yet",
             url: "#",
-            id: "no-sessions", // Add unique id for default item
+            id: "no-sessions",
           }
         ],
         isLoading: isLoadingSessions,
       },
     ]
-  }, [chatSessions, isLoadingSessions])
+  }, [chatSessions, isLoadingSessions, rooms, isLoadingRooms])
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -112,7 +166,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavAgent navAgents={staticNavAgents} />
-        <NavMain items={navMainData} onRefreshSessions={loadChatSessions} />
+        <NavMain 
+          items={navMainData} 
+          onRefreshSessions={loadChatSessions}
+          onRefreshRooms={loadRooms}
+        />
       </SidebarContent>
       <SidebarFooter>
         <NavUser />
