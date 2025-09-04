@@ -35,7 +35,7 @@ function AgentCardHover({ agent, children }: AgentCardHoverProps) {
         {children}
       </HoverCardTrigger>
       <HoverCardContent 
-        className="w-80 bg-white dark:bg-gray-900 border shadow-lg z-[60] opacity-100" 
+        className="w-80 bg-background/80 backdrop-blur-md border shadow-lg z-[60]"
         side="top"
         sideOffset={8}
         align="center"
@@ -52,7 +52,9 @@ function AgentCardHover({ agent, children }: AgentCardHoverProps) {
               </AvatarFallback>
             </Avatar>
             <div className="space-y-1 flex-1 min-w-0">
-              <h4 className="text-sm font-semibold truncate">{agent.agent_card.name}</h4>
+              <h4 className="text-sm font-semibold truncate">
+                {agent.agent_card.name}
+              </h4>
               <p className="text-xs text-muted-foreground">
                 Version {agent.agent_card.version}
               </p>
@@ -116,7 +118,9 @@ function AgentCardHover({ agent, children }: AgentCardHoverProps) {
               {(!agent.agent_card.capabilities.streaming && 
                 !agent.agent_card.capabilities.pushNotifications && 
                 !agent.agent_card.capabilities.stateTransitionHistory) && (
-                <span className="text-xs text-muted-foreground">Basic capabilities</span>
+                <span className="text-xs text-muted-foreground">
+                  Basic capabilities
+                </span>
               )}
             </div>
           </div>

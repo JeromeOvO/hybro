@@ -131,7 +131,7 @@ export default function RoomChatPage() {
               <Settings className="h-5 w-5" />
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-white dark:bg-gray-900 opacity-100">
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
             <DialogHeader>
               <DialogTitle>Room Settings</DialogTitle>
             </DialogHeader>
@@ -157,7 +157,7 @@ export default function RoomChatPage() {
       </main>
 
       {/* Fixed Chat Input - Never scrolls */}
-      <footer className="flex-shrink-0 p-4 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
+      <footer className="flex-shrink-0 p-4 border-t bg-background z-10">
         <RoomChatInput
           onSubmit={handleSendMessage}
           disabled={sending || processing}
