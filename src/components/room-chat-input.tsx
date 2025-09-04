@@ -207,19 +207,29 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
       {showAgentSuggestions && filteredAgents.length > 0 && (
         <div 
           ref={suggestionsRef}
-          className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto z-50"
+          className="absolute bottom-full left-0 right-0 mb-2 bg-background/80 backdrop-blur-md border border-border/30 shadow-lg rounded-lg max-h-40 overflow-y-auto z-50"
         >
           {filteredAgents.map((agent, index) => (
             <button
               key={agent.id}
               onClick={() => insertMention(agent)}
-              className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+              className={`w-full text-left px-3 py-2 text-sm transition-all duration-200 border-l-2 ${
                 index === selectedAgentIndex
-                  ? 'bg-blue-500 dark:bg-blue-600 text-white font-medium' // More prominent selection style
-                  : 'text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700'
+                  ? 'bg-primary text-primary-foreground font-semibold shadow-md border-l-primary-foreground'
+                  : 'text-foreground hover:bg-muted/60 border-l-transparent'
               }`}
+              onMouseEnter={() => setSelectedAgentIndex(index)}
             >
-              @{agent.name}
+              <span className={`${
+                index === selectedAgentIndex 
+                  ? 'text-primary-foreground' 
+                  : 'text-muted-foreground'
+              }`}>
+                @
+              </span>
+              <span className="font-medium">
+                {agent.name}
+              </span>
             </button>
           ))}
         </div>
