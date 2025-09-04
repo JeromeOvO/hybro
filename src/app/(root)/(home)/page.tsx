@@ -7,7 +7,7 @@ export default function Page() {
   const router = useRouter()
 
   useEffect(() => {
-    router.push('/chat')
+    router.push('/room')
   }, [router])
 
   return (

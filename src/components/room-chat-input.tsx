@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Send } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -27,12 +28,28 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
 
   const filteredAgents = agents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
-  ).slice(0, 5) // Limit to 5 agents
+  ) // Show all filtered agents
 
   // Reset selected index when filtered agents change
   useEffect(() => {
     setSelectedAgentIndex(0)
-  }, [filteredAgents.length, mentionQuery])
+  }, [mentionQuery]) // Only reset when mentionQuery changes, not filteredAgents.length
+
+  // Add ref for suggestions container to handle scrolling
+  const suggestionsRef = useRef<HTMLDivElement>(null)
+
+  // Scroll selected item into view
+  useEffect(() => {
+    if (showAgentSuggestions && suggestionsRef.current) {
+      const selectedElement = suggestionsRef.current.children[selectedAgentIndex] as HTMLElement
+      if (selectedElement) {
+        selectedElement.scrollIntoView({
+          block: 'nearest',
+          behavior: 'smooth'
+        })
+      }
+    }
+  }, [selectedAgentIndex, showAgentSuggestions])
 
   // Convert storage format to display format
   const convertToDisplayFormat = (content: string) => {
@@ -154,8 +171,27 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     }
   }
 
+  // Function to check if message contains at least one @mention
+  const validateMessage = (messageText: string): boolean => {
+    // Check for storage format mentions: <@id|name>
+    const mentionPattern = /<@[^|]+\|[^>]+>/g
+    const mentions = messageText.match(mentionPattern)
+    if (mentions === null) {
+      return false
+    }
+    return mentions && mentions.length > 0
+  }
+
   const handleSubmit = () => {
     if (message.trim()) {
+      // Validate that message contains at least one @mention
+      if (!validateMessage(message.trim())) {
+        toast.error("Please mention at least one agent", {
+          description: "Use @agentName to mention an agent, for example: @HelloAgent hello"
+        })
+        return
+      }
+      
       console.log('🚀 Submitting message (storage format):', message.trim())
       onSubmit(message.trim()) // Submit message in storage format
       setMessage('')
@@ -169,15 +205,18 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     <div className="relative">
       {/* Agent suggestions dropdown */}
       {showAgentSuggestions && filteredAgents.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-32 overflow-y-auto z-50">
+        <div 
+          ref={suggestionsRef}
+          className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-40 overflow-y-auto z-50"
+        >
           {filteredAgents.map((agent, index) => (
             <button
               key={agent.id}
               onClick={() => insertMention(agent)}
-              className={`w-full text-left px-3 py-2 text-sm text-gray-900 dark:text-gray-100 transition-colors ${
+              className={`w-full text-left px-3 py-2 text-sm transition-colors ${
                 index === selectedAgentIndex
-                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100'
-                  : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                  ? 'bg-blue-500 dark:bg-blue-600 text-white font-medium' // More prominent selection style
+                  : 'text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
             >
               @{agent.name}

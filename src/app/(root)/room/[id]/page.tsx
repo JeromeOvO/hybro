@@ -131,7 +131,7 @@ export default function RoomChatPage() {
               <Settings className="h-5 w-5" />
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-white dark:bg-gray-900 opacity-100">
             <DialogHeader>
               <DialogTitle>Room Settings</DialogTitle>
             </DialogHeader>

@@ -4,9 +4,9 @@ import * as React from "react"
 import {
   BookOpen,
   VectorSquare,
-  MessageCircle,
+  // MessageCircle,
   HousePlus,
-  History,
+  // History,
   Users
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
@@ -29,11 +29,11 @@ import type { TaskSession, TaskCenterResponse } from "@/lib/types"
 import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
-  {
-    name: "Start a new Chat",
-    url: "/chat",
-    icon: MessageCircle,
-  },
+  // {
+  //   name: "Start a new Chat",
+  //   url: "/chat",
+  //   icon: MessageCircle,
+  // },
   {
     name: "Create a new Room",
     url: "/room",
@@ -112,11 +112,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
-    const chatHistoryItems = [...chatSessions].reverse().map(session => ({
-      title: session.session_name,
-      url: `/chat/${session.session_id}`,
-      id: session.session_id,
-    }))
+    // const chatHistoryItems = [...chatSessions].reverse().map(session => ({
+    //   title: session.session_name,
+    //   url: `/chat/${session.session_id}`,
+    //   id: session.session_id,
+    // }))
 
     const roomItems = [...rooms].reverse().map(room => ({
       title: room.room_name || 'Unnamed Room',
@@ -139,20 +139,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ],
         isLoading: isLoadingRooms,
       },
-      {
-        title: "Chat Sessions",
-        url: "#",
-        icon: History,
-        isActive: true,
-        items: chatHistoryItems.length > 0 ? chatHistoryItems : [
-          {
-            title: isLoadingSessions ? "Loading..." : "No sessions yet",
-            url: "#",
-            id: "no-sessions",
-          }
-        ],
-        isLoading: isLoadingSessions,
-      },
+      // {
+      //   title: "Chat Sessions",
+      //   url: "#",
+      //   icon: History,
+      //   isActive: true,
+      //   items: chatHistoryItems.length > 0 ? chatHistoryItems : [
+      //     {
+      //       title: isLoadingSessions ? "Loading..." : "No sessions yet",
+      //       url: "#",
+      //       id: "no-sessions",
+      //     }
+      //   ],
+      //   isLoading: isLoadingSessions,
+      // },
     ]
   }, [chatSessions, isLoadingSessions, rooms, isLoadingRooms])
 

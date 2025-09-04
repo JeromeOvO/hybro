@@ -35,8 +35,12 @@ function AgentCardHover({ agent, children }: AgentCardHoverProps) {
         {children}
       </HoverCardTrigger>
       <HoverCardContent 
-        className="w-80 bg-white dark:bg-gray-900 border shadow-lg" 
+        className="w-80 bg-white dark:bg-gray-900 border shadow-lg z-[60] opacity-100" 
         side="top"
+        sideOffset={8}
+        align="center"
+        avoidCollisions={true}
+        collisionPadding={10}
       >
         <div className="space-y-4">
           {/* Header */}

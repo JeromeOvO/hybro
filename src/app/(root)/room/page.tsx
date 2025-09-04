@@ -160,7 +160,7 @@ export default function RoomPage() {
   }
 
   return (
-    <div className="container mx-auto items-center justify-center h-full p-4">
+    <div className="container mx-auto flex items-center justify-center min-h-screen p-4">
       {/* Room Creation Form */}
       <Card>
         <CardHeader>
