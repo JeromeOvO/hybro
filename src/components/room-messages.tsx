@@ -4,7 +4,6 @@ import React, { useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
 export interface MessageData {
@@ -200,26 +199,24 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   }
 
   return (
-    <div className="h-full w-full">
-      <ScrollArea className="h-full">
-        <div className="py-4 min-h-full">
-          {messages.length === 0 ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center text-muted-foreground">
-                <p className="text-lg font-medium">No messages yet</p>
-                <p className="text-sm">Start the conversation by sending a message</p>
-              </div>
+    <div className="h-full w-full overflow-y-auto">
+      <div className="py-4 min-h-full">
+        {messages.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center text-muted-foreground">
+              <p className="text-lg font-medium">No messages yet</p>
+              <p className="text-sm">Start the conversation by sending a message</p>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {messages.map((message) => (
+              <MessageBubble key={message.id} message={message} />
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }
