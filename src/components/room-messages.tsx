@@ -202,7 +202,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   return (
     <div className="h-full w-full">
       <ScrollArea className="h-full">
-        <div className="p-4 min-h-full">
+        <div className="py-4 min-h-full">
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <div className="text-center text-muted-foreground">
