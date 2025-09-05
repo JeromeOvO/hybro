@@ -215,7 +215,7 @@ export function AgentSelector({
                       {agent.agent_card.name.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-sm font-medium truncate max-w-20">
+                  <span className="text-sm font-medium truncate max-w-32">
                     {agent.agent_card.name}
                   </span>
                   <Minus 
@@ -261,7 +261,7 @@ export function AgentSelector({
                       {agent.agent_card.name.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-sm font-medium truncate max-w-20">
+                  <span className="text-sm font-medium truncate max-w-32">
                     {agent.agent_card.name}
                   </span>
                   <Plus className="w-4 h-4 text-primary ml-auto" />
