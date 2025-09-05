@@ -2,6 +2,7 @@ import json
 import os
 import re
 
+from a2a.types import Role
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from openai.types.chat import (
@@ -11,10 +12,9 @@ from openai.types.chat import (
 
 from common.utils.logger import get_logger
 from models.agent import Agent
-from models.memory import ChatContext, ContextData, RoomMemory, MemoryContent
-from models.task import BaseTask
+from models.memory import ContextData, MemoryContent
 from models.room import RoomAgentMessage
-from a2a.types import Role
+from models.task import BaseTask
 
 load_dotenv()
 
@@ -621,11 +621,13 @@ OUTPUT: Return a comprehensive, well-organized context summary that captures the
             fallback = f"{existing_context}\n\nLatest: User: {user_input} | Agent: {agent_response[:200]}..."
             return fallback.strip()
 
-    async def generate_room_memory_content(self, messages: list[RoomAgentMessage], room_memory_content: MemoryContent) -> str:
+    async def generate_room_memory_content(
+        self, messages: list[RoomAgentMessage], room_memory_content: MemoryContent
+    ) -> str:
         """
         Generate room memory content using OpenAI based on agent messages and existing memory content.
         """
-        
+
         # Comprehensive system prompt for room memory generation
         system_prompt = """You are an expert room memory content generator for multi-agent conversation rooms. Your task is to create and maintain a comprehensive memory summary that captures the essential information from agent interactions.
 
@@ -652,83 +654,110 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             try:
                 # Extract agent message content
                 agent_content = ""
-                if (msg.message_content and 
-                    msg.message_content.message_task and 
-                    msg.message_content.message_task.history):
+                if (
+                    msg.message_content
+                    and msg.message_content.message_task
+                    and msg.message_content.message_task.history
+                ):
                     # Get the latest agent message from history
                     agent_messages = [
-                        m for m in msg.message_content.message_task.history 
+                        m
+                        for m in msg.message_content.message_task.history
                         if m.role == Role.agent
                     ]
-                    
+
                     if agent_messages:
                         latest_message = agent_messages[-1]
                         if latest_message.parts and len(latest_message.parts) > 0:
                             # Extract text from the first part
                             agent_content = latest_message.parts[0].root.text
-                
+
                 if agent_content:
-                    message_summary = f"Agent {msg.agent_name} ({msg.agent_id}) at {msg.message_created_at}: {agent_content[:500]}..."
+                    # Safely construct agent display without assuming agent_name exists
+                    _agent_id = getattr(msg, "agent_id", "unknown-agent")
+                    _agent_name = getattr(msg, "agent_name", None)
+                    _agent_display = (
+                        f"{_agent_name} ({_agent_id})"
+                        if _agent_name
+                        else f"{_agent_id}"
+                    )
+                    message_summary = f"Agent {_agent_display} at {msg.message_created_at}: {agent_content[:500]}..."
                     message_summaries.append(message_summary)
-                    
+
             except Exception as e:
                 print(f"Error processing message {msg.message_id}: {str(e)}")
                 continue
-        
+
         # Build the prompt
-        prompt_parts = [
-            "**RECENT AGENT MESSAGES:**"
-        ]
-        
+        prompt_parts = ["**RECENT AGENT MESSAGES:**"]
+
         if message_summaries:
             prompt_parts.extend(message_summaries)
         else:
             prompt_parts.append("No recent agent messages to process.")
-        
+
         prompt_parts.append("")
-        
+
         # Include existing memory if available
-        if room_memory_content and room_memory_content.memory_text and room_memory_content.memory_text.strip():
-            prompt_parts.extend([
-                "**EXISTING ROOM MEMORY:**",
-                room_memory_content.memory_text,
-                "",
-                "**TASK:** Update and enhance the existing room memory by incorporating the new agent messages above. Merge related information, resolve any contradictions, and ensure the memory reflects the current state of the room."
-            ])
+        if (
+            room_memory_content
+            and room_memory_content.memory_text
+            and room_memory_content.memory_text.strip()
+        ):
+            prompt_parts.extend(
+                [
+                    "**EXISTING ROOM MEMORY:**",
+                    room_memory_content.memory_text,
+                    "",
+                    "**TASK:** Update and enhance the existing room memory by incorporating the new agent messages above. Merge related information, resolve any contradictions, and ensure the memory reflects the current state of the room.",
+                ]
+            )
         else:
-            prompt_parts.extend([
-                "**TASK:** Create a comprehensive initial room memory summary based on the agent messages above."
-            ])
-        
+            prompt_parts.extend(
+                [
+                    "**TASK:** Create a comprehensive initial room memory summary based on the agent messages above."
+                ]
+            )
+
         prompt = "\n".join(prompt_parts)
-        
+
         messages_for_ai = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
             ChatCompletionUserMessageParam(role="user", content=prompt),
         ]
-        
+
         try:
             response = await self.client.responses.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 reasoning={"effort": "low"},
-                input=messages_for_ai  
+                input=messages_for_ai,
             )
-            
-            memory_content = response.output_text.strip() if response.output_text else ""
-            
+
+            memory_content = (
+                response.output_text.strip() if response.output_text else ""
+            )
+
             # Basic validation
             if not memory_content:
                 # Fallback if AI doesn't return content
-                existing_memory = room_memory_content.memory_text if room_memory_content and room_memory_content.memory_text else ""
+                existing_memory = (
+                    room_memory_content.memory_text
+                    if room_memory_content and room_memory_content.memory_text
+                    else ""
+                )
                 fallback_content = f"{existing_memory}\n\nUpdated with {len(message_summaries)} new agent messages."
                 return fallback_content.strip()
-            
+
             return memory_content
-            
+
         except Exception as e:
             print(f"Error in generate_room_memory_content: {str(e)}")
             # Provide a useful fallback
-            existing_memory = room_memory_content.memory_text if room_memory_content and room_memory_content.memory_text else ""
+            existing_memory = (
+                room_memory_content.memory_text
+                if room_memory_content and room_memory_content.memory_text
+                else ""
+            )
             fallback = f"{existing_memory}\n\nProcessed {len(message_summaries)} agent messages."
             return fallback.strip()
 
