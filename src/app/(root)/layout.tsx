@@ -20,6 +20,7 @@ export default function RootLayout({
       <SidebarProvider>
           <AppSidebar />
           <SidebarInset>
+            <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
             <main className="flex flex-1 flex-col">
                 {children}
             </main>
