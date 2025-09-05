@@ -112,58 +112,63 @@ export default function RoomChatPage() {
   }
 
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden">
-      {/* Fixed Header - Never scrolls */}
-      <header className="flex-shrink-0 flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
-        <div>
-          <h1 className="text-xl font-semibold">{room.room_name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {processing && (
-              <span className="text-blue-600">Processing messages...</span>
-            )}
-          </p>
-        </div>
-        
-        {/* Settings Button */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button variant="ghost" size="icon">
-              <Settings className="h-5 w-5" />
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
-            <DialogHeader>
-              <DialogTitle>Room Settings</DialogTitle>
-            </DialogHeader>
-            <div className="mt-4">
-              <RoomSettingForm
-                onSubmit={handleRoomSettingsUpdate}
-                availableAgents={availableAgents}
-                loadingAgents={loadingAgents}
-                agentsError={agentsError}
-                isSubmitting={updatingRoom}
-                isEditing={true}
-                onRetryLoadAgents={loadAvailableAgents}
-                initialData={roomFormData}
-              />
+    <div className="flex flex-col h-screen bg-background">
+      <div className="flex-1 overflow-hidden">
+        <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 h-full flex flex-col">
+          {/* Fixed Header - Never scrolls */}
+          <header className="flex-shrink-0 flex items-center justify-between py-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
+            <div>
+              <h1 className="text-xl font-semibold">{room.room_name}</h1>
+              <p className="text-sm text-muted-foreground">
+                {processing && (
+                  <span className="text-blue-600">Processing messages...</span>
+                )}
+              </p>
             </div>
-          </DialogContent>
-        </Dialog>
-      </header>
+            
+            {/* Settings Button */}
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <Settings className="h-5 w-5" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
+                <DialogHeader>
+                  <DialogTitle>Room Settings</DialogTitle>
+                </DialogHeader>
+                <div className="mt-4">
+                  <RoomSettingForm
+                    onSubmit={handleRoomSettingsUpdate}
+                    availableAgents={availableAgents}
+                    loadingAgents={loadingAgents}
+                    agentsError={agentsError}
+                    isSubmitting={updatingRoom}
+                    isEditing={true}
+                    onRetryLoadAgents={loadAvailableAgents}
+                    initialData={roomFormData}
+                  />
+                </div>
+              </DialogContent>
+            </Dialog>
+          </header>
 
-      {/* Scrollable Messages Area - Only this area scrolls */}
-      <main className="flex-1 overflow-hidden">
-        <RoomMessages messages={messages} loading={false} />
-      </main>
-
-      {/* Fixed Chat Input - Never scrolls */}
-      <footer className="flex-shrink-0 p-4 border-t bg-background z-10">
-        <RoomChatInput
-          onSubmit={handleSendMessage}
-          disabled={sending || processing}
-          agents={agentList}
-        />
-      </footer>
+          {/* Scrollable Messages Area - Only this area scrolls */}
+          <main className="flex-1 overflow-hidden">
+            <RoomMessages messages={messages} loading={false} />
+          </main>
+        </div>
+      </div>
+      
+      <div className="bg-background p-4 border-t">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6">
+          <RoomChatInput
+            onSubmit={handleSendMessage}
+            disabled={sending || processing}
+            agents={agentList}
+          />
+        </div>
+      </div>
     </div>
   )
 }
