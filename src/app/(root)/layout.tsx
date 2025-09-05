@@ -20,7 +20,7 @@ export default function RootLayout({
     <div className="min-h-screen bg-background">
       <SidebarProvider>
           <AppSidebar />
-                  <SidebarInset>
+          <SidebarInset>
           <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
           <Header />
           <main className="flex flex-1 flex-col">

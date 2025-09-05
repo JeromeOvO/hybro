@@ -6,7 +6,7 @@ import { Logo } from '@/components/logo';
 
 export const Header = () => {
   const [mounted, setMounted] = React.useState(false);
-  const { open, isMobile } = useSidebar();
+  const { isMobile } = useSidebar();
   
   React.useEffect(() => {
     setMounted(true);
@@ -15,11 +15,11 @@ export const Header = () => {
   if (!mounted) {
     // Return a simple header while loading to avoid hydration issues
     return (
-      <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex h-14 items-center gap-4 px-4">
           <div className="flex items-center gap-2">
-            <SidebarTrigger />
-            <Logo size="sm" />
+            <SidebarTrigger className="md:hidden" />
+            <Logo size="sm" className="md:hidden" />
           </div>
           <div className="flex-1" />
         </div>
@@ -28,19 +28,18 @@ export const Header = () => {
   }
   
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center gap-4 px-4">
         <div className="flex items-center gap-2">
-          {/* Show toggle button and logo when sidebar is closed on desktop, or always on mobile */}
-          {(!open && !isMobile) || isMobile ? (
+          {/* Only show on mobile */}
+          {isMobile && (
             <>
               <SidebarTrigger />
               <Logo size="sm" />
             </>
-          ) : null}
+          )}
         </div>
         <div className="flex-1" />
-        {/* Removed theme toggle completely from header */}
       </div>
     </header>
   );

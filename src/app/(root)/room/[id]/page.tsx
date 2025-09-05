@@ -116,7 +116,7 @@ export default function RoomChatPage() {
       <div className="flex-1 overflow-hidden">
         <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 h-full flex flex-col">
           {/* Fixed Header - Never scrolls */}
-          <header className="flex-shrink-0 flex items-center justify-between py-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
+          <header className="flex-shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
             <div>
               <h1 className="text-xl font-semibold">{room.room_name}</h1>
               <p className="text-sm text-muted-foreground">
@@ -160,7 +160,7 @@ export default function RoomChatPage() {
         </div>
       </div>
       
-      <div className="bg-background p-4 border-t">
+      <div className="bg-background p-4">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
           <RoomChatInput
             onSubmit={handleSendMessage}
