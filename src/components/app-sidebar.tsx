@@ -21,8 +21,8 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { ThemeToggle } from "./theme-toggle"
 import { getAllSessions } from "@/lib/api"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { TaskSession, TaskCenterResponse } from "@/lib/types"
@@ -157,11 +157,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [chatSessions, isLoadingSessions, rooms, isLoadingRooms])
 
   return (
-    <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader className="group-data-[collapsible=icon]:hidden">
+    <Sidebar collapsible="offcanvas" {...props}>
+      <SidebarHeader>
         <div className="flex items-center gap-2 px-2">
           <Logo className="flex-1" />
-          <ThemeToggle />
+          <SidebarTrigger />
         </div>
       </SidebarHeader>
       <SidebarContent>
