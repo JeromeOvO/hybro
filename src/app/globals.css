@@ -46,14 +46,14 @@
   --color-chart-4: 45 90% 55%;
   --color-chart-5: 320 80% 65%;
   
-  /* Modern sidebar */
-  --color-sidebar-background: 210 30% 95%;
+  /* Modern sidebar with blur effect */
+  --color-sidebar-background: 210 30% 98%;
   --color-sidebar-foreground: 215 25% 25%;
   --color-sidebar-primary: 195 100% 50%;
   --color-sidebar-primary-foreground: 210 30% 98%;
-  --color-sidebar-accent: 240 20% 88%;
+  --color-sidebar-accent: 240 20% 92%;
   --color-sidebar-accent-foreground: 240 25% 20%;
-  --color-sidebar-border: 220 20% 82%;
+  --color-sidebar-border: 220 20% 85%;
   --color-sidebar-ring: 195 100% 50%;
   
   /* Modern border radius */
@@ -111,14 +111,14 @@
   --color-chart-4: 60 100% 60%;
   --color-chart-5: 330 100% 65%;
   
-  /* Dark sidebar with neon accents */
-  --color-sidebar-background: 235 25% 12%;
+  /* Dark sidebar with blur effect and neon accents */
+  --color-sidebar-background: 235 25% 8%;
   --color-sidebar-foreground: 210 30% 85%;
   --color-sidebar-primary: 180 100% 60%;
   --color-sidebar-primary-foreground: 230 25% 8%;
-  --color-sidebar-accent: 240 15% 18%;
+  --color-sidebar-accent: 240 15% 15%;
   --color-sidebar-accent-foreground: 210 30% 88%;
-  --color-sidebar-border: 240 25% 22%;
+  --color-sidebar-border: 240 25% 18%;
   --color-sidebar-ring: 180 100% 60%;
 }
 

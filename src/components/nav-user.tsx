@@ -2,6 +2,7 @@
 
 import { LogIn } from "lucide-react"
 import { useUser, UserButton, useClerk } from "@clerk/nextjs"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 import {
   SidebarMenu,
@@ -94,6 +95,7 @@ export function NavUser() {
             <span className="truncate font-medium">{userName}</span>
             <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
           </div>
+          <ThemeToggle />
         </div>
       </SidebarMenuItem>
     </SidebarMenu>
