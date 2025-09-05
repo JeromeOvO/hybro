@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/collapsible"
 import {
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -52,7 +51,6 @@ export function NavMain({
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Playground</SidebarGroupLabel>
       <SidebarMenu className="gap-1.5">
         {items.map((item) => {
           const refreshHandler = getRefreshHandler(item.title)
