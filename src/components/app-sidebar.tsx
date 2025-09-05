@@ -157,14 +157,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [chatSessions, isLoadingSessions, rooms, isLoadingRooms])
 
   return (
-    <Sidebar collapsible="offcanvas" {...props}>
+    <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2">
-          <Logo className="flex-1" />
-          <SidebarTrigger />
+          <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
+          <SidebarTrigger className="hidden md:block" />
         </div>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="group-data-[collapsible=icon]:hidden">
         <NavAgent navAgents={staticNavAgents} />
         <NavMain 
           items={navMainData} 
@@ -172,7 +172,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           onRefreshRooms={loadRooms}
         />
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="group-data-[collapsible=icon]:hidden">
         <NavUser />
       </SidebarFooter>
       <SidebarRail />
