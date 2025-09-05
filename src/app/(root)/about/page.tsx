@@ -79,7 +79,7 @@ export default function AboutPage() {
               variant="outline" 
               size="lg" 
               className="px-8"
-              onClick={() => router.push('/room')}
+              onClick={() => router.push('/sign-in?redirect_url=/room')}
             >
               Get Started Free
               <ArrowRight className="ml-2 h-4 w-4" />
