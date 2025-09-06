@@ -26,7 +26,7 @@ export default function ChatPage() {
 
         if (!user?.id) {
             toast.error("Please sign in to continue")
-            router.push('/sign-in?redirect_url=/chat')
+            router.push('/sign-in?redirect_url=/room')
             return
         }
 
