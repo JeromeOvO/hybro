@@ -65,33 +65,54 @@ export function AgentCard({
 
   return (
     <Card 
-      className="group hover:shadow-lg transition-all duration-200 hover:border-primary/50 cursor-pointer
-             aspect-square w-full max-w-[260px]"
+      className="group relative overflow-hidden cursor-pointer
+                 aspect-square w-full max-w-[260px]
+                 backdrop-blur-sm
+                 transition-all duration-300 ease-out
+                 border-none ring-0
+                 hover:bg-secondary/50 dark:hover:bg-muted/40 hover:shadow-2xl hover:shadow-primary/30
+                 dark:hover:shadow-primary/20 dark:hover:shadow-2xl
+                 hover:scale-[1.02] hover:-translate-y-1
+                 before:absolute before:inset-0 before:bg-gradient-to-br 
+                 before:from-primary/5 before:via-transparent before:to-accent/5
+                 before:opacity-0 before:transition-opacity before:duration-300
+                 hover:before:opacity-100
+                 after:absolute after:inset-[2px] after:rounded-xl 
+                 after:shadow-inner after:shadow-primary/8
+                 dark:after:shadow-white/10 after:pointer-events-none
+                 bg-secondary/40 dark:bg-muted/30 shadow-xl shadow-black/10 dark:shadow-black/50"
       onClick={handleCardClick}
     >
-      <CardHeader className="pb-3 pt-4 text-center">
+      <CardHeader className="pb-3 pt-4 text-center relative z-10">
         <div className="flex flex-col items-center gap-3">
           <div className="relative">
-            <Avatar className="h-12 w-12 ring-2 ring-border shadow-sm">
+            <Avatar className="h-12 w-12 shadow-lg shadow-primary/20 dark:shadow-white/25
+                             transition-all duration-300 ease-out
+                             group-hover:shadow-xl group-hover:shadow-primary/35 
+                             dark:group-hover:shadow-primary/35 group-hover:scale-110">
               <AvatarImage src={agent.agent_card.iconUrl || DEFAULT_AGENT_ICON} alt={agent.agent_card.name} />
-              <AvatarFallback>
-                <Bot className="h-6 w-6" />
+              <AvatarFallback className="group-hover:bg-primary/20 transition-colors duration-300">
+                <Bot className="h-6 w-6 group-hover:text-primary transition-colors duration-300" />
               </AvatarFallback>
             </Avatar>
-            <div className="absolute -top-1 -right-1">
-              <StatusIcon className={`${statusConfig.className}`} />
+            <div className="absolute -top-1 -right-1 transition-transform duration-300 group-hover:scale-110">
+              <StatusIcon className={`${statusConfig.className} group-hover:shadow-lg`} />
             </div>
           </div>
         </div>
       </CardHeader>
       
-      <CardContent className="px-6 pb-6">
+      <CardContent className="px-6 pb-6 relative z-10">
         <div className="space-y-1">
-            <CardTitle className="text-xl font-semibold text-center">
+            <CardTitle className="text-xl font-semibold text-center
+                                transition-all duration-300 ease-out
+                                group-hover:text-primary group-hover:scale-105">
               {agent.agent_card.name}
             </CardTitle>
           </div>
-        <CardDescription className="text-center leading-relaxed line-clamp-3">
+        <CardDescription className="text-center leading-relaxed line-clamp-3
+                                   transition-all duration-300 ease-out
+                                   group-hover:text-foreground/90">
           {agent.agent_card.description}
         </CardDescription>
       </CardContent>

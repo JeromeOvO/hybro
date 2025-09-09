@@ -7,7 +7,7 @@
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
   
   /* Futuristic Light Mode - Cool tones with depth */
-  --color-background: 210 25% 97%;
+  --color-background: 210 20% 96%;
   --color-foreground: 215 25% 15%;
   --color-card: 210 30% 98%;
   --color-card-foreground: 215 25% 15%;
@@ -35,7 +35,7 @@
   --color-destructive-foreground: 210 30% 98%;
   
   /* Refined borders with cool tones */
-  --color-border: 220 20% 85%;
+  --color-border: 220 15% 75%;
   --color-input: 220 20% 88%;
   --color-ring: 195 100% 50%;
   
