@@ -123,7 +123,7 @@ export default function RoomPage() {
   // Show loading if user info is not loaded yet
   if (!isLoaded) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="container mx-auto flex items-center justify-center min-h-screen p-4">
         <Loader2 className="h-8 w-8 animate-spin" />
       </div>
     )
@@ -132,7 +132,7 @@ export default function RoomPage() {
   // Show error if user is not authenticated
   if (!user) {
     return (
-      <div className="container mx-auto items-center justify-center h-full p-4">
+      <div className="container mx-auto flex flex-col items-center justify-center min-h-screen p-4">
        <section className="py-20 px-4">
         <div className="max-w-6xl mx-auto text-center">
           <h1 className="text-4xl md:text-6xl font-bold mb-6">
@@ -173,7 +173,7 @@ export default function RoomPage() {
   // Show success loading screen after room creation
   if (roomCreated) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-4">
+      <div className="container mx-auto flex flex-col items-center justify-center min-h-screen p-4">
         <div className="text-center space-y-6">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
             <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
