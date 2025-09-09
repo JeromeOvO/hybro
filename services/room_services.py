@@ -743,7 +743,8 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Get latest 10 messages for context
+        # Temporary: Get latest 10 messages for context
+        # TODO: Create a more robust context and memory solution.
         latest_messages_text = ""
         try:
             room_messages_response = await self.inquiry_room_messages_by_room_id(
