@@ -175,9 +175,9 @@ export function Message({
             isUser && "bg-primary text-primary-foreground",
             isAgent && "bg-blue-500 text-white"
           )}>
-            {isUser ? <User className="h-4 w-4" /> : 
-             isAgent ? <Bot className="h-4 w-4" /> :
-             <Bot className="h-4 w-4" />}
+            {isUser ? <User className="h-4 w-4 icon-info" /> : 
+             isAgent ? <Bot className="h-4 w-4 icon-action" /> :
+             <Bot className="h-4 w-4 icon-neutral" />}
           </AvatarFallback>
         </Avatar>
       </div>
@@ -231,7 +231,7 @@ export function Message({
               onClick={handleCopy}
               className="h-7 px-2 text-xs hover:bg-muted/50"
             >
-              <Copy className="h-3 w-3 mr-1" />
+              <Copy className="h-3 w-3 mr-1 icon-neutral" />
               Copy
             </Button>
             
@@ -243,7 +243,7 @@ export function Message({
                 onClick={() => onRetry(message.id)}
                 className="h-7 px-2 text-xs hover:bg-muted/50"
               >
-                <RotateCcw className="h-3 w-3 mr-1" />
+                <RotateCcw className="h-3 w-3 mr-1 icon-action" />
                 Retry
               </Button>
             )}
@@ -255,7 +255,7 @@ export function Message({
                 onClick={() => onLike(message.id)}
                 className="h-7 px-2 text-xs hover:bg-muted/50"
               >
-                <ThumbsUp className="h-3 w-3" />
+                <ThumbsUp className="h-3 w-3 icon-success" />
               </Button>
             )}
             
@@ -266,7 +266,7 @@ export function Message({
                 onClick={() => onDislike(message.id)}
                 className="h-7 px-2 text-xs hover:bg-muted/50"
               >
-                <ThumbsDown className="h-3 w-3" />
+                <ThumbsDown className="h-3 w-3 icon-error" />
               </Button>
             )}
 

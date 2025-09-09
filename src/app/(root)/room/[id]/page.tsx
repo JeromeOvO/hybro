@@ -130,7 +130,7 @@ export default function RoomChatPage() {
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="ghost" size="icon">
-                  <Settings className="h-5 w-5" />
+                  <Settings className="h-5 w-5 icon-neutral" />
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">

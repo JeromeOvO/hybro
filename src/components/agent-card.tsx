@@ -30,8 +30,7 @@ export function AgentCard({
           icon: CircleCheck,
           className: [
             base,
-            "text-green-500",
-            "dark:text-green-400"
+            "icon-success"
           ].join(" "),
         };
   
@@ -40,8 +39,7 @@ export function AgentCard({
           icon: CircleMinus,
           className: [
             base,
-            "text-red-500", 
-            "dark:text-red-400"
+            "icon-error"
           ].join(" "),
         };
   
@@ -50,8 +48,7 @@ export function AgentCard({
           icon: XCircle,
           className: [
             base,
-            "text-red-600",
-            "dark:text-red-300"
+            "icon-error"
           ].join(" "),
         };
     }
@@ -110,7 +107,7 @@ export function StatsCards({ agents }: { agents: Agent[] }) {
       <Card
         className="@container/card border-none bg-transparent shadow-none flex flex-col items-center gap-3 px-8 py-6 w-52"
       >
-        <PartyPopper className="w-7 h-7 text-primary" />
+        <PartyPopper className="w-7 h-7 icon-action" />
         <CardDescription className="font-medium text-muted-foreground whitespace-nowrap">
           Total&nbsp;Agents
         </CardDescription>

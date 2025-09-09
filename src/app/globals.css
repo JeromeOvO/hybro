@@ -60,6 +60,26 @@
   --color-hybro-hy: 195 100% 40%;
   --color-hybro-bro: 280 70% 45%;
 
+  /* Semantic icon colors - Light mode */
+  --color-icon-success: 142 76% 36%;
+  --color-icon-warning: 45 93% 47%;
+  --color-icon-error: 0 84% 60%;
+  --color-icon-info: 217 91% 60%;
+  --color-icon-neutral: 215 20% 65%;
+  --color-icon-action: 195 100% 50%;
+  --color-icon-navigation: 215 25% 45%;
+  --color-icon-sun: 45 93% 47%;
+  --color-icon-moon: 217 91% 60%;
+  
+  /* Professional category colors - Light mode */
+  --color-icon-create: 142 70% 45%;
+  --color-icon-network: 195 100% 50%;
+  --color-icon-learn: 280 70% 50%;
+  --color-icon-workflow: 160 80% 40%;
+  --color-icon-collaboration: 320 65% 55%;
+  --color-icon-architecture: 240 60% 55%;
+  --color-icon-contact: 215 25% 45%;
+
   /* Modern border radius */
   --radius: 0.875rem;
   --radius-sm: calc(var(--radius) - 4px);
@@ -111,6 +131,26 @@
   /* Brand colors for HYBRO - Dark mode */
   --color-hybro-hy: 180 100% 60%;
   --color-hybro-bro: 270 80% 70%;
+
+  /* Semantic icon colors - Dark mode */
+  --color-icon-success: 142 76% 60%;
+  --color-icon-warning: 45 93% 65%;
+  --color-icon-error: 0 84% 70%;
+  --color-icon-info: 217 91% 75%;
+  --color-icon-neutral: 215 20% 75%;
+  --color-icon-action: 180 100% 70%;
+  --color-icon-navigation: 210 30% 75%;
+  --color-icon-sun: 45 93% 65%;
+  --color-icon-moon: 217 91% 75%;
+  
+  /* Professional category colors - Dark mode */
+  --color-icon-create: 142 70% 65%;
+  --color-icon-network: 180 100% 70%;
+  --color-icon-learn: 280 70% 70%;
+  --color-icon-workflow: 160 80% 60%;
+  --color-icon-collaboration: 320 65% 75%;
+  --color-icon-architecture: 240 60% 75%;
+  --color-icon-contact: 210 30% 75%;
 
   /* Neon chart colors */
   --color-chart-1: 180 100% 60%;
@@ -296,6 +336,26 @@
     inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
     0 0 15px rgba(0, 255, 255, 0.05);
 }
+
+/* Semantic icon color utilities */
+.icon-success { color: hsl(var(--color-icon-success)); }
+.icon-warning { color: hsl(var(--color-icon-warning)); }
+.icon-error { color: hsl(var(--color-icon-error)); }
+.icon-info { color: hsl(var(--color-icon-info)); }
+.icon-neutral { color: hsl(var(--color-icon-neutral)); }
+.icon-action { color: hsl(var(--color-icon-action)); }
+.icon-navigation { color: hsl(var(--color-icon-navigation)); }
+.icon-sun { color: hsl(var(--color-icon-sun)); }
+.icon-moon { color: hsl(var(--color-icon-moon)); }
+
+/* Professional category color utilities */
+.icon-create { color: hsl(var(--color-icon-create)); }
+.icon-network { color: hsl(var(--color-icon-network)); }
+.icon-learn { color: hsl(var(--color-icon-learn)); }
+.icon-workflow { color: hsl(var(--color-icon-workflow)); }
+.icon-collaboration { color: hsl(var(--color-icon-collaboration)); }
+.icon-architecture { color: hsl(var(--color-icon-architecture)); }
+.icon-contact { color: hsl(var(--color-icon-contact)); }
 
 /* Glowing scrollbars */
 ::-webkit-scrollbar {

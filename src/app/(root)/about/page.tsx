@@ -19,32 +19,32 @@ export default function AboutPage() {
 
   const features = [
     {
-      icon: <Network className="h-8 w-8" />,
+      icon: <Network className="h-8 w-8 icon-network" />,
       title: "AI Agent Network",
       description: "All AI agents are interoperable, connected through A2A-compliant protocols into a cohesive network."
     },
     {
-      icon: <Workflow className="h-8 w-8" />,
+      icon: <Workflow className="h-8 w-8 icon-workflow" />,
       title: "Multi-Agent Collaboration Engine",
       description: "Automatically handles user queries, decomposes tasks, orchestrates workflows, and coordinates agent interactions."
     },
     {
-      icon: <Users className="h-8 w-8" />,
+      icon: <Users className="h-8 w-8 icon-collaboration" />,
       title: "Human-AI Collaboration",
       description: "Seamless collaboration between humans and AI agents to tackle complex real-world problems together."
     },
     {
-      icon: <Grid3X3 className="h-8 w-8" />,
+      icon: <Grid3X3 className="h-8 w-8 icon-network" />,
       title: "Interoperable Design",
       description: "Built on open standards to ensure all AI agents can connect and work together seamlessly."
     },
     {
-      icon: <Bot className="h-8 w-8" />,
+      icon: <Bot className="h-8 w-8 icon-architecture" />,
       title: "Scalable Architecture",
       description: "Designed to handle millions of AI agents working together in the AGI era."
     },
     {
-      icon: <Zap className="h-8 w-8" />,
+      icon: <Zap className="h-8 w-8 icon-action" />,
       title: "Intelligent Orchestration",
       description: "Smart task decomposition and workflow management for optimal agent coordination."
     }
@@ -82,7 +82,7 @@ export default function AboutPage() {
               onClick={() => router.push('/sign-in?redirect_url=/room')}
             >
               Get Started Free
-              <ArrowRight className="ml-2 h-4 w-4" />
+              <ArrowRight className="ml-2 h-4 w-4 icon-action" />
             </Button>
           </div>
         </div>
@@ -102,7 +102,7 @@ export default function AboutPage() {
             <Card className="border-0 shadow-sm hover:shadow-md transition-shadow">
               <CardHeader className="text-center pb-4">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-                  <Network className="h-8 w-8" />
+                  <Network className="h-8 w-8 icon-network" />
                 </div>
                 <CardTitle className="text-xl">Interoperability</CardTitle>
               </CardHeader>
@@ -116,7 +116,7 @@ export default function AboutPage() {
             <Card className="border-0 shadow-sm hover:shadow-md transition-shadow">
               <CardHeader className="text-center pb-4">
                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-                  <Users className="h-8 w-8" />
+                  <Users className="h-8 w-8 icon-collaboration" />
                 </div>
                 <CardTitle className="text-xl">Collaboration</CardTitle>
               </CardHeader>
@@ -144,7 +144,7 @@ export default function AboutPage() {
             <Card className="border-2 border-primary/20 shadow-lg">
               <CardHeader className="text-center pb-6">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-                  <Network className="h-10 w-10" />
+                  <Network className="h-10 w-10 icon-network" />
                 </div>
                 <CardTitle className="text-2xl">AI Agent Network</CardTitle>
               </CardHeader>
@@ -158,7 +158,7 @@ export default function AboutPage() {
             <Card className="border-2 border-primary/20 shadow-lg">
               <CardHeader className="text-center pb-6">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-                  <Workflow className="h-10 w-10" />
+                  <Workflow className="h-10 w-10 icon-workflow" />
                 </div>
                 <CardTitle className="text-2xl">Multi-Agent Collaboration Engine</CardTitle>
               </CardHeader>
@@ -217,7 +217,7 @@ export default function AboutPage() {
             </div>
             
             <div className="flex items-center justify-center gap-2 mb-4">
-              <Mail className="h-5 w-5 text-muted-foreground" />
+              <Mail className="h-5 w-5 icon-contact" />
               <a 
                 href="mailto:info@hybro.ai" 
                 className="text-muted-foreground hover:text-primary transition-colors"
