@@ -1364,7 +1364,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
-        room_related_message_id = request.room_related_message_id
 
         # get room memory
         room_memory_response = (
@@ -1411,8 +1410,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error=inquiry_user_message_response.error,
                 status_code=500,
             )
-
-        room_user_message = inquiry_user_message_response.message
 
         inquiry_agent_messages_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(

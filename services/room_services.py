@@ -743,13 +743,54 @@ class RoomServices:
                 status_code=400,
             )
 
+        # Get latest 10 messages for context
+        latest_messages_text = ""
+        try:
+            room_messages_response = await self.inquiry_room_messages_by_room_id(
+                RoomCenterRoomMessageRequest(room_id=message.room_id)
+            )
+
+            if room_messages_response.success and room_messages_response.message_list:
+                # Get the latest 10 messages (already sorted by creation time)
+                recent_messages = room_messages_response.message_list[-10:]
+
+                latest_messages_parts = []
+                for msg in recent_messages:
+                    if msg.message_type == "user":
+                        user_id = msg.user_id or "Unknown User"
+                        text = msg.message_content.message_text or ""
+                        latest_messages_parts.append(f"User ({user_id}): {text}")
+                    elif msg.message_type == "agent":
+                        agent_id = msg.agent_id or "Unknown Agent"
+                        text = msg.message_content.message_text or ""
+                        latest_messages_parts.append(f"Agent ({agent_id}): {text}")
+
+                if latest_messages_parts:
+                    latest_messages_text = "\n".join(latest_messages_parts)
+        except Exception:
+            # If we can't get recent messages, continue without them
+            latest_messages_text = ""
+
         # Inject context with clear delimiter and guard structure access
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
                 original_text = agent_message.parts[0].root.text or ""
-                injected = (
-                    f"Context:\n{room_memory_content_text}\n\nUser:\n{original_text}"
-                )
+
+                # Build enhanced context with room memory and latest messages
+                context_parts = []
+                if room_memory_content_text.strip():
+                    context_parts.append(f"Context:\n{room_memory_content_text}")
+
+                if latest_messages_text:
+                    context_parts.append(f"Latest messages:\n{latest_messages_text}")
+
+                if context_parts:
+                    injected = (
+                        f"{chr(10).join(context_parts)}\n\nUser:\n{original_text}"
+                    )
+                else:
+                    injected = f"User:\n{original_text}"
+
                 agent_message.parts[0].root.text = injected
         except Exception:
             # Leave message as-is if structure is unexpected
