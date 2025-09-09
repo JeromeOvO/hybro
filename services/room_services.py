@@ -743,7 +743,7 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Temporary: Get latest 10 messages for context
+        # Temporary: Get all messages for context
         # TODO: Create a more robust context and memory solution.
         latest_messages_text = ""
         try:
@@ -752,8 +752,7 @@ class RoomServices:
             )
 
             if room_messages_response.success and room_messages_response.message_list:
-                # Get the latest 10 messages (already sorted by creation time)
-                recent_messages = room_messages_response.message_list[-10:]
+                recent_messages = room_messages_response.message_list
 
                 latest_messages_parts = []
                 for msg in recent_messages:
