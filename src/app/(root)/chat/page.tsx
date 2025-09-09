@@ -119,7 +119,11 @@ export default function ChatPage() {
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-4xl">
                     <div className="text-center mb-8">
-                        <h1 className="text-4xl font-bold mb-4">HYBRO AI</h1>
+                        <h1 className="text-4xl font-bold mb-4">
+                            <span className="text-[hsl(var(--color-hybro-hy))]">HY</span>
+                            <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
+                            <span className="ml-2">AI</span>
+                        </h1>
                     </div>
                     
                     {isSubmitting && (

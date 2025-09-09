@@ -44,7 +44,7 @@ const staticNavAgents = [
     icon: VectorSquare,
   },
   {
-    name: "About Hybro",
+    name: "About HYBRO",
     url: "/about",
     icon: BookOpen,
   }

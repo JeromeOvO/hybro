@@ -57,10 +57,10 @@ export default function AboutPage() {
       <section className="py-20 px-4">
         <div className="max-w-6xl mx-auto text-center">
           <h1 className="text-4xl md:text-6xl font-bold mb-6">
-            Hybro: A Collaborative AI Agent Network for the AGI Era
+            <span className="text-[hsl(var(--color-hybro-hy))]">HY</span><span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>: A Collaborative AI Agent Network for the AGI Era
           </h1>
           <p className="text-xl text-muted-foreground mb-8 max-w-4xl mx-auto">
-            As we move toward the AGI (Artificial General Intelligence) era, the presence of millions, even billions of AI agents in our lives will be inevitable. Hybro is building a unified, collaborative AI agent network that connects and coordinates all AI agents, empowering humans and AI to tackle complex tasks together.
+            As we move toward the AGI (Artificial General Intelligence) era, the presence of millions, even billions of AI agents in our lives will be inevitable. <span className="text-[hsl(var(--color-hybro-hy))]">HY</span><span className="text-[hsl(var(--color-hybro-bro))]">BRO</span> is building a unified, collaborative AI agent network that connects and coordinates all AI agents, empowering humans and AI to tackle complex tasks together.
           </p>
         </div>
       </section>
@@ -136,7 +136,7 @@ export default function AboutPage() {
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold mb-6">Our Solution</h2>
             <p className="text-xl text-muted-foreground mb-8 max-w-4xl mx-auto">
-              These are the fundamental problems that Hybro is addressing. Our vision is supported by two core components:
+              These are the fundamental problems that <span className="text-[hsl(var(--color-hybro-hy))]">HY</span><span className="text-[hsl(var(--color-hybro-bro))]">BRO</span> is addressing. Our vision is supported by two core components:
             </p>
           </div>
           
@@ -207,7 +207,10 @@ export default function AboutPage() {
         <div className="max-w-6xl mx-auto">
           <div className="text-center">
             <div className="mb-6">
-              <h3 className="text-2xl font-bold mb-2">HYBRO</h3>
+              <h3 className="text-2xl font-bold mb-2">
+                <span className="text-[hsl(var(--color-hybro-hy))]">HY</span>
+                <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
+              </h3>
               <p className="text-muted-foreground">
                 A Collaborative AI Agent Network for the AGI Era
               </p>

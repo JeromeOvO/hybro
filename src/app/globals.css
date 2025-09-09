@@ -15,7 +15,7 @@
   --color-popover-foreground: 215 25% 15%;
   
   /* Vibrant cyan-blue primary */
-  --color-primary: 195 100% 50%;
+  --color-primary: 195 100% 40%;
   --color-primary-foreground: 210 30% 98%;
   
   /* Cool secondary with purple hints */
@@ -27,7 +27,7 @@
   --color-muted-foreground: 215 20% 45%;
   
   /* Electric accent */
-  --color-accent: 280 60% 85%;
+  --color-accent: 280 70% 45%;
   --color-accent-foreground: 280 40% 25%;
   
   /* Modern destructive - coral red */
@@ -56,6 +56,10 @@
   --color-sidebar-border: 220 20% 85%;
   --color-sidebar-ring: 195 100% 50%;
   
+  /* Brand colors for HYBRO */
+  --color-hybro-hy: 195 100% 40%;
+  --color-hybro-bro: 280 70% 45%;
+
   /* Modern border radius */
   --radius: 0.875rem;
   --radius-sm: calc(var(--radius) - 4px);
@@ -104,6 +108,10 @@
   --color-input: 240 25% 18%;
   --color-ring: 180 100% 60%;
   
+  /* Brand colors for HYBRO - Dark mode */
+  --color-hybro-hy: 180 100% 60%;
+  --color-hybro-bro: 270 80% 70%;
+
   /* Neon chart colors */
   --color-chart-1: 180 100% 60%;
   --color-chart-2: 120 100% 50%;
