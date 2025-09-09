@@ -60,25 +60,25 @@
   --color-hybro-hy: 195 100% 40%;
   --color-hybro-bro: 280 70% 45%;
 
-  /* Semantic icon colors - Light mode */
-  --color-icon-success: 142 76% 36%;
-  --color-icon-warning: 45 93% 47%;
-  --color-icon-error: 0 84% 60%;
-  --color-icon-info: 217 91% 60%;
-  --color-icon-neutral: 215 20% 65%;
-  --color-icon-action: 195 100% 50%;
-  --color-icon-navigation: 215 25% 45%;
-  --color-icon-sun: 45 93% 47%;
-  --color-icon-moon: 217 91% 60%;
+  /* Semantic icon colors - Light mode (enhanced for better contrast) */
+  --color-icon-success: 142 80% 32%;
+  --color-icon-warning: 45 95% 42%;
+  --color-icon-error: 0 90% 50%;
+  --color-icon-info: 217 95% 45%;
+  --color-icon-neutral: 215 40% 45%;
+  --color-icon-action: 195 100% 45%;
+  --color-icon-navigation: 215 50% 38%;
+  --color-icon-sun: 45 95% 42%;
+  --color-icon-moon: 217 95% 45%;
   
-  /* Professional category colors - Light mode */
-  --color-icon-create: 142 70% 45%;
-  --color-icon-network: 195 100% 50%;
-  --color-icon-learn: 280 70% 50%;
-  --color-icon-workflow: 160 80% 40%;
-  --color-icon-collaboration: 320 65% 55%;
-  --color-icon-architecture: 240 60% 55%;
-  --color-icon-contact: 215 25% 45%;
+  /* Professional category colors - Light mode (enhanced for better contrast) */
+  --color-icon-create: 142 80% 38%;
+  --color-icon-network: 195 100% 45%;
+  --color-icon-learn: 280 80% 42%;
+  --color-icon-workflow: 160 85% 35%;
+  --color-icon-collaboration: 320 80% 45%;
+  --color-icon-architecture: 240 75% 45%;
+  --color-icon-contact: 215 50% 38%;
 
   /* Modern border radius */
   --radius: 0.875rem;
