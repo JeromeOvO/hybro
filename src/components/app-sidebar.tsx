@@ -23,9 +23,8 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { getAllSessions } from "@/lib/api"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
-import type { TaskSession, TaskCenterResponse } from "@/lib/types"
+//import type { TaskSessionesponse } from "@/lib/types"
 import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
@@ -53,12 +52,13 @@ const staticNavAgents = [
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
-  const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
-  const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
+  //const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
+  //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
 
   // Get user's chat session list
+  /**
   const loadChatSessions = React.useCallback(async () => {
     if (!isLoaded || !isSignedIn || !user?.id) return
 
@@ -79,6 +79,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       setIsLoadingSessions(false)
     }
   }, [isLoaded, isSignedIn, user?.id])
+  */
 
   // Get user's room list
   const loadRooms = React.useCallback(async () => {
@@ -105,10 +106,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   // Load sessions and rooms when user login status changes
   React.useEffect(() => {
     if (isLoaded && isSignedIn && user?.id) {
-      loadChatSessions()
       loadRooms()
     }
-  }, [isLoaded, isSignedIn, user?.id, loadChatSessions, loadRooms])
+  }, [isLoaded, isSignedIn, user?.id, loadRooms])
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
@@ -154,7 +154,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       //   isLoading: isLoadingSessions,
       // },
     ]
-  }, [chatSessions, isLoadingSessions, rooms, isLoadingRooms])
+  }, [rooms, isLoadingRooms])
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -168,7 +168,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavAgent navAgents={staticNavAgents} />
         <NavMain 
           items={navMainData} 
-          onRefreshSessions={loadChatSessions}
+          //onRefreshSessions={loadChatSessions}
           onRefreshRooms={loadRooms}
         />
       </SidebarContent>
