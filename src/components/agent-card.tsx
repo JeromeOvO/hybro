@@ -69,7 +69,8 @@ export function AgentCard({
                  aspect-square w-full max-w-[260px]
                  backdrop-blur-sm
                  transition-all duration-300 ease-out
-                 border-none ring-0
+                 border border-transparent ring-0
+                 hover:border hover:border-primary/70 dark:hover:border-primary/60
                  hover:bg-secondary/50 dark:hover:bg-muted/40 hover:shadow-2xl hover:shadow-primary/30
                  dark:hover:shadow-primary/20 dark:hover:shadow-2xl
                  hover:scale-[1.02] hover:-translate-y-1
