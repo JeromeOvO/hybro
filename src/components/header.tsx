@@ -15,11 +15,11 @@ export const Header = () => {
   if (!mounted) {
     // Return a simple header while loading to avoid hydration issues
     return (
-      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 md:hidden">
         <div className="flex h-14 items-center gap-4 px-4">
           <div className="flex items-center gap-2">
-            <SidebarTrigger className="md:hidden" />
-            <Logo size="sm" className="md:hidden" />
+            <SidebarTrigger />
+            <Logo size="sm" />
           </div>
           <div className="flex-1" />
         </div>
@@ -27,17 +27,17 @@ export const Header = () => {
     );
   }
   
+  // Only render the header on mobile devices
+  if (!isMobile) {
+    return null;
+  }
+  
   return (
     <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center gap-4 px-4">
         <div className="flex items-center gap-2">
-          {/* Only show on mobile */}
-          {isMobile && (
-            <>
-              <SidebarTrigger />
-              <Logo size="sm" />
-            </>
-          )}
+          <SidebarTrigger />
+          <Logo size="sm" />
         </div>
         <div className="flex-1" />
       </div>

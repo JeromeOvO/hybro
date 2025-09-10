@@ -10,6 +10,20 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
+// Professional color mapping for navigation icons
+const getIconColorClass = (itemName: string): string => {
+  switch (itemName) {
+    case "Create a new Room":
+      return "icon-create"
+    case "Agent Network":
+      return "icon-network"
+    case "About HYBRO":
+      return "icon-learn"
+    default:
+      return "icon-navigation"
+  }
+}
+
 export function NavAgent({
   navAgents,
 }: {
@@ -27,7 +41,7 @@ export function NavAgent({
           <SidebarMenuItem key={item.name}>
             <SidebarMenuButton asChild size="lg" className="text-base">
               <Link href={item.url} prefetch={false} scroll={false}>
-                <item.icon />
+                <item.icon className={getIconColorClass(item.name)} />
                 <span className="leading-7">{item.name}</span>
               </Link>
             </SidebarMenuButton>

@@ -7,7 +7,7 @@
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
   
   /* Futuristic Light Mode - Cool tones with depth */
-  --color-background: 210 25% 97%;
+  --color-background: 210 20% 96%;
   --color-foreground: 215 25% 15%;
   --color-card: 210 30% 98%;
   --color-card-foreground: 215 25% 15%;
@@ -15,7 +15,7 @@
   --color-popover-foreground: 215 25% 15%;
   
   /* Vibrant cyan-blue primary */
-  --color-primary: 195 100% 50%;
+  --color-primary: 195 100% 40%;
   --color-primary-foreground: 210 30% 98%;
   
   /* Cool secondary with purple hints */
@@ -27,7 +27,7 @@
   --color-muted-foreground: 215 20% 45%;
   
   /* Electric accent */
-  --color-accent: 280 60% 85%;
+  --color-accent: 280 70% 45%;
   --color-accent-foreground: 280 40% 25%;
   
   /* Modern destructive - coral red */
@@ -35,7 +35,7 @@
   --color-destructive-foreground: 210 30% 98%;
   
   /* Refined borders with cool tones */
-  --color-border: 220 20% 85%;
+  --color-border: 220 15% 75%;
   --color-input: 220 20% 88%;
   --color-ring: 195 100% 50%;
   
@@ -56,6 +56,30 @@
   --color-sidebar-border: 220 20% 85%;
   --color-sidebar-ring: 195 100% 50%;
   
+  /* Brand colors for HYBRO */
+  --color-hybro-hy: 195 100% 40%;
+  --color-hybro-bro: 280 70% 45%;
+
+  /* Semantic icon colors - Light mode (enhanced for better contrast) */
+  --color-icon-success: 142 80% 32%;
+  --color-icon-warning: 45 95% 42%;
+  --color-icon-error: 0 90% 50%;
+  --color-icon-info: 217 95% 45%;
+  --color-icon-neutral: 215 40% 45%;
+  --color-icon-action: 195 100% 45%;
+  --color-icon-navigation: 215 50% 38%;
+  --color-icon-sun: 45 95% 42%;
+  --color-icon-moon: 217 95% 45%;
+  
+  /* Professional category colors - Light mode (enhanced for better contrast) */
+  --color-icon-create: 142 80% 38%;
+  --color-icon-network: 195 100% 45%;
+  --color-icon-learn: 280 80% 42%;
+  --color-icon-workflow: 160 85% 35%;
+  --color-icon-collaboration: 320 80% 45%;
+  --color-icon-architecture: 240 75% 45%;
+  --color-icon-contact: 215 50% 38%;
+
   /* Modern border radius */
   --radius: 0.875rem;
   --radius-sm: calc(var(--radius) - 4px);
@@ -104,6 +128,30 @@
   --color-input: 240 25% 18%;
   --color-ring: 180 100% 60%;
   
+  /* Brand colors for HYBRO - Dark mode */
+  --color-hybro-hy: 180 100% 60%;
+  --color-hybro-bro: 270 80% 70%;
+
+  /* Semantic icon colors - Dark mode */
+  --color-icon-success: 142 76% 60%;
+  --color-icon-warning: 45 93% 65%;
+  --color-icon-error: 0 84% 70%;
+  --color-icon-info: 217 91% 75%;
+  --color-icon-neutral: 215 20% 75%;
+  --color-icon-action: 180 100% 70%;
+  --color-icon-navigation: 210 30% 75%;
+  --color-icon-sun: 45 93% 65%;
+  --color-icon-moon: 217 91% 75%;
+  
+  /* Professional category colors - Dark mode */
+  --color-icon-create: 142 70% 65%;
+  --color-icon-network: 180 100% 70%;
+  --color-icon-learn: 280 70% 70%;
+  --color-icon-workflow: 160 80% 60%;
+  --color-icon-collaboration: 320 65% 75%;
+  --color-icon-architecture: 240 60% 75%;
+  --color-icon-contact: 210 30% 75%;
+
   /* Neon chart colors */
   --color-chart-1: 180 100% 60%;
   --color-chart-2: 120 100% 50%;
@@ -288,6 +336,26 @@
     inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
     0 0 15px rgba(0, 255, 255, 0.05);
 }
+
+/* Semantic icon color utilities */
+.icon-success { color: hsl(var(--color-icon-success)); }
+.icon-warning { color: hsl(var(--color-icon-warning)); }
+.icon-error { color: hsl(var(--color-icon-error)); }
+.icon-info { color: hsl(var(--color-icon-info)); }
+.icon-neutral { color: hsl(var(--color-icon-neutral)); }
+.icon-action { color: hsl(var(--color-icon-action)); }
+.icon-navigation { color: hsl(var(--color-icon-navigation)); }
+.icon-sun { color: hsl(var(--color-icon-sun)); }
+.icon-moon { color: hsl(var(--color-icon-moon)); }
+
+/* Professional category color utilities */
+.icon-create { color: hsl(var(--color-icon-create)); }
+.icon-network { color: hsl(var(--color-icon-network)); }
+.icon-learn { color: hsl(var(--color-icon-learn)); }
+.icon-workflow { color: hsl(var(--color-icon-workflow)); }
+.icon-collaboration { color: hsl(var(--color-icon-collaboration)); }
+.icon-architecture { color: hsl(var(--color-icon-architecture)); }
+.icon-contact { color: hsl(var(--color-icon-contact)); }
 
 /* Glowing scrollbars */
 ::-webkit-scrollbar {

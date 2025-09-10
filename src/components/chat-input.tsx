@@ -167,7 +167,7 @@ export function ChatInput({
                     disabled={disabled}
                     className="h-12 w-12 rounded-full p-0 hover:bg-muted"
                   >
-                    <Plus className="h-5 w-5" /> {/* Increase icon size */}
+                    <Plus className="h-5 w-5 icon-action" /> {/* Increase icon size */}
                   </Button>
                 </DropdownMenuTrigger>
             <DropdownMenuContent 
@@ -180,11 +180,11 @@ export function ChatInput({
                   collisionPadding={16} // Increase collision padding
                 >
                   <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
-                    <Paperclip className="h-4 w-4 mr-2" />
+                    <Paperclip className="h-4 w-4 mr-2 icon-neutral" />
                     Attach file
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
-                    <ImageIcon className="h-4 w-4 mr-2" />
+                    <ImageIcon className="h-4 w-4 mr-2 icon-info" />
                     Upload image
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -202,7 +202,7 @@ export function ChatInput({
               size="lg"
               className="h-12 w-12 rounded-full p-0 ml-1" // Increase button size
             >
-              <Send className="h-5 w-5" /> {/* Increase icon size */}
+              <Send className="h-5 w-5 icon-action" /> {/* Increase icon size */}
             </Button>
           )}
         </div>

@@ -26,13 +26,13 @@ export function Logo({
       className
     )}>
       <span className={cn(
-        "font-bold font-spaceGrotesk text-foreground",
+        "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",
         sizeClasses[size]
       )}>
         HY
       </span>
       <span className={cn(
-        "font-bold font-spaceGrotesk text-muted-foreground",
+        "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro))]",
         sizeClasses[size]
       )}>
         BRO

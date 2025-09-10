@@ -123,8 +123,8 @@ export default function RoomPage() {
   // Show loading if user info is not loaded yet
   if (!isLoaded) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-8 w-8 animate-spin" />
+      <div className="container mx-auto flex items-center justify-center min-h-screen p-4">
+        <Loader2 className="h-8 w-8 animate-spin icon-action" />
       </div>
     )
   }
@@ -132,7 +132,7 @@ export default function RoomPage() {
   // Show error if user is not authenticated
   if (!user) {
     return (
-      <div className="container mx-auto items-center justify-center h-full p-4">
+      <div className="container mx-auto flex flex-col items-center justify-center min-h-screen p-4">
        <section className="py-20 px-4">
         <div className="max-w-6xl mx-auto text-center">
           <h1 className="text-4xl md:text-6xl font-bold mb-6">
@@ -161,7 +161,7 @@ export default function RoomPage() {
               onClick={() => router.push('/sign-in?redirect_url=/room')}
             >
               Create Your Chat Room Free
-              <ArrowRight className="ml-2 h-4 w-4" />
+              <ArrowRight className="ml-2 h-4 w-4 icon-action" />
             </Button>
           </div>
         </div>
@@ -173,14 +173,14 @@ export default function RoomPage() {
   // Show success loading screen after room creation
   if (roomCreated) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-4">
+      <div className="container mx-auto flex flex-col items-center justify-center min-h-screen p-4">
         <div className="text-center space-y-6">
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
-            <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
+            <CheckCircle className="h-8 w-8 icon-success" />
           </div>
           <div className="flex items-center justify-center">
             <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin icon-action" />
               <span className="text-sm">Entering room...</span>
             </div>
           </div>
@@ -203,7 +203,7 @@ export default function RoomPage() {
           {isCreatingRoom && (
             <div className="flex items-center justify-center mb-6">
               <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin icon-action" />
                 <span className="text-sm">Creating room...</span>
               </div>
             </div>

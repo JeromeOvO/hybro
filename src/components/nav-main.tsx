@@ -66,12 +66,12 @@ export function NavMain({
                 <div className="flex items-center w-full">
                   <CollapsibleTrigger asChild className="flex-1">
                     <SidebarMenuButton tooltip={item.title} size="lg" className="text-base">
-                      {item.icon && <item.icon />}
+                      {item.icon && <item.icon className="icon-navigation" />}
                       <span>{item.title}</span>
                       {item.isLoading ? (
-                        <RefreshCw className="ml-auto h-4 w-4 animate-spin" />
+                        <RefreshCw className="ml-auto h-4 w-4 animate-spin icon-action" />
                       ) : (
-                        <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                        <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90 icon-neutral" />
                       )}
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
@@ -82,7 +82,7 @@ export function NavMain({
                       onClick={refreshHandler}
                       className="h-6 w-6 p-0 opacity-60 hover:opacity-100 ml-1 flex-shrink-0"
                     >
-                      <RefreshCw className="h-3 w-3" />
+                      <RefreshCw className="h-3 w-3 icon-action" />
                     </Button>
                   )}
                 </div>

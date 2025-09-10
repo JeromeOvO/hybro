@@ -65,7 +65,7 @@ export default function ChatPage() {
     if (!isLoaded) {
         return (
             <div className="flex items-center justify-center h-full">
-                <Loader2 className="h-8 w-8 animate-spin" />
+                <Loader2 className="h-8 w-8 animate-spin icon-action" />
             </div>
         )
     }
@@ -76,7 +76,7 @@ export default function ChatPage() {
                 <Card className="w-full max-w-md">
                     <CardHeader className="text-center">
                         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
-                            <AlertCircle className="h-6 w-6 text-destructive" />
+                            <AlertCircle className="h-6 w-6 icon-error" />
                         </div>
                         <CardTitle className="text-destructive">Server Error</CardTitle>
                         <CardDescription>
@@ -91,12 +91,12 @@ export default function ChatPage() {
                         >
                             {isSubmitting ? (
                                 <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin icon-action" />
                                     Retrying...
                                 </>
                             ) : (
                                 <>
-                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                    <RefreshCw className="mr-2 h-4 w-4 icon-action" />
                                     Retry
                                 </>
                             )}
@@ -119,13 +119,17 @@ export default function ChatPage() {
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-4xl">
                     <div className="text-center mb-8">
-                        <h1 className="text-4xl font-bold mb-4">HYBRO AI</h1>
+                        <h1 className="text-4xl font-bold mb-4">
+                            <span className="text-[hsl(var(--color-hybro-hy))]">HY</span>
+                            <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
+                            <span className="ml-2">AI</span>
+                        </h1>
                     </div>
                     
                     {isSubmitting && (
                         <div className="flex items-center justify-center mb-6">
                             <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <Loader2 className="h-4 w-4 animate-spin icon-action" />
                                 <span className="text-sm">Creating new session...</span>
                             </div>
                         </div>
