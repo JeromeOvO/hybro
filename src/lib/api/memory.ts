@@ -4,9 +4,10 @@ import type {
     ChatMemoryResponse,
   } from '@/lib/types'
   
+  import { getApiUrl } from '../utils'
   // Using Next.js API routes as proxy to avoid CORS issues
-  const API_BASE_URL = '/api/memoryCenter'
-  
+  const API_BASE_URL = getApiUrl('memoryCenter')
+
   // Add chat context
   export async function addChatContext(request: ChatMemoryRequest): Promise<ChatMemoryResponse> {
     const response = await fetch(`${API_BASE_URL}/addChatContext`, {

@@ -5,8 +5,9 @@ import type {
   InsepectionCenterConnectionValidationResponse 
 } from '@/lib/types'
 
-// Using Next.js API routes as proxy to avoid CORS issues
-const API_BASE_URL = '/api/inspectionCenter'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('inspectionCenter')
 
 // Inspect agent card
 export async function inspectAgentCard(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {

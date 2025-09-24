@@ -1,8 +1,9 @@
 // Task-related API functions
 import type { TaskCenterResponse } from '@/lib/types'
 
-// Using Next.js API routes as proxy to avoid CORS issues
-const API_BASE_URL = '/api/task'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('task')
 
 // Query task
 export async function queryTask(taskId: string): Promise<TaskCenterResponse> {

@@ -1,8 +1,9 @@
 // Chat-related API functions
 import type { ChatRequest, ChatResponse } from '@/lib/types'
 
-// Using Next.js API routes as proxy to avoid CORS issues
-const API_BASE_URL = '/api/chat'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('chat')
 
 // Send message
 export async function sendMessage(request: ChatRequest): Promise<ChatResponse> {
