@@ -79,7 +79,7 @@ async def health_check():
 
 
 # Include API routers with /api/v1 prefix
-api_prefix = os.getenv("API_PREFIX", "")
+api_prefix = os.getenv("API_PREFIX", "/api/v1")
 app.include_router(agent.router, prefix=api_prefix, tags=["agent"])
 app.include_router(chat.router, prefix=api_prefix, tags=["chat"])
 app.include_router(inspection_center.router, prefix=api_prefix, tags=["inspection"])
