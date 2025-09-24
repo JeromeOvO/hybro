@@ -10,8 +10,9 @@ import type {
   RoomCenterRoomMessageRequest,
 } from '@/lib/types/request'
 
-// Using Next.js API routes as proxy to avoid CORS issues
-const API_BASE_URL = '/api/roomCenter'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('roomCenter')
 
 // Create new room
 export async function createNewRoom(

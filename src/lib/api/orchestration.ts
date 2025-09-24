@@ -1,8 +1,9 @@
 // Orchestration-related API functions
 import type { OrchestrationCenterResponse } from '@/lib/types'
 
-// Using Next.js API routes as proxy to avoid CORS issues
-const API_BASE_URL = '/api/orchestrationCenter'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('orchestrationCenter')
 
 // Decompose task
 export async function decomposeTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
