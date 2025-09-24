@@ -382,7 +382,6 @@ docstring-code-format = true
 
 [tool.setuptools]
 packages = [
-    "agents",
     "models",
     "common",
     "modules",
