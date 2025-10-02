@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    app_env: str = "development"  # development, staging, production
+
     frontend_origins: str | list[str] = ["http://localhost:3000"]
     api_prefix: str = "/api/v1"
 
