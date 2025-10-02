@@ -1,8 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
+
+from api.agent_viewset import AgentViewSet
 from models.request import AgentCenterRequest
 from modules.AgentCenter import AgentCenter
 
 router = APIRouter()
+agent_viewset = AgentViewSet()
+router.include_router(agent_viewset.get_router())
 
 
 @router.post("/agent/getAgentCardFromUrl")

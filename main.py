@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -8,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
-from api import (  # pylint: disable=import-error
+from api import (
     agent,
     chat,
     inspection_center,
@@ -17,6 +18,8 @@ from api import (  # pylint: disable=import-error
     room_center,
     task,
 )
+from config.settings import settings
+from database.db import close_db, get_db, init_db
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 
@@ -46,14 +49,26 @@ logger.add(
     serialize=False,  # if want to output JSON, change to True
 )
 
-app = FastAPI(title="Multi-Agent AI System")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """ Lifespan context manager to handle startup and shutdown events. """
+    await init_db(app)        # gets "app" from FastAPI
+    await mongodb.connect()
+    pinecone_db.connect()
+    try:
+        yield
+    finally:
+        await close_db(app)
+        await mongodb.close_database_connection()
+        logger.stop()
+
+app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
 # Add CORS middleware
-frontend_urls = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",")
-frontend_urls = [url.strip() for url in frontend_urls if url.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=frontend_urls,  # Allow all frontend URLs from env
+    allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,15 +76,15 @@ app.add_middleware(
 
 
 # Startup and shutdown events
-@app.on_event("startup")
-async def startup_db_client():
-    await mongodb.connect()
-    pinecone_db.connect()
+# @app.on_event("startup")
+# async def startup_db_client():
+#     await mongodb.connect()
+#     pinecone_db.connect()
 
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    await mongodb.close_database_connection()
+# @app.on_event("shutdown")
+# async def shutdown_db_client():
+#     await mongodb.close_database_connection()
 
 
 # Health check endpoint (no prefix)

@@ -1,13 +1,35 @@
-from typing import Any, Optional
+from datetime import datetime
+from typing import Any, Generic, Optional, TypeVar
 
-from a2a.types import AgentCard, SendMessageResponse, SendStreamingMessageResponse, Task, TaskState
+from a2a.types import (
+    AgentCard,
+    SendMessageResponse,
+    SendStreamingMessageResponse,
+    Task,
+    TaskState,
+)
 from pydantic import BaseModel, Field
 
-from models.agent import Agent
-from models.room import Room, RoomUserMessage, RoomAgentMessage, RoomAgentMessage, RoomMessage
-from models.task import BaseTask, MetaTask, TaskSession
+from models.agent import Agent, AgentStatus
 from models.memory import ChatContext, RoomMemory
-from datetime import datetime
+from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
+from models.task import BaseTask, MetaTask, TaskSession
+
+T = TypeVar('T')
+
+
+class PaginationMeta(BaseModel):
+    page: int
+    limit: int
+    total: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: list[T]
+    meta: PaginationMeta
 
 class Step(BaseModel):
     step_id: str
@@ -82,6 +104,31 @@ class AgentCenterResponse(BaseModel):
     success: bool
     error: str | None = None
     status_code: int = 200
+    
+
+class AgentResponse(BaseModel):
+
+    # Primary identification field
+    agent_id: str
+
+    # Agent card
+    agent_card: AgentCard
+
+    # Agent status
+    agent_status: AgentStatus = AgentStatus.active
+
+    # Count for agent usage
+    call_count: int = 0
+
+    # Count for agent success usage
+    call_success_count: int = 0
+
+    # Like count from user
+    like_count: int = 0
+
+    # Dislike count from user
+    dislike_count: int = 0
+
 
 
 class TaskCenterResponse(BaseModel):
