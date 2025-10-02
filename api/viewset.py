@@ -18,6 +18,16 @@ UPDATE = "update"
 PATCH = "patch"
 DELETE = "delete"
 
+REPO_ACTIONS_MAP = {
+    LIST: "get_all",
+    RETRIEVE: "get",
+    CREATE: "create",
+    UPDATE: "update",
+    DELETE: "delete",
+    PATCH: "patch",
+}
+
+
 
 class ViewSet:
     """
@@ -128,10 +138,6 @@ class ViewSet:
                 for k, v in request.query_params.items()
                 if k not in ["page", "limit", "sort_by", "sort_order"]
             }
-            print("DEBUG: Filter dict constructed:", filter_dict)
-            print("DEBUG: db instance:", db)
-            print("DEBUG: request.query_params:", request.query_params)
-
             # Create pagination params if page or limit is provided
             pagination = None
             if page is not None or limit is not None:
@@ -148,7 +154,7 @@ class ViewSet:
         response_model = schema_out
 
         self.router.add_api_route(
-            "/",
+            "",
             list_endpoint,
             methods=["GET"],
             response_model=response_model,
@@ -188,7 +194,7 @@ class ViewSet:
             return await self._create(db, item)
 
         self.router.add_api_route(
-            "/",
+            "",
             create_endpoint,
             methods=["POST"],
             response_model=schema_out,
@@ -252,7 +258,7 @@ class ViewSet:
     # --- Default endpoint implementations (can be overridden) ---
 
     async def _handle_operation(
-        self, repo_method: str, db: AsyncIOMotorDatabase, *args
+        self, action: str, db: AsyncIOMotorDatabase, *args
     ):
         """Generic handler for CRUD operations."""
         repo = Repository(
@@ -261,7 +267,7 @@ class ViewSet:
             pinecone=None,
             pk_field=self.pk_field,
         )
-        method = getattr(repo, repo_method)
+        method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
         # If you need db, get it from self.repo.db or let repo handle it
         if self.use_transactions:
             async with await db.client.start_session() as session:
@@ -319,23 +325,43 @@ class ViewSet:
         )
 
         return await self._handle_operation(
-            "get_all", db, pagination, processed_filters
+            LIST, db, pagination, processed_filters
         )
 
     async def _retrieve(self, db, item_id):
-        return await self._handle_operation("get", db, item_id)
+        result = await self._handle_operation(RETRIEVE, db, item_id)
+        # if not result:
+        #     raise HTTPException(
+        #         status_code=404, detail=f"{self.resource_name} not found"
+        #     )
+        return result
 
     async def _create(self, db, item):
-        return await self._handle_operation("create", db, item)
+        result = await self._handle_operation(CREATE, db, item)
+        if not result:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to create {self.resource_name}"
+            )
+        return result
 
     async def _update(self, db, item_id, item):
-        return await self._handle_operation("update", db, item_id, item)
+        result = await self._handle_operation(UPDATE, db, item_id, item)
+        if not result:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to update {self.resource_name}"
+            )
+        return result
 
     async def _patch(self, db, item_id, item):
-        return await self._handle_operation("patch", db, item_id, item)
+        result = await self._handle_operation(PATCH, db, item_id, item)
+        if not result:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to patch {self.resource_name}"
+            )
+        return result
 
     async def _delete(self, db, item_id):
-        return await self._handle_operation("delete", db, item_id)
+        return await self._handle_operation(DELETE, db, item_id)
 
     # --- Public methods for customization ---
 

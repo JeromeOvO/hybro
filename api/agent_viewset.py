@@ -1,6 +1,9 @@
+from fastapi import HTTPException
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import BaseModel
 
-import api.viewset as router
+from api import viewset
+from api.viewset import REPO_ACTIONS_MAP
 from database.pinecone_db import pinecone_db
 from database.repository import Repository
 from models.request import AgentCreate, AgentPatch, AgentUpdate
@@ -12,7 +15,7 @@ from models.response import (
 from services.openai_service import openai_service
 
 
-class AgentViewSet(router.ViewSet):
+class AgentViewSet(viewset.ViewSet):
     """
     CRUD router for managing agents.
     Override update, create, delete methods to update pinecone index as needed.
@@ -24,12 +27,12 @@ class AgentViewSet(router.ViewSet):
             schema_out=AgentResponse,
             schema_in=AgentCreate,
             schemas={
-                router.LIST: {"out": PaginatedResponse[AgentResponse], "meta": PaginationMeta},
-                router.CREATE: {"out": AgentResponse, "in": AgentCreate},
-                router.RETRIEVE: {"out": AgentResponse},
-                router.UPDATE: {"out": AgentResponse, "in": AgentUpdate},
-                router.DELETE: {"out": dict},
-                router.PATCH: {"out": AgentResponse, "in": AgentPatch},
+                viewset.LIST: {"out": PaginatedResponse[AgentResponse], "meta": PaginationMeta},
+                viewset.CREATE: {"out": AgentResponse, "in": AgentCreate},
+                viewset.RETRIEVE: {"out": AgentResponse},
+                viewset.UPDATE: {"out": AgentResponse, "in": AgentUpdate},
+                viewset.DELETE: {"out": dict},
+                viewset.PATCH: {"out": AgentResponse, "in": AgentPatch},
             },
             pk_field="agent_id",
         )
@@ -47,26 +50,55 @@ class AgentViewSet(router.ViewSet):
         }
         pinecone_db.upsert([vector_data])
 
-    async def _handle_operation(self, repo_method: str, db: AsyncIOMotorDatabase, *args):
+    async def _update_db_and_pinecone(self, repo, action, *args):
+        repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action), None)
+        schema: BaseModel | None = None
+        existing_description: str | None = None
+        new_description: str | None = None
+        primary_key: str | None = None
+        # We only want to update Pinecone index on create, update, patch, delete
+        if action in [viewset.UPDATE, viewset.PATCH, viewset.DELETE]:
+            primary_key = args[0]
+            existing_agent = await repo.get(primary_key)
+            if existing_agent:
+                existing_description = existing_agent.get('agent_card', {}).get('description', '') if existing_agent else ''
+            else:
+                raise HTTPException(status_code=404, detail="Agent not found")
+        if action in [viewset.CREATE, viewset.UPDATE, viewset.PATCH]:
+            schema = args[0] if action == viewset.CREATE else args[1]
+            # agent_card field is optional and may be None in schema
+            new_description = schema.agent_card.description if schema.agent_card else None
+        if action == viewset.PATCH and new_description is None:
+            # For patch, if description not provided, keep existing one
+            new_description = existing_description
+        # Update DB
+        result = await repo_method(*args)
+        # Update Pinecone index if description changed
+        if result and existing_description != new_description:
+            if new_description:
+                await self.update_pinecone_index(result[repo.pk_field], new_description)
+            elif existing_description:
+                # No new description but had existing one,
+                # this will also cover delete case
+                pinecone_db.delete([str(primary_key)])
+        return result
+
+
+    async def _handle_operation(self, action: str, db: AsyncIOMotorDatabase, *args):
         """Generic handler for CRUD operations."""
         repo = Repository(collection_name=self.collection_name, db=db, pinecone=None, pk_field=self.pk_field)
-        method = getattr(repo, repo_method)
-
-        async def handle_result(result):
-            if repo_method in [router.CREATE, router.UPDATE, router.PATCH]:
-                description = result.get('agent_card', {}).get('description', '')
-                await self.update_pinecone_index(result["agent_id"], description)
+        repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
+        if action in [viewset.LIST, viewset.RETRIEVE]:
+            # No update to Pinecone index for read operations
+            return await repo_method(*args)
 
         if self.use_transactions:
             async with await db.client.start_session() as session:
                 async with session.start_transaction():
-                    result = await method(*args)
-                    await handle_result(result)
-                    return result
-        result = await method(*args)
-        await handle_result(result)
-        return result
-    
+                    return await self._update_db_and_pinecone(repo, action, *args)
+        return await self._update_db_and_pinecone(repo, action, *args)
+
+
     def get_filters(self, db, filter_params):
         base_query = super().get_filters(db, filter_params)
         filters = filter_params.filters if filter_params else {}
