@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -19,7 +20,6 @@ from api import (
     task,
 )
 from config.settings import settings
-from database.db import close_db, get_db, init_db
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 
@@ -41,27 +41,40 @@ logging_config = LOGGING_CONFIG.copy()
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
 
 logger.remove()
-logger.add(
-    sys.stderr,
-    enqueue=True,  # multi-thread/multi-process safe
-    backtrace=True,  # print full call stack when exception occurs
-    diagnose=True,  # variable insight
-    serialize=False,  # if want to output JSON, change to True
-)
+if settings.app_env == "development":    
+    logger.add(
+        sys.stderr,
+        enqueue=False,
+        backtrace=True,  # print full call stack when exception occurs
+        diagnose=True,  # variable insight
+        serialize=False,  # if want to output JSON, change to True
+        level="INFO",
+    )
+else:
+    logger.add(
+        f"logs/app_{time.strftime('%Y-%m-%d')}.log",
+        enqueue=True,
+        backtrace=True,
+        diagnose=True,
+        serialize=False,
+        rotation="100 MB",
+        retention="30 days",
+        compression="zip",
+        level="DEBUG",
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """ Lifespan context manager to handle startup and shutdown events. """
-    await init_db(app)        # gets "app" from FastAPI
+    # await init_db(app)        # gets "app" from FastAPI
     await mongodb.connect()
     pinecone_db.connect()
     try:
         yield
     finally:
-        await close_db(app)
+        # await close_db(app)
         await mongodb.close_database_connection()
-        logger.stop()
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
@@ -73,18 +86,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Startup and shutdown events
-# @app.on_event("startup")
-# async def startup_db_client():
-#     await mongodb.connect()
-#     pinecone_db.connect()
-
-
-# @app.on_event("shutdown")
-# async def shutdown_db_client():
-#     await mongodb.close_database_connection()
 
 
 # Health check endpoint (no prefix)

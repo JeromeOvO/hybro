@@ -5,7 +5,7 @@ from uuid import uuid4
 from a2a.types import AgentCard, Message, Task, TextPart
 from pydantic import BaseModel, Field
 
-from models.agent import Agent
+from models.agent import Agent, AgentStatus
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
@@ -27,6 +27,8 @@ class FilterParams(BaseModel):
     filters: dict[str, Any] | None = Field(default_factory=dict, description="MongoDB filter conditions")
     sort_by: str | None = Field(default=None, description="Field to sort by")
     sort_order: int | None = Field(default=-1, description="Sort order: 1 for ascending, -1 for descending")
+
+
 
 
 
@@ -124,13 +126,16 @@ class AgentCenterRequest(BaseModel):
 class BaseAgent(BaseModel):
     agent_url: str | None = None
     agent_card: AgentCard | None = None
-    call_increment: int | None = 0
-    call_success_increment: int | None = 0
-    like_increment: int | None = 0
-    dislike_increment: int | None = 0
-    query_text: str | None = None
-    agent: Agent | None = None
-    agent_count: int | None = 0
+    call_count: int | None = 0
+    call_success_count: int | None = 0
+    like_count: int | None = 0
+    dislike_count: int | None = 0
+    agent_status: AgentStatus | None = None
+    # query_text: str | None = None
+    # agent: Agent | None = None
+    # agent_count: int | None = 0
+    class Config:
+        use_enum_values = True
 
 
 class AgentCreate(BaseAgent):
@@ -151,7 +156,7 @@ class AgentUpdate(BaseAgent):
     call_success_count: int | None
     like_count: int | None
     dislike_count: int | None
-    agent_status: str | None
+    agent_status: AgentStatus | None
 
 
 class AgentPatch(BaseAgent):

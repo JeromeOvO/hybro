@@ -1,11 +1,16 @@
-import api.viewset as router
-from models.request import AgentCenterRequest, AgentCreate, AgentUpdate, AgentPatch
-from models.response import AgentCenterResponse, AgentResponse
-from models.response import PaginationMeta, PaginatedResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from database.repository import Repository
-from services.openai_service import openai_service
+
+import api.viewset as router
 from database.pinecone_db import pinecone_db
+from database.repository import Repository
+from models.request import AgentCreate, AgentPatch, AgentUpdate
+from models.response import (
+    AgentResponse,
+    PaginatedResponse,
+    PaginationMeta,
+)
+from services.openai_service import openai_service
+
 
 class AgentViewSet(router.ViewSet):
     """
@@ -66,6 +71,9 @@ class AgentViewSet(router.ViewSet):
         base_query = super().get_filters(db, filter_params)
         filters = filter_params.filters if filter_params else {}
 
+        # Always exclude null agent_ids
+        base_query["agent_id"] = {"$ne": None}
+    
         if "search" in filters:
             search_term = filters.pop("search")
             base_query["$or"] = [

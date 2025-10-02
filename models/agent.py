@@ -1,7 +1,7 @@
 from enum import Enum
 
 from a2a.types import AgentCard
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 
 
 class AgentStatus(Enum):
@@ -31,3 +31,10 @@ class Agent(BaseModel):
 
     # Dislike count from user
     dislike_count: int = 0
+    
+    @field_serializer('agent_status')
+    def serialize_status(self, value: AgentStatus) -> str:
+        """Convert Enum to string value for storage"""
+        if value is None:
+            return None
+        return value.value if isinstance(value, AgentStatus) else value

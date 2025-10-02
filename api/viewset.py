@@ -1,14 +1,14 @@
 from collections.abc import Callable, Iterable
 
-from fastapi import APIRouter, Depends, Query, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
+from database.mongodb import get_db
 from database.repository import Repository
 from models.request import FilterParams, PaginationParams
-from models.response import PaginatedResponse
-from database.db import get_db
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from fastapi import HTTPException
+
+# from models.response import PaginatedResponse
 
 # CRUD operation constants
 LIST = "list"
@@ -22,6 +22,17 @@ DELETE = "delete"
 class ViewSet:
     """
     A class-based CRUD router generator for FastAPI with MongoDB support.
+    
+    Arguments:
+        resource_name (str): The name of the resource (used in the URL path).
+        collection_name (str): The name of the collection in the database.
+        schema_in (type[BaseModel] | None): Pydantic model for input data.
+        schema_out (type[BaseModel] | None): Pydantic model for output data.
+        schemas (dict[str, dict[str, type[BaseModel]]] | None): Specific schemas per operation.
+        allow (Iterable[str]): List of allowed operations (LIST, RETRIEVE, CREATE, DELETE, UPDATE, PATCH).
+        use_transactions (bool): Whether to use transactions for operations.
+        id_type (type): The type of the item ID (default is str).
+        pk_field (str): The name of the primary key field (default is "_id").
 
     Features:
     - Automatic CRUD endpoint generation
@@ -337,43 +348,3 @@ class ViewSet:
     def get_router(self) -> APIRouter:
         """Get the configured FastAPI router."""
         return self.router
-
-
-def crud_router(
-    resource_name: str,
-    collection_name: str,
-    *,
-    schema_in: type[BaseModel] | None = None,
-    schema_out: type[BaseModel] | None = None,
-    schemas: dict[str, dict[str, type[BaseModel]]] | None = None,
-    allow: Iterable[str] = (LIST, RETRIEVE, CREATE, DELETE, UPDATE, PATCH),
-    use_transactions: bool = False,
-    id_type: type = str,
-) -> APIRouter:
-    """
-    Factory function to create a CRUD router.
-
-    Args:
-        resource_name (str): The name of the resource (used in the URL path).
-        collection_name (str): The name of the collection in the database.
-        schema_in (type[BaseModel] | None): Pydantic model for input data.
-        schema_out (type[BaseModel] | None): Pydantic model for output data.
-        schemas (dict[str, dict[str, type[BaseModel]]] | None): Specific schemas per operation.
-        allow (Iterable[str]): List of allowed operations.
-        use_transactions (bool): Whether to use transactions for operations.
-        id_type (type): The type of the item ID (default is str).
-
-    Returns:
-        APIRouter: Configured FastAPI router with CRUD endpoints.
-    """
-    crud_router_instance = ViewSet(
-        resource_name=resource_name,
-        collection_name=collection_name,
-        schema_in=schema_in,
-        schema_out=schema_out,
-        schemas=schemas,
-        allow=allow,
-        use_transactions=use_transactions,
-        id_type=id_type,
-    )
-    return crud_router_instance.get_router()
