@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from a2a.types import AgentCard, Message, Task, TextPart
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from models.agent import Agent, AgentStatus
 from models.memory import ChatContext, RoomMemory
@@ -131,11 +131,7 @@ class BaseAgent(BaseModel):
     like_count: int | None = 0
     dislike_count: int | None = 0
     agent_status: AgentStatus | None = None
-    # query_text: str | None = None
-    # agent: Agent | None = None
-    # agent_count: int | None = 0
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class AgentCreate(BaseAgent):
@@ -160,7 +156,7 @@ class AgentUpdate(BaseAgent):
 
 
 class AgentPatch(BaseAgent):
-    agent_id: str
+    pass
 
 
 class TaskCenterRequest(BaseModel):
