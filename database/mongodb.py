@@ -1,14 +1,15 @@
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from a2a.types import AgentCard
 from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from models.agent import Agent
 from models.memory import ChatContext, RoomMemory
+from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
-from models.room import Room, RoomUserMessage, RoomAgentMessage
 
 load_dotenv()
 
@@ -612,3 +613,30 @@ class MongoDB:
         return result.deleted_count > 0
 
 mongodb = MongoDB()
+
+async def get_db() -> AsyncIOMotorDatabase:
+    """Return module-level database"""
+    return mongodb.db
+
+# Create context manager for mongo connection
+@asynccontextmanager
+async def mongodb_connection(transaction: bool = False):
+    """Async context manager for MongoDB connection
+
+    Example usage:
+        async with mongodb_connection() as db:
+            # use db
+    """
+    # Startup: connect to MongoDB
+    mongodb_instance = MongoDB()
+    await mongodb_instance.connect()
+    try:
+        if transaction:
+            async with await mongodb_instance.client.start_session() as session:
+                async with session.start_transaction():
+                    yield mongodb_instance.db
+        else:
+            yield mongodb_instance.db
+    finally:
+        # Shutdown: close MongoDB connection
+        await mongodb_instance.close_database_connection()
