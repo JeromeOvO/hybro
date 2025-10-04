@@ -386,7 +386,8 @@ packages = [
     "common",
     "modules",
     "database",
-    "services"
+    "services",
+    "config"
 ]
 
 [tool.uv]
