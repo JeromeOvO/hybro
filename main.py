@@ -18,6 +18,7 @@ from api import (
     orchestration_center,
     room_center,
     task,
+    sse,
 )
 from config.settings import settings
 from database.mongodb import mongodb
@@ -105,3 +106,4 @@ app.include_router(
 )
 app.include_router(room_center.router, prefix=api_prefix, tags=["room"])
 app.include_router(task.router, prefix=api_prefix, tags=["task"])
+app.include_router(sse.router, prefix=api_prefix, tags=["sse"])

@@ -34,6 +34,7 @@ from services.openai_service import OpenAIService
 from services.room_services import RoomMemoryService, RoomServices
 from services.task_service import TaskService
 from services.debate_service import debate_service
+from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 
@@ -112,6 +113,7 @@ class OrchestrationCenter:
         self.room_memory_service = RoomMemoryService()
         self.database_service = DatabaseService()
         self.debate_service = debate_service
+        self.sse_manager = sse_manager
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1584,6 +1586,17 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     status_code=500,
                 )
             
+
+            current_message = await self.database_service.get_room_agent_message_by_message_id(current_message.message_id)
+            if current_message is None:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error="Agent message not found",
+                    status_code=500,
+                )
+            logger.info("OrchestrationCenter: Sending agent response to room %s for message %s", room_id, current_message.message_id)
+            await self.sse_manager.send_agent_response(room_id, current_message.message_id, current_message.agent_id, current_message.message_content.message_task.history[-1].parts[0].root.text)
+            
             next_messages = await self.database_service.get_room_agent_messages_by_related_message_id(
                 current_message.message_id
             )
@@ -1593,6 +1606,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     continue
                 message_queue.append(new_agent_message)
 
+        
+        logger.info("OrchestrationCenter: Sending processing status to room %s for message %s", room_id, room_user_message_id)
+        await self.sse_manager.send_processing_status(room_id, "completed", room_user_message_id)
+        
         # update room memory
         new_room_memory_content_text = (
             await self.openai_service.generate_room_memory_content(

@@ -31,6 +31,7 @@ from services.agent_service import AgentService
 from services.database_service import DatabaseService
 from services.memory_service import RoomMemoryService
 from services.openai_service import OpenAIService
+from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,7 @@ class RoomServices:
         self.openai_service = OpenAIService()
         self.a2a_service = A2AService()
         self.room_memory_service = RoomMemoryService()
+        self.sse_manager = sse_manager
 
     # room setting management
     async def create_new_room(
@@ -620,6 +622,9 @@ class RoomServices:
                 status_code=500,
             )
 
+        logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
+        await sse_manager.send_processing_status(room_id, "processing", message.message_id)
+
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             room_memory = RoomMemory(
@@ -800,6 +805,9 @@ class RoomServices:
                 error="Failed to add message",
                 status_code=500,
             )
+        
+        logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
+        await sse_manager.send_processing_status(room_id, "processing", message.message_id)
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
