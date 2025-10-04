@@ -77,6 +77,16 @@ async def update_room_name(request: Request):
     return room_center_response
 
 
+@router.post("/roomCenter/updateRoomExtendInfo")
+async def update_room_extend_info(request: Request):
+    room_center = RoomCenter()
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+    extend_info = request_data.get("extend_info")
+    room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, extend_info=extend_info)
+    room_center_response = await room_center.update_room_extend_info(room_center_request)
+    return room_center_response
+
 @router.post("/roomCenter/createAndParseUserMessage")
 async def create_and_parse_user_message(request: Request):
     room_center = RoomCenter()
@@ -85,6 +95,18 @@ async def create_and_parse_user_message(request: Request):
     message = request_data.get("message")
     room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
     room_center_response = await room_center.create_and_parse_user_message(
+        room_center_request
+    )
+    return room_center_response
+
+@router.post("/roomCenter/createAndParseUserMessageWithDebate")
+async def create_and_parse_user_message_with_debate(request: Request):
+    room_center = RoomCenter()
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+    message = request_data.get("message")
+    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    room_center_response = await room_center.create_and_parse_user_message_with_debate(
         room_center_request
     )
     return room_center_response

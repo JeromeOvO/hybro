@@ -1,8 +1,10 @@
 import json
 import uuid
 from typing import Any
+from collections import deque
 
-from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
+
+from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart, TaskStatusUpdateEvent, TaskArtifactUpdateEvent, Task
 
 from common.utils.logger import get_logger
 from models.error import (
@@ -21,6 +23,7 @@ from models.request import (
     RoomCenterUserMessageRequest,
     TaskCenterRequest,
 )
+from models.room import RoomAgentMessage
 from models.response import OrchestrationCenterResponse
 from models.task import MetaTask, TaskDefaultValue
 from services.a2a_service import A2AService
@@ -30,6 +33,8 @@ from services.memory_service import ChatMemoryService
 from services.openai_service import OpenAIService
 from services.room_services import RoomMemoryService, RoomServices
 from services.task_service import TaskService
+from services.debate_service import debate_service
+from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 
@@ -107,6 +112,8 @@ class OrchestrationCenter:
         self.room_services = RoomServices()
         self.room_memory_service = RoomMemoryService()
         self.database_service = DatabaseService()
+        self.debate_service = debate_service
+        self.sse_manager = sse_manager
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1331,7 +1338,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 messageId=str(uuid.uuid4()),
                 parts=[Part(root=TextPart(text=summary_response))],
             )
-        )
+        )   
 
         base_task.task.status = TaskStatus(state=TaskState.completed)
 
@@ -1351,118 +1358,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 status_code=500,
             )
 
-    # room services
-    async def process_room_user_message(
-        self, request: OrchestrationCenterRequest
-    ) -> OrchestrationCenterResponse:
-        if request.room_id is None:
-            return OrchestrationCenterResponse(
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        room_user_message_id = request.room_user_message_id
-
-        # get room memory
-        room_memory_response = (
-            await self.room_memory_service.get_room_memory_by_room_id(
-                RoomCenterMemoryRequest(room_id=room_id)
-            )
-        )
-        if not room_memory_response.success:
-            return OrchestrationCenterResponse(
-                success=False,
-                error=room_memory_response.error,
-                status_code=500,
-            )
-
-        room_memory = room_memory_response.memory
-        if room_memory is None:
-            # Fallback: initialize empty room memory content
-            room_memory_content_text = ""
-        else:
-            room_memory_content = room_memory.memory_content
-            if room_memory_content is None:
-                room_memory_content_text = ""
-            else:
-                room_memory_content_text = room_memory_content.memory_text or ""
-
-        # Always add a delimiter even if empty, so the injected prompt remains consistent
-        room_memory_content_text = (room_memory_content_text or "") + "\n\n"
-
-        if room_user_message_id is None:
-            return OrchestrationCenterResponse(
-                success=False,
-                error="Room user message id is required",
-                status_code=400,
-            )
-
-        inquiry_user_message_response = (
-            await self.room_services.inquiry_user_message_by_message_id(
-                RoomCenterUserMessageRequest(message_id=room_user_message_id)
-            )
-        )
-        if not inquiry_user_message_response.success:
-            return OrchestrationCenterResponse(
-                success=False,
-                error=inquiry_user_message_response.error,
-                status_code=500,
-            )
-
-        inquiry_agent_messages_response = (
-            await self.room_services.inquiry_agent_messages_by_related_message_id(
-                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
-            )
-        )
-        if not inquiry_agent_messages_response.success:
-            return OrchestrationCenterResponse(
-                success=False,
-                error=inquiry_agent_messages_response.error,
-                status_code=500,
-            )
-
-        room_agent_messages = inquiry_agent_messages_response.message_list
-        if room_agent_messages is None or len(room_agent_messages) == 0:
-            return OrchestrationCenterResponse(
-                success=False,
-                error="No agent messages found",
-                status_code=200,
-            )
-
-        for room_agent_message in room_agent_messages:
-            process_agent_message_response = (
-                await self.room_services.process_agent_message(
-                    RoomCenterAgentMessageRequest(message=room_agent_message),
-                    room_memory_content_text,
-                )
-            )
-            if not process_agent_message_response.success:
-                return OrchestrationCenterResponse(
-                    success=False,
-                    error=process_agent_message_response.error,
-                    status_code=500,
-                )
-
-            message_data = await self.a2a_service.process_a2a_response(
-                process_agent_message_response.a2a_response
-            )
-
-            logger.info("OrchestrationCenter: process response: %s", message_data)
-
+    async def _handle_a2a_response_for_room(self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent) -> bool:
             # Add null check for process_response
             if message_data is None:
-                logger.error(
-                    "OrchestrationCenter: process_a2a_response returned None for agent message %s",
-                    room_agent_message.message_id,
-                )
-                return OrchestrationCenterResponse(
-                    room_id=room_id,
-                    success=False,
-                    error="Failed to process agent response - no valid response data",
-                    status_code=500,
-                )
+                logger.error("OrchestrationCenter: process_a2a_response returned None for agent message ")
+                return False
 
             if message_data.kind == "task":
                 room_agent_message.message_content.message_task = message_data
@@ -1475,12 +1375,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     )
                 )
                 if not update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id,
-                        success=False,
-                        error="Failed to update agent message",
-                        status_code=500,
-                    )
+                    logger.error("OrchestrationCenter: Failed to update agent message with task")
+                    return False
+                return True
 
             elif message_data.kind == "message":
                 if (
@@ -1503,12 +1400,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 )
 
                 if not update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id,
-                        success=False,
-                        error="Failed to update agent message",
-                        status_code=500,
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with message",
+                        update_response.error,
                     )
+                    return False
+                return True
 
             elif message_data.kind == "status-update":
                 # Handle status update responses - update task status and potentially add message
@@ -1558,12 +1455,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 )
 
                 if not update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id,
-                        success=False,
-                        error="Failed to update agent message with status update",
-                        status_code=500,
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with status update",
+                        update_response.error,
                     )
+                    return False
+                return True
 
             elif message_data.kind == "artifact-update":
                 # Handle artifact update responses - add artifacts to task
@@ -1591,30 +1488,62 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 )
 
                 if not update_response.success:
-                    return OrchestrationCenterResponse(
-                        room_id=room_id,
-                        success=False,
-                        error="Failed to update agent message with artifact",
-                        status_code=500,
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with artifact update",
+                        update_response.error,
                     )
+                    return False
+                return True
 
-            # Handle case where process_response doesn't have expected kind
+    # room services
+    async def process_room_user_message(
+        self, request: OrchestrationCenterRequest
+    ) -> OrchestrationCenterResponse:
+        if request.room_id is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        room_user_message_id = request.room_user_message_id
+
+        # get room memory
+        room_memory_response = (
+            await self.room_memory_service.get_room_memory_by_room_id(
+                RoomCenterMemoryRequest(room_id=room_id)
+            )
+        )
+        if not room_memory_response.success:
+            return OrchestrationCenterResponse(
+                success=False,
+                error=room_memory_response.error,
+                status_code=500,
+            )
+
+        room_memory = room_memory_response.memory
+        if room_memory is None:
+            # Fallback: initialize empty room memory content
+            room_memory_content_text = ""
+        else:
+            room_memory_content = room_memory.memory_content
+            if room_memory_content is None:
+                room_memory_content_text = ""
             else:
-                logger.error(
-                    "OrchestrationCenter: Unexpected response kind '%s' for agent message %s",
-                    getattr(message_data, "kind", "unknown"),
-                    room_agent_message.message_id,
-                )
-                return OrchestrationCenterResponse(
-                    room_id=room_id,
-                    success=False,
-                    error=(
-                        f"Unexpected response type from agent: "
-                        f"{getattr(message_data, 'kind', 'unknown')}"
-                    ),
-                    status_code=500,
-                )
+                room_memory_content_text = room_memory_content.memory_text or ""
 
+        # Always add a delimiter even if empty, so the injected prompt remains consistent
+        room_memory_content_text = (room_memory_content_text or "") + "\n\n"
+
+        if room_user_message_id is None:
+            return OrchestrationCenterResponse(
+                success=False,
+                error="Room user message id is required",
+                status_code=400,
+            )
+
+        # processing agent messages by the order of messsage chain
         query_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(
                 RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
@@ -1628,6 +1557,59 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 status_code=500,
             )
 
+        # initialize message queue
+        message_queue = deque(query_response.message_list) if query_response.message_list is not None else deque()
+        message_list = []
+
+        while len(message_queue) > 0:
+            current_message = message_queue.popleft()
+            message_list.append(current_message)
+
+            process_response = await self.room_services.process_agent_message(
+                RoomCenterAgentMessageRequest(message=current_message),
+                room_memory_content_text,
+            )
+            if not process_response.success:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error=process_response.error,
+                    status_code=500,
+                )
+            message_data = await self.a2a_service.process_a2a_response(
+                process_response.a2a_response
+            )
+            message_data = await self._handle_a2a_response_for_room(current_message, message_data)
+            if not message_data:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error="Failed to handle a2a response",
+                    status_code=500,
+                )
+            
+
+            current_message = await self.database_service.get_room_agent_message_by_message_id(current_message.message_id)
+            if current_message is None:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error="Agent message not found",
+                    status_code=500,
+                )
+            logger.info("OrchestrationCenter: Sending agent response to room %s for message %s", room_id, current_message.message_id)
+            await self.sse_manager.send_agent_response(room_id, current_message.message_id, current_message.agent_id, current_message.message_content.message_task.history[-1].parts[0].root.text)
+            
+            next_messages = await self.database_service.get_room_agent_messages_by_related_message_id(
+                current_message.message_id
+            )
+            for next_message in next_messages:
+                new_agent_message = await self.debate_service.inject_short_debate_for_agent_message(next_message)
+                if new_agent_message is None:
+                    continue
+                message_queue.append(new_agent_message)
+
+        
+        logger.info("OrchestrationCenter: Sending processing status to room %s for message %s", room_id, room_user_message_id)
+        await self.sse_manager.send_processing_status(room_id, "completed", room_user_message_id)
+        
         # update room memory
         new_room_memory_content_text = (
             await self.openai_service.generate_room_memory_content(

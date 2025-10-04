@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from uuid import uuid4
-
+from config.settings import settings
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.logger import get_logger
@@ -31,6 +31,7 @@ from services.agent_service import AgentService
 from services.database_service import DatabaseService
 from services.memory_service import RoomMemoryService
 from services.openai_service import OpenAIService
+from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,7 @@ class RoomServices:
         self.openai_service = OpenAIService()
         self.a2a_service = A2AService()
         self.room_memory_service = RoomMemoryService()
+        self.sse_manager = sse_manager
 
     # room setting management
     async def create_new_room(
@@ -242,6 +244,53 @@ class RoomServices:
                 status_code=500,
             )
 
+    async def update_room_extend_info(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        if request.room_id is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if room is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room not found",
+                status_code=404,
+            )
+        
+        if request.extend_info is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Extend info is required",
+                status_code=400,
+            )
+        
+        room.extend_info = request.extend_info
+        success = await self.database_service.update_room_by_room_id(room_id, room)
+        if success:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id, room=room, success=True, error=None, status_code=200
+            )
+        else:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Failed to update room extend info",
+                status_code=500,
+            )
+
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -274,46 +323,47 @@ class RoomServices:
         self, message_text: str, room_agent_set: dict
     ) -> list[dict]:
         """
-        Parse @agent mentions in Slack-style markdown format
-
+        Parse @agent mentions in format "<@agent-id|agentname>"
+        
         Args:
-            message_text: User input text, e.g., "Hey <@agent_id|agent_name> help me"
-            room_agent_set: Agent set in the room {agent_name: agent_id}
-
+            message_text: User input text with format "<@agent-id|agentname>"
+            room_agent_set: Agent set in the room {agent_id: agent_name}
+        
         Returns:
             list[dict]: Parsed mentions [{"agent_id": "xxx", "agent_name": "yyy", "mention_text": "<@xxx|yyy>"}]
         """
         mentions = []
-
-        # Slack-style pattern: <@agent_id|agent_name>
-        pattern = r"<@([^|]+)\|([^>]+)>"
-
-        for match in re.finditer(pattern, message_text):
+        
+        #pattern: <@agent_id|agent_name>
+        slack_pattern = r"<@([^|]+)\|([^>]+)>"
+        
+        for match in re.finditer(slack_pattern, message_text):
             agent_id = match.group(1).strip()
             agent_name = match.group(2).strip()
-
-            # Verify agent exists in room (optional validation)
-            if agent_name in room_agent_set:
-                mentions.append(
-                    {
-                        "agent_id": room_agent_set[agent_name],
-                        "agent_name": agent_name,
-                        "mention_text": match.group(0),
-                        "position": match.start(),
-                    }
-                )
+            position = match.start()
+            
+            # Check if agent exists in room by agent_id
+            if agent_id in room_agent_set:
+                # Agent found in room
+                room_agent_name = room_agent_set[agent_id]
+                mentions.append({
+                    "agent_id": agent_id,
+                    "agent_name": room_agent_name,  # Use the name from room_agent_set
+                    "mention_text": match.group(0),
+                    "position": position,
+                })
             else:
-                # Agent name not present in room set: do not index room_agent_set to avoid KeyError
-                mentions.append(
-                    {
-                        "agent_id": agent_id,
-                        "agent_name": agent_name,
-                        "mention_text": match.group(0),
-                        "position": match.start(),
-                        "warning": "Agent not in current room",
-                    }
-                )
-
+                # Agent not found in room, but still parse it
+                mentions.append({
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,  # Use the name from the mention
+                    "mention_text": match.group(0),
+                    "position": position,
+                    "warning": "Agent not in current room",
+                })
+        
+        # Sort by position to maintain order
+        mentions.sort(key=lambda x: x["position"])
         return mentions
 
     def extract_agent_message_content(
@@ -325,108 +375,141 @@ class RoomServices:
     ) -> str:
         """
         Extract message content relevant to a specific agent
-
+        Remove @mentions and return clean task content
+        
         Args:
             message_text: Original message text
             target_agent_id: Target agent ID
             target_agent_name: Target agent name
             all_mentions: All parsed mentions from the message
-
+        
         Returns:
-            str: Message content relevant to the target agent
+            str: Clean message content relevant to the target agent
         """
         # Find all mentions for this specific agent
         agent_mentions = [m for m in all_mentions if m["agent_id"] == target_agent_id]
-
+        
         if not agent_mentions:
-            return message_text  # No mentions found, return original
-
+            # No mentions found, remove all mentions and return clean content
+            processed_text = message_text
+            for mention in all_mentions:
+                processed_text = processed_text.replace(mention["mention_text"], "")
+            return re.sub(r'\s+', ' ', processed_text).strip()
+        
         # Strategy 1: Extract text around each mention of this agent
         relevant_parts = []
-
+        
         for mention in agent_mentions:
             mention_pos = mention["position"]
             mention_text = mention["mention_text"]
-
+            
             # Find the sentence or context around this mention
-            # Look for sentence boundaries (., !, ?, or line breaks)
             start_pos = mention_pos
             end_pos = mention_pos + len(mention_text)
-
+            
             # Extend backwards to find sentence start
             while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
                 start_pos -= 1
-
+            
             # Extend forwards to find sentence end
             while end_pos < len(message_text) and message_text[end_pos] not in ".!?\n":
                 end_pos += 1
-
+            
             # Include the sentence ending punctuation
             if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
                 end_pos += 1
-
+            
             # Extract the relevant sentence/context
             context = message_text[start_pos:end_pos].strip()
-
-            # Replace the slack-style mention with just @agent_name for readability
-            context = context.replace(mention_text, f"@{target_agent_name}")
-
-            if context and context not in relevant_parts:
-                relevant_parts.append(context)
-
+            
+            # Remove ALL mentions from this context, not just replace with @agent_name
+            context_clean = context
+            for m in all_mentions:
+                context_clean = context_clean.replace(m["mention_text"], "")
+            
+            # Clean up whitespace
+            context_clean = re.sub(r'\s+', ' ', context_clean).strip()
+            
+            if context_clean and context_clean not in relevant_parts:
+                relevant_parts.append(context_clean)
+        
         # Join all relevant parts
         if relevant_parts:
             return " ".join(relevant_parts)
         else:
-            # Fallback: return original message with mentions replaced
+            # Fallback: return original message with all mentions removed
             processed_text = message_text
-            for mention in agent_mentions:
-                processed_text = processed_text.replace(
-                    mention["mention_text"], f"@{target_agent_name}"
-                )
-            return processed_text
+            for mention in all_mentions:
+                processed_text = processed_text.replace(mention["mention_text"], "")
+            return re.sub(r'\s+', ' ', processed_text).strip()
 
     def group_mentions_by_context(self, message_text: str, mentions: list) -> dict:
         """
-        Group mentions by their shared context/sentence
-
+        Group mentions by their shared context/sentence and detect consecutive mentions
+        
         Args:
             message_text: Original message text
             mentions: List of parsed mentions
-
+        
         Returns:
-            dict: {context_text: [list of mentions sharing this context]}
+            dict: {context_text: {"mentions": [mentions], "is_consecutive": bool}}
         """
         context_groups = {}
-
+        
         for mention in mentions:
             mention_pos = mention["position"]
             mention_text = mention["mention_text"]
-
+            
             # Find sentence boundaries around this mention
             start_pos = mention_pos
             end_pos = mention_pos + len(mention_text)
-
+            
             # Extend backwards to find sentence start
             while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
                 start_pos -= 1
-
+            
             # Extend forwards to find sentence end
             while end_pos < len(message_text) and message_text[end_pos] not in ".!?\n":
                 end_pos += 1
-
+            
             # Include the sentence ending punctuation
             if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
                 end_pos += 1
-
+            
             # Extract the sentence context
             context = message_text[start_pos:end_pos].strip()
-
+            
             # Group mentions by context
             if context not in context_groups:
-                context_groups[context] = []
-            context_groups[context].append(mention)
-
+                context_groups[context] = {"mentions": [], "is_consecutive": False}
+            context_groups[context]["mentions"].append(mention)
+        
+        # Detect consecutive mentions within each context
+        for context, group_info in context_groups.items():
+            mentions_in_context = group_info["mentions"]
+            if len(mentions_in_context) > 1:
+                # Check if mentions are consecutive (close together with minimal text between)
+                mentions_in_context.sort(key=lambda x: x["position"])
+                
+                is_consecutive = True
+                for i in range(len(mentions_in_context) - 1):
+                    current_mention = mentions_in_context[i]
+                    next_mention = mentions_in_context[i + 1]
+                    
+                    # Get text between mentions
+                    between_start = current_mention["position"] + len(current_mention["mention_text"])
+                    between_end = next_mention["position"]
+                    between_text = message_text[between_start:between_end].strip()
+                    
+                    # If there's significant text between mentions (more than just spaces/commas), 
+                    # they're not consecutive
+                    if len(between_text) > 10 or any(word in between_text.lower() for word in 
+                        ['and', 'then', 'also', 'but', 'however', 'meanwhile']):
+                        is_consecutive = False
+                        break
+                
+                group_info["is_consecutive"] = is_consecutive
+        
         return context_groups
 
     def create_shared_message_content(
@@ -434,22 +517,25 @@ class RoomServices:
     ) -> str:
         """
         Create message content for multiple agents sharing the same context
-
+        Remove all @mentions and return clean task content
+        
         Args:
             context_text: The shared context/sentence
             mentions_in_context: List of mentions in this context
-
+        
         Returns:
-            str: Processed message content for all agents in this context
+            str: Clean message content without @mentions
         """
         processed_text = context_text
-
-        # Replace all slack-style mentions with simple @agent_name format
+        
+        # Remove all mentions (both simple @agent and Slack-style <@id|name>)
         for mention in mentions_in_context:
-            agent_name = mention["agent_name"]
             mention_text = mention["mention_text"]
-            processed_text = processed_text.replace(mention_text, f"@{agent_name}")
-
+            processed_text = processed_text.replace(mention_text, "")
+        
+        # Clean up extra spaces and normalize whitespace
+        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+        
         return processed_text
 
     def create_task_for_agent(
@@ -583,6 +669,9 @@ class RoomServices:
                 status_code=500,
             )
 
+        logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
+        await sse_manager.send_processing_status(room_id, "processing", message.message_id)
+
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             room_memory = RoomMemory(
@@ -647,50 +736,272 @@ class RoomServices:
         message_text = message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
-        # 4. Group mentions by context
+        # 4. Group mentions by context and detect consecutive patterns
         context_groups = self.group_mentions_by_context(message_text, mentions)
 
-        # 5. Create tasks for each context group
+        # 5. Create tasks with appropriate dependency chains
         created_agent_messages = []
-        for context_text, mentions_in_context in context_groups.items():
+        for context_text, group_info in context_groups.items():
+            mentions_in_context = group_info["mentions"]
+            is_consecutive = group_info["is_consecutive"]
+            
             try:
                 # Create shared message content
                 shared_content = self.create_shared_message_content(
                     context_text, mentions_in_context
                 )
-
+                
                 # Create tasks for all agents in this context
                 tasks_group = await self.create_task_for_agents_group(
                     message, mentions_in_context, shared_content
                 )
-
-                # Create RoomAgentMessage for each agent
-                for task_info in tasks_group:
-                    agent_message = RoomAgentMessage(
-                        room_id=room_id,
-                        message_id=str(uuid4()),
-                        related_message_id=message.message_id,
-                        agent_id=task_info["agent_id"],
-                        message_content=MessageContent(
-                            message_task=task_info["task"]
-                        ),  # 正确使用MessageContent包装Task
-                        message_created_at=datetime.now(),
-                    )
-
-                    # Save to database
-                    agent_message_success = (
-                        await self.database_service.add_room_agent_message(
-                            agent_message
+                
+                if is_consecutive:
+                    # Consecutive mentions: create dependency chain
+                    previous_message_id = message.message_id  # Start with user message ID
+                    
+                    for i, task_info in enumerate(tasks_group):
+                        agent_message = RoomAgentMessage(
+                            room_id=room_id,
+                            message_id=str(uuid4()),
+                            related_message_id=previous_message_id,  # Chain dependency
+                            agent_id=task_info["agent_id"],
+                            message_content=MessageContent(
+                                message_task=task_info["task"]
+                            ),
+                            message_created_at=datetime.now(),
                         )
-                    )
-                    if agent_message_success:
-                        created_agent_messages.append(agent_message)
-
+                        
+                        # Save to database
+                        agent_message_success = (
+                            await self.database_service.add_room_agent_message(
+                                agent_message
+                            )
+                        )
+                        if agent_message_success:
+                            created_agent_messages.append(agent_message)
+                            # Update previous_message_id for next agent in chain
+                            previous_message_id = agent_message.message_id
+                else:
+                    # Non-consecutive mentions: all relate directly to user message
+                    for task_info in tasks_group:
+                        agent_message = RoomAgentMessage(
+                            room_id=room_id,
+                            message_id=str(uuid4()),
+                            related_message_id=message.message_id,  # All relate to user message
+                            agent_id=task_info["agent_id"],
+                            message_content=MessageContent(
+                                message_task=task_info["task"]
+                            ),
+                            message_created_at=datetime.now(),
+                        )
+                        
+                        # Save to database
+                        agent_message_success = (
+                            await self.database_service.add_room_agent_message(
+                                agent_message
+                            )
+                        )
+                        if agent_message_success:
+                            created_agent_messages.append(agent_message)
+        
             except Exception as e:
-                print(
-                    f"Error creating agent messages for context '{context_text}': {e}"
+                print(f"Error creating agent messages for context '{context_text}': {e}")
+        
+        return RoomCenterUserMessageResponse(
+            message_id=message.message_id,
+            message=message,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+    
+    
+    async def create_and_parse_user_message_with_debate(
+        self, request: RoomCenterUserMessageRequest
+    ) -> RoomCenterUserMessageResponse:
+        """Send user message and handle @agent parsing with context grouping in debate mode"""
+
+        if request.room_id is None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        message = request.message
+        if message is None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Message is required",
+                status_code=400,
+            )
+
+        # 1. Save user message
+        add_message_success = await self.database_service.add_room_user_message(message)
+        if not add_message_success:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Failed to add message",
+                status_code=500,
+            )
+        
+        logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
+        await sse_manager.send_processing_status(room_id, "processing", message.message_id)
+
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            room_memory = RoomMemory(
+                room_id=room_id,
+                memory_id=str(uuid4()),
+                memory_content=MemoryContent(
+                    memory_text=message.message_content.message_text
+                ),
+            )
+            add_room_memory_success = await self.database_service.add_room_memory(
+                room_memory
+            )
+            if not add_room_memory_success:
+                return RoomCenterUserMessageResponse(
+                    message_id=message.message_id,
+                    message=message,
+                    success=True,
+                    error="Failed to add room memory",
+                    status_code=500,
                 )
 
+        # Safely and clearly update room memory content with labeled delimiter
+        prev_text = (
+            (room_memory.memory_content.memory_text or "")
+            if room_memory and room_memory.memory_content
+            else ""
+        )
+        user_text = ""
+        if message and message.message_content and message.message_content.message_text:
+            user_text = message.message_content.message_text
+        # Add clear labels and separation to avoid blending
+        addition = f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
+        new_room_memory_content_text = f"{prev_text}{addition}".strip()
+        room_memory_response = (
+            await self.database_service.update_room_memory_by_room_id(
+                room_id,
+                RoomMemory(
+                    room_id=room_id,
+                    memory_id=room_memory.memory_id,
+                    memory_content=MemoryContent(
+                        memory_text=new_room_memory_content_text
+                    ),
+                ),
+            )
+        )
+
+        if not room_memory_response:
+            logger.error("RoomServices: Failed to update room memory")
+
+        # 2. Get room information
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if not room:
+            return RoomCenterUserMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=True,
+                error="Room not found, but message saved",
+                status_code=200,
+            )
+
+        # 3. Parse @agent mentions
+        message_text = message.message_content.message_text
+        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
+
+        # 4. Group mentions by context and detect consecutive patterns
+        context_groups = self.group_mentions_by_context(message_text, mentions)
+
+        # 5. Create tasks with appropriate dependency chains
+        created_agent_messages = []
+        for context_text, group_info in context_groups.items():
+            mentions_in_context = group_info["mentions"]
+            is_consecutive = group_info["is_consecutive"]
+            
+            try:
+                # Create shared message content
+                shared_content = self.create_shared_message_content(
+                    context_text, mentions_in_context
+                )
+                
+                # Create tasks for all agents in this context
+                tasks_group = await self.create_task_for_agents_group(
+                    message, mentions_in_context, shared_content
+                )
+                
+                if is_consecutive:
+                    # Consecutive mentions: create dependency chain
+                    iteration_rounds = settings.debate_rounds # todo: can be as parameter
+
+
+                    previous_message_id = message.message_id  # Start with user message ID
+                    
+                    for round_num in range(1, iteration_rounds + 1):
+                        for i, task_info in enumerate(tasks_group):
+                            agent_message = RoomAgentMessage(
+                                room_id=room_id,
+                                message_id=str(uuid4()),
+                                related_message_id=previous_message_id,  # Chain dependency
+                                agent_id=task_info["agent_id"],
+                                message_content=MessageContent(
+                                    message_task=task_info["task"]  # use original task content, not add iteration mark
+                                ),
+                                message_created_at=datetime.now(),
+                                extend_info={
+                                    "iteration_round": round_num,
+                                    "total_rounds": iteration_rounds,
+                                    "agent_sequence": i + 1,
+                                    "total_agents": len(tasks_group)
+                                }
+                            )
+                            
+                            # Save to database
+                            agent_message_success = (
+                                await self.database_service.add_room_agent_message(
+                                    agent_message
+                                )
+                            )
+                            if agent_message_success:
+                                created_agent_messages.append(agent_message)
+                                # Update previous_message_id for next agent in chain
+                                previous_message_id = agent_message.message_id
+                else:
+                    # Non-consecutive mentions: all relate directly to user message
+                    for task_info in tasks_group:
+                        agent_message = RoomAgentMessage(
+                            room_id=room_id,
+                            message_id=str(uuid4()),
+                            related_message_id=message.message_id,  # All relate to user message
+                            agent_id=task_info["agent_id"],
+                            message_content=MessageContent(
+                                message_task=task_info["task"]
+                            ),
+                            message_created_at=datetime.now(),
+                        )
+                        
+                        # Save to database
+                        agent_message_success = (
+                            await self.database_service.add_room_agent_message(
+                                agent_message
+                            )
+                        )
+                        if agent_message_success:
+                            created_agent_messages.append(agent_message)
+        
+            except Exception as e:
+                print(f"Error creating agent messages for context '{context_text}': {e}")
+        
         return RoomCenterUserMessageResponse(
             message_id=message.message_id,
             message=message,

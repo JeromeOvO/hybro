@@ -9,7 +9,7 @@ from database.pinecone_db import pinecone_db
 from models.agent import Agent
 from models.memory import ChatContext, RoomMemory
 from models.task import BaseTask, MetaTask, TaskSession
-from models.room import Room, RoomUserMessage, RoomAgentMessage
+from models.room import Room, RoomUserMessage, RoomAgentMessage, MessageContent
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
@@ -120,6 +120,13 @@ class DatabaseService:
         Get an agent by agent_id from both MongoDB and Pinecone databases.
         """
         return await self.mongo.get_agent_by_agent_id(agent_id)
+
+    async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None:
+        """
+        Get an agent's name by agent_id from both MongoDB and Pinecone databases.
+        """
+        agent = await self.get_agent_by_agent_id(agent_id)
+        return agent.agent_card.name if agent else None
 
     async def get_all_agents(self) -> list[Agent]:
         """
@@ -614,6 +621,21 @@ class DatabaseService:
             logger.error(f"Failed to update room agent message {message_id} in databases: {str(e)}")
             return False
     
+    async def update_room_agent_message_with_new_message_content_by_message_id(self, message_id: str, message_content: MessageContent) -> bool:
+        """
+        Update a room agent message by message_id with new message content
+        """
+        try:
+            room_agent_message = await self.get_room_agent_message_by_message_id(message_id)
+            if room_agent_message is None:
+                return False
+            room_agent_message.message_content = message_content
+        
+            return await self.mongo.update_room_agent_message_by_message_id(message_id, room_agent_message)
+        except Exception as e:
+            logger.error(f"Failed to update room agent message {message_id} in databases: {str(e)}")
+            return False
+    
     async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
         """
         Delete a room agent message by message_id
@@ -687,3 +709,5 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to update room memory {room_id} in databases: {str(e)}")
             return False
+
+db_service = DatabaseService()

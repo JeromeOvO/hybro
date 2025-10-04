@@ -465,7 +465,7 @@ class MongoDB:
         Update a room by room_id
         """
         result = await self.rooms_collection.update_one({"room_id": room_id}, {"$set": room.model_dump(exclude_unset=True, mode="json")})
-        return result.modified_count > 0
+        return result.modified_count >= 0
     
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """

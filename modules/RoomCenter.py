@@ -23,9 +23,15 @@ class RoomCenter:
 
     def update_room_name(self, request: RoomCenterRoomSettingRequest) -> RoomCenterRoomSettingResponse:
         return self.room_services.update_room_name(request)
+    
+    def update_room_extend_info(self, request: RoomCenterRoomSettingRequest) -> RoomCenterRoomSettingResponse:
+        return self.room_services.update_room_extend_info(request)
 
     def create_and_parse_user_message(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
         return self.room_services.create_and_parse_user_message(request)
+
+    def create_and_parse_user_message_with_debate(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        return self.room_services.create_and_parse_user_message_with_debate(request)
     
     def inquiry_room_messages_by_room_id(self, request: RoomCenterRoomMessageRequest) -> RoomCenterRoomMessageResponse:
         return self.room_services.inquiry_room_messages_by_room_id(request)
