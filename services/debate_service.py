@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from a2a.types import AgentCard, Message, TaskSendParams, TextPart
+from a2a.types import AgentCard, Message, TextPart
 
 from common.types import TaskSendParams
 from common.utils.remote_agent_connection import RemoteAgentConnections
