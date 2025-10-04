@@ -89,6 +89,18 @@ async def create_and_parse_user_message(request: Request):
     )
     return room_center_response
 
+@router.post("/roomCenter/createAndParseUserMessageWithDebate")
+async def create_and_parse_user_message_with_debate(request: Request):
+    room_center = RoomCenter()
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+    message = request_data.get("message")
+    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    room_center_response = await room_center.create_and_parse_user_message_with_debate(
+        room_center_request
+    )
+    return room_center_response
+
 
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")
 async def inquiry_room_messages(request: Request):
