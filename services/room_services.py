@@ -244,6 +244,53 @@ class RoomServices:
                 status_code=500,
             )
 
+    async def update_room_extend_info(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        if request.room_id is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if room is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Room not found",
+                status_code=404,
+            )
+        
+        if request.extend_info is None:
+            return RoomCenterRoomSettingResponse(
+                room_id=None,
+                room=None,
+                success=False,
+                error="Extend info is required",
+                status_code=400,
+            )
+        
+        room.extend_info = request.extend_info
+        success = await self.database_service.update_room_by_room_id(room_id, room)
+        if success:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id, room=room, success=True, error=None, status_code=200
+            )
+        else:
+            return RoomCenterRoomSettingResponse(
+                room_id=room_id,
+                room=None,
+                success=False,
+                error="Failed to update room extend info",
+                status_code=500,
+            )
+
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
