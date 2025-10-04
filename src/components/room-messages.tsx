@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { cn } from '@/lib/utils'
+import { Bot, Zap } from 'lucide-react'
 
 export interface MessageData {
   id: string
@@ -14,6 +15,32 @@ export interface MessageData {
   timestamp: string
   user_id?: string
   agent_id?: string
+}
+
+// Processing Status Component
+function ProcessingStatus({ processing }: { processing: boolean }) {
+  if (!processing) return null
+
+  return (
+    <div className="flex justify-start w-full mb-4">
+      <div className="max-w-[80%] rounded-lg p-3 shadow-sm bg-muted border border-purple-200 dark:border-purple-800">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Bot className="h-4 w-4 text-purple-600" />
+            <span className="text-purple-600 font-medium">Agents are discussing...</span>
+          </div>
+        </div>
+        <div className="mt-2 flex items-center gap-1">
+          <div className="flex gap-1">
+            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+          <Zap className="h-3 w-3 text-yellow-500 animate-pulse ml-2" />
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // Message Component with enhanced @mention parsing and markdown support
@@ -180,15 +207,16 @@ function MessageBubble({ message }: { message: MessageData }) {
 interface RoomMessagesProps {
   messages: MessageData[]
   loading?: boolean
+  processing?: boolean
 }
 
-export function RoomMessages({ messages, loading }: RoomMessagesProps) {
+export function RoomMessages({ messages, loading, processing = false }: RoomMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Auto scroll to bottom when new messages arrive
+  // Auto scroll to bottom when new messages arrive or processing state changes
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, processing])
 
   if (loading) {
     return (
@@ -201,7 +229,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   return (
     <div className="h-full w-full overflow-y-auto">
       <div className="py-4 min-h-full">
-        {messages.length === 0 ? (
+        {messages.length === 0 && !processing ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center text-muted-foreground">
               <p className="text-lg font-medium">No messages yet</p>
@@ -213,6 +241,10 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
+            
+            {/* Processing Status - appears after messages */}
+            <ProcessingStatus processing={processing} />
+            
             <div ref={messagesEndRef} />
           </div>
         )}
