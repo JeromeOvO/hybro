@@ -12,6 +12,7 @@ from models.request import (
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
+    RoomCenterMemoryRequest,
 )
 from models.response import (
     RoomCenterAgentMessageResponse,
@@ -658,7 +659,7 @@ class RoomServices:
                 status_code=400,
             )
 
-        # 1. Save user message
+        # Save user message
         add_message_success = await self.database_service.add_room_user_message(message)
         if not add_message_success:
             return RoomCenterUserMessageResponse(
@@ -669,59 +670,27 @@ class RoomServices:
                 status_code=500,
             )
 
+        # send processing status via sse to client
         logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
         await sse_manager.send_processing_status(room_id, "processing", message.message_id)
 
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            room_memory = RoomMemory(
+        # Initialize or update room memory
+        room_memory_initialize_or_update_response = await self.room_memory_service.initialize_or_update_room_memory(
+            RoomCenterMemoryRequest(
                 room_id=room_id,
-                memory_id=str(uuid4()),
-                memory_content=MemoryContent(
-                    memory_text=message.message_content.message_text
-                ),
-            )
-            add_room_memory_success = await self.database_service.add_room_memory(
-                room_memory
-            )
-            if not add_room_memory_success:
-                return RoomCenterUserMessageResponse(
-                    message_id=message.message_id,
-                    message=message,
-                    success=True,
-                    error="Failed to add room memory",
-                    status_code=500,
-                )
-
-        # Safely and clearly update room memory content with labeled delimiter
-        prev_text = (
-            (room_memory.memory_content.memory_text or "")
-            if room_memory and room_memory.memory_content
-            else ""
-        )
-        user_text = ""
-        if message and message.message_content and message.message_content.message_text:
-            user_text = message.message_content.message_text
-        # Add clear labels and separation to avoid blending
-        addition = f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
-        new_room_memory_content_text = f"{prev_text}{addition}".strip()
-        room_memory_response = (
-            await self.database_service.update_room_memory_by_room_id(
-                room_id,
-                RoomMemory(
-                    room_id=room_id,
-                    memory_id=room_memory.memory_id,
-                    memory_content=MemoryContent(
-                        memory_text=new_room_memory_content_text
-                    ),
-                ),
+                memory_content=message.message_content.message_text
             )
         )
+        if not room_memory_initialize_or_update_response.success:
+            return RoomCenterUserMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=False,
+                error="Failed to initialize or update room memory",
+                status_code=500,
+            )
 
-        if not room_memory_response:
-            logger.error("RoomServices: Failed to update room memory")
-
-        # 2. Get room information
+        # Get room information
         room = await self.database_service.get_room_by_room_id(room_id)
         if not room:
             return RoomCenterUserMessageResponse(
@@ -732,14 +701,14 @@ class RoomServices:
                 status_code=200,
             )
 
-        # 3. Parse @agent mentions
+        # Parse @agent mentions
         message_text = message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
-        # 4. Group mentions by context and detect consecutive patterns
+        # Group mentions by context and detect consecutive patterns
         context_groups = self.group_mentions_by_context(message_text, mentions)
 
-        # 5. Create tasks with appropriate dependency chains
+        # Create tasks with appropriate dependency chains
         created_agent_messages = []
         for context_text, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
@@ -842,7 +811,7 @@ class RoomServices:
                 status_code=400,
             )
 
-        # 1. Save user message
+        # Save user message
         add_message_success = await self.database_service.add_room_user_message(message)
         if not add_message_success:
             return RoomCenterUserMessageResponse(
@@ -852,60 +821,28 @@ class RoomServices:
                 error="Failed to add message",
                 status_code=500,
             )
-        
+
+        # send processing status via sse to client
         logger.info(f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}")
         await sse_manager.send_processing_status(room_id, "processing", message.message_id)
 
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            room_memory = RoomMemory(
+        # Initialize or update room memory
+        room_memory_initialize_or_update_response = await self.room_memory_service.initialize_or_update_room_memory(
+            RoomCenterMemoryRequest(
                 room_id=room_id,
-                memory_id=str(uuid4()),
-                memory_content=MemoryContent(
-                    memory_text=message.message_content.message_text
-                ),
-            )
-            add_room_memory_success = await self.database_service.add_room_memory(
-                room_memory
-            )
-            if not add_room_memory_success:
-                return RoomCenterUserMessageResponse(
-                    message_id=message.message_id,
-                    message=message,
-                    success=True,
-                    error="Failed to add room memory",
-                    status_code=500,
-                )
-
-        # Safely and clearly update room memory content with labeled delimiter
-        prev_text = (
-            (room_memory.memory_content.memory_text or "")
-            if room_memory and room_memory.memory_content
-            else ""
-        )
-        user_text = ""
-        if message and message.message_content and message.message_content.message_text:
-            user_text = message.message_content.message_text
-        # Add clear labels and separation to avoid blending
-        addition = f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
-        new_room_memory_content_text = f"{prev_text}{addition}".strip()
-        room_memory_response = (
-            await self.database_service.update_room_memory_by_room_id(
-                room_id,
-                RoomMemory(
-                    room_id=room_id,
-                    memory_id=room_memory.memory_id,
-                    memory_content=MemoryContent(
-                        memory_text=new_room_memory_content_text
-                    ),
-                ),
+                memory_content=message.message_content.message_text
             )
         )
+        if not room_memory_initialize_or_update_response.success:
+            return RoomCenterUserMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=False,
+                error="Failed to initialize or update room memory",
+                status_code=500,
+            )
 
-        if not room_memory_response:
-            logger.error("RoomServices: Failed to update room memory")
-
-        # 2. Get room information
+        # Get room information
         room = await self.database_service.get_room_by_room_id(room_id)
         if not room:
             return RoomCenterUserMessageResponse(
@@ -916,14 +853,14 @@ class RoomServices:
                 status_code=200,
             )
 
-        # 3. Parse @agent mentions
+        # Parse @agent mentions
         message_text = message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
-        # 4. Group mentions by context and detect consecutive patterns
+        # Group mentions by context and detect consecutive patterns
         context_groups = self.group_mentions_by_context(message_text, mentions)
 
-        # 5. Create tasks with appropriate dependency chains
+        # Create tasks with appropriate dependency chains
         created_agent_messages = []
         for context_text, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
