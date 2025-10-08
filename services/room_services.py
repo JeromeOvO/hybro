@@ -444,6 +444,35 @@ class RoomServices:
                 processed_text = processed_text.replace(mention["mention_text"], "")
             return re.sub(r'\s+', ' ', processed_text).strip()
 
+    def _parse_user_messsage_with_mentions(self, message_text: str) -> str:
+        """
+        Parse user message by algorithm and return clean message content based on mentions
+        """
+        return message_text
+
+    def _calculate_confidence(self, parsed_result: str) -> float:
+        """
+        Calculate parsed result of user message by algorithm and return confidence of user message
+        """
+        return 0.5
+
+    def parse_user_message(self, message_text: str) -> str:
+        """
+        Parse user message and return clean message content
+        if confidence < 0.5, use llm to parse
+        if confidence >= 0.5, return parsed result
+        """
+
+        parsed_result = self._parse_user_messsage_with_mentions(message_text)
+        confidence = self._calculate_confidence(parsed_result)
+
+        if confidence < settings.parse_confidence_threshold:
+            #ToDo: use llm to parse
+            parsed_result_by_llm = None
+            return parsed_result_by_llm
+
+        return parsed_result
+
     def group_mentions_by_context(self, message_text: str, mentions: list) -> dict:
         """
         Group mentions by their shared context/sentence and detect consecutive mentions

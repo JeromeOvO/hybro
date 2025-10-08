@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     log_max_bytes: int = 10485760  # 10 MB
 
     debate_rounds: int = 2 # todo: can be as parameter
+    parse_confidence_threshold: float = 0.5
 
     class Config:
         env_file = ".env"
