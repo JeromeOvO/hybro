@@ -459,8 +459,8 @@ class RoomServices:
     def parse_user_message(self, message_text: str) -> str:
         """
         Parse user message and return clean message content
-        if confidence < 0.5, use llm to parse
-        if confidence >= 0.5, return parsed result
+        if confidence < 0.3, use llm to parse
+        if confidence >= 0.3, return parsed result
         """
 
         parsed_result = self._parse_user_messsage_with_mentions(message_text)
