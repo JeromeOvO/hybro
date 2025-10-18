@@ -792,7 +792,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                         "agent_name": agent_name.strip(),
                     }
                     for agent_id, agent_name in mentions
-                    if agent_id.strip() in room_agent_set
+                    if agent_name.strip() in room_agent_set
                 ]
                 message_type = "DEBATE_WITH_MENTIONS"
             else:
