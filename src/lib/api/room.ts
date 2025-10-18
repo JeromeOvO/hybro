@@ -271,3 +271,47 @@ export async function inquiryRoomMessagesByRoomId(room_id: string): Promise<Room
 }
 
 
+export async function SendMessage(
+  room_id: string,
+  user_input: string,
+  user_id?: string,
+  user_name?: string
+): Promise<RoomCenterUserMessageResponse> {
+  const requestData: RoomCenterUserMessageRequest = {
+    room_id,
+    user_id: user_id || "",
+    user_name: user_name || "",
+    user_input,
+    message: {
+      room_id,
+      message_id: "",
+      message_type: "user",
+      related_message_id: null,
+      message_content: {
+        message_text: user_input
+      },
+      user_id: user_id || "",
+      extend_info: null
+    }
+  }
+
+  console.log('🚀 Sending SendMessage request:', JSON.stringify(requestData, null, 2))
+
+ const response = await fetch(`${API_BASE_URL}/sendMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestData),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error('❌ API Error:', response.status, errorText)
+    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  }
+
+  const result = await response.json()
+  console.log('✅ API Response:', result)
+  return result
+}

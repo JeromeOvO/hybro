@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Send } from 'lucide-react'
-import { toast } from 'sonner'
+// import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 
 interface Agent {
@@ -418,21 +418,21 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     }
   }
 
-  const validateMessage = (messageText: string): boolean => {
-    const mentionPattern = /<@[^|]+\|[^>]+>/g
-    const mentions = messageText.match(mentionPattern)
-    return mentions !== null && mentions.length > 0
-  }
+  // const validateMessage = (messageText: string): boolean => {
+  //   const mentionPattern = /<@[^|]+\|[^>]+>/g
+  //   const mentions = messageText.match(mentionPattern)
+  //   return mentions !== null && mentions.length > 0
+  // }
 
   const handleSubmit = () => {
     const trimmedMessage = message.trim()
     if (trimmedMessage) {
-      if (!validateMessage(trimmedMessage)) {
-        toast.error("Please mention at least one agent", {
-          description: "Use @agentName to mention an agent"
-        })
-        return
-      }
+      // if (!validateMessage(trimmedMessage)) {
+      //   toast.error("Please mention at least one agent", {
+      //     description: "Use @agentName to mention an agent"
+      //   })
+      //   return
+      // }
       
       console.log('🚀 Submitting message (storage format):', trimmedMessage)
       onSubmit(trimmedMessage)

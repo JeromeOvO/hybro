@@ -1,8 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { 
   inquiryRoomSetting,
-  createAndParseUserMessage,
-  createAndParseUserMessageWithDebate,
+  SendMessage,
   inquiryRoomMessagesByRoomId,
   updateRoomAgentSet,
   updateRoomName,
@@ -344,15 +343,11 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     }
   }, [room, roomId, loadRoomSetting, getDebateMode])
 
-  // Complete user message sending workflow - now uses debate mode
+  // Complete user message sending workflow - using unified SendMessage API
   const sendUserMessage = useCallback(async (userInput: string) => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
     }
-
-    // Check if debate mode is enabled
-    const debateMode = getDebateMode()
-    console.log('🎭 Debate mode:', debateMode ? 'ENABLED' : 'DISABLED')
 
     // Generate temporary message ID for optimistic update
     const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -374,10 +369,8 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setSending(true)
       isProcessingRef.current = true
       
-      // Step 1: Send user message to backend - use appropriate API based on debate mode
-      const createResponse = debateMode 
-        ? await createAndParseUserMessageWithDebate(roomId, userInput, userId, userName)
-        : await createAndParseUserMessage(roomId, userInput, userId, userName)
+      // Step 1: Send user message to backend using unified SendMessage API
+      const createResponse = await SendMessage(roomId, userInput, userId, userName)
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
@@ -410,8 +403,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
       }
       
-      const modeText = debateMode ? 'with debate mode' : 'in normal mode'
-      toast.success(`Message sent successfully ${modeText}`)
+      toast.success('Message sent successfully')
       
       return true
       
@@ -437,7 +429,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setProcessing(false)
       isProcessingRef.current = false
     }
-  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected, getDebateMode, getAgentName])
+  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
