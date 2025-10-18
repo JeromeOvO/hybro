@@ -1358,142 +1358,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 status_code=500,
             )
 
-    async def _handle_a2a_response_for_room(self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent) -> bool:
-            # Add null check for process_response
-            if message_data is None:
-                logger.error("OrchestrationCenter: process_a2a_response returned None for agent message ")
-                return False
-
-            if message_data.kind == "task":
-                room_agent_message.message_content.message_task = message_data
-                update_response = (
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=room_agent_message.message_id,
-                            message=room_agent_message,
-                        )
-                    )
-                )
-                if not update_response.success:
-                    logger.error("OrchestrationCenter: Failed to update agent message with task")
-                    return False
-                return True
-
-            elif message_data.kind == "message":
-                if (
-                    room_agent_message.message_content
-                    and room_agent_message.message_content.message_task
-                ):
-                    if room_agent_message.message_content.message_task.history is None:
-                        room_agent_message.message_content.message_task.history = []
-                    room_agent_message.message_content.message_task.history.append(
-                        message_data
-                    )
-
-                update_response = (
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=room_agent_message.message_id,
-                            message=room_agent_message,
-                        )
-                    )
-                )
-
-                if not update_response.success:
-                    logger.error(
-                        "OrchestrationCenter: Failed to update agent message with message",
-                        update_response.error,
-                    )
-                    return False
-                return True
-
-            elif message_data.kind == "status-update":
-                # Handle status update responses - update task status and potentially add message
-                if hasattr(message_data, "status") and hasattr(
-                    message_data.status, "state"
-                ):
-                    if (
-                        room_agent_message.message_content
-                        and room_agent_message.message_content.message_task
-                        and room_agent_message.message_content.message_task.status
-                        is None
-                    ):
-                        room_agent_message.message_content.message_task.status = (
-                            TaskStatus(state=TaskState.submitted)
-                        )
-                    if (
-                        room_agent_message.message_content
-                        and room_agent_message.message_content.message_task
-                    ):
-                        room_agent_message.message_content.message_task.status.state = (
-                            message_data.status.state
-                        )
-
-                    # If there's a message in the status update, add it to history
-                    if (
-                        hasattr(message_data.status, "message")
-                        and message_data.status.message
-                        and room_agent_message.message_content
-                        and room_agent_message.message_content.message_task
-                    ):
-                        if (
-                            room_agent_message.message_content.message_task.history
-                            is None
-                        ):
-                            room_agent_message.message_content.message_task.history = []
-                        room_agent_message.message_content.message_task.history.append(
-                            message_data.status.message
-                        )
-
-                update_response = (
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=room_agent_message.message_id,
-                            message=room_agent_message,
-                        )
-                    )
-                )
-
-                if not update_response.success:
-                    logger.error(
-                        "OrchestrationCenter: Failed to update agent message with status update",
-                        update_response.error,
-                    )
-                    return False
-                return True
-
-            elif message_data.kind == "artifact-update":
-                # Handle artifact update responses - add artifacts to task
-                if (
-                    hasattr(message_data, "artifact")
-                    and room_agent_message.message_content
-                    and room_agent_message.message_content.message_task
-                ):
-                    if (
-                        room_agent_message.message_content.message_task.artifacts
-                        is None
-                    ):
-                        room_agent_message.message_content.message_task.artifacts = []
-                    room_agent_message.message_content.message_task.artifacts.append(
-                        message_data.artifact
-                    )
-
-                update_response = (
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=room_agent_message.message_id,
-                            message=room_agent_message,
-                        )
-                    )
-                )
-
-                if not update_response.success:
-                    logger.error(
-                        "OrchestrationCenter: Failed to update agent message with artifact update",
-                        update_response.error,
-                    )
-                    return False
-                return True
 
     # room services
     async def process_room_user_message(
@@ -1565,6 +1429,32 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             current_message = message_queue.popleft()
             message_list.append(current_message)
 
+
+            if current_message.agent_id is None:
+                user_input = current_message.message_content.message_task.history[0].parts[0].root.text
+                matched_agents = await self.database_service.query_similar_agents(user_input)
+                if len(matched_agents) > 0:
+                    current_message.agent_id = matched_agents[0].agent_id   
+                else:
+                    return OrchestrationCenterResponse(
+                        success=False,
+                        error="Agent id is not found",
+                        status_code=500,
+                    )
+                
+                agent = matched_agents[0]
+                current_message.agent_id = agent.agent_id
+                update_success = await self.database_service.update_room_agent_message_by_message_id(
+                    message_id=current_message.message_id, room_agent_message=current_message
+                )
+                if not update_success:
+                    return OrchestrationCenterResponse(
+                        success=False,
+                        error="Failed to update agent message",
+                        status_code=500,
+                    )
+
+
             process_response = await self.room_services.process_agent_message(
                 RoomCenterAgentMessageRequest(message=current_message),
                 room_memory_content_text,
@@ -1578,7 +1468,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             message_data = await self.a2a_service.process_a2a_response(
                 process_response.a2a_response
             )
-            message_data = await self._handle_a2a_response_for_room(current_message, message_data)
+            message_data = await self.room_services.handle_a2a_response_for_room(current_message, message_data)
             if not message_data:
                 return OrchestrationCenterResponse(
                     success=False,

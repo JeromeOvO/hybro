@@ -38,3 +38,6 @@ class RoomCenter:
     
     def inquiry_agent_messages_by_related_message_id(self, request: RoomCenterAgentMessageRequest) -> RoomCenterAgentMessageResponse:
         return self.room_services.inquiry_agent_messages_by_related_message_id(request)
+    
+    def send_message_to_room(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        return self.room_services.send_message_to_room(request)

@@ -1,7 +1,7 @@
 import json
 import os
 import re
-
+from config.settings import settings
 from a2a.types import Role
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -760,6 +760,242 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             )
             fallback = f"{existing_memory}\n\nProcessed {len(message_summaries)} agent messages."
             return fallback.strip()
+
+    async def parse_user_message_by_llm(
+        self, message_text: str, room_agent_set: dict = None, is_debate_mode: bool = False
+    ) -> dict:
+        """
+        Parse user message using LLM with intelligent task decomposition.
+        
+        Process:
+        1. Analyze if task needs decomposition
+        2. If complex, break into logical steps
+        3. Assign agents based on mentions or task nature
+        
+        Debate mode: Skip decomposition, generate linear chain
+        """
+        
+        room_agent_set = room_agent_set or {}
+        
+        # === DEBATE MODE ===
+        if is_debate_mode:
+            # Extract mentions from message
+            mention_pattern = r"<@([^|]+)\|([^>]+)>"
+            mentions = re.findall(mention_pattern, message_text)
+            
+            # Determine agents for debate
+            if mentions:
+                # Use mentioned agents
+                debate_agents = [
+                    {
+                        "agent_id": agent_id.strip(),
+                        "agent_name": agent_name.strip(),
+                    }
+                    for agent_id, agent_name in mentions
+                    if agent_id.strip() in room_agent_set
+                ]
+                message_type = "DEBATE_WITH_MENTIONS"
+            else:
+                # Use all room agents
+                debate_agents = [
+                    {
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
+                    }
+                    for agent_name, agent_id in room_agent_set.items()
+                ]
+                message_type = "DEBATE_NO_MENTIONS"
+            
+            if not debate_agents:
+                raise ValueError("No agents available for debate mode")
+            
+            # Remove mentions from content
+            clean_content = message_text
+            for match in re.finditer(mention_pattern, message_text):
+                clean_content = clean_content.replace(match.group(0), "")
+            clean_content = re.sub(r'\s+', ' ', clean_content).strip()
+            
+            # Generate debate rounds
+            num_rounds = settings.debate_rounds or 3
+            task_steps = []
+            previous_step_id = None
+            
+            step_counter = 1
+            for round_num in range(1, num_rounds + 1):
+                for agent in debate_agents:
+                    step_id = f"step_{step_counter}"
+                    
+                    # Use unified format: agent_id, agent_name, task_content
+                    task_step = {
+                        "step_id": step_id,
+                        "agent_id": agent["agent_id"],
+                        "agent_name": agent["agent_name"],
+                        "task_content": clean_content,  # Changed from step_content
+                        "dependencies": [previous_step_id] if previous_step_id else [],
+                    }
+                    
+                    task_steps.append(task_step)
+                    previous_step_id = step_id
+                    step_counter += 1
+            
+            result = {
+                "message_type": message_type,
+                "original_text": message_text,
+                "needs_decomposition": False,
+                "task_steps": task_steps  # Unified format
+            }
+            
+            logger.info(
+                f"Generated debate chain: {len(debate_agents)} agents × "
+                f"{num_rounds} rounds = {len(task_steps)} tasks"
+            )
+            
+            return result
+        
+        # === NORMAL MODE: Enhanced with decomposition decision ===
+        agent_list = ""
+        if room_agent_set:
+            agent_list = "\n".join([
+                f"- Agent ID: {aid}, Name: {aname}"
+                for aid, aname in room_agent_set.items()
+            ])
+        
+        system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+                Your job is to analyze user messages, decide if decomposition is needed, then assign agents.
+
+                PROCESS:
+                1. ANALYZE TASK COMPLEXITY
+                - Simple task: Single action, can be completed in one step
+                - Complex task: Multiple logical steps, dependencies between actions
+                
+                2. DECIDE DECOMPOSITION
+                - If simple: Keep as single step
+                - If complex: Break into logical sub-tasks with clear dependencies
+                
+                3. ASSIGN AGENTS
+                - ONLY assign agents that are explicitly mentioned in the message using <@agent-id|agent-name> format
+                - If NO mentions in message: ALL agent_id MUST be null (do not auto-assign)
+                - If agents mentioned: Use ONLY those mentioned agents
+                - Extract agent_id and agent_name from mention format
+
+                CRITICAL RULE: 
+                NO agent mentions in message = ALL agent_id = null
+                Do NOT auto-assign agents based on task type or capabilities if not mentioned.
+
+                SCENARIOS:
+
+                1. NO MENTIONS + SIMPLE TASK
+                Example: "Help me analyze the data"
+                → Single step, agent_id = null, agent_name = null
+
+                2. NO MENTIONS + COMPLEX TASK
+                Example: "Create a complete data analysis report including data cleaning, statistical analysis and visualization"
+                → Decompose into steps: [cleaning, analysis, visualization]
+                → ALL steps: agent_id = null, agent_name = null
+
+                3. SINGLE MENTION + SIMPLE TASK
+                Example: "<@agent-1|Analyst> Analyze sales data"
+                → Single step, agent_id = "agent-1", agent_name = "Analyst"
+
+                4. SINGLE MENTION + COMPLEX TASK
+                Example: "<@agent-1|Developer> Build a complete web application including frontend, backend and database"
+                → Decompose into steps, ALL assign to agent-1
+
+                5. MULTIPLE MENTIONS + TASK
+                Example: "<@agent-1|Analyst> Analyze data, then <@agent-2|Designer> Create visualization"
+                → Assign steps based on which agent is mentioned near that task
+                → Step 1: agent_id = "agent-1"
+                → Step 2: agent_id = "agent-2"
+
+                OUTPUT STRUCTURE (strict JSON):
+                {
+                "message_type": "NO_MENTIONS" | "SINGLE_MENTION" | "MULTIPLE_MENTIONS",
+                "original_text": "original message",
+                "needs_decomposition": true | false,
+                "decomposition_reason": "why decomposed or not" | null,
+                "task_steps": [
+                    {
+                    "step_id": "step_1",
+                    "agent_id": "uuid" | null,
+                    "agent_name": "name" | null,
+                    "task_content": "what to do (clean text, remove all <@...> mentions)",
+                    "dependencies": ["step_id", ...]
+                    }
+                ]
+                }
+
+                DECOMPOSITION GUIDELINES:
+                - Break by logical phases (prepare → execute → review)
+                - Break by functional areas (data → analysis → visualization)
+                - Break by sequential dependencies (A must complete before B)
+                - Keep steps granular but not too fine (3-7 steps optimal)
+                - Each step should be independently executable
+
+                DEPENDENCY RULES:
+                - Empty [] = no dependencies, can start immediately
+                - ["step_1"] = depends on step_1 completing
+                - ["step_1", "step_2"] = depends on both (usually use last one)
+
+                AGENT ASSIGNMENT RULES:
+                - Mention format: <@uuid|name>
+                - If NO <@...> in original message: agent_id = null for ALL steps
+                - If mentions present: Extract agent_id and agent_name from mentions
+                - Remove all <@...> from task_content (clean text only)
+                - Match mentioned agents to appropriate task steps based on position/context
+
+                Output valid JSON only, no explanation."""
+
+        user_prompt = f"""Analyze this task and create execution plan:
+
+                Available agents in room:
+                {agent_list if agent_list else "None"}
+
+                User message:
+                "{message_text}"
+
+                Steps:
+                1. Is this a simple or complex task?
+                2. Should it be decomposed? Why or why not?
+                3. What are the logical steps (if decomposed)?
+                4. Which agents should handle each step?
+
+                Output JSON with your analysis."""
+
+        try:  
+            messages = [
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=user_prompt)
+            ]
+            
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                messages=messages,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from LLM")
+            
+            result = json.loads(content)
+            
+            # Log decomposition decision
+            needs_decomp = result.get("needs_decomposition", False)
+            decomp_reason = result.get("decomposition_reason", "")
+            steps_count = len(result.get("task_steps", []))
+            
+            logger.info(
+                f"LLM analysis: {result.get('message_type')}, "
+                f"decomposition={'YES' if needs_decomp else 'NO'} "
+                f"({decomp_reason}), {steps_count} steps"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"LLM parsing failed: {e}")
+            raise
 
 
 openai_service = OpenAIService()

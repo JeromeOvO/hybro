@@ -5,14 +5,18 @@ from models.error import SessionIdRequiredError
 from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
 from models.response import ChatMemoryResponse, RoomCenterMemoryResponse
-from services.database_service import DatabaseService
+from services.database_service import db_service
 from services.openai_service import OpenAIService
+
+from common.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # Chat Memory Service Manager
 class ChatMemoryService:
     def __init__(self):
-        self.database_service = DatabaseService()
+        self.database_service = db_service
         self.openai_service = OpenAIService()
 
     # Chat Contexts
@@ -194,7 +198,7 @@ class ChatMemoryService:
 
 class RoomMemoryService:
     def __init__(self):
-        self.database_service = DatabaseService()
+        self.database_service = db_service
         self.openai_service = OpenAIService()
 
     async def create_room_memory(
@@ -426,3 +430,82 @@ class RoomMemoryService:
                 error=str(e),
                 status_code=500,
             )
+    
+    async def initialize_or_update_room_memory(
+        self, request: RoomCenterMemoryRequest
+    ) -> RoomCenterMemoryResponse:
+        """
+        Initialize a room memory by room_id
+        """
+
+
+        room_id = request.room_id
+        new_message = request.memory_content
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+
+
+        if not room_memory: 
+            # Initialize room memory
+            room_memory = RoomMemory(
+                room_id=room_id,
+                memory_id=str(uuid4()),
+                memory_content=MemoryContent(
+                    memory_text=new_message
+                ),
+            )
+            add_room_memory_success = await self.database_service.add_room_memory(
+                room_memory
+            )
+            if not add_room_memory_success:
+                return RoomCenterMemoryResponse(
+                    room_id=room_id,
+                    success=False,
+                    error="Failed to add room memory",
+                    status_code=500,
+                )
+        else:
+            # Safely and clearly update room memory content with labeled delimiter
+            prev_memory_content = (
+                (room_memory.memory_content.memory_text or "")
+                if room_memory and room_memory.memory_content
+                else ""
+            )
+
+            user_text = ""
+            if new_message:
+                user_text = new_message
+            # Add clear labels and separation to avoid blending
+            addition = f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
+            new_room_memory_content_text = f"{prev_memory_content}{addition}".strip()
+            
+            
+            room_memory_response = (
+                await self.database_service.update_room_memory_by_room_id(
+                    room_id,
+                    RoomMemory(
+                        room_id=room_id,
+                        memory_id=room_memory.memory_id,
+                        memory_content=MemoryContent(
+                            memory_text=new_room_memory_content_text
+                        ),
+                    ),
+                )
+            )
+
+            if not room_memory_response:
+                logger.error("RoomMemoryService: Failed to update room memory")
+                return RoomCenterMemoryResponse(
+                    room_id=room_id,
+                    memory_id=room_memory.memory_id,
+                    success=False,
+                    error="Failed to update room memory",
+                    status_code=500,
+                )
+
+        return RoomCenterMemoryResponse(
+            room_id=room_id,
+            memory_id=room_memory.memory_id,
+            success=True,
+            error=None,
+            status_code=200,
+        )
