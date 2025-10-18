@@ -2,7 +2,8 @@ import re
 from datetime import datetime
 from uuid import uuid4
 from config.settings import settings
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
+from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
+import re
 
 from common.utils.logger import get_logger
 from models.memory import MemoryContent, RoomMemory
@@ -444,35 +445,6 @@ class RoomServices:
                 processed_text = processed_text.replace(mention["mention_text"], "")
             return re.sub(r'\s+', ' ', processed_text).strip()
 
-    def _parse_user_messsage_with_mentions(self, message_text: str) -> str:
-        """
-        Parse user message by algorithm and return clean message content based on mentions
-        """
-        return message_text
-
-    def _calculate_confidence(self, parsed_result: str) -> float:
-        """
-        Calculate parsed result of user message by algorithm and return confidence of user message
-        """
-        return 0.5
-
-    def parse_user_message(self, message_text: str) -> str:
-        """
-        Parse user message and return clean message content
-        if confidence < 0.3, use llm to parse
-        if confidence >= 0.3, return parsed result
-        """
-
-        parsed_result = self._parse_user_messsage_with_mentions(message_text)
-        confidence = self._calculate_confidence(parsed_result)
-
-        if confidence < settings.parse_confidence_threshold:
-            #ToDo: use llm to parse
-            parsed_result_by_llm = None
-            return parsed_result_by_llm
-
-        return parsed_result
-
     def group_mentions_by_context(self, message_text: str, mentions: list) -> dict:
         """
         Group mentions by their shared context/sentence and detect consecutive mentions
@@ -662,6 +634,228 @@ class RoomServices:
             tasks.append({"task": task, "agent_id": agent_id, "agent_name": agent_name})
 
         return tasks
+    
+
+    def _generate_agent_message_content(self, content: str) -> MessageContent:
+        """
+        Generate agent message content based on content.
+        """
+        a2a_message = Message(
+                message_id=str(uuid4()),
+                role=Role.user,
+                parts=[TextPart(text=content)],
+                context_id=str(uuid4()),
+                metadata={}
+            )
+            
+            # Create Task status
+        task_status = TaskStatus(
+                state=TaskState.submitted,
+                timestamp=datetime.now().isoformat()
+            )
+            
+            # Create a2a Task
+        task = Task(
+                id=str(uuid4()),
+                context_id=str(uuid4()),
+                status=task_status,
+                history=[a2a_message]
+            )
+
+        return MessageContent(message_task=task)
+
+    def _generate_new_agent_message(self, room_id: str, related_message_id: str, agent_id: str, content: str, extend_info: dict | None = None) -> RoomAgentMessage:
+        """
+        Generate a new agent message.
+        """
+        return RoomAgentMessage(
+            room_id=room_id,
+            related_message_id=related_message_id if related_message_id else str(uuid4()),
+            agent_id=agent_id if agent_id else None,
+            message_id=str(uuid4()),
+            message_content=self._generate_agent_message_content(content),
+            message_created_at=datetime.now(),
+            extend_info=extend_info if extend_info else None)
+
+    async def _generate_agent_messages_based_on_parsed_result(
+        self, 
+        parsed_result: dict,
+        user_message_id: str,
+        room_id: str
+    ) -> list[RoomAgentMessage]:
+        """
+        Generate agent messages based on parsed result from LLM.
+        All steps are converted to agent messages, even if agent_id is None.
+        
+        Args:
+            parsed_result: Output from parse_user_message_by_llm()
+                {
+                    "message_type": str,
+                    "original_text": str,
+                    "task_steps": [
+                        {
+                            "step_id": str,
+                            "agent_id": str | None,
+                            "agent_name": str | None,
+                            "task_content": str,
+                            "dependencies": [step_id, ...]
+                        }
+                    ]
+                }
+            user_message_id: User message ID (root for dependency chain)
+            room_id: Room ID
+        
+        Returns:
+            list[RoomAgentMessage]: Generated agent messages (agent_id may be None)
+        """
+        
+        agent_messages = []
+        task_steps = parsed_result.get("task_steps", [])
+        
+        if not task_steps:
+            logger.warning("No task steps in parsed result")
+            return agent_messages
+        
+        # Map step_id to generated agent_message_id for dependency resolution
+        step_to_message_id = {}
+        
+        for step in task_steps:
+            step_id = step.get("step_id")
+            agent_id = step.get("agent_id")  # Can be None
+            agent_name = step.get("agent_name")  # Can be None
+            task_content = step.get("task_content", "")
+            dependencies = step.get("dependencies", [])
+            
+            # Skip only if no task content
+            if not task_content:
+                logger.warning(f"Step {step_id} has no task content, skipping")
+                continue
+            
+            # Resolve related_message_id based on dependencies
+            if not dependencies:
+                # No dependencies: relate directly to user message
+                related_message_id = user_message_id
+            else:
+                # Has dependencies: relate to the last dependency's agent message
+                last_dependency_step_id = dependencies[-1]
+                related_message_id = step_to_message_id.get(
+                    last_dependency_step_id,
+                    user_message_id  # Fallback if dependency not found
+                )
+                
+                # Log if dependency not found
+                if last_dependency_step_id not in step_to_message_id:
+                    logger.warning(
+                        f"Step {step_id} depends on {last_dependency_step_id}, "
+                        f"but it's not found. Using user message as fallback."
+                    )
+            
+            # Create a2a Message
+            agent_message = self._generate_new_agent_message(room_id, related_message_id, agent_id, task_content)
+            
+            agent_messages.append(agent_message)
+            
+            # Store mapping for dependency resolution
+            step_to_message_id[step_id] = agent_message.message_id
+
+            # Save to database
+            agent_message_success = await self.database_service.add_room_agent_message(agent_message)
+            if not agent_message_success:
+                logger.warning(f"Failed to add agent message {agent_message.message_id}")
+            
+            logger.info(f"Generated agent message {agent_message.message_id} for step {step_id}")
+        
+        return agent_messages
+
+
+    async def parse_user_message(self, room_id: str, user_message_id: str, message_text: str, room_agent_set: dict, is_debate_mode: bool = False) -> bool:
+        """
+        Parse user message
+        """
+        # Parse user message
+        parsed_result = await self.openai_service.parse_user_message_by_llm(message_text, room_agent_set, is_debate_mode)
+
+        logger.info(f"LLM Parsed result: {parsed_result}")
+
+        if not parsed_result:
+            logger.warning("No parsed result from LLM")
+            return False
+
+        agent_messages = await self._generate_agent_messages_based_on_parsed_result(parsed_result, user_message_id, room_id)
+
+        return True if agent_messages else False
+
+    async def send_message_to_room(self, request: RoomCenterUserMessageRequest) -> RoomCenterUserMessageResponse:
+        """Add and parese user message to room and send processing status to client"""
+        if request.room_id is None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+        
+        if request.message is None:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Message is required",
+                status_code=400,
+            )
+        user_message = request.message
+        add_message_success = await self.database_service.add_room_user_message(user_message)
+        if not add_message_success:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Failed to add message",
+                status_code=500,
+            )
+        
+        # send processing status via sse to client
+        logger.info(f"RoomServices: Sending processing status to room {request.room_id} for message {user_message.message_id}")
+        await sse_manager.send_processing_status(request.room_id, "processing", user_message.message_id)
+
+        # Initialize or update room memory
+        room_memory_initialize_or_update_response = await self.room_memory_service.initialize_or_update_room_memory(
+            RoomCenterMemoryRequest(
+                room_id=request.room_id,
+                memory_content=user_message.message_content.message_text
+            )
+        )
+        if not room_memory_initialize_or_update_response.success:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=False,
+                error="Failed to initialize or update room memory",
+                status_code=500,
+            )
+
+        # Parse user message
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        is_debate_mode = room.extend_info.get("debateMode", False) if room.extend_info else False
+        parse_user_message_success = await self.parse_user_message(request.room_id, user_message.message_id, user_message.message_content.message_text, room.room_agent_set, is_debate_mode)
+        if not parse_user_message_success:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=False,
+                error="Failed to parse user message",
+                status_code=500,
+            )
+        
+        return RoomCenterUserMessageResponse(
+            message_id=user_message.message_id,
+            message=user_message,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+        
 
     async def create_and_parse_user_message(
         self, request: RoomCenterUserMessageRequest
@@ -1331,3 +1525,140 @@ class RoomServices:
                 error=str(e),
                 status_code=500,
             )
+
+    async def handle_a2a_response_for_room(self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent) -> bool:
+            # Add null check for process_response
+            if message_data is None:
+                logger.error("OrchestrationCenter: process_a2a_response returned None for agent message ")
+                return False
+
+            if message_data.kind == "task":
+                room_agent_message.message_content.message_task = message_data
+                update_response = (
+                    await self.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=room_agent_message.message_id,
+                            message=room_agent_message,
+                        )
+                    )
+                )
+                if not update_response.success:
+                    logger.error("OrchestrationCenter: Failed to update agent message with task")
+                    return False
+                return True
+
+            elif message_data.kind == "message":
+                if (
+                    room_agent_message.message_content
+                    and room_agent_message.message_content.message_task
+                ):
+                    if room_agent_message.message_content.message_task.history is None:
+                        room_agent_message.message_content.message_task.history = []
+                    room_agent_message.message_content.message_task.history.append(
+                        message_data
+                    )
+
+                update_response = (
+                    await self.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=room_agent_message.message_id,
+                            message=room_agent_message,
+                        )
+                    )
+                )
+
+                if not update_response.success:
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with message",
+                        update_response.error,
+                    )
+                    return False
+                return True
+
+            elif message_data.kind == "status-update":
+                # Handle status update responses - update task status and potentially add message
+                if hasattr(message_data, "status") and hasattr(
+                    message_data.status, "state"
+                ):
+                    if (
+                        room_agent_message.message_content
+                        and room_agent_message.message_content.message_task
+                        and room_agent_message.message_content.message_task.status
+                        is None
+                    ):
+                        room_agent_message.message_content.message_task.status = (
+                            TaskStatus(state=TaskState.submitted)
+                        )
+                    if (
+                        room_agent_message.message_content
+                        and room_agent_message.message_content.message_task
+                    ):
+                        room_agent_message.message_content.message_task.status.state = (
+                            message_data.status.state
+                        )
+
+                    # If there's a message in the status update, add it to history
+                    if (
+                        hasattr(message_data.status, "message")
+                        and message_data.status.message
+                        and room_agent_message.message_content
+                        and room_agent_message.message_content.message_task
+                    ):
+                        if (
+                            room_agent_message.message_content.message_task.history
+                            is None
+                        ):
+                            room_agent_message.message_content.message_task.history = []
+                        room_agent_message.message_content.message_task.history.append(
+                            message_data.status.message
+                        )
+
+                update_response = (
+                    await self.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=room_agent_message.message_id,
+                            message=room_agent_message,
+                        )
+                    )
+                )
+
+                if not update_response.success:
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with status update",
+                        update_response.error,
+                    )
+                    return False
+                return True
+
+            elif message_data.kind == "artifact-update":
+                # Handle artifact update responses - add artifacts to task
+                if (
+                    hasattr(message_data, "artifact")
+                    and room_agent_message.message_content
+                    and room_agent_message.message_content.message_task
+                ):
+                    if (
+                        room_agent_message.message_content.message_task.artifacts
+                        is None
+                    ):
+                        room_agent_message.message_content.message_task.artifacts = []
+                    room_agent_message.message_content.message_task.artifacts.append(
+                        message_data.artifact
+                    )
+
+                update_response = (
+                    await self.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=room_agent_message.message_id,
+                            message=room_agent_message,
+                        )
+                    )
+                )
+
+                if not update_response.success:
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent message with artifact update",
+                        update_response.error,
+                    )
+                    return False
+                return True

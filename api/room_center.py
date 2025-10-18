@@ -122,3 +122,13 @@ async def inquiry_room_messages(request: Request):
         room_center_request
     )
     return room_center_response
+
+@router.post("/roomCenter/sendMessage")
+async def send_message(request: Request):
+    room_center = RoomCenter()
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+    message = request_data.get("message")
+    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    room_center_response = await room_center.send_message_to_room(room_center_request)
+    return room_center_response
