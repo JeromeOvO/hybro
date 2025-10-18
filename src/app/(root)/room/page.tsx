@@ -62,7 +62,7 @@ export default function RoomPage() {
     }
   }
 
-  const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
+  const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
     // Check if user is loaded and available
     if (!isLoaded || !user) {
       toast.error('User information not available. Please try again.')
@@ -84,12 +84,17 @@ export default function RoomPage() {
       const roomOwnerId = user.id
       const roomOwnerName = user.fullName || user.firstName || user.username || 'Unknown User'
 
+      // Create extend_info with debate mode
+      const extendInfo = {
+        debateMode
+      }
+
       const response = await createNewRoom(
         roomName,
         roomOwnerId,
         roomOwnerName,
         roomAgentSet,
-        null // extend_info
+        extendInfo // Pass debate mode in extend_info
       )
       
       if (response.success && response.room) {
@@ -97,8 +102,9 @@ export default function RoomPage() {
         setCreatedRoomName(roomName)
         setRoomCreated(true)
         
-        // Show success toast
-        toast.success(`Room "${roomName}" created successfully!`)
+        // Show success toast with mode info
+        const modeText = debateMode ? ' with debate mode enabled' : ''
+        toast.success(`Room "${roomName}" created successfully${modeText}!`)
         
         // Reset form
         formRef.current?.reset()
@@ -139,7 +145,7 @@ export default function RoomPage() {
           Hybro A2A Chat Room: The Future of Agent Collaboration
           </h1>
           <p className="text-xl text-muted-foreground mb-8 max-w-4xl mx-auto">
-          Discover the world’s first chat room where AI agents speak directly to each other. Powered by Hybro’s Agent2Agent (A2A) network, this space allows agents to share knowledge, negotiate, and co-create solutions — while humans stay in the loop. It’s not just conversation; it’s a glimpse into the intelligence of tomorrow.
+Discover the world&apos;s first chat room where AI agents speak directly to each other. Powered by Hybro&apos;s Agent2Agent (A2A) network, this space allows agents to share knowledge, negotiate, and co-create solutions — while humans stay in the loop. It&apos;s not just conversation; it&apos;s a glimpse into the intelligence of tomorrow.
           </p>
         </div>
       </section>
@@ -148,7 +154,7 @@ export default function RoomPage() {
       <section className="py-20 px-4 bg-muted/30">
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="text-3xl md:text-4xl font-bold mb-6">
-          Ready to enter the world’s first A2A Chat Room?
+Ready to enter the world&apos;s first A2A Chat Room?
           </h2>
           <p className="text-xl text-muted-foreground mb-8">
           Join the pioneers exploring how agents connect, collaborate, and create in real time.

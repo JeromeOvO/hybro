@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { 
   inquiryRoomSetting,
-  createAndParseUserMessage,
+  SendMessage,
   inquiryRoomMessagesByRoomId,
   updateRoomAgentSet,
-  updateRoomName
+  updateRoomName,
+  updateRoomExtendInfo
 } from '@/lib/api/room'
 import { getAgent } from '@/lib/api/agent'
 
@@ -15,6 +16,8 @@ import type { Room } from '@/lib/types/room'
 import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
 import type { Agent } from '@/lib/types/agent'
+import { useRoomSSE } from './useRoomSSE'
+import type { SSEMessage } from '@/lib/types/sse'
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -30,6 +33,9 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   const [processing, setProcessing] = useState(false)
   const [updatingRoom, setUpdatingRoom] = useState(false)
   
+  // SSE state
+  const [sseEnabled, setSseEnabled] = useState(true)
+  
   // Cache for agent names to avoid repeated API calls
   const agentNameCache = useRef<{ [agentId: string]: string }>({})
   
@@ -44,6 +50,13 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     initializing: false,
     roomId: null
   })
+
+  // Get debate mode from room's extend_info
+  const getDebateMode = useCallback((): boolean => {
+    if (!room?.extend_info) return false
+    const extendInfo = room.extend_info as { debateMode?: boolean }
+    return extendInfo.debateMode || false
+  }, [room])
 
   // Get agent name by agent ID with caching
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
@@ -127,6 +140,97 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     }
   }, [userId, userName, getAgentName])
 
+  // Handle SSE messages - REMOVED loadRoomMessages calls
+  const handleSSEMessage = useCallback(async (sseMessage: SSEMessage) => {
+    console.log('🔔 Room webhook received SSE message:', sseMessage)
+    
+    switch (sseMessage.type) {
+      case 'user_message':
+        console.log('📨 User message received via SSE')
+        // SSE provides the message data, no need to reload
+        if (sseMessage.data?.content) {
+          const newMessage: MessageData = {
+            id: sseMessage.data.message_id || `sse-${Date.now()}`,
+            type: 'user',
+            content: sseMessage.data.content,
+            sender_name: sseMessage.data.user_id || 'User',
+            timestamp: sseMessage.timestamp,
+            user_id: sseMessage.data.user_id,
+          }
+          setMessages(prev => {
+            // Check if message already exists
+            if (prev.some(msg => msg.id === newMessage.id)) {
+              return prev
+            }
+            return [...prev, newMessage]
+          })
+        }
+        break
+        
+      case 'agent_response':
+        console.log('🤖 Agent response received via SSE')
+        // SSE provides the agent response data, no need to reload
+        if (sseMessage.data?.content && sseMessage.data?.agent_id) {
+          const agentName = await getAgentName(sseMessage.data.agent_id)
+          const newMessage: MessageData = {
+            id: sseMessage.data.message_id || `sse-agent-${Date.now()}`,
+            type: 'agent',
+            content: sseMessage.data.content,
+            sender_name: agentName,
+            timestamp: sseMessage.timestamp,
+            agent_id: sseMessage.data.agent_id,
+          }
+          setMessages(prev => {
+            // Check if message already exists
+            if (prev.some(msg => msg.id === newMessage.id)) {
+              return prev
+            }
+            return [...prev, newMessage]
+          })
+        }
+        break
+        
+      case 'processing_status':
+        console.log('⚙️ Processing status update:', sseMessage.data?.status)
+        if (sseMessage.data?.status) {
+          if (sseMessage.data.status === 'processing') {
+            setProcessing(true)
+          } else if (sseMessage.data.status === 'completed') {
+            setProcessing(false)
+            // Don't reload messages, they should come via SSE
+          } else if (sseMessage.data.status === 'failed') {
+            setProcessing(false)
+            toast.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+          }
+        }
+        break
+        
+      case 'error':
+        console.error('❌ SSE error message:', sseMessage.data)
+        toast.error(`Real-time update error: ${sseMessage.data?.details || 'Unknown error'}`)
+        break
+        
+      case 'heartbeat':
+        // Heartbeat message, no action needed
+        console.log('💓 SSE heartbeat received')
+        break
+        
+      default:
+        console.log('❓ Unknown SSE message type:', sseMessage.type)
+    }
+  }, [getAgentName])
+
+  // Initialize SSE connection
+  const {
+    connected: sseConnected,
+    connecting: sseConnecting,
+    error: sseError
+  } = useRoomSSE({
+    roomId,
+    enabled: sseEnabled && !!roomId,
+    onMessage: handleSSEMessage,
+  })
+
   // Load room settings
   const loadRoomSetting = useCallback(async () => {
     try {
@@ -171,8 +275,12 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     }
   }, [roomId, convertApiMessageToMessageData])
 
-  // Update room settings
-  const updateRoomSettings = useCallback(async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
+  // Update room settings - now includes debate mode
+  const updateRoomSettings = useCallback(async (
+    roomName: string, 
+    selectedAgents: { [agentId: string]: Agent }, 
+    debateMode: boolean
+  ) => {
     if (!room) {
       toast.error('Room data not available')
       return false
@@ -188,6 +296,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
           id                     // value: agent id
         ])
       )
+      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode })
 
       // Update room name if changed
       if (roomName !== room.room_name) {
@@ -203,7 +312,23 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         throw new Error(`Failed to update room agents: ${agentResponse.error}`)
       }
 
-      // Reload room settings to get updated data
+      // Update extend_info with debate mode using the new API
+      const currentDebateMode = getDebateMode()
+      if (debateMode !== currentDebateMode) {
+        const updatedExtendInfo = {
+          ...(room.extend_info as object || {}),
+          debateMode
+        }
+        
+        const extendInfoResponse = await updateRoomExtendInfo(roomId, updatedExtendInfo)
+        if (!extendInfoResponse.success) {
+          throw new Error(`Failed to update debate mode: ${extendInfoResponse.error}`)
+        }
+        
+        console.log('✅ Debate mode updated:', debateMode ? 'ENABLED' : 'DISABLED')
+      }
+
+      // Reload room settings to get updated data from backend
       await loadRoomSetting()
       
       toast.success('Room settings updated successfully')
@@ -216,9 +341,9 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, loadRoomSetting])
+  }, [room, roomId, loadRoomSetting, getDebateMode])
 
-  // Complete user message sending workflow
+  // Complete user message sending workflow - using unified SendMessage API
   const sendUserMessage = useCallback(async (userInput: string) => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
@@ -244,13 +369,8 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setSending(true)
       isProcessingRef.current = true
       
-      // Step 1: Send user message to backend
-      const createResponse = await createAndParseUserMessage(
-        roomId,
-        userInput,
-        userId,
-        userName
-      )
+      // Step 1: Send user message to backend using unified SendMessage API
+      const createResponse = await SendMessage(roomId, userInput, userId, userName)
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
@@ -272,9 +392,16 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         throw new Error(`Failed to process user message: ${processResponse.error}`)
       }
       
-      // Step 3: Reload messages to get latest state (including agent replies)
-      // This will replace the optimistic message with the real one and add any agent responses
-      await loadRoomMessages()
+      // Step 3: If SSE is connected, we'll get updates automatically via SSE
+      // If not connected, manually refresh messages as fallback
+      if (!sseConnected) {
+        console.log('📡 SSE not connected, manually refreshing messages as fallback...')
+        await loadRoomMessages()
+      } else {
+        console.log('📡 SSE connected, waiting for real-time updates...')
+        // Remove optimistic message as real message will come via SSE
+        setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
+      }
       
       toast.success('Message sent successfully')
       
@@ -288,8 +415,9 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       
       toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
       
-      // Even if error occurs, try to reload messages to ensure UI sync
+      // On error, reload messages to ensure UI sync (regardless of SSE status)
       try {
+        console.log('🔄 Reloading messages after error to ensure sync...')
         await loadRoomMessages()
       } catch (reloadError) {
         console.error('Failed to reload messages after error:', reloadError)
@@ -301,10 +429,11 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setProcessing(false)
       isProcessingRef.current = false
     }
-  }, [userId, userName, room, roomId, sending, loadRoomMessages])
+  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected])
 
-  // Manually refresh messages
+  // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
+    console.log('🔄 Manual message refresh requested')
     await loadRoomMessages()
   }, [loadRoomMessages])
 
@@ -319,7 +448,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     return Object.entries(room.room_agent_set).map(([name, id]) => ({ id, name }))
   }, [room])
 
-  // Get current room data for form initialization
+  // Get current room data for form initialization - now includes debate mode
   const getRoomFormData = useCallback(() => {
     if (!room) return null
     
@@ -328,9 +457,15 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       roomId: room.room_id || '',
       selectedAgents: room.room_agent_set || {},
       roomOwnerId: room.room_owner_id || '',
-      roomOwnerName: room.room_owner_name || ''
+      roomOwnerName: room.room_owner_name || '',
+      debateMode: getDebateMode()
     }
-  }, [room])
+  }, [room, getDebateMode])
+
+  // Toggle SSE connection
+  const toggleSSE = useCallback(() => {
+    setSseEnabled(prev => !prev)
+  }, [])
 
   // Initialize room data
   useEffect(() => {
@@ -419,6 +554,15 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     processing,
     updatingRoom,
     
+    // SSE State
+    sseConnected,
+    sseConnecting,
+    sseError,
+    sseEnabled,
+    
+    // Debate Mode
+    debateMode: getDebateMode(),
+    
     // Actions
     sendUserMessage,
     updateRoomSettings,
@@ -426,6 +570,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     refreshRoomSetting,
     getAgentList,
     getRoomFormData,
+    toggleSSE,
     
     // Utility functions
     loadRoomSetting,

@@ -41,6 +41,13 @@ export default function RoomChatPage() {
     updateRoomSettings,
     getAgentList,
     getRoomFormData,
+    // SSE state
+    sseConnected,
+    sseConnecting,
+    sseEnabled,
+    toggleSSE,
+    // Debate mode
+    debateMode,
   } = useRoomWebhook({
     roomId,
     userId: user?.id,
@@ -81,9 +88,13 @@ export default function RoomChatPage() {
     console.log('Message send result:', success)
   }
 
-  // Handle room settings update
-  const handleRoomSettingsUpdate = async (roomName: string, selectedAgents: { [agentId: string]: Agent }) => {
-    const success = await updateRoomSettings(roomName, selectedAgents)
+  // Handle room settings update - now includes debate mode
+  const handleRoomSettingsUpdate = async (
+    roomName: string, 
+    selectedAgents: { [agentId: string]: Agent }, 
+    debateMode: boolean
+  ) => {
+    const success = await updateRoomSettings(roomName, selectedAgents, debateMode)
     if (success) {
       setDialogOpen(false) // Close dialog on success
     }
@@ -117,45 +128,82 @@ export default function RoomChatPage() {
         <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 h-full flex flex-col">
           {/* Fixed Header - Never scrolls */}
           <header className="flex-shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
-            <div>
-              <h1 className="text-xl font-semibold">{room.room_name}</h1>
-              <p className="text-sm text-muted-foreground">
-                {processing && (
-                  <span className="text-blue-600">Processing messages...</span>
+            <div className="flex items-center gap-3">
+              <div>
+                <h1 className="text-xl font-semibold">{room.room_name}</h1>
+                {debateMode && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+                    <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
+                      Debate Mode Active
+                    </span>
+                  </div>
                 )}
-              </p>
+              </div>
+              
+              {/* Simple SSE Connection Status - Just a dot */}
+              <div 
+                className={`w-2 h-2 rounded-full transition-colors duration-200 ${
+                  sseConnected ? 'bg-green-500' : 
+                  sseConnecting ? 'bg-yellow-500 animate-pulse' : 
+                  'bg-red-500'
+                }`}
+                title={
+                  sseConnected ? 'Live updates connected' : 
+                  sseConnecting ? 'Connecting to live updates...' : 
+                  'Live updates disconnected'
+                }
+              />
             </div>
             
             {/* Settings Button */}
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="ghost" size="icon">
-                  <Settings className="h-5 w-5 icon-neutral" />
+            <div className="flex items-center gap-2">
+              {/* Optional: Toggle SSE button (can be hidden if not needed) */}
+              {!sseEnabled && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleSSE}
+                  className="text-xs text-muted-foreground"
+                >
+                  Enable Live Updates
                 </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
-                <DialogHeader>
-                  <DialogTitle>Room Settings</DialogTitle>
-                </DialogHeader>
-                <div className="mt-4">
-                  <RoomSettingForm
-                    onSubmit={handleRoomSettingsUpdate}
-                    availableAgents={availableAgents}
-                    loadingAgents={loadingAgents}
-                    agentsError={agentsError}
-                    isSubmitting={updatingRoom}
-                    isEditing={true}
-                    onRetryLoadAgents={loadAvailableAgents}
-                    initialData={roomFormData}
-                  />
-                </div>
-              </DialogContent>
-            </Dialog>
+              )}
+              
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="icon">
+                    <Settings className="h-5 w-5 icon-neutral" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
+                  <DialogHeader>
+                    <DialogTitle>Room Settings</DialogTitle>
+                  </DialogHeader>
+                  <div className="mt-4">
+                    <RoomSettingForm
+                      onSubmit={handleRoomSettingsUpdate}
+                      availableAgents={availableAgents}
+                      loadingAgents={loadingAgents}
+                      agentsError={agentsError}
+                      isSubmitting={updatingRoom}
+                      isEditing={true}
+                      onRetryLoadAgents={loadAvailableAgents}
+                      initialData={roomFormData}
+                    />
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
           </header>
 
           {/* Scrollable Messages Area - Only this area scrolls */}
           <main className="flex-1 overflow-hidden">
-            <RoomMessages messages={messages} loading={false} />
+            <RoomMessages 
+              messages={messages} 
+              loading={false} 
+              processing={processing}
+            />
           </main>
         </div>
       </div>

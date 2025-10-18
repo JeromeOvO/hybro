@@ -13,10 +13,13 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
+import { MessageSquareMore, Users } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
 const formSchema = z.object({
@@ -25,22 +28,24 @@ const formSchema = z.object({
   }).max(50, {
     message: "Room name must be less than 50 characters.",
   }),
+  debateMode: z.boolean(),
 })
 
 interface RoomFormData {
   roomName: string
   selectedAgents: { [agentName: string]: string } // agent_name -> agent_id mapping
+  debateMode?: boolean // Add debateMode to interface
 }
 
 interface RoomSettingFormProps {
-  onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }) => void
+  onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => void
   isSubmitting?: boolean
   availableAgents?: Agent[]
   loadingAgents?: boolean
   agentsError?: string | null
   isEditing?: boolean
   onRetryLoadAgents?: () => void
-  initialData?: RoomFormData | null // Add initial data prop
+  initialData?: RoomFormData | null
 }
 
 export interface RoomSettingFormHandle {
@@ -63,6 +68,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
+      debateMode: false,
     },
   })
 
@@ -71,6 +77,9 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     if (initialData && availableAgents.length > 0) {
       // Set room name
       form.setValue('roomName', initialData.roomName)
+      
+      // Set debate mode from initialData
+      form.setValue('debateMode', initialData.debateMode || false)
       
       // Convert agent mapping back to selected agents
       const agentMapping: { [agentId: string]: Agent } = {}
@@ -87,6 +96,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       setSelectedAgents(agentMapping)
       console.log('Form initialized with data:', {
         roomName: initialData.roomName,
+        debateMode: initialData.debateMode || false,
         selectedAgents: agentMapping,
         originalAgentSet: initialData.selectedAgents
       })
@@ -109,7 +119,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   }
 
   function handleSubmit(values: z.infer<typeof formSchema>) {
-    onSubmit(values.roomName, selectedAgents)
+    onSubmit(values.roomName, selectedAgents, values.debateMode)
   }
 
   // Reset form function
@@ -146,8 +156,39 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
 
         <Separator />
 
+        {/* Debate Mode Switch */}
+        <FormField
+          control={form.control}
+          name="debateMode"
+          render={({ field }) => (
+            <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 bg-card">
+              <div className="space-y-0.5 flex-1">
+                <FormLabel className="text-base flex items-center gap-2">
+                  <MessageSquareMore className="h-4 w-4" />
+                  Debate Mode
+                </FormLabel>
+                <FormDescription className="text-sm">
+                  Enable debate mode for enhanced agent discussions and collaborative problem-solving
+                </FormDescription>
+              </div>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+
+        <Separator />
+
         {/* Agent Selection */}
         <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            <FormLabel className="text-base">Select Agents</FormLabel>
+          </div>
           <AgentSelector
             selectedAgents={selectedAgents}
             onAgentAdd={handleAddAgent}
@@ -164,13 +205,13 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
         {/* Submit Button */}
         {!isEditing ? (
           <Button 
-          type="submit" 
-          variant="outline"
-          className="w-full"
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? "Creating Room..." : "Create Room"}
-        </Button>
+            type="submit" 
+            variant="outline"
+            className="w-full"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? "Creating Room..." : "Create Room"}
+          </Button>
         ) : (
           <Button 
             type="submit" 
