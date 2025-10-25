@@ -181,16 +181,9 @@ class MongoDB:
         """
         Get all agents
         """
-        agents = []
         cursor = self.agents_collection.find()
-        try:
-            async for agent in cursor:
-                agents.append(Agent(**agent))
-        finally:
-            # Ensure cursor is closed
-            if cursor:
-                cursor.close()
-        return agents
+        results = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in results]
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -208,15 +201,12 @@ class MongoDB:
         if query is None:
             query = {}
 
-        results = self.agents_collection.find(query)
+        cursor = self.agents_collection.find(query)
         if limit > 0:
-            results = results.limit(limit)
+            cursor = cursor.limit(limit)
 
-        agents = []
-        async for agent in results:
-            agents.append(Agent(**agent))
-
-        return agents
+        results = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in results]
 
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
@@ -331,31 +321,25 @@ class MongoDB:
         """
         Get all task sessions by user_name
         """
-        results = self.task_sessions_collection.find({"user_name": user_name})
-        task_sessions = []
-        async for task_session in results:
-            task_sessions.append(TaskSession(**task_session))
-        return task_sessions
+        cursor = self.task_sessions_collection.find({"user_name": user_name})
+        results = await cursor.to_list(length=None)
+        return [TaskSession(**task_session) for task_session in results]
 
     async def get_all_task_sessions(self) -> list[TaskSession]:
         """
         Get all task sessions
         """
-        results = self.task_sessions_collection.find()
-        task_sessions = []
-        async for task_session in results:
-            task_sessions.append(TaskSession(**task_session))
-        return task_sessions
+        cursor = self.task_sessions_collection.find()
+        results = await cursor.to_list(length=None)
+        return [TaskSession(**task_session) for task_session in results]
 
     async def get_base_tasks_by_session_id(self, session_id: str) -> list[BaseTask]:
         """
         Get all base tasks by session_id
         """
-        results = self.base_tasks_collection.find({"session_id": session_id})
-        base_tasks = []
-        async for base_task in results:
-            base_tasks.append(BaseTask(**base_task))
-        return base_tasks
+        cursor = self.base_tasks_collection.find({"session_id": session_id})
+        results = await cursor.to_list(length=None)
+        return [BaseTask(**base_task) for base_task in results]
 
     async def get_meta_tasks_by_parent_task_id(
         self, parent_task_id: str
@@ -363,11 +347,9 @@ class MongoDB:
         """
         Get all meta tasks by parent_task_id
         """
-        results = self.meta_tasks_collection.find({"parent_task_id": parent_task_id})
-        meta_tasks = []
-        async for meta_task in results:
-            meta_tasks.append(MetaTask(**meta_task))
-        return meta_tasks
+        cursor = self.meta_tasks_collection.find({"parent_task_id": parent_task_id})
+        results = await cursor.to_list(length=None)
+        return [MetaTask(**meta_task) for meta_task in results]
 
     async def update_base_task_by_task_id(
         self, task_id: str, base_task: BaseTask
@@ -466,11 +448,9 @@ class MongoDB:
         """
         Get rooms by room_owner_id
         """
-        results = self.rooms_collection.find({"room_owner_id": room_owner_id})
-        rooms = []
-        async for room in results:
-            rooms.append(Room(**room))
-        return rooms
+        cursor = self.rooms_collection.find({"room_owner_id": room_owner_id})
+        results = await cursor.to_list(length=None)
+        return [Room(**room) for room in results]
 
     async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
         """
@@ -505,11 +485,9 @@ class MongoDB:
         """
         Get room user messages by room_id
         """
-        results = self.room_user_messages_collection.find({"room_id": room_id})
-        room_user_messages = []
-        async for room_user_message in results:
-            room_user_messages.append(RoomUserMessage(**room_user_message))
-        return room_user_messages
+        cursor = self.room_user_messages_collection.find({"room_id": room_id})
+        results = await cursor.to_list(length=None)
+        return [RoomUserMessage(**room_user_message) for room_user_message in results]
 
     async def get_room_user_message_by_message_id(
         self, message_id: str
@@ -559,11 +537,11 @@ class MongoDB:
         """
         Get room agent messages by room_id
         """
-        results = self.room_agent_messages_collection.find({"room_id": room_id})
-        room_agent_messages = []
-        async for room_agent_message in results:
-            room_agent_messages.append(RoomAgentMessage(**room_agent_message))
-        return room_agent_messages
+        cursor = self.room_agent_messages_collection.find({"room_id": room_id})
+        results = await cursor.to_list(length=None)
+        return [
+            RoomAgentMessage(**room_agent_message) for room_agent_message in results
+        ]
 
     async def get_room_agent_message_by_message_id(
         self, message_id: str
@@ -582,13 +560,13 @@ class MongoDB:
         """
         Get room agent messages by related_message_id
         """
-        results = self.room_agent_messages_collection.find(
+        cursor = self.room_agent_messages_collection.find(
             {"related_message_id": related_message_id}
         )
-        room_agent_messages = []
-        async for room_agent_message in results:
-            room_agent_messages.append(RoomAgentMessage(**room_agent_message))
-        return room_agent_messages
+        results = await cursor.to_list(length=None)
+        return [
+            RoomAgentMessage(**room_agent_message) for room_agent_message in results
+        ]
 
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
