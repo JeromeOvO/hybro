@@ -22,7 +22,15 @@ class MongoDB:
 
     async def connect(self):
         try:
-            self.client = AsyncIOMotorClient(os.getenv("MONGODB_URL"))
+            self.client = AsyncIOMotorClient(
+                os.getenv("MONGODB_URL"),
+                maxPoolSize=50,  # Maximum number of connections in the pool
+                minPoolSize=10,  # Minimum number of connections to maintain
+                maxIdleTimeMS=30000,  # Close connections idle for 30 seconds
+                serverSelectionTimeoutMS=5000,  # Timeout for server selection
+                connectTimeoutMS=5000,  # Timeout for initial connection
+                socketTimeoutMS=30000,  # Timeout for socket operations
+            )
             # Verify connection works
             await self.client.admin.command("ping")
             print("Connected to MongoDB successfully")
@@ -91,7 +99,6 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.chat_contexts
-
 
     @property
     def rooms_collection(self):
@@ -174,10 +181,15 @@ class MongoDB:
         """
         Get all agents
         """
-        results = self.agents_collection.find()
         agents = []
-        async for agent in results:
-            agents.append(Agent(**agent))
+        cursor = self.agents_collection.find()
+        try:
+            async for agent in cursor:
+                agents.append(Agent(**agent))
+        finally:
+            # Ensure cursor is closed
+            if cursor:
+                cursor.close()
         return agents
 
     async def get_agents_with_conditions(
@@ -464,25 +476,32 @@ class MongoDB:
         """
         Update a room by room_id
         """
-        result = await self.rooms_collection.update_one({"room_id": room_id}, {"$set": room.model_dump(exclude_unset=True, mode="json")})
+        result = await self.rooms_collection.update_one(
+            {"room_id": room_id},
+            {"$set": room.model_dump(exclude_unset=True, mode="json")},
+        )
         return result.modified_count >= 0
-    
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
         """
         result = await self.rooms_collection.delete_one({"room_id": room_id})
         return result.deleted_count > 0
-    
+
     # room user message management
     async def add_room_user_message(self, room_user_message: RoomUserMessage) -> str:
         """
         Add a room user message to the database
         """
-        result = await self.room_user_messages_collection.insert_one(room_user_message.model_dump(mode="json"))
+        result = await self.room_user_messages_collection.insert_one(
+            room_user_message.model_dump(mode="json")
+        )
         return str(result.inserted_id)
-    
-    async def get_room_user_messages_by_room_id(self, room_id: str) -> list[RoomUserMessage]:
+
+    async def get_room_user_messages_by_room_id(
+        self, room_id: str
+    ) -> list[RoomUserMessage]:
         """
         Get room user messages by room_id
         """
@@ -491,37 +510,52 @@ class MongoDB:
         async for room_user_message in results:
             room_user_messages.append(RoomUserMessage(**room_user_message))
         return room_user_messages
-    
-    async def get_room_user_message_by_message_id(self, message_id: str) -> RoomUserMessage | None:
+
+    async def get_room_user_message_by_message_id(
+        self, message_id: str
+    ) -> RoomUserMessage | None:
         """
         Get a room user message by message_id
         """
-        result = await self.room_user_messages_collection.find_one({"message_id": message_id})
+        result = await self.room_user_messages_collection.find_one(
+            {"message_id": message_id}
+        )
         return RoomUserMessage(**result) if result else None
-    
-    async def update_room_user_message_by_message_id(self, message_id: str, room_user_message: RoomUserMessage) -> bool:
+
+    async def update_room_user_message_by_message_id(
+        self, message_id: str, room_user_message: RoomUserMessage
+    ) -> bool:
         """
         Update a room user message by message_id
         """
-        result = await self.room_user_messages_collection.update_one({"message_id": message_id}, {"$set": room_user_message.model_dump(exclude_unset=True, mode="json")})
+        result = await self.room_user_messages_collection.update_one(
+            {"message_id": message_id},
+            {"$set": room_user_message.model_dump(exclude_unset=True, mode="json")},
+        )
         return result.modified_count > 0
-    
+
     async def delete_room_user_message_by_message_id(self, message_id: str) -> bool:
         """
         Delete a room user message by message_id
         """
-        result = await self.room_user_messages_collection.delete_one({"message_id": message_id})
+        result = await self.room_user_messages_collection.delete_one(
+            {"message_id": message_id}
+        )
         return result.deleted_count > 0
-    
+
     # room agent message management
     async def add_room_agent_message(self, room_agent_message: RoomAgentMessage) -> str:
         """
         Add a room agent message to the database
         """
-        result = await self.room_agent_messages_collection.insert_one(room_agent_message.model_dump(mode="json"))
+        result = await self.room_agent_messages_collection.insert_one(
+            room_agent_message.model_dump(mode="json")
+        )
         return str(result.inserted_id)
-    
-    async def get_room_agent_messages_by_room_id(self, room_id: str) -> list[RoomAgentMessage]:
+
+    async def get_room_agent_messages_by_room_id(
+        self, room_id: str
+    ) -> list[RoomAgentMessage]:
         """
         Get room agent messages by room_id
         """
@@ -530,36 +564,51 @@ class MongoDB:
         async for room_agent_message in results:
             room_agent_messages.append(RoomAgentMessage(**room_agent_message))
         return room_agent_messages
-    
-    async def get_room_agent_message_by_message_id(self, message_id: str) -> RoomAgentMessage | None:
+
+    async def get_room_agent_message_by_message_id(
+        self, message_id: str
+    ) -> RoomAgentMessage | None:
         """
         Get a room agent message by message_id
         """
-        result = await self.room_agent_messages_collection.find_one({"message_id": message_id})
+        result = await self.room_agent_messages_collection.find_one(
+            {"message_id": message_id}
+        )
         return RoomAgentMessage(**result) if result else None
 
-    async def get_room_agent_messages_by_related_message_id(self, related_message_id: str) -> list[RoomAgentMessage]:
+    async def get_room_agent_messages_by_related_message_id(
+        self, related_message_id: str
+    ) -> list[RoomAgentMessage]:
         """
         Get room agent messages by related_message_id
         """
-        results = self.room_agent_messages_collection.find({"related_message_id": related_message_id})
+        results = self.room_agent_messages_collection.find(
+            {"related_message_id": related_message_id}
+        )
         room_agent_messages = []
         async for room_agent_message in results:
             room_agent_messages.append(RoomAgentMessage(**room_agent_message))
         return room_agent_messages
-    
-    async def update_room_agent_message_by_message_id(self, message_id: str, room_agent_message: RoomAgentMessage) -> bool:
+
+    async def update_room_agent_message_by_message_id(
+        self, message_id: str, room_agent_message: RoomAgentMessage
+    ) -> bool:
         """
         Update a room agent message by message_id
         """
-        result = await self.room_agent_messages_collection.update_one({"message_id": message_id}, {"$set": room_agent_message.model_dump(exclude_unset=True, mode="json")})
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id},
+            {"$set": room_agent_message.model_dump(exclude_unset=True, mode="json")},
+        )
         return result.modified_count > 0
-    
+
     async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
         """
         Delete a room agent message by message_id
         """
-        result = await self.room_agent_messages_collection.delete_one({"message_id": message_id})
+        result = await self.room_agent_messages_collection.delete_one(
+            {"message_id": message_id}
+        )
         return result.deleted_count > 0
 
     # room memory management
@@ -567,7 +616,9 @@ class MongoDB:
         """
         Add a room memory to the database
         """
-        result = await self.room_memories_collection.insert_one(room_memory.model_dump(mode="json"))
+        result = await self.room_memories_collection.insert_one(
+            room_memory.model_dump(mode="json")
+        )
         return str(result.inserted_id)
 
     async def get_room_memory_by_memory_id(self, memory_id: str) -> RoomMemory | None:
@@ -584,27 +635,39 @@ class MongoDB:
         result = await self.room_memories_collection.find_one({"room_id": room_id})
         return RoomMemory(**result) if result else None
 
-    async def update_room_memory_by_memory_id(self, memory_id: str, room_memory: RoomMemory) -> bool:
+    async def update_room_memory_by_memory_id(
+        self, memory_id: str, room_memory: RoomMemory
+    ) -> bool:
         """
         Update a room memory by memory_id
         """
-        result = await self.room_memories_collection.update_one({"memory_id": memory_id}, {"$set": room_memory.model_dump(exclude_unset=True, mode="json")})
+        result = await self.room_memories_collection.update_one(
+            {"memory_id": memory_id},
+            {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
+        )
         return result.modified_count > 0
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
         """
         Delete a room memory by memory_id
         """
-        result = await self.room_memories_collection.delete_one({"memory_id": memory_id})
+        result = await self.room_memories_collection.delete_one(
+            {"memory_id": memory_id}
+        )
         return result.deleted_count > 0
 
-    async def update_room_memory_by_room_id(self, room_id: str, room_memory: RoomMemory) -> bool:
+    async def update_room_memory_by_room_id(
+        self, room_id: str, room_memory: RoomMemory
+    ) -> bool:
         """
         Update a room memory by room_id
         """
-        result = await self.room_memories_collection.update_one({"room_id": room_id}, {"$set": room_memory.model_dump(exclude_unset=True, mode="json")})
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
+        )
         return result.modified_count > 0
-    
+
     async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room memory by room_id
@@ -612,11 +675,14 @@ class MongoDB:
         result = await self.room_memories_collection.delete_one({"room_id": room_id})
         return result.deleted_count > 0
 
+
 mongodb = MongoDB()
+
 
 async def get_db() -> AsyncIOMotorDatabase:
     """Return module-level database"""
     return mongodb.db
+
 
 # Create context manager for mongo connection
 @asynccontextmanager
@@ -628,15 +694,15 @@ async def mongodb_connection(transaction: bool = False):
             # use db
     """
     # Startup: connect to MongoDB
-    mongodb_instance = MongoDB()
-    await mongodb_instance.connect()
+    if not mongodb.client:
+        await mongodb.connect()
+
     try:
         if transaction:
-            async with await mongodb_instance.client.start_session() as session:
+            async with await mongodb.client.start_session() as session:
                 async with session.start_transaction():
-                    yield mongodb_instance.db
+                    yield mongodb.db
         else:
-            yield mongodb_instance.db
+            yield mongodb.db
     finally:
-        # Shutdown: close MongoDB connection
-        await mongodb_instance.close_database_connection()
+        pass
