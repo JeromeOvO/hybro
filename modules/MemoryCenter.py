@@ -1,11 +1,11 @@
 from models.request import ChatMemoryRequest
 from models.response import ChatMemoryResponse
-from services.memory_service import ChatMemoryService
+from services.memory_service import chat_memory_service
 
 
 class MemoryCenter:
     def __init__(self):
-        self.chat_memory_service = ChatMemoryService()
+        self.chat_memory_service = chat_memory_service  # Use singleton
 
     async def add_chat_context(self, request: ChatMemoryRequest) -> ChatMemoryResponse:
         """

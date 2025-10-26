@@ -12,18 +12,18 @@ from models.error import (
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from services.a2a_service import A2AService
-from services.database_service import DatabaseService
-from services.openai_service import OpenAIService
+from services.a2a_service import a2a_service
+from services.database_service import db_service
+from services.openai_service import openai_service
 
 logger = get_logger(__name__)
 
 
 class AgentService:
     def __init__(self):
-        self.database_service = DatabaseService()
-        self.openai_service = OpenAIService()
-        self.a2a_service = A2AService()
+        self.database_service = db_service  # Use singleton
+        self.openai_service = openai_service  # Use singleton
+        self.a2a_service = a2a_service  # Use singleton
 
     async def get_agent_card_from_url(
         self, request: AgentCenterRequest

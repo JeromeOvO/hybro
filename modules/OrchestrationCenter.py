@@ -1,10 +1,9 @@
 import json
 import uuid
-from typing import Any
 from collections import deque
+from typing import Any
 
-
-from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart, TaskStatusUpdateEvent, TaskArtifactUpdateEvent, Task
+from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
 
 from common.utils.logger import get_logger
 from models.error import (
@@ -20,21 +19,19 @@ from models.request import (
     OrchestrationCenterRequest,
     RoomCenterAgentMessageRequest,
     RoomCenterMemoryRequest,
-    RoomCenterUserMessageRequest,
     TaskCenterRequest,
 )
-from models.room import RoomAgentMessage
 from models.response import OrchestrationCenterResponse
 from models.task import MetaTask, TaskDefaultValue
-from services.a2a_service import A2AService
-from services.agent_service import AgentService
-from services.database_service import DatabaseService
-from services.memory_service import ChatMemoryService
-from services.openai_service import OpenAIService
-from services.room_services import RoomMemoryService, RoomServices
-from services.task_service import TaskService
+from services.a2a_service import a2a_service
+from services.agent_service import agent_service
+from services.database_service import db_service
 from services.debate_service import debate_service
+from services.memory_service import chat_memory_service, room_memory_service
+from services.openai_service import openai_service
+from services.room_services import room_services
 from services.sse_services import sse_manager
+from services.task_service import task_service
 
 logger = get_logger(__name__)
 
@@ -104,16 +101,16 @@ class OrchestrationCenter:
         agent service for agent management, and A2A service for agent communication.
         """
 
-        self.task_service = TaskService()
-        self.openai_service = OpenAIService()
-        self.agent_service = AgentService()
-        self.a2a_service = A2AService()
-        self.chat_memory_service = ChatMemoryService()
-        self.room_services = RoomServices()
-        self.room_memory_service = RoomMemoryService()
-        self.database_service = DatabaseService()
-        self.debate_service = debate_service
-        self.sse_manager = sse_manager
+        self.task_service = task_service  # Use singleton
+        self.openai_service = openai_service  # Use singleton
+        self.agent_service = agent_service  # Use singleton
+        self.a2a_service = a2a_service  # Use singleton
+        self.chat_memory_service = chat_memory_service  # Use singleton
+        self.room_services = room_services  # Use singleton
+        self.room_memory_service = room_memory_service  # Use singleton
+        self.database_service = db_service  # Use singleton
+        self.debate_service = debate_service  # Use singleton
+        self.sse_manager = sse_manager  # Use singleton
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1338,7 +1335,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 messageId=str(uuid.uuid4()),
                 parts=[Part(root=TextPart(text=summary_response))],
             )
-        )   
+        )
 
         base_task.task.status = TaskStatus(state=TaskState.completed)
 
@@ -1357,7 +1354,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error="Failed to update base task",
                 status_code=500,
             )
-
 
     # room services
     async def process_room_user_message(
@@ -1422,30 +1418,42 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             )
 
         # initialize message queue
-        message_queue = deque(query_response.message_list) if query_response.message_list is not None else deque()
+        message_queue = (
+            deque(query_response.message_list)
+            if query_response.message_list is not None
+            else deque()
+        )
         message_list = []
 
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
             message_list.append(current_message)
 
-
             if current_message.agent_id is None:
-                user_input = current_message.message_content.message_task.history[0].parts[0].root.text
-                matched_agents = await self.database_service.query_similar_agents(user_input)
+                user_input = (
+                    current_message.message_content.message_task.history[0]
+                    .parts[0]
+                    .root.text
+                )
+                matched_agents = await self.database_service.query_similar_agents(
+                    user_input
+                )
                 if len(matched_agents) > 0:
-                    current_message.agent_id = matched_agents[0].agent_id   
+                    current_message.agent_id = matched_agents[0].agent_id
                 else:
                     return OrchestrationCenterResponse(
                         success=False,
                         error="Agent id is not found",
                         status_code=500,
                     )
-                
+
                 agent = matched_agents[0]
                 current_message.agent_id = agent.agent_id
-                update_success = await self.database_service.update_room_agent_message_by_message_id(
-                    message_id=current_message.message_id, room_agent_message=current_message
+                update_success = (
+                    await self.database_service.update_room_agent_message_by_message_id(
+                        message_id=current_message.message_id,
+                        room_agent_message=current_message,
+                    )
                 )
                 if not update_success:
                     return OrchestrationCenterResponse(
@@ -1453,7 +1461,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         error="Failed to update agent message",
                         status_code=500,
                     )
-
 
             process_response = await self.room_services.process_agent_message(
                 RoomCenterAgentMessageRequest(message=current_message),
@@ -1468,38 +1475,63 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             message_data = await self.a2a_service.process_a2a_response(
                 process_response.a2a_response
             )
-            message_data = await self.room_services.handle_a2a_response_for_room(current_message, message_data)
+            message_data = await self.room_services.handle_a2a_response_for_room(
+                current_message, message_data
+            )
             if not message_data:
                 return OrchestrationCenterResponse(
                     success=False,
                     error="Failed to handle a2a response",
                     status_code=500,
                 )
-            
 
-            current_message = await self.database_service.get_room_agent_message_by_message_id(current_message.message_id)
+            current_message = (
+                await self.database_service.get_room_agent_message_by_message_id(
+                    current_message.message_id
+                )
+            )
             if current_message is None:
                 return OrchestrationCenterResponse(
                     success=False,
                     error="Agent message not found",
                     status_code=500,
                 )
-            logger.info("OrchestrationCenter: Sending agent response to room %s for message %s", room_id, current_message.message_id)
-            await self.sse_manager.send_agent_response(room_id, current_message.message_id, current_message.agent_id, current_message.message_content.message_task.history[-1].parts[0].root.text)
-            
+            logger.info(
+                "OrchestrationCenter: Sending agent response to room %s for message %s",
+                room_id,
+                current_message.message_id,
+            )
+            await self.sse_manager.send_agent_response(
+                room_id,
+                current_message.message_id,
+                current_message.agent_id,
+                current_message.message_content.message_task.history[-1]
+                .parts[0]
+                .root.text,
+            )
+
             next_messages = await self.database_service.get_room_agent_messages_by_related_message_id(
                 current_message.message_id
             )
             for next_message in next_messages:
-                new_agent_message = await self.debate_service.inject_short_debate_for_agent_message(next_message)
+                new_agent_message = (
+                    await self.debate_service.inject_short_debate_for_agent_message(
+                        next_message
+                    )
+                )
                 if new_agent_message is None:
                     continue
                 message_queue.append(new_agent_message)
 
-        
-        logger.info("OrchestrationCenter: Sending processing status to room %s for message %s", room_id, room_user_message_id)
-        await self.sse_manager.send_processing_status(room_id, "completed", room_user_message_id)
-        
+        logger.info(
+            "OrchestrationCenter: Sending processing status to room %s for message %s",
+            room_id,
+            room_user_message_id,
+        )
+        await self.sse_manager.send_processing_status(
+            room_id, "completed", room_user_message_id
+        )
+
         # update room memory
         new_room_memory_content_text = (
             await self.openai_service.generate_room_memory_content(
