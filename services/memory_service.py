@@ -1,14 +1,13 @@
 from datetime import datetime
 from uuid import uuid4
 
+from common.utils.logger import get_logger
 from models.error import SessionIdRequiredError
 from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
 from models.response import ChatMemoryResponse, RoomCenterMemoryResponse
 from services.database_service import db_service
-from services.openai_service import OpenAIService
-
-from common.utils.logger import get_logger
+from services.openai_service import openai_service
 
 logger = get_logger(__name__)
 
@@ -16,8 +15,8 @@ logger = get_logger(__name__)
 # Chat Memory Service Manager
 class ChatMemoryService:
     def __init__(self):
-        self.database_service = db_service
-        self.openai_service = OpenAIService()
+        self.database_service = db_service  # Use singleton
+        self.openai_service = openai_service  # Use singleton
 
     # Chat Contexts
     async def create_chat_context(
@@ -198,8 +197,8 @@ class ChatMemoryService:
 
 class RoomMemoryService:
     def __init__(self):
-        self.database_service = db_service
-        self.openai_service = OpenAIService()
+        self.database_service = db_service  # Use singleton
+        self.openai_service = openai_service  # Use singleton
 
     async def create_room_memory(
         self, request: RoomCenterMemoryRequest
@@ -430,7 +429,7 @@ class RoomMemoryService:
                 error=str(e),
                 status_code=500,
             )
-    
+
     async def initialize_or_update_room_memory(
         self, request: RoomCenterMemoryRequest
     ) -> RoomCenterMemoryResponse:
@@ -438,20 +437,16 @@ class RoomMemoryService:
         Initialize a room memory by room_id
         """
 
-
         room_id = request.room_id
         new_message = request.memory_content
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
 
-
-        if not room_memory: 
+        if not room_memory:
             # Initialize room memory
             room_memory = RoomMemory(
                 room_id=room_id,
                 memory_id=str(uuid4()),
-                memory_content=MemoryContent(
-                    memory_text=new_message
-                ),
+                memory_content=MemoryContent(memory_text=new_message),
             )
             add_room_memory_success = await self.database_service.add_room_memory(
                 room_memory
@@ -475,10 +470,11 @@ class RoomMemoryService:
             if new_message:
                 user_text = new_message
             # Add clear labels and separation to avoid blending
-            addition = f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
+            addition = (
+                f"\n\n[User Message at {datetime.now().isoformat()}]\n{user_text}\n"
+            )
             new_room_memory_content_text = f"{prev_memory_content}{addition}".strip()
-            
-            
+
             room_memory_response = (
                 await self.database_service.update_room_memory_by_room_id(
                     room_id,
@@ -509,3 +505,8 @@ class RoomMemoryService:
             error=None,
             status_code=200,
         )
+
+
+# Singleton exports
+chat_memory_service = ChatMemoryService()
+room_memory_service = RoomMemoryService()

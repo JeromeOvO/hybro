@@ -11,16 +11,16 @@ from models.error import (
 from models.request import TaskCenterRequest
 from models.response import TaskCenterResponse
 from models.task import BaseTask, MetaTask, TaskDefaultValue, TaskSession
-from services.agent_service import AgentService
-from services.database_service import DatabaseService
-from services.openai_service import OpenAIService
+from services.agent_service import agent_service
+from services.database_service import db_service
+from services.openai_service import openai_service
 
 
 class TaskService:
     def __init__(self):
-        self.openai_service = OpenAIService()
-        self.database_service = DatabaseService()
-        self.agent_service = AgentService()
+        self.openai_service = openai_service  # Use singleton
+        self.database_service = db_service  # Use singleton
+        self.agent_service = agent_service  # Use singleton
 
     async def create_a2a_message(self, role: Role, text: str) -> Message:
         return Message(messageId=str(uuid4()), role=role, parts=[TextPart(text=text)])

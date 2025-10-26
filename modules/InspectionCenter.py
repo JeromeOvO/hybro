@@ -5,8 +5,8 @@ from common.utils.logger import get_logger
 from models.error import AgentNotFoundError
 from models.request import InspectionCenterRequest
 from models.response import InspectionCenterResponse
-from services.a2a_service import A2AService
-from services.agent_service import AgentService
+from services.a2a_service import a2a_service
+from services.agent_service import agent_service
 
 logger = get_logger(__name__)
 
@@ -74,8 +74,8 @@ class InspectionCenter:
         Sets up the agent service for validation logic and A2A service
         for protocol testing and communication capabilities.
         """
-        self.agent_service = AgentService()
-        self.a2a_service = A2AService()
+        self.agent_service = agent_service  # Use singleton
+        self.a2a_service = a2a_service  # Use singleton
 
     async def inspect_agent_card(
         self, request: InspectionCenterRequest

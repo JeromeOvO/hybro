@@ -1,14 +1,15 @@
 from fastapi import APIRouter, HTTPException, Request
-from modules.InspectionCenter import InspectionCenter
-from models.request import InspectionCenterRequest
 from loguru import logger
 
+from models.request import InspectionCenterRequest
+from modules.InspectionCenter import InspectionCenter
+
 router = APIRouter()
+inspection_center = InspectionCenter()  # Singleton instance
 
 
 @router.post("/inspectionCenter/inspectAgentCard")
 async def inspect_agent(request: Request):
-    inspection_center = InspectionCenter()
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
     if not agent_url:
@@ -23,7 +24,6 @@ async def inspect_agent(request: Request):
 
 @router.post("/inspectionCenter/inspectA2AConnection")
 async def inspect_a2a_connection(request: Request):
-    inspection_center = InspectionCenter()
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
     if not agent_url:

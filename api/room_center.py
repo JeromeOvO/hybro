@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
+
 from models.request import (
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
@@ -7,11 +8,11 @@ from models.request import (
 from modules.RoomCenter import RoomCenter
 
 router = APIRouter()
+room_center = RoomCenter()  # Singleton instance
 
 
 @router.post("/roomCenter/createNewRoom")
 async def create_new_room(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_name = request_data.get("room_name")
     room_owner_id = request_data.get("room_owner_id")
@@ -31,7 +32,6 @@ async def create_new_room(request: Request):
 
 @router.post("/roomCenter/inquiryRoomSetting")
 async def inquiry_room_setting(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_center_request = RoomCenterRoomSettingRequest(room_id=room_id)
@@ -41,7 +41,6 @@ async def inquiry_room_setting(request: Request):
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
 async def inquiry_rooms_by_room_owner_id(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_owner_id = request_data.get("room_owner_id")
     room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
@@ -53,7 +52,6 @@ async def inquiry_rooms_by_room_owner_id(request: Request):
 
 @router.post("/roomCenter/updateRoomAgentSet")
 async def update_room_agent_set(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_agent_set = request_data.get("room_agent_set")
@@ -66,7 +64,6 @@ async def update_room_agent_set(request: Request):
 
 @router.post("/roomCenter/updateRoomName")
 async def update_room_name(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_name = request_data.get("room_name")
@@ -79,17 +76,20 @@ async def update_room_name(request: Request):
 
 @router.post("/roomCenter/updateRoomExtendInfo")
 async def update_room_extend_info(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     extend_info = request_data.get("extend_info")
-    room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, extend_info=extend_info)
-    room_center_response = await room_center.update_room_extend_info(room_center_request)
+    room_center_request = RoomCenterRoomSettingRequest(
+        room_id=room_id, extend_info=extend_info
+    )
+    room_center_response = await room_center.update_room_extend_info(
+        room_center_request
+    )
     return room_center_response
+
 
 @router.post("/roomCenter/createAndParseUserMessage")
 async def create_and_parse_user_message(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
@@ -99,9 +99,9 @@ async def create_and_parse_user_message(request: Request):
     )
     return room_center_response
 
+
 @router.post("/roomCenter/createAndParseUserMessageWithDebate")
 async def create_and_parse_user_message_with_debate(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
@@ -114,7 +114,6 @@ async def create_and_parse_user_message_with_debate(request: Request):
 
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")
 async def inquiry_room_messages(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
@@ -123,9 +122,9 @@ async def inquiry_room_messages(request: Request):
     )
     return room_center_response
 
+
 @router.post("/roomCenter/sendMessage")
 async def send_message(request: Request):
-    room_center = RoomCenter()
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
