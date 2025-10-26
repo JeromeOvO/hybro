@@ -128,6 +128,77 @@ class SSEManager:
         }
         await self.broadcast_to_room(room_id, "agent_response", data)
 
+    async def send_agent_token(self, room_id: str, message_id: str, agent_id: str, token: str):
+        """
+        Send incremental token from agent streaming response.
+        
+        This is for real-time token-by-token streaming from agents.
+        Tokens are sent as they arrive from the agent, enabling
+        real-time display in the frontend.
+        
+        Args:
+            room_id: The room ID
+            message_id: The message being generated
+            agent_id: The agent sending the token
+            token: The incremental text token (word, character, etc.)
+        """
+        data = {
+            "message_id": message_id,
+            "agent_id": agent_id,
+            "token": token,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.broadcast_to_room(room_id, "agent_token", data)
+
+    async def send_error(self, room_id: str, error: str, message_id: str = None):
+        """
+        Send error event to room.
+        
+        Args:
+            room_id: The room ID
+            error: Error message
+            message_id: Optional message ID related to the error
+        """
+        data = {
+            "error": error,
+            "message_id": message_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.broadcast_to_room(room_id, "error", data)
+
+    async def send_artifact_update(
+        self, 
+        room_id: str, 
+        message_id: str, 
+        agent_id: str, 
+        artifact: Any,
+        append: bool = False,
+        last_chunk: bool = False
+    ):
+        """
+        Send artifact update event from A2A agent streaming.
+        
+        This is used when agents stream artifacts (files, data, documents)
+        incrementally during task execution. Following A2A protocol section 7.2.3.
+        
+        Args:
+            room_id: The room ID
+            message_id: The message being generated
+            agent_id: The agent sending the artifact
+            artifact: The artifact data (dict from A2A TaskArtifactUpdateEvent)
+            append: Whether to append to existing artifact
+            last_chunk: Whether this is the final chunk
+        """
+        data = {
+            "message_id": message_id,
+            "agent_id": agent_id,
+            "artifact": artifact,
+            "append": append,
+            "last_chunk": last_chunk,
+            "timestamp": datetime.now().isoformat()
+        }
+        await self.broadcast_to_room(room_id, "artifact_update", data)
+
     async def send_processing_status(self, room_id: str, status: str, message_id: str = None, details: str = None):
         """send processing status"""
         data = {

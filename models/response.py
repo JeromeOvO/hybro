@@ -3,6 +3,7 @@ from typing import Any, Generic, Optional, TypeVar
 
 from a2a.types import (
     AgentCard,
+    Message,
     SendMessageResponse,
     SendStreamingMessageResponse,
     Task,
@@ -192,6 +193,7 @@ class RoomCenterAgentMessageResponse(BaseModel):
     agent_name: str | None = None
     message: RoomAgentMessage | None = None
     a2a_response: SendMessageResponse | SendStreamingMessageResponse | None = None
+    a2a_message: Message | None = None  # The prepared A2A message ready to send
     message_list: list[RoomAgentMessage] | None = None
     success: bool
     error: str | None = None

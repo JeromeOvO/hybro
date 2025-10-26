@@ -104,10 +104,12 @@ class OpenAIService:
         2.	Constraint-Based Decomposition (CBD):
         - Apply explicit constraints from the task description (e.g., deadlines, resources, ordering rules).
         - Use these constraints to validate or eliminate candidate subtasks.
+        - CRITICAL: If the task explicitly states a number of tasks/agents (e.g., "exactly 2 tasks", "2 agents"), 
+          you MUST create exactly that many execution steps. Do not add planning, validation, or orchestration steps.
         3.	Merge-and-Prune:
         - Merge overlapping or redundant subtasks.
         - Prune infeasible, irrelevant, or duplicate branches. 
-        Important: Max 8 steps.
+        Important: Max 8 steps (unless explicitly constrained to fewer).
         Your goal is to create a structured execution plan for all steps.
         
         Return the response in the following JSON format:

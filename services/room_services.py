@@ -1106,29 +1106,17 @@ class RoomServices:
         except Exception:
             # Leave message as-is if structure is unexpected
             pass
-
-        send_response = await self.a2a_service.send_message_to_agent(
-            agent_url, agent_message
+        
+        # Return the prepared message without sending
+        # OrchestrationCenter will handle the actual sending with streaming support
+        return RoomCenterAgentMessageResponse(
+            message_id=message.message_id,
+            message=message,
+            a2a_message=agent_message,  # Return the prepared A2A message
+            success=True,
+            error=None,
+            status_code=200,
         )
-
-        if send_response is not None:
-            return RoomCenterAgentMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                a2a_response=send_response,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-        else:
-            return RoomCenterAgentMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                a2a_response=None,
-                success=False,
-                error="Failed to send message",
-                status_code=500,
-            )
 
     async def update_agent_message_by_message_id(
         self, request: RoomCenterAgentMessageRequest
@@ -1333,8 +1321,15 @@ class RoomServices:
                             # Get the latest agent message
                             latest_agent_message = agent_messages[-1]
 
-                            # Extract text parts from message parts
-                            agent_content = latest_agent_message.parts[0].root.text
+                            # Extract text parts from ALL message parts, not just the first one
+                            text_parts = []
+                            if hasattr(latest_agent_message, 'parts') and latest_agent_message.parts:
+                                for part in latest_agent_message.parts:
+                                    if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                                        text_parts.append(part.root.text)
+                            
+                            # Combine all text parts
+                            agent_content = " ".join(text_parts) if text_parts else ""
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
