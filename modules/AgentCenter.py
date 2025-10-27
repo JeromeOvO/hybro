@@ -1,9 +1,9 @@
 from models.error import IllgalParameterError
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
-from services.a2a_service import A2AService
-from services.agent_service import AgentService
-from services.database_service import DatabaseService
+from services.a2a_service import a2a_service
+from services.agent_service import agent_service
+from services.database_service import db_service
 
 # Implementation of agent management service
 
@@ -59,9 +59,9 @@ class AgentCenter:
         agent service for business logic, and A2A service for
         agent communication capabilities.
         """
-        self.database_service = DatabaseService()
-        self.agent_service = AgentService()
-        self.a2a_service = A2AService()
+        self.database_service = db_service  # Use singleton
+        self.agent_service = agent_service  # Use singleton
+        self.a2a_service = a2a_service  # Use singleton
 
     async def get_agent_card_from_url(
         self, request: AgentCenterRequest

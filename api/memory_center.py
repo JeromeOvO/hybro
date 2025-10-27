@@ -1,13 +1,14 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
+
 from models.request import ChatMemoryRequest
 from modules.MemoryCenter import MemoryCenter
 
 router = APIRouter()
+memory_center = MemoryCenter()  # Singleton instance
 
 
 @router.post("/memoryCenter/addChatContext")
 async def add_chat_context(request: Request):
-    memory_center = MemoryCenter()
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
@@ -21,7 +22,6 @@ async def add_chat_context(request: Request):
 
 @router.post("/memoryCenter/getChatContextBySessionId")
 async def get_chat_context_by_session_id(request: Request):
-    memory_center = MemoryCenter()
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
@@ -36,7 +36,6 @@ async def get_chat_context_by_session_id(request: Request):
 
 @router.post("/memoryCenter/updateChatContextBySessionId")
 async def update_chat_context_by_session_id(request: Request):
-    memory_center = MemoryCenter()
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")
@@ -58,7 +57,6 @@ async def update_chat_context_by_session_id(request: Request):
 
 @router.post("/memoryCenter/deleteChatContextBySessionId")
 async def delete_chat_context_by_session_id(request: Request):
-    memory_center = MemoryCenter()
     request_data = await request.json()
     user_name = request_data.get("user_name")
     session_id = request_data.get("session_id")

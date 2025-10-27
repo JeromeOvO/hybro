@@ -1,9 +1,9 @@
 from models.request import TaskCenterRequest
 from models.response import TaskCenterResponse
-from services.agent_service import AgentService
-from services.database_service import DatabaseService
-from services.openai_service import OpenAIService
-from services.task_service import TaskService
+from services.agent_service import agent_service
+from services.database_service import db_service
+from services.openai_service import openai_service
+from services.task_service import task_service
 
 
 class TaskCenter:
@@ -69,10 +69,10 @@ class TaskCenter:
         Sets up the task service for core operations, database service for persistence,
         agent service for agent-related operations, and OpenAI service for AI operations.
         """
-        self.openai_service = OpenAIService()
-        self.database_service = DatabaseService()
-        self.agent_service = AgentService()
-        self.task_service = TaskService()
+        self.openai_service = openai_service  # Use singleton
+        self.database_service = db_service  # Use singleton
+        self.agent_service = agent_service  # Use singleton
+        self.task_service = task_service  # Use singleton
 
     # Task Sessions
     async def create_new_session(

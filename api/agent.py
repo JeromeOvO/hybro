@@ -7,6 +7,7 @@ from modules.AgentCenter import AgentCenter
 router = APIRouter()
 agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
+agent_center = AgentCenter()
 
 
 @router.post("/agent/getAgentCardFromUrl")
@@ -17,7 +18,6 @@ async def get_agent_card_from_url(request: Request):
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
 
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest(agent_url=agent_url)
     agent_center_response = await agent_center.get_agent_card_from_url(
         agent_center_request
@@ -33,7 +33,6 @@ async def register_agent(request: Request):
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
 
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest(agent_url=agent_url)
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
@@ -45,7 +44,6 @@ async def get_agent(agent_id: str):
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
 
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.query_agent_by_agent_id(
         agent_center_request
@@ -62,7 +60,6 @@ async def delete_agent(request: Request):
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
 
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)
 
@@ -71,7 +68,6 @@ async def delete_agent(request: Request):
 
 @router.get("/agent/getAllAgents")
 async def get_agent_list():
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_all_agents(agent_center_request)
     return agent_center_response
@@ -79,7 +75,6 @@ async def get_agent_list():
 
 @router.post("/agent/getAgentListWithConditions")
 async def get_agent_list_with_conditions():
-    agent_center = AgentCenter()
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_agents_with_conditions(
         agent_center_request
