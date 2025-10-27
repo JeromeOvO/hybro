@@ -1572,9 +1572,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
             # Handle status updates (TaskStatusUpdateEvent)
             elif data_kind == "status-update":
-                message_streaming_state = result.status.state
+                state = result.status.state
                 logger.debug(
-                    f"OrchestrationCenter: Status update for message {current_message.message_id}: {message_streaming_state}"
+                    f"OrchestrationCenter: Status update for message {current_message.message_id}: {state}"
                 )
 
                 # Update task status in database
@@ -1588,7 +1588,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         )
 
                     # Update state
-                    current_message.message_content.message_task.status.state = message_streaming_state
+                    current_message.message_content.message_task.status.state = state
 
                     # Update message in database
                     update_response = (
@@ -1604,14 +1604,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         logger.error(
                             f"OrchestrationCenter: Failed to update message status: {update_response.error}"
                         )
-                if message_streaming_state in [
+                if state in [
                     TaskState.completed,
                     TaskState.failed,
                     TaskState.canceled,
                     TaskState.rejected,
                 ]:
                     logger.debug(
-                        f"OrchestrationCenter: Final status for message {current_message.message_id}: {message_streaming_state}"
+                        f"OrchestrationCenter: Final status for message {current_message.message_id}: {state}"
                     )
                     # Process final task or message
                     if message_streaming_state.agent_message_id is not None and message_streaming_state.accumulated_parts:
@@ -1631,9 +1631,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 if send_sse:
                     await self.sse_manager.send_processing_status(
                         room_id,
-                        message_streaming_state,
+                        state,
                         current_message.message_id,
-                        details=f"Agent {current_message.agent_id} status: {message_streaming_state}",
+                        details=f"Agent {current_message.agent_id} status: {state}",
                     )
 
             # Handle artifact updates (TaskArtifactUpdateEvent)
