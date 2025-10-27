@@ -960,7 +960,7 @@ class RoomServices:
             )
 
         # send processing status via sse to client
-        logger.info(
+        logger.debug(
             f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}"
         )
         await sse_manager.send_processing_status(
@@ -1120,7 +1120,7 @@ class RoomServices:
             )
 
         # send processing status via sse to client
-        logger.info(
+        logger.debug(
             f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}"
         )
         await sse_manager.send_processing_status(

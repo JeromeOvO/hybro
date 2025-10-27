@@ -972,7 +972,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
-                temperature=0.3,
+                # temperature=0.3,
                 response_format={"type": "json_object"}
             )
             
