@@ -123,7 +123,7 @@ class A2AService:
                 params=payload,
             )
 
-            logger.info(f"a2a_service: Sending sync message to agent: {agent_card}")
+            logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
             response = await a2a_client.send_message(send_message_request)
 
             # Handle error
@@ -175,7 +175,7 @@ class A2AService:
             params=payload,
         )
 
-        logger.info(f"a2a_service: Starting streaming from agent: {agent_card}")
+        logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
         response_stream = a2a_client.send_message_streaming(stream_request)
         # Yield each event IMMEDIATELY as it arrives
         async for response in response_stream:
@@ -205,12 +205,12 @@ class A2AService:
 
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
-            logger.info(f"a2a_service: Agent supports streaming: {agent_card.url}")
+            logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
             async for event in self.send_message_streaming(agent_card, message):
                 yield event
 
         else:
-            logger.info(
+            logger.debug(
                 f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
             )
             try:

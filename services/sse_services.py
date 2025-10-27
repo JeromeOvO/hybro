@@ -116,7 +116,7 @@ class SSEManager:
                     del self.room_connections[room_id][connection_id]
 
             active_connections = len(self.room_connections[room_id])
-            logger.info(
+            logger.debug(
                 f"Broadcasted {message_type} to {active_connections} connections in room {room_id}"
             )
 
