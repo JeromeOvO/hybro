@@ -3,7 +3,19 @@ import uuid
 from collections import deque
 from typing import Any
 
-from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
+from a2a.types import (
+    AgentCard,
+    JSONRPCErrorResponse,
+    Message,
+    Part,
+    Role,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
 
 from common.utils.logger import get_logger
 from models.error import (
@@ -22,6 +34,7 @@ from models.request import (
     TaskCenterRequest,
 )
 from models.response import OrchestrationCenterResponse
+from models.room import RoomAgentMessage
 from models.task import MetaTask, TaskDefaultValue
 from services.a2a_service import a2a_service
 from services.agent_service import agent_service
@@ -1080,6 +1093,33 @@ class OrchestrationCenter:
                 task_id=meta_task_id, success=False, error=str(e), status_code=500
             )
 
+    def _get_text_from_a2a_response(self, result: Task | Message) -> str:
+        """
+        Extract text content from an A2A response (Task or Message).
+        
+        Args:
+            result: A Task or Message object from A2A response
+            
+        Returns:
+            Extracted text as a string, or empty string if no text found
+        """
+        if result.kind == "message" and hasattr(result, "parts") and result.parts:
+            # Extract text from message parts
+            return " ".join(
+                part.root.text if part.root and hasattr(part.root, "text") else ""
+                for part in result.parts
+            )
+        elif result.kind == "task" and hasattr(result, "history") and result.history:
+            # Extract text from last message in task history
+            last_message = result.history[-1]
+            if hasattr(last_message, "parts") and last_message.parts:
+                return " ".join(
+                    part.root.text if part.root and hasattr(part.root, "text") else ""
+                    for part in last_message.parts
+                )
+        
+        return ""
+
     async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
         """Extract the result from a completed meta task for context passing."""
         query_result = await self.task_service.query_meta_task_by_task_id(
@@ -1355,10 +1395,430 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 status_code=500,
             )
 
-    # room services
+    async def _handle_streaming_response_for_room(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        send_sse: bool = False,
+    ) -> tuple[bool, str]:
+        """
+        Handle streaming responses from an agent for a room message.
+
+        This method:
+        1. Streams responses from the agent in real-time
+        2. Processes each event type (message, task, status-update, artifact-update)
+        3. Updates the database as events arrive
+        4. Optionally sends SSE events to the frontend
+
+        Args:
+            current_message: The RoomAgentMessage being processed
+            agent_card: The agent's card information
+            prepared_message: The A2A message to send to the agent
+            room_id: The room ID for SSE events
+            send_sse: Whether to send SSE notifications to frontend (default: False)
+
+        Returns:
+            Tuple of (success: bool, full_response_text: str)
+        """
+        # Use a state object to track streaming state immutably
+        class MessageStreamingState:
+            """Tracks streaming state without mutating shared references."""
+            def __init__(self):
+                self.full_response_text = ""
+                self.accumulated_parts: list[Part] = []
+                self.agent_message_id: str | None = None
+                self.message_added_to_history = False
+        
+        message_streaming_state = MessageStreamingState()
+
+        async for a2a_response in self.a2a_service.send_message_streaming(
+            agent_card, prepared_message
+        ):
+            # Handle JSON-RPC errors
+            if isinstance(a2a_response.root, JSONRPCErrorResponse):
+                logger.error(
+                    f"OrchestrationCenter: Agent error: {a2a_response.root.error}"
+                )
+                return False, message_streaming_state.full_response_text
+
+            # Extract result from response
+            result = a2a_response.root.result
+            data_kind = result.kind
+
+            # Handle token streaming - send to SSE manager immediately
+            if data_kind == "message":
+                # Extract message parts and content
+                message_list = result.parts
+                
+                # Accumulate parts efficiently (extend instead of concatenation)
+                message_streaming_state.accumulated_parts.extend(message_list)
+                
+                # Capture message ID on first chunk
+                if message_streaming_state.agent_message_id is None:
+                    message_streaming_state.agent_message_id = result.messageId
+                
+                # Extract text content from current chunk
+                content = " ".join(
+                    part.root.text if part.root and hasattr(part.root, "text") else ""
+                    for part in message_list
+                )
+                message_streaming_state.full_response_text += content
+                
+                # Log accumulated message
+                logger.debug(
+                    f"OrchestrationCenter: Full accumulated message for {current_message.message_id}: {message_streaming_state.full_response_text}"
+                )
+
+                # Save incrementally to database to avoid data loss
+                # TODO: Maybe we can just save once when the message is complete to reduce DB load
+                # or update only every N tokens or seconds
+                if (
+                    current_message.message_content
+                    and current_message.message_content.message_task
+                ):
+                    if current_message.message_content.message_task.history is None:
+                        current_message.message_content.message_task.history = []
+
+                    # Create a new message with accumulated parts
+                    updated_message = Message(
+                        kind="message",
+                        role=result.role,
+                        messageId=message_streaming_state.agent_message_id,
+                        parts=message_streaming_state.accumulated_parts.copy(),  # Copy to avoid shared references
+                        timestamp=result.timestamp if hasattr(result, 'timestamp') else None
+                    )
+
+                    if not message_streaming_state.message_added_to_history:
+                        # First time - append the message
+                        logger.debug(
+                            "OrchestrationCenter: First message chunk, appending to history"
+                        )
+                        current_message.message_content.message_task.history.append(
+                            updated_message
+                        )
+                        message_streaming_state.message_added_to_history = True
+                    else:
+                        # Update existing message by replacing it
+                        logger.debug(
+                            "OrchestrationCenter: Updating existing message in history"
+                        )
+                        for i, msg in enumerate(
+                            current_message.message_content.message_task.history
+                        ):
+                            if (
+                                hasattr(msg, "messageId")
+                                and msg.messageId == message_streaming_state.agent_message_id
+                            ):
+                                current_message.message_content.message_task.history[
+                                    i
+                                ] = updated_message
+                                logger.debug(
+                                    f"OrchestrationCenter: Replaced message at index {i} with {len(message_streaming_state.accumulated_parts)} parts"
+                                )
+                                break
+
+                    # Log history before saving
+                    if current_message.message_content.message_task.history:
+                        for idx, hist_msg in enumerate(
+                            current_message.message_content.message_task.history
+                        ):
+                            part_count = (
+                                len(hist_msg.parts) if hasattr(hist_msg, "parts") else 0
+                            )
+                            logger.debug(
+                                f"OrchestrationCenter: History[{idx}] has {part_count} parts"
+                            )
+
+                    # Update message in database
+                    # TODO : Consider update DB only when there is a significant change or when task is in certain states to reduce DB load
+                    update_response = (
+                        await self.room_services.update_agent_message_by_message_id(
+                            RoomCenterAgentMessageRequest(
+                                message_id=current_message.message_id,
+                                message=current_message,
+                            )
+                        )
+                    )
+
+                    if not update_response.success:
+                        logger.error(
+                            f"OrchestrationCenter: Failed to update agent message incrementally: {update_response.error}"
+                        )
+                    else:
+                        logger.debug(
+                            f"OrchestrationCenter: Successfully saved message to database with {len(message_streaming_state.accumulated_parts)} total parts"
+                        )
+
+                # Send token to room via SSE
+                if send_sse:
+                    await self.sse_manager.send_agent_token(
+                        room_id,
+                        current_message.message_id,
+                        current_message.agent_id,
+                        content,
+                    )
+            # Handle task completion (full Task object)
+            elif data_kind == "task":
+                # event is task
+                # Get status
+                status = result.status
+                logger.debug(
+                    f"OrchestrationCenter: Task update for message {current_message.message_id}: {status.state if status else 'no status'}"
+                )
+                # Note: We don't process the task here during streaming
+                # The complete message with all parts will be saved after the loop completes
+
+            # Handle status updates (TaskStatusUpdateEvent)
+            elif data_kind == "status-update":
+                state = result.status.state
+                logger.debug(
+                    f"OrchestrationCenter: Status update for message {current_message.message_id}: {state}"
+                )
+
+                # Update task status in database
+                if (
+                    current_message.message_content
+                    and current_message.message_content.message_task
+                ):
+                    if current_message.message_content.message_task.status is None:
+                        current_message.message_content.message_task.status = (
+                            TaskStatus(state=TaskState.submitted)
+                        )
+
+                    # Update state
+                    current_message.message_content.message_task.status.state = state
+
+                    # Update message in database
+                    update_response = (
+                        await self.room_services.update_agent_message_by_message_id(
+                            RoomCenterAgentMessageRequest(
+                                message_id=current_message.message_id,
+                                message=current_message,
+                            )
+                        )
+                    )
+
+                    if not update_response.success:
+                        logger.error(
+                            f"OrchestrationCenter: Failed to update message status: {update_response.error}"
+                        )
+                if state in [
+                    TaskState.completed,
+                    TaskState.failed,
+                    TaskState.canceled,
+                    TaskState.rejected,
+                ]:
+                    logger.debug(
+                        f"OrchestrationCenter: Final status for message {current_message.message_id}: {state}"
+                    )
+                    # Process final task or message
+                    if message_streaming_state.agent_message_id is not None and message_streaming_state.accumulated_parts:
+                        # Create final message with all accumulated parts
+                        final_message = Message(
+                            kind="message",
+                            role=Role.agent,
+                            messageId=message_streaming_state.agent_message_id,
+                            parts=message_streaming_state.accumulated_parts.copy(),
+                        )
+                        # Process the final task data
+                        await self._handle_a2a_response_for_room(
+                            current_message, final_message
+                        )
+
+                # Forward status update to frontend via SSE
+                if send_sse:
+                    await self.sse_manager.send_processing_status(
+                        room_id,
+                        state,
+                        current_message.message_id,
+                        details=f"Agent {current_message.agent_id} status: {state}",
+                    )
+
+            # Handle artifact updates (TaskArtifactUpdateEvent)
+            elif data_kind == "artifact-update":
+                artifact_data = result.artifact if hasattr(result, "artifact") else None
+                append = result.append if hasattr(result, "append") else False
+                last_chunk = (
+                    result.last_chunk if hasattr(result, "last_chunk") else False
+                )
+
+                if (
+                    artifact_data
+                    and current_message.message_content
+                    and current_message.message_content.message_task
+                ):
+                    logger.debug(
+                        f"OrchestrationCenter: Artifact update for message {current_message.message_id}, append={append}, last_chunk={last_chunk}"
+                    )
+
+                    # Initialize artifacts list if needed
+                    if current_message.message_content.message_task.artifacts is None:
+                        current_message.message_content.message_task.artifacts = []
+
+                    # Handle artifact append vs replace
+                    artifact_id = artifact_data.get("artifactId")
+                    if append and artifact_id:
+                        # Find existing artifact and append to it
+                        existing_artifact = None
+                        for (
+                            artifact
+                        ) in current_message.message_content.message_task.artifacts:
+                            if (
+                                hasattr(artifact, "artifactId")
+                                and artifact.artifactId == artifact_id
+                            ):
+                                existing_artifact = artifact
+                                break
+
+                        if existing_artifact:
+                            # Append parts to existing artifact
+                            if "parts" in artifact_data:
+                                existing_artifact.parts.extend(artifact_data["parts"])
+                        else:
+                            # First chunk of this artifact
+                            current_message.message_content.message_task.artifacts.append(
+                                artifact_data
+                            )
+                    else:
+                        # Replace/add new artifact
+                        current_message.message_content.message_task.artifacts.append(
+                            artifact_data
+                        )
+
+                    # Update message in database
+                    update_response = (
+                        await self.room_services.update_agent_message_by_message_id(
+                            RoomCenterAgentMessageRequest(
+                                message_id=current_message.message_id,
+                                message=current_message,
+                            )
+                        )
+                    )
+
+                    if not update_response.success:
+                        logger.error(
+                            f"OrchestrationCenter: Failed to update message artifacts: {update_response.error}"
+                        )
+
+                    # Forward artifact update to frontend via SSE
+                    if send_sse:
+                        await self.sse_manager.send_artifact_update(
+                            room_id,
+                            current_message.message_id,
+                            current_message.agent_id,
+                            artifact_data,
+                            append=append,
+                            last_chunk=last_chunk,
+                        )
+
+            # Handle errors
+            elif data_kind == "error":
+                error_msg = a2a_response.get("error", "Unknown error")
+                logger.error(
+                    f"OrchestrationCenter: Streaming error for message {current_message.message_id}: {error_msg}"
+                )
+                if send_sse:
+                    await self.sse_manager.send_error(room_id, error_msg)
+                return False, message_streaming_state.full_response_text
+
+        # Streaming complete - message was saved incrementally during the loop
+        logger.info(
+            f"OrchestrationCenter: Streaming complete for message {current_message.message_id}, "
+            f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
+        )
+
+        return True, message_streaming_state.full_response_text
+
+    async def _handle_a2a_response_for_room(
+        self,
+        room_agent_message: RoomAgentMessage,
+        message_data: None
+        | Task
+        | Message
+    ) -> bool:
+        # Add null check for process_response
+        if message_data is None:
+            logger.error(
+                "OrchestrationCenter: process_a2a_response returned None for agent message "
+            )
+            return False
+
+        if message_data.kind == "task":
+            room_agent_message.message_content.message_task = message_data
+            update_response = (
+                await self.room_services.update_agent_message_by_message_id(
+                    RoomCenterAgentMessageRequest(
+                        message_id=room_agent_message.message_id,
+                        message=room_agent_message,
+                    )
+                )
+            )
+            if not update_response.success:
+                logger.error(
+                    "OrchestrationCenter: Failed to update agent message with task"
+                )
+                return False
+            return True
+
+        elif message_data.kind == "message":
+            if (
+                room_agent_message.message_content
+                and room_agent_message.message_content.message_task
+            ):
+                if room_agent_message.message_content.message_task.history is None:
+                    room_agent_message.message_content.message_task.history = []
+                room_agent_message.message_content.message_task.history.append(
+                    message_data
+                )
+
+            update_response = (
+                await self.room_services.update_agent_message_by_message_id(
+                    RoomCenterAgentMessageRequest(
+                        message_id=room_agent_message.message_id,
+                        message=room_agent_message,
+                    )
+                )
+            )
+
+            if not update_response.success:
+                logger.error(
+                    "OrchestrationCenter: Failed to update agent message with message",
+                    update_response.error,
+                )
+                return False
+            return True
+        # Neither task nor message
+        logger.error(
+            "OrchestrationCenter: Unexpected data kind in A2A response: %s", message_data.kind
+        )
+        return False
+
     async def process_room_user_message(
         self, request: OrchestrationCenterRequest
     ) -> OrchestrationCenterResponse:
+        """
+        Process a room user message by executing all related agent messages in sequence.
+
+        This method:
+        1. Gets room memory context
+        2. Queries all agent messages related to the user message
+        3. Processes each agent message in order using streaming
+        4. Updates room memory after all agents have responded
+        5. Sends SSE events to the room for real-time updates
+
+        Args:
+            request: Contains room_id and room_user_message_id
+
+        Returns:
+            OrchestrationCenterResponse with success status
+        """
+        logger.debug(
+            "OrchestrationCenter: Starting to process room user message %s in room %s",
+            request.room_user_message_id,
+            request.room_id,
+        )
         if request.room_id is None:
             return OrchestrationCenterResponse(
                 success=False,
@@ -1424,12 +1884,32 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             else deque()
         )
         message_list = []
-
+        logger.debug(
+            "OrchestrationCenter: Starting to process %d agent messages for room %s and user message %s",
+            len(message_queue),
+            room_id,
+            room_user_message_id,
+        )  
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
             message_list.append(current_message)
 
             if current_message.agent_id is None:
+                # Log parts data
+                parts = (
+                    current_message.message_content.message_task.history[0]
+                    .parts
+                )
+                content = "".join(
+                    part.root.text if part.root and hasattr(part.root, "text") else ""
+                    for part in parts
+                )
+                logger.info(
+                    "OrchestrationCenter: Agent id is missing for message %s, inferring from content: %s, parts count: %d",
+                    current_message.message_id,
+                    content,
+                    len(parts) 
+                )
                 user_input = (
                     current_message.message_content.message_task.history[0]
                     .parts[0]
@@ -1441,6 +1921,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 if len(matched_agents) > 0:
                     current_message.agent_id = matched_agents[0].agent_id
                 else:
+                    logger.error(
+                        "OrchestrationCenter: No similar agent found for message %s",
+                        current_message.message_id,
+                    )
                     return OrchestrationCenterResponse(
                         success=False,
                         error="Agent id is not found",
@@ -1456,12 +1940,17 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     )
                 )
                 if not update_success:
+                    logger.error(
+                        "OrchestrationCenter: Failed to update agent id for message %s",
+                        current_message.message_id,
+                    )
                     return OrchestrationCenterResponse(
                         success=False,
                         error="Failed to update agent message",
                         status_code=500,
                     )
 
+            # Prepare the agent message with context (no sending yet)
             process_response = await self.room_services.process_agent_message(
                 RoomCenterAgentMessageRequest(message=current_message),
                 room_memory_content_text,
@@ -1472,19 +1961,60 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     error=process_response.error,
                     status_code=500,
                 )
-            message_data = await self.a2a_service.process_a2a_response(
-                process_response.a2a_response
-            )
-            message_data = await self.room_services.handle_a2a_response_for_room(
-                current_message, message_data
-            )
-            if not message_data:
+            # prepared_message = await self.a2a_service.process_a2a_response(
+            #     process_response.a2a_response
+            # )
+            # prepared_message = await self._handle_a2a_response_for_room(current_message, prepared_message)
+            prepared_message = process_response.a2a_message
+            if prepared_message is None:
                 return OrchestrationCenterResponse(
                     success=False,
-                    error="Failed to handle a2a response",
+                    error="Failed to prepare agent message",
                     status_code=500,
                 )
 
+            # Get agent info
+            agent = await self.database_service.get_agent_by_agent_id(
+                current_message.agent_id
+            )
+
+            # Stream the agent's response in real-time
+            full_response_text = ""
+            support_streaming = self.a2a_service.has_streaming_capability(
+                agent_card=agent.agent_card
+            )
+            if not support_streaming:
+                a2a_response = await self.a2a_service.send_message_sync(
+                    agent.agent_card, prepared_message
+                )
+                # log a2a_response.root.result
+                logger.debug(
+                    "OrchestrationCenter: Received sync response for message %s: %s",
+                    current_message.message_id,
+                    a2a_response.root.result,
+                )
+                # Save the full response
+                success = await self._handle_a2a_response_for_room(
+                    current_message, a2a_response.root.result
+                )
+                
+                # Extract text from the response using helper method
+                full_response_text = self._get_text_from_a2a_response(a2a_response.root.result)
+                
+            else:
+                (
+                    success,
+                    full_response_text,
+                ) = await self._handle_streaming_response_for_room(
+                    current_message, agent.agent_card, prepared_message, room_id
+                )
+            if not success:
+                return OrchestrationCenterResponse(
+                    success=False,
+                    error="Failed to process agent response",
+                    status_code=500,
+                )
+            # Get updated message from database
             current_message = (
                 await self.database_service.get_room_agent_message_by_message_id(
                     current_message.message_id
@@ -1496,7 +2026,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     error="Agent message not found",
                     status_code=500,
                 )
-            logger.info(
+            logger.debug(
                 "OrchestrationCenter: Sending agent response to room %s for message %s",
                 room_id,
                 current_message.message_id,
@@ -1505,9 +2035,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 room_id,
                 current_message.message_id,
                 current_message.agent_id,
-                current_message.message_content.message_task.history[-1]
-                .parts[0]
-                .root.text,
+                full_response_text,
             )
 
             next_messages = await self.database_service.get_room_agent_messages_by_related_message_id(
@@ -1523,7 +2051,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     continue
                 message_queue.append(new_agent_message)
 
-        logger.info(
+        logger.debug(
             "OrchestrationCenter: Sending processing status to room %s for message %s",
             room_id,
             room_user_message_id,
