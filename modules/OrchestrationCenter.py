@@ -1395,6 +1395,37 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 status_code=500,
             )
 
+    async def _get_task_from_agent(self, agent_card: AgentCard, task_id: str) -> Task | None:
+        a2a_client = await self.a2a_service.create_a2a_client(agent_card)
+        if not a2a_client:
+            return None
+        try:
+            response = await self.task_service.get_task(a2a_client, task_id)
+            if not response or isinstance(response.root, JSONRPCErrorResponse):
+                logger.error(
+                    f"Failed to get task from agent, error: {getattr(response.root, 'error', 'Unknown error')}"
+                )
+                return None
+            return response.root.result
+        except Exception as e:
+            logger.error(f"Failed to get task from agent: {e}", exc_info=True)
+            return None
+
+    async def _get_message_from_task(self, task: Task) -> Message | None:
+        # task.artifacts[].parts[].root -> message
+        all_parts = []
+        for artifact in task.artifacts:
+            for part in artifact.parts:
+                if part.root:
+                    all_parts.append(part.root)
+        message = Message(
+            role=Role.agent,
+            messageId=str(uuid.uuid4()),
+            taskId=task.id,
+            parts=all_parts,
+        )
+        return message
+
     async def _handle_streaming_response_for_room(
         self,
         current_message: RoomAgentMessage,
@@ -1565,7 +1596,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 # Get status
                 status = result.status
                 logger.debug(
-                    f"OrchestrationCenter: Task update for message {current_message.message_id}: {status.state if status else 'no status'}"
+                    f"OrchestrationCenter: Task update for task {result}: {status.state if status else 'no status'}"
                 )
                 # Note: We don't process the task here during streaming
                 # The complete message with all parts will be saved after the loop completes
@@ -1573,8 +1604,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Handle status updates (TaskStatusUpdateEvent)
             elif data_kind == "status-update":
                 state = result.status.state
-                logger.debug(
-                    f"OrchestrationCenter: Status update for message {current_message.message_id}: {state}"
+                logger.info(
+                    f"OrchestrationCenter: Status update for message {current_message.model_dump()}: {state}"
                 )
 
                 # Update task status in database
@@ -1610,23 +1641,36 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     TaskState.canceled,
                     TaskState.rejected,
                 ]:
-                    logger.debug(
-                        f"OrchestrationCenter: Final status for message {current_message.message_id}: {state}"
+                    logger.info(
+                        f"OrchestrationCenter: Final status for message {current_message}: {state}"
                     )
-                    # Process final task or message
-                    if message_streaming_state.agent_message_id is not None and message_streaming_state.accumulated_parts:
-                        # Create final message with all accumulated parts
-                        final_message = Message(
-                            kind="message",
-                            role=Role.agent,
-                            messageId=message_streaming_state.agent_message_id,
-                            parts=message_streaming_state.accumulated_parts.copy(),
-                        )
-                        # Process the final task data
-                        await self._handle_a2a_response_for_room(
-                            current_message, final_message
-                        )
+                    # Get task from agent
+                    # https://a2a-protocol.org/latest/specification/#73-tasksget
 
+                    task = await self.task_service.get_task_from_agent(agent_card, result.task_id)
+                    if task is None:
+                        logger.error(
+                            f"OrchestrationCenter: Failed to retrieve final task for task id {current_message.task_id}"
+                        )
+                        continue
+                    message = await self._get_message_from_task(task)
+                    await self._handle_a2a_response_for_room(
+                        current_message, message
+                    )
+                    # # Process final task or message
+                    # if message_streaming_state.agent_message_id is not None and message_streaming_state.accumulated_parts:
+                    #     # Create final message with all accumulated parts
+                    #     final_message = Message(
+                    #         kind="message",
+                    #         role=Role.agent,
+                    #         messageId=message_streaming_state.agent_message_id,
+                    #         parts=message_streaming_state.accumulated_parts.copy(),
+                    #     )
+                    #     # Process the final task data
+                    #     await self._handle_a2a_response_for_room(
+                    #         current_message, message
+                    #     )
+                    message_streaming_state.full_response_text = self._get_text_from_a2a_response(message)
                 # Forward status update to frontend via SSE
                 if send_sse:
                     await self.sse_manager.send_processing_status(
@@ -1769,6 +1813,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             ):
                 if room_agent_message.message_content.message_task.history is None:
                     room_agent_message.message_content.message_task.history = []
+                # append new message
                 room_agent_message.message_content.message_task.history.append(
                     message_data
                 )
