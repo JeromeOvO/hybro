@@ -1106,16 +1106,9 @@ class OrchestrationCenter:
         if result.kind == "message" and hasattr(result, "parts") and result.parts:
             return self._get_text_from_message(result)
         elif result.kind == "task":
-            # Extract text from last message in task history
             # Extract text from artifacts if available
             message = self._get_message_from_task(result)
             return self._get_text_from_message(message) if message else ""
-            # last_message = result.history[-1]
-            # if hasattr(last_message, "parts") and last_message.parts:
-            #     return " ".join(
-            #         part.root.text if part.root and hasattr(part.root, "text") else ""
-            #         for part in last_message.parts
-            #     )
         return ""
 
     async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
@@ -1473,11 +1466,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         ):
             # Handle JSON-RPC errors
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
+                error_message = a2a_response.root.error.model_dump_json()
                 logger.error(
-                    f"OrchestrationCenter: Agent error: {a2a_response.root.error}"
+                    f"OrchestrationCenter: Agent error: {error_message}"
                 )
+                if send_sse:
+                    await self.sse_manager.send_error(room_id, error_message)
                 return False, message_streaming_state.full_response_text
-
+            # Below this, there is no error - process the response
             # Extract result from response
             result = a2a_response.root.result
             data_kind = result.kind
@@ -1711,15 +1707,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         # existing_artifact = None
                         # current_artifacts = current_message.message_content.message_task.artifacts
                         existing_artifact = next((a for a in current_artifacts if a.artifact_id == artifact_id), None)
-                        # for (
-                        #     artifact
-                        # ) in current_message.message_content.message_task.artifacts:
-                        #     if (
-                        #         hasattr(artifact, "artifact_id")
-                        #         and artifact.artifact_id == artifact_id
-                        #     ):
-                        #         existing_artifact = artifact
-                        #         break
 
                         if existing_artifact:
                             # Append parts to existing artifact
@@ -1757,16 +1744,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                             append=append,
                             last_chunk=last_chunk,
                         )
-
-            # Handle errors
-            elif data_kind == "error":
-                error_msg = a2a_response.get("error", "Unknown error")
-                logger.error(
-                    f"OrchestrationCenter: Streaming error for message {current_message.message_id}: {error_msg}"
-                )
-                if send_sse:
-                    await self.sse_manager.send_error(room_id, error_msg)
-                return False, message_streaming_state.full_response_text
 
         # Streaming complete - message was saved incrementally during the loop
         logger.info(
@@ -2033,6 +2010,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 a2a_response = await self.a2a_service.send_message_sync(
                     agent.agent_card, prepared_message
                 )
+                
+                if isinstance(a2a_response.root, JSONRPCErrorResponse):
+                    logger.error(f"Agent error: {a2a_response.root.error}")
+                    await self.sse_manager.send_error(room_id, str(a2a_response.root.error))
+                    return OrchestrationCenterResponse(success=False, error="Agent error", status_code=500)
+                
                 # log a2a_response.root.result
                 logger.debug(
                     "OrchestrationCenter: Received sync response for message %s: %s",
