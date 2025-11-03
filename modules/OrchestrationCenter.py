@@ -1104,37 +1104,18 @@ class OrchestrationCenter:
             Extracted text as a string, or empty string if no text found
         """
         if result.kind == "message" and hasattr(result, "parts") and result.parts:
-            # Extract text from message parts
-            return " ".join(
-                part.root.text if part.root and hasattr(part.root, "text") else ""
-                for part in result.parts
-            )
+            return self._get_text_from_message(result)
         elif result.kind == "task":
             # Extract text from last message in task history
             # Extract text from artifacts if available
-            if result.artifacts:
-                artifact_texts = []
-                for artifact in result.artifacts:
-                    # artifact : Artifact type
-                    if hasattr(artifact, "parts") and artifact.parts:
-                        for part in artifact.parts:
-                            if (
-                                hasattr(part, "root")
-                                and hasattr(part.root, "text")
-                                and part.root.text
-                            ):
-                                artifact_texts.append(part.root.text)
-                            elif hasattr(part, "text") and part.text:
-                                artifact_texts.append(part.text)
-                if artifact_texts:
-                    return " ".join(artifact_texts)
+            message = self._get_message_from_task(result)
+            return self._get_text_from_message(message) if message else ""
             # last_message = result.history[-1]
             # if hasattr(last_message, "parts") and last_message.parts:
             #     return " ".join(
             #         part.root.text if part.root and hasattr(part.root, "text") else ""
             #         for part in last_message.parts
             #     )
-        
         return ""
 
     async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
@@ -1442,6 +1423,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             parts=all_parts,
         )
         return message
+    
+    async def _get_text_from_message(self, message: Message) -> str:
+        return " ".join(
+            part.root.text if part.root and hasattr(part.root, "text") else ""
+            for part in message.parts
+        )
 
     async def _handle_streaming_response_for_room(
         self,
