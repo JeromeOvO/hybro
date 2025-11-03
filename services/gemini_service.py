@@ -76,7 +76,7 @@ class GeminiService:
             task.status = TaskStatus(
                 state=TaskState.failed,
                 message=Message(
-                    messageId=uuid.uuid4().hex,
+                    message_id=uuid.uuid4().hex,
                     role=Role.agent,
                     parts=[
                         Part(
@@ -113,7 +113,7 @@ class GeminiService:
 
         # Create agent response message
         agent_message = Message(
-            messageId=uuid.uuid4().hex,
+            message_id=uuid.uuid4().hex,
             role=Role.agent,
             parts=[Part(root=TextPart(text=response.text if response.text else ""))],
         )

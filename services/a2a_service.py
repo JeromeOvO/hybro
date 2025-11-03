@@ -231,8 +231,8 @@ class A2AService:
         message = Message(
             role=Role.user,
             parts=[TextPart(text=str(message_text))],  # type: ignore[list-item]
-            messageId=str(uuid4()),
-            contextId=str(uuid4()),
+            message_id=str(uuid4()),
+            context_id=str(uuid4()),
         )
 
         payload = MessageSendParams(

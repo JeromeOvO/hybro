@@ -38,7 +38,7 @@ class TaskService:
         self.a2a_service = a2a_service
 
     async def create_a2a_message(self, role: Role, text: str) -> Message:
-        return Message(messageId=str(uuid4()), role=role, parts=[TextPart(text=text)])
+        return Message(message_id=str(uuid4()), role=role, parts=[TextPart(text=text)])
 
     async def create_a2a_task(self) -> Task:
         return Task(
@@ -48,7 +48,7 @@ class TaskService:
                 state=TaskState.submitted,
             ),
             history=[],
-            contextId=str(uuid4()),
+            context_id=str(uuid4()),
             metadata={},
             artifacts=[],
         )

@@ -933,7 +933,7 @@ class OrchestrationCenter:
 
             message = Message(
                 role=Role.user,
-                messageId=str(uuid.uuid4()),
+                message_id=str(uuid.uuid4()),
                 parts=[Part(root=TextPart(text=task_description_with_context))],
             )
 
@@ -1109,14 +1109,31 @@ class OrchestrationCenter:
                 part.root.text if part.root and hasattr(part.root, "text") else ""
                 for part in result.parts
             )
-        elif result.kind == "task" and hasattr(result, "history") and result.history:
+        elif result.kind == "task":
             # Extract text from last message in task history
-            last_message = result.history[-1]
-            if hasattr(last_message, "parts") and last_message.parts:
-                return " ".join(
-                    part.root.text if part.root and hasattr(part.root, "text") else ""
-                    for part in last_message.parts
-                )
+            # Extract text from artifacts if available
+            if result.artifacts:
+                artifact_texts = []
+                for artifact in result.artifacts:
+                    # artifact : Artifact type
+                    if hasattr(artifact, "parts") and artifact.parts:
+                        for part in artifact.parts:
+                            if (
+                                hasattr(part, "root")
+                                and hasattr(part.root, "text")
+                                and part.root.text
+                            ):
+                                artifact_texts.append(part.root.text)
+                            elif hasattr(part, "text") and part.text:
+                                artifact_texts.append(part.text)
+                if artifact_texts:
+                    return " ".join(artifact_texts)
+            # last_message = result.history[-1]
+            # if hasattr(last_message, "parts") and last_message.parts:
+            #     return " ".join(
+            #         part.root.text if part.root and hasattr(part.root, "text") else ""
+            #         for part in last_message.parts
+            #     )
         
         return ""
 
@@ -1372,7 +1389,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         base_task.task.history.append(
             Message(
                 role=Role.agent,
-                messageId=str(uuid.uuid4()),
+                message_id=str(uuid.uuid4()),
                 parts=[Part(root=TextPart(text=summary_response))],
             )
         )
@@ -1420,8 +1437,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     all_parts.append(part.root)
         message = Message(
             role=Role.agent,
-            messageId=str(uuid.uuid4()),
-            taskId=task.id,
+            message_id=str(uuid.uuid4()),
+            task_id=task.id,
             parts=all_parts,
         )
         return message
@@ -1488,7 +1505,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 
                 # Capture message ID on first chunk
                 if message_streaming_state.agent_message_id is None:
-                    message_streaming_state.agent_message_id = result.messageId
+                    message_streaming_state.agent_message_id = result.message_id
                 
                 # Extract text content from current chunk
                 content = " ".join(
@@ -1516,9 +1533,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     updated_message = Message(
                         kind="message",
                         role=result.role,
-                        messageId=message_streaming_state.agent_message_id,
+                        message_id=message_streaming_state.agent_message_id,
                         parts=message_streaming_state.accumulated_parts.copy(),  # Copy to avoid shared references
-                        timestamp=result.timestamp if hasattr(result, 'timestamp') else None
                     )
 
                     if not message_streaming_state.message_added_to_history:
@@ -1539,8 +1555,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                             current_message.message_content.message_task.history
                         ):
                             if (
-                                hasattr(msg, "messageId")
-                                and msg.messageId == message_streaming_state.agent_message_id
+                                hasattr(msg, "message_id")
+                                and msg.message_id == message_streaming_state.agent_message_id
                             ):
                                 current_message.message_content.message_task.history[
                                     i
@@ -1663,7 +1679,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     #     final_message = Message(
                     #         kind="message",
                     #         role=Role.agent,
-                    #         messageId=message_streaming_state.agent_message_id,
+                    #         message_id=message_streaming_state.agent_message_id,
                     #         parts=message_streaming_state.accumulated_parts.copy(),
                     #     )
                     #     # Process the final task data
@@ -1682,14 +1698,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
             # Handle artifact updates (TaskArtifactUpdateEvent)
             elif data_kind == "artifact-update":
-                artifact_data = result.artifact if hasattr(result, "artifact") else None
+                artifact_result = getattr(result, "artifact", None)
                 append = result.append if hasattr(result, "append") else False
                 last_chunk = (
                     result.last_chunk if hasattr(result, "last_chunk") else False
                 )
 
                 if (
-                    artifact_data
+                    artifact_result
                     and current_message.message_content
                     and current_message.message_content.message_task
                 ):
@@ -1700,36 +1716,34 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     # Initialize artifacts list if needed
                     if current_message.message_content.message_task.artifacts is None:
                         current_message.message_content.message_task.artifacts = []
-
+                    current_artifacts = current_message.message_content.message_task.artifacts
                     # Handle artifact append vs replace
-                    artifact_id = artifact_data.get("artifactId")
+                    artifact_id = getattr(artifact_result, "artifact_id", None)
                     if append and artifact_id:
                         # Find existing artifact and append to it
-                        existing_artifact = None
-                        for (
-                            artifact
-                        ) in current_message.message_content.message_task.artifacts:
-                            if (
-                                hasattr(artifact, "artifactId")
-                                and artifact.artifactId == artifact_id
-                            ):
-                                existing_artifact = artifact
-                                break
+                        # existing_artifact = None
+                        # current_artifacts = current_message.message_content.message_task.artifacts
+                        existing_artifact = next((a for a in current_artifacts if a.artifact_id == artifact_id), None)
+                        # for (
+                        #     artifact
+                        # ) in current_message.message_content.message_task.artifacts:
+                        #     if (
+                        #         hasattr(artifact, "artifact_id")
+                        #         and artifact.artifact_id == artifact_id
+                        #     ):
+                        #         existing_artifact = artifact
+                        #         break
 
                         if existing_artifact:
                             # Append parts to existing artifact
-                            if "parts" in artifact_data:
-                                existing_artifact.parts.extend(artifact_data["parts"])
+                            if "parts" in artifact_result:
+                                existing_artifact.parts.extend(artifact_result["parts"])
                         else:
                             # First chunk of this artifact
-                            current_message.message_content.message_task.artifacts.append(
-                                artifact_data
-                            )
+                            current_artifacts.append(artifact_result)
                     else:
                         # Replace/add new artifact
-                        current_message.message_content.message_task.artifacts.append(
-                            artifact_data
-                        )
+                        current_artifacts.append(artifact_result)
 
                     # Update message in database
                     update_response = (
@@ -1752,7 +1766,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                             room_id,
                             current_message.message_id,
                             current_message.agent_id,
-                            artifact_data,
+                            artifact_result,
                             append=append,
                             last_chunk=last_chunk,
                         )
