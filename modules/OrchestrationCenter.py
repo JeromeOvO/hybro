@@ -1407,6 +1407,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
     def _get_message_from_task(self, task: Task) -> Message | None:
         # task.artifacts[].parts[].root -> message
         all_parts = []
+        if not task.artifacts:
+            return None
         for artifact in task.artifacts:
             for part in artifact.parts:
                 if part.root:
@@ -1419,7 +1421,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
         return message
 
-    def _get_text_from_message(self, message: Message) -> str:
+    def _get_text_from_message(self, message: Message | None) -> str:
+        if message is None:
+            return ""
         return " ".join(
             part.root.text if part.root and hasattr(part.root, "text") else ""
             for part in message.parts
@@ -1654,7 +1658,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     )
                     if task is None:
                         logger.error(
-                            f"OrchestrationCenter: Failed to retrieve final task for task id {current_message.task_id}"
+                            f"OrchestrationCenter: Failed to retrieve final task for task id {result.task_id}"
                         )
                         continue
                     message = self._get_message_from_task(task)
