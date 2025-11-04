@@ -24,6 +24,7 @@ from models.error import (
     TaskIdRequiredError,
     TaskNotFoundError,
 )
+from models.agent import Agent
 from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
@@ -1903,12 +1904,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error="Failed to process agent messages",
                 status_code=500,
             )
-        
+
         # Send completion status
         await self.sse_manager.send_processing_status(
             room_id, "completed", room_user_message_id
         )
-            
+
         # Update room memory with new content
         await self._update_room_memory_after_processing(
             room_id, room_memory, query_response.message_list
@@ -1973,16 +1974,31 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
 
-            # Ensure agent is assigned
-            agent_assignment_response = await self._ensure_agent_assigned(
-                current_message
-            )
-            if agent_assignment_response:
-                return False
+            # Assign agent if not already assigned
+            if current_message.agent_id is None:
+                agent = await self._assign_agent(current_message)
+                if agent is None:
+                    logger.error(
+                        "OrchestrationCenter: Failed to assign agent for message %s",
+                        current_message.message_id,
+                    )
+                    return False
+            else:
+                # Agent already assigned, fetch it
+                agent = await self.database_service.get_agent_by_agent_id(
+                    current_message.agent_id
+                )
+                if agent is None:
+                    logger.error(
+                        "OrchestrationCenter: Assigned agent %s not found for message %s",
+                        current_message.agent_id,
+                        current_message.message_id,
+                    )
+                    return False
 
             # Process the agent message
             success = await self._process_single_agent_message(
-                current_message, room_id, room_memory_content_text
+                current_message, room_id, room_memory_content_text, agent
             )
 
             if not success:
@@ -1993,22 +2009,23 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         return True
 
-    async def _ensure_agent_assigned(self, current_message: RoomAgentMessage) -> bool:
-        """Ensure the message has an agent assigned, inferring if necessary."""
-        if current_message.agent_id is not None:
-            return False  # Agent already assigned
+    async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
+        """Assign an agent to the message by inferring from content.
 
+        Returns:
+            Agent object if successfully assigned, None if failed
+        """
         # Log parts data
         parts = current_message.message_content.message_task.history[0].parts
         content = "".join(
             part.root.text if part.root and hasattr(part.root, "text") else ""
             for part in parts
         )
+
         logger.info(
-            "OrchestrationCenter: Agent id is missing for message %s, inferring from content: %s, parts count: %d",
+            "OrchestrationCenter: Inferring agent for message %s from content (length: %d chars)",
             current_message.message_id,
-            content,
-            len(parts),
+            len(content),
         )
 
         # Infer agent from content
@@ -2022,11 +2039,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 "OrchestrationCenter: No similar agent found for message %s",
                 current_message.message_id,
             )
-            return True  # Error occurred
+            return None
 
-        # Update message with assigned agent
+        # Assign the best matching agent
         agent = matched_agents[0]
         current_message.agent_id = agent.agent_id
+
         update_success = (
             await self.database_service.update_room_agent_message_by_message_id(
                 message_id=current_message.message_id,
@@ -2036,18 +2054,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         if not update_success:
             logger.error(
-                "OrchestrationCenter: Failed to update agent id for message %s",
+                "OrchestrationCenter: Failed to update agent assignment for message %s",
                 current_message.message_id,
             )
-            return True  # Error occurred
+            return None
 
-        return False  # Success
+        logger.info(
+            "OrchestrationCenter: Successfully assigned agent %s to message %s",
+            agent.agent_id,
+            current_message.message_id,
+        )
+        return agent
 
     async def _process_single_agent_message(
         self,
         current_message: RoomAgentMessage,
         room_id: str,
         room_memory_content_text: str,
+        agent: Agent,  # Agent is now passed in
     ) -> bool:
         """Process a single agent message with streaming support."""
         # Prepare the agent message with context
@@ -2063,10 +2087,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         if prepared_message is None:
             return False
 
-        # Get agent info
-        agent = await self.database_service.get_agent_by_agent_id(
-            current_message.agent_id
-        )
+        # Agent is now passed in as parameter - no need to fetch again
 
         # Stream or sync send based on agent capabilities
         support_streaming = self.a2a_service.has_streaming_capability(
