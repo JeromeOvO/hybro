@@ -49,7 +49,7 @@ if settings.app_env == "development":
         backtrace=True,  # print full call stack when exception occurs
         diagnose=True,  # variable insight
         serialize=False,  # if want to output JSON, change to True
-        level="INFO",
+        level=settings.log_level,
     )
 else:
     logger.add(
@@ -61,7 +61,7 @@ else:
         rotation="100 MB",
         retention="30 days",
         compression="zip",
-        level="DEBUG",
+        level=settings.log_level,
     )
 
 

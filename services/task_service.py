@@ -1,7 +1,19 @@
 from uuid import uuid4
 
-from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
+from a2a.types import (
+    AgentCard,
+    GetTaskRequest,
+    JSONRPCErrorResponse,
+    Message,
+    Role,
+    Task,
+    TaskQueryParams,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 
+from common.utils.logger import get_logger
 from models.error import (
     IllgalParameterError,
     ParentTaskIdRequiredError,
@@ -11,19 +23,22 @@ from models.error import (
 from models.request import TaskCenterRequest
 from models.response import TaskCenterResponse
 from models.task import BaseTask, MetaTask, TaskDefaultValue, TaskSession
+from services.a2a_service import a2a_service
 from services.agent_service import agent_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 
+logger = get_logger(__name__)
 
 class TaskService:
     def __init__(self):
         self.openai_service = openai_service  # Use singleton
         self.database_service = db_service  # Use singleton
         self.agent_service = agent_service  # Use singleton
+        self.a2a_service = a2a_service
 
     async def create_a2a_message(self, role: Role, text: str) -> Message:
-        return Message(messageId=str(uuid4()), role=role, parts=[TextPart(text=text)])
+        return Message(message_id=str(uuid4()), role=role, parts=[TextPart(text=text)])
 
     async def create_a2a_task(self) -> Task:
         return Task(
@@ -33,7 +48,7 @@ class TaskService:
                 state=TaskState.submitted,
             ),
             history=[],
-            contextId=str(uuid4()),
+            context_id=str(uuid4()),
             metadata={},
             artifacts=[],
         )
@@ -415,5 +430,23 @@ class TaskService:
                 status_code=500,
             )
 
+
+    async def get_task_from_agent(self, agent_card: AgentCard, task_id: str) -> Task | None:
+        """Get task from agent via A2A client"""
+
+        a2a_client = await self.a2a_service.create_a2a_client(agent_card)
+        if not a2a_client:
+            return None
+        try:
+            response = await a2a_client.get_task(GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id)))
+            if not response or isinstance(response.root, JSONRPCErrorResponse):
+                logger.error(
+                    f"Failed to get task from agent, error: {getattr(response.root, 'error', 'Unknown error')}"
+                )
+                return None
+            return response.root.result
+        except Exception as e:
+            logger.error(f"Failed to get task from agent: {e}", exc_info=True)
+            return None
 
 task_service = TaskService()
