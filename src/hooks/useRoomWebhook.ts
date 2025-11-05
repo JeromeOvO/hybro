@@ -158,10 +158,20 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
             user_id: sseMessage.data.user_id,
           }
           setMessages(prev => {
-            // Check if message already exists
-            if (prev.some(msg => msg.id === newMessage.id)) {
-              return prev
+            // Check if message with this ID or content already exists
+            const existingIndex = prev.findIndex(msg => 
+              msg.id === newMessage.id || 
+              (msg.type === 'user' && msg.content === newMessage.content)
+            )
+            
+            if (existingIndex !== -1) {
+              // Update existing message with real data from SSE
+              const updated = [...prev]
+              updated[existingIndex] = { ...updated[existingIndex], ...newMessage }
+              return updated
             }
+            
+            // Add new message if it doesn't exist
             return [...prev, newMessage]
           })
         }
@@ -392,15 +402,22 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
         throw new Error(`Failed to process user message: ${processResponse.error}`)
       }
       
-      // Step 3: If SSE is connected, we'll get updates automatically via SSE
-      // If not connected, manually refresh messages as fallback
+      // Step 3: Replace optimistic message ID with real message ID
+      // Keep the message in UI regardless of SSE status to prevent it from disappearing
+      setMessages(prevMessages => 
+        prevMessages.map(msg => 
+          msg.id === tempMessageId 
+            ? { ...msg, id: messageId } 
+            : msg
+        )
+      )
+      
+      // If SSE is not connected, refresh all messages to ensure sync
       if (!sseConnected) {
         console.log('📡 SSE not connected, manually refreshing messages as fallback...')
         await loadRoomMessages()
       } else {
-        console.log('📡 SSE connected, waiting for real-time updates...')
-        // Remove optimistic message as real message will come via SSE
-        setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
+        console.log('📡 SSE connected, user message kept in UI, waiting for agent responses...')
       }
       
       toast.success('Message sent successfully')
