@@ -7,7 +7,7 @@ import {
   // MessageCircle,
   HousePlus,
   // History,
-  Users
+  Users,
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -15,6 +15,7 @@ import { NavMain } from "@/components/nav-main"
 import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from '@/components/logo'
+import { WaitlistDialog } from "@/components/waitlist-dialog"
 import {
   Sidebar,
   SidebarContent,
@@ -157,25 +158,26 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [rooms, isLoadingRooms])
 
   return (
-    <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2">
-          <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
-          <SidebarTrigger className="hidden md:block" />
-        </div>
-      </SidebarHeader>
-      <SidebarContent className="group-data-[collapsible=icon]:hidden">
-        <NavAgent navAgents={staticNavAgents} />
-        <NavMain 
-          items={navMainData} 
-          //onRefreshSessions={loadChatSessions}
-          onRefreshRooms={loadRooms}
-        />
-      </SidebarContent>
-      <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-        <NavUser />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+      <Sidebar collapsible="icon" {...props}>
+        <SidebarHeader>
+          <div className="flex items-center gap-2 px-2">
+            <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
+            <SidebarTrigger className="hidden md:block" />
+          </div>
+        </SidebarHeader>
+        <SidebarContent className="group-data-[collapsible=icon]:hidden">
+          <NavAgent navAgents={staticNavAgents} />
+          <NavMain 
+            items={navMainData} 
+            //onRefreshSessions={loadChatSessions}
+            onRefreshRooms={loadRooms}
+          />
+        </SidebarContent>
+        <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+          <WaitlistDialog />
+          <NavUser />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
   )
 }
