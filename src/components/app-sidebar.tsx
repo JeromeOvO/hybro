@@ -16,6 +16,7 @@ import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from '@/components/logo'
 import { WaitlistDialog } from "@/components/waitlist-dialog"
+import { DiscordButton } from "@/components/nav-discord-button"
 import {
   Sidebar,
   SidebarContent,
@@ -57,6 +58,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
+  
+  const enableWaitlist = process.env.NEXT_PUBLIC_ENABLE_WAITLIST === 'true'
 
   // Get user's chat session list
   /**
@@ -174,8 +177,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           />
         </SidebarContent>
         <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-          <WaitlistDialog />
-          <NavUser />
+          <DiscordButton />
+          {enableWaitlist ? (
+            <WaitlistDialog />
+          ) : (
+            <NavUser />
+          )}
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
