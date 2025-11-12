@@ -883,7 +883,8 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 CRITICAL RULE: 
                 NO agent mentions in message = ALL agent_id = null
                 Do NOT auto-assign agents based on task type or capabilities if not mentioned.
-
+                ADDITIONAL CRITICAL RULE: If "needs_decomposition" is false, there MUST be exactly one task step, and its "task_content" MUST be the "original_text" with all <@...> mentions removed.
+                
                 SCENARIOS:
 
                 1. NO MENTIONS + SIMPLE TASK
