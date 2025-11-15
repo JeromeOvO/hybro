@@ -4,10 +4,9 @@ import * as React from "react"
 import {
   BookOpen,
   VectorSquare,
-  // MessageCircle,
   HousePlus,
-  // History,
   Users,
+  MessageCircle,
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -26,15 +25,14 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
-//import type { TaskSessionesponse } from "@/lib/types"
 import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
-  // {
-  //   name: "Start a new Chat",
-  //   url: "/chat",
-  //   icon: MessageCircle,
-  // },
+  {
+    name: "Start a new Chat",
+    url: "/chat",
+    icon: MessageCircle,
+  },
   {
     name: "Create a new Room",
     url: "/room",
