@@ -40,7 +40,7 @@ export function ChatInput({
   onSubmit,
   disabled = false,
   className,
-  showTools = true,
+  showTools = false,
   showSend = true,
   maxRows = 6,
   maxHeight = 300,

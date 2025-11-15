@@ -10,7 +10,7 @@ export default function Page() {
 
   useEffect(() => {
     if (isLoaded) {
-      router.push('/room')
+      router.push('/chat')
     }
   }, [router, isLoaded])
 

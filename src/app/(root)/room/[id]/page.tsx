@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser } from '@clerk/nextjs'
 import { Settings } from 'lucide-react'
@@ -29,6 +29,9 @@ export default function RoomChatPage() {
   const [loadingAgents, setLoadingAgents] = useState(false)
   const [agentsError, setAgentsError] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  
+  // Ref to track if initial message has been sent
+  const initialMessageSentRef = useRef(false)
   
   const {
     room,
@@ -80,6 +83,43 @@ export default function RoomChatPage() {
       loadAvailableAgents()
     }
   }, [dialogOpen])
+
+  // Check for and send initial message from chat page
+  useEffect(() => {
+    // Only proceed if:
+    // 1. Room is loaded
+    // 2. Not currently loading
+    // 3. Initial message hasn't been sent yet
+    // 4. User is available
+    if (!room || loading || initialMessageSentRef.current || !user?.id) {
+      return
+    }
+
+    // Check sessionStorage for initial message
+    const storageKey = `room-${roomId}-initial-message`
+    const initialMessage = sessionStorage.getItem(storageKey)
+
+    if (initialMessage) {
+      console.log('📨 Found initial message, sending automatically:', initialMessage)
+      
+      // Mark as sent immediately to prevent duplicate sends
+      initialMessageSentRef.current = true
+      
+      // Clear from sessionStorage
+      sessionStorage.removeItem(storageKey)
+      
+      // Send the message
+      sendUserMessage(initialMessage).then((success) => {
+        if (success) {
+          console.log('✅ Initial message sent successfully')
+        } else {
+          console.error('❌ Failed to send initial message')
+          // Reset the flag if sending failed so user can retry
+          initialMessageSentRef.current = false
+        }
+      })
+    }
+  }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string) => {

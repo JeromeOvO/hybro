@@ -15,17 +15,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function WaitlistDialog() {
+interface WaitlistDialogProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  showTrigger?: boolean;
+}
+
+export function WaitlistDialog({ open, onOpenChange, showTrigger = true }: WaitlistDialogProps) {
   const launchlistKey = process.env.NEXT_PUBLIC_LAUNCHLIST_KEY || "6xqgWJ";
   return (
     <>
-      <Dialog>
-        <DialogTrigger asChild>
-          <Button variant="ghost" className="w-full justify-start gap-2">
-            <UserPlus className="h-4 w-4" />
-            Join Waitlist
-          </Button>
-        </DialogTrigger>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        {showTrigger && (
+          <DialogTrigger asChild>
+            <Button variant="ghost" className="w-full justify-start gap-2">
+              <UserPlus className="h-4 w-4" />
+              Join Waitlist
+            </Button>
+          </DialogTrigger>
+        )}
         <DialogContent className="sm:max-w-md bg-black border shadow-lg">
           <DialogHeader>
             <DialogTitle>Join Our Waitlist</DialogTitle>
