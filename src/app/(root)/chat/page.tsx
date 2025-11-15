@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { WaitlistDialog } from "@/components/waitlist-dialog"
 import type { ChatRequest } from "@/lib/types"
 
 export default function ChatPage() {
@@ -17,6 +18,7 @@ export default function ChatPage() {
     const [input, setInput] = useState("")
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [hasError, setHasError] = useState(false)
+    const [isWaitlistOpen, setIsWaitlistOpen] = useState(false)
 
     const handleSubmit = async (value: string) => {
         if (!value.trim()) {
@@ -25,8 +27,7 @@ export default function ChatPage() {
         }
 
         if (!user?.id) {
-            toast.error("Please sign in to continue")
-            router.push('/sign-in?redirect_url=/room')
+            setIsWaitlistOpen(true)
             return
         }
 
@@ -144,6 +145,12 @@ export default function ChatPage() {
                     />
                 </div>
             </div>
+
+            <WaitlistDialog 
+                open={isWaitlistOpen} 
+                onOpenChange={setIsWaitlistOpen}
+                showTrigger={false}
+            />
         </div>
     )
 }
