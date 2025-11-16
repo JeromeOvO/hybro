@@ -5,8 +5,8 @@ import {
   BookOpen,
   VectorSquare,
   HousePlus,
-  Users,
   MessageCircle,
+  History,
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -14,7 +14,6 @@ import { NavMain } from "@/components/nav-main"
 import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from '@/components/logo'
-import { WaitlistDialog } from "@/components/waitlist-dialog"
 import { DiscordButton } from "@/components/nav-discord-button"
 import {
   Sidebar,
@@ -57,8 +56,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
   
-  const enableWaitlist = process.env.NEXT_PUBLIC_ENABLE_WAITLIST === 'true'
-
   // Get user's chat session list
   /**
   const loadChatSessions = React.useCallback(async () => {
@@ -128,15 +125,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     return [
       {
-        title: "Rooms",
+        title: "History",
         url: "#",
-        icon: Users,
+        icon: History,
         isActive: true,
         items: roomItems.length > 0 ? roomItems : [
           {
-            title: isLoadingRooms ? "Loading..." : "No rooms yet",
+            title: isLoadingRooms ? "Loading..." : "No history yet",
             url: "#",
-            id: "no-rooms",
+            id: "no-history",
           }
         ],
         isLoading: isLoadingRooms,
@@ -176,11 +173,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarContent>
         <SidebarFooter className="group-data-[collapsible=icon]:hidden">
           <DiscordButton />
-          {enableWaitlist ? (
-            <WaitlistDialog />
-          ) : (
             <NavUser />
-          )}
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>

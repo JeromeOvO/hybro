@@ -1,8 +1,8 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { useParams, useRouter } from "next/navigation"
-import { useUser } from "@clerk/nextjs"
+import { useParams } from "next/navigation"
+import { useUser, useClerk } from "@clerk/nextjs"
 import { ChatSession } from "@/components/chat-session"
 import { ChatInput } from "@/components/chat-input"
 import { toast } from "sonner"
@@ -20,10 +20,9 @@ import type {
 
 export default function ChatSessionPage() {
   const params = useParams()
-  const router = useRouter()
   const { user, isLoaded } = useUser()
   const sessionId = params.id as string
-
+  const { openWaitlist } = useClerk()
   const [messages, setMessages] = useState<MessageData[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -257,9 +256,9 @@ export default function ChatSessionPage() {
     return <div>Loading...</div>
   }
 
-  if (!user) {
-    router.push('/sign-in')
-    return null
+  if (!user?.id) {
+    openWaitlist()
+    return
   }
 
   return (

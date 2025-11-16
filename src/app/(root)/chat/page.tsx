@@ -1,21 +1,19 @@
 "use client"
 
 import { useState } from "react"
-import { useUser } from "@clerk/nextjs"
+import { useUser, useClerk } from "@clerk/nextjs"
 import { ChatInput } from "@/components/chat-input"
 import { toast } from "sonner"
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { WaitlistDialog } from "@/components/waitlist-dialog"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 
 export default function ChatPage() {
     const { user, isLoaded } = useUser()
     const [input, setInput] = useState("")
     const [hasError, setHasError] = useState(false)
-    const [isWaitlistOpen, setIsWaitlistOpen] = useState(false)
-    
+    const { openWaitlist } = useClerk()
     const { creating, createAndNavigate } = useChatRoomCreation({
         userId: user?.id,
         userName: user?.firstName || user?.username || 'User'
@@ -26,11 +24,10 @@ export default function ChatPage() {
             toast.error("Please enter a message")
             return
         }
-
         if (!user?.id) {
-            setIsWaitlistOpen(true)
+            openWaitlist()
             return
-        }
+          }
 
         try {
             setHasError(false)
@@ -140,12 +137,6 @@ export default function ChatPage() {
                     />
                 </div>
             </div>
-
-            <WaitlistDialog 
-                open={isWaitlistOpen} 
-                onOpenChange={setIsWaitlistOpen}
-                showTrigger={false}
-            />
         </div>
     )
 }

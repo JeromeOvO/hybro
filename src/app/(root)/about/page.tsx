@@ -12,11 +12,10 @@ import {
   Workflow,
   Mail
 } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { useClerk } from "@clerk/nextjs"
 
 export default function AboutPage() {
-  const router = useRouter()
-
+  const { openWaitlist } = useClerk()
   const features = [
     {
       icon: <Network className="h-8 w-8 icon-network" />,
@@ -79,9 +78,9 @@ export default function AboutPage() {
               variant="outline" 
               size="lg" 
               className="px-8"
-              onClick={() => router.push('/sign-in?redirect_url=/room')}
+              onClick={() => openWaitlist()}
             >
-              Get Started Free
+              Join Waitlist
               <ArrowRight className="ml-2 h-4 w-4 icon-action" />
             </Button>
           </div>
