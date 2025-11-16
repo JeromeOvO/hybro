@@ -17,10 +17,10 @@ const getIconColorClass = (itemName: string): string => {
       return "icon-create"
     case "Create a new Room":
       return "icon-create"
-    case "A2A Agent Inspector":
-      return "icon-info"
     case "Agent Network":
       return "icon-network"
+    case "A2A Agent Inspector":
+      return "icon-inspection"
     case "About HYBRO":
       return "icon-learn"
     default:

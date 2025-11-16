@@ -5,7 +5,7 @@ import {
   BookOpen,
   VectorSquare,
   HousePlus,
-  Search,
+  InspectionPanel,
   MessageCircle,
   History,
 } from "lucide-react"
@@ -39,14 +39,14 @@ const staticNavAgents = [
     icon: HousePlus,
   },
   {
-    name: "A2A Agent Inspector",
-    url: "/inspector",
-    icon: Search,
-  },
-  {
     name: "Agent Network",
     url: "/agent",
     icon: VectorSquare,
+  },
+  {
+    name: "A2A Agent Inspector",
+    url: "/inspector",
+    icon: InspectionPanel,
   },
   {
     name: "About HYBRO",
