@@ -256,7 +256,7 @@ export default function ChatSessionPage() {
     return <div>Loading...</div>
   }
 
-  if (!user?.id) {
+  if (isLoaded && !user?.id) {
     openWaitlist()
     return
   }

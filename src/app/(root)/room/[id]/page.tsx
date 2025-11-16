@@ -22,7 +22,7 @@ import type { Agent } from '@/lib/types/agent'
 export default function RoomChatPage() {
   const params = useParams()
   const roomId = params.id as string
-  const { user } = useUser()
+  const { user, isLoaded } = useUser()
   // State for agents in dialog
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(false)
@@ -145,7 +145,7 @@ export default function RoomChatPage() {
   // Get room form data for initialization
   const roomFormData = getRoomFormData()
 
-  if (loading) {
+  if (!isLoaded || loading) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-muted-foreground">Loading room...</div>
@@ -161,7 +161,7 @@ export default function RoomChatPage() {
     )
   }
 
-  if (!user?.id) {
+  if (isLoaded && !user?.id) {
     openWaitlist()
     return
   }

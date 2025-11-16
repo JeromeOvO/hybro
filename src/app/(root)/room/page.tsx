@@ -62,7 +62,7 @@ export default function RoomPage() {
   }
 
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
-    if (!user?.id) {
+    if (isLoaded && !user?.id) {
       openWaitlist()
       return
     }

@@ -18,7 +18,7 @@ import { useUser, useClerk} from "@clerk/nextjs"
 
 export default function RegisterAgentPage() {
   const router = useRouter()
-  const { user } = useUser()
+  const { user, isLoaded } = useUser()
   const [url, setUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [inspecting, setInspecting] = useState(false)
@@ -119,7 +119,7 @@ export default function RegisterAgentPage() {
       return
     }
 
-    if (!user?.id) {
+    if (isLoaded && !user?.id) {
       openWaitlist()
       return
     }
