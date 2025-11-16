@@ -13,6 +13,8 @@ import {
 // Professional color mapping for navigation icons
 const getIconColorClass = (itemName: string): string => {
   switch (itemName) {
+    case "Start a new Chat":
+      return "icon-create"
     case "Create a new Room":
       return "icon-create"
     case "A2A Agent Inspector":

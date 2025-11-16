@@ -33,7 +33,7 @@ export default function InspectorPage() {
             <Button
               variant="outline" 
               size="lg" 
-              className="px-8"
+              className="px-8 cursor-pointer"
               onClick={handleLaunchInspector}
             >
               Launch Inspector
@@ -42,7 +42,7 @@ export default function InspectorPage() {
             <Button 
               variant="outline" 
               size="lg" 
-              className="px-8"
+              className="px-8 cursor-pointer"
               onClick={handleGithubLink}
             >
               <Github className="mr-2 h-4 w-4 icon-neutral" />

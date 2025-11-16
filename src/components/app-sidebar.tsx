@@ -4,11 +4,10 @@ import * as React from "react"
 import {
   BookOpen,
   VectorSquare,
-  // MessageCircle,
   HousePlus,
-  // History,
-  Users,
-  Search
+  Search,
+  MessageCircle,
+  History,
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -16,6 +15,7 @@ import { NavMain } from "@/components/nav-main"
 import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from '@/components/logo'
+import { DiscordButton } from "@/components/nav-discord-button"
 import {
   Sidebar,
   SidebarContent,
@@ -25,15 +25,14 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
-//import type { TaskSessionesponse } from "@/lib/types"
 import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
-  // {
-  //   name: "Start a new Chat",
-  //   url: "/chat",
-  //   icon: MessageCircle,
-  // },
+  {
+    name: "Start a new Chat",
+    url: "/chat",
+    icon: MessageCircle,
+  },
   {
     name: "Create a new Room",
     url: "/room",
@@ -62,7 +61,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
-
+  
   // Get user's chat session list
   /**
   const loadChatSessions = React.useCallback(async () => {
@@ -132,15 +131,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     return [
       {
-        title: "Rooms",
+        title: "History",
         url: "#",
-        icon: Users,
+        icon: History,
         isActive: true,
         items: roomItems.length > 0 ? roomItems : [
           {
-            title: isLoadingRooms ? "Loading..." : "No rooms yet",
+            title: isLoadingRooms ? "Loading..." : "No history yet",
             url: "#",
-            id: "no-rooms",
+            id: "no-history",
           }
         ],
         isLoading: isLoadingRooms,
@@ -163,25 +162,26 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [rooms, isLoadingRooms])
 
   return (
-    <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2">
-          <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
-          <SidebarTrigger className="hidden md:block" />
-        </div>
-      </SidebarHeader>
-      <SidebarContent className="group-data-[collapsible=icon]:hidden">
-        <NavAgent navAgents={staticNavAgents} />
-        <NavMain 
-          items={navMainData} 
-          //onRefreshSessions={loadChatSessions}
-          onRefreshRooms={loadRooms}
-        />
-      </SidebarContent>
-      <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-        <NavUser />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+      <Sidebar collapsible="icon" {...props}>
+        <SidebarHeader>
+          <div className="flex items-center gap-2 px-2">
+            <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
+            <SidebarTrigger className="hidden md:block" />
+          </div>
+        </SidebarHeader>
+        <SidebarContent className="group-data-[collapsible=icon]:hidden">
+          <NavAgent navAgents={staticNavAgents} />
+          <NavMain 
+            items={navMainData} 
+            //onRefreshSessions={loadChatSessions}
+            onRefreshRooms={loadRooms}
+          />
+        </SidebarContent>
+        <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+          <DiscordButton />
+            <NavUser />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
   )
 }

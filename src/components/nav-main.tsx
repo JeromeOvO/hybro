@@ -43,7 +43,7 @@ export function NavMain({
     if (itemTitle === "Chat Sessions" && onRefreshSessions) {
       return onRefreshSessions
     }
-    if (itemTitle === "Rooms" && onRefreshRooms) {
+    if (itemTitle === "History" && onRefreshRooms) {
       return onRefreshRooms
     }
     return undefined

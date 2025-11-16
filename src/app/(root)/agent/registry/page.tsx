@@ -14,7 +14,7 @@ import type {
   AgentCenterRequest,
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
-import { useUser } from "@clerk/nextjs"
+import { useUser, useClerk} from "@clerk/nextjs"
 
 export default function RegisterAgentPage() {
   const router = useRouter()
@@ -26,7 +26,7 @@ export default function RegisterAgentPage() {
   const [agentData, setAgentData] = useState<InspectionCenterResponse | null>(null)
   const [inspectionData, setInspectionData] = useState<InsepectionCenterConnectionValidationResponse | null>(null)
   const [urlError, setUrlError] = useState("")
-
+  const { openWaitlist } = useClerk()
   const validateUrl = (inputUrl: string): boolean => {
     try {
       const urlObj = new URL(inputUrl)
@@ -120,10 +120,9 @@ export default function RegisterAgentPage() {
     }
 
     if (!user?.id) {
-      toast.error("Please sign in to continue")
-      router.push('/sign-in?redirect_url=/agent/registry')
+      openWaitlist()
       return
-  }
+    }
 
     setRegistering(true)
 

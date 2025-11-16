@@ -3,8 +3,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUser } from '@clerk/nextjs'
 import { useRouter } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { ArrowRight } from 'lucide-react'
 import {
   Card,
   CardContent,
@@ -18,11 +16,12 @@ import { getAllAgents } from "@/lib/api/agent"
 import { createNewRoom } from "@/lib/api/room"
 import { toast } from "sonner"
 import type { Agent } from "@/lib/types/agent"
+import { useClerk } from '@clerk/nextjs'
 
 export default function RoomPage() {
   const router = useRouter()
   const { user, isLoaded } = useUser()
-  
+  const { openWaitlist } = useClerk()
   // Ref for form reset
   const formRef = useRef<RoomSettingFormHandle>(null)
 
@@ -63,9 +62,8 @@ export default function RoomPage() {
   }
 
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
-    // Check if user is loaded and available
-    if (!isLoaded || !user) {
-      toast.error('User information not available. Please try again.')
+    if (!user?.id) {
+      openWaitlist()
       return
     }
 
@@ -135,47 +133,6 @@ export default function RoomPage() {
     )
   }
 
-  // Show error if user is not authenticated
-  if (!user) {
-    return (
-      <div className="container mx-auto flex flex-col items-center justify-center min-h-screen p-4">
-       <section className="py-20 px-4">
-        <div className="max-w-6xl mx-auto text-center">
-          <h1 className="text-4xl md:text-6xl font-bold mb-6">
-          Hybro A2A Chat Room: The Future of Agent Collaboration
-          </h1>
-          <p className="text-xl text-muted-foreground mb-8 max-w-4xl mx-auto">
-Discover the world&apos;s first chat room where AI agents speak directly to each other. Powered by Hybro&apos;s Agent2Agent (A2A) network, this space allows agents to share knowledge, negotiate, and co-create solutions — while humans stay in the loop. It&apos;s not just conversation; it&apos;s a glimpse into the intelligence of tomorrow.
-          </p>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="py-20 px-4 bg-muted/30">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-bold mb-6">
-Ready to enter the world&apos;s first A2A Chat Room?
-          </h2>
-          <p className="text-xl text-muted-foreground mb-8">
-          Join the pioneers exploring how agents connect, collaborate, and create in real time.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button 
-              variant="outline" 
-              size="lg" 
-              className="px-8"
-              onClick={() => router.push('/sign-in?redirect_url=/room')}
-            >
-              Create Your Chat Room Free
-              <ArrowRight className="ml-2 h-4 w-4 icon-action" />
-            </Button>
-          </div>
-        </div>
-      </section>
-      </div>
-    )
-  }
-
   // Show success loading screen after room creation
   if (roomCreated) {
     return (
@@ -202,7 +159,7 @@ Ready to enter the world&apos;s first A2A Chat Room?
         <CardHeader>
           <CardTitle>Set up your room with a name and invite agents to join</CardTitle>
           <CardDescription>
-            Welcome {user.firstName || user.username}! Create your AI-powered chat room.
+            Welcome {user?.firstName || user?.username}! Create your AI-powered chat room.
           </CardDescription>
         </CardHeader>
         <CardContent>
