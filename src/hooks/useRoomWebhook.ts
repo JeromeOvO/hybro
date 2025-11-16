@@ -180,7 +180,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       case 'agent_response':
         console.log('🤖 Agent response received via SSE')
         // SSE provides the agent response data, no need to reload
-        if (sseMessage.data?.content && sseMessage.data?.agent_id) {
+        if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
           const agentName = await getAgentName(sseMessage.data.agent_id)
           const newMessage: MessageData = {
             id: sseMessage.data.message_id || `sse-agent-${Date.now()}`,
