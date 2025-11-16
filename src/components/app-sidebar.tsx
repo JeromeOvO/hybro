@@ -7,7 +7,8 @@ import {
   // MessageCircle,
   HousePlus,
   // History,
-  Users
+  Users,
+  Search
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -37,6 +38,11 @@ const staticNavAgents = [
     name: "Create a new Room",
     url: "/room",
     icon: HousePlus,
+  },
+  {
+    name: "A2A Agent Inspector",
+    url: "/inspector",
+    icon: Search,
   },
   {
     name: "Agent Network",

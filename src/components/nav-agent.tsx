@@ -15,6 +15,8 @@ const getIconColorClass = (itemName: string): string => {
   switch (itemName) {
     case "Create a new Room":
       return "icon-create"
+    case "A2A Agent Inspector":
+      return "icon-info"
     case "Agent Network":
       return "icon-network"
     case "About HYBRO":
