@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
-import { useUser } from '@clerk/nextjs'
+import { useUser, useClerk } from '@clerk/nextjs'
 import { Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,13 +23,12 @@ export default function RoomChatPage() {
   const params = useParams()
   const roomId = params.id as string
   const { user } = useUser()
-  
   // State for agents in dialog
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(false)
   const [agentsError, setAgentsError] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
-  
+  const { openWaitlist } = useClerk()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
   
@@ -160,6 +159,11 @@ export default function RoomChatPage() {
         <div className="text-destructive">Room not found</div>
       </div>
     )
+  }
+
+  if (!user?.id) {
+    openWaitlist()
+    return
   }
 
   return (
