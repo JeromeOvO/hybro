@@ -16,7 +16,7 @@ export default function AgentProfilePage() {
   const params = useParams()
   const router = useRouter()
   const agentId = params.id as string
-  const { user } = useUser()
+  const { user, isLoaded } = useUser()
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const { openWaitlist } = useClerk()
@@ -48,7 +48,7 @@ export default function AgentProfilePage() {
 
   const loadAgentDetail = async () => {
 
-    if (!user?.id) {
+    if (isLoaded && !user?.id) {
       openWaitlist()
       return
     }
@@ -73,10 +73,10 @@ export default function AgentProfilePage() {
   }
 
   useEffect(() => {
-    if (agentId) {
+    if (isLoaded && agentId) {
       loadAgentDetail()
     }
-  }, [agentId])
+  }, [agentId, isLoaded])
 
   if (loading) {
     return (
