@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useRef, useEffect } from 'react'
+import React, { useRef, useEffect, useState, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -212,11 +212,48 @@ interface RoomMessagesProps {
 
 export function RoomMessages({ messages, loading, processing = false }: RoomMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
+  const previousMessageCountRef = useRef(messages.length)
 
-  // Auto scroll to bottom when new messages arrive or processing state changes
+  // Track if user is near bottom of scroll
+  const checkIfNearBottom = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container) return false
+    
+    const threshold = 100 // pixels from bottom
+    const isNearBottom = 
+      container.scrollHeight - container.scrollTop - container.clientHeight < threshold
+    return isNearBottom
+  }, [])
+
+  // Handle scroll to detect if user manually scrolls
+  const handleScroll = useCallback(() => {
+    const isNearBottom = checkIfNearBottom()
+    setShouldAutoScroll(isNearBottom)
+  }, [checkIfNearBottom])
+
+  // Auto scroll logic - only scroll if user is at bottom or just sent a message
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, processing])
+    const messageCountIncreased = messages.length > previousMessageCountRef.current
+    const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === 'user'
+    
+    // Auto-scroll if:
+    // 1. User just sent a message (new user message added), OR
+    // 2. User is already at the bottom (shouldAutoScroll is true)
+    if (messageCountIncreased && (lastMessageIsUser || shouldAutoScroll)) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+    
+    previousMessageCountRef.current = messages.length
+  }, [messages, shouldAutoScroll])
+
+  // Auto scroll when processing state changes only if at bottom
+  useEffect(() => {
+    if (shouldAutoScroll) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [processing, shouldAutoScroll])
 
   if (loading) {
     return (
@@ -227,7 +264,11 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }
 
   return (
-    <div className="h-full w-full overflow-y-auto">
+    <div 
+      ref={scrollContainerRef}
+      onScroll={handleScroll}
+      className="h-full w-full overflow-y-auto"
+    >
       <div className="py-4 min-h-full">
         {messages.length === 0 && !processing ? (
           <div className="h-full flex items-center justify-center">
