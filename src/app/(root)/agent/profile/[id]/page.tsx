@@ -56,6 +56,12 @@ export default function AgentProfilePage() {
     try {
       setLoading(true)
       const response = await getAgent(agentId)
+
+      // valid the specific agent's provider is the current user
+      const providerId = response.provider_id
+      if ((providerId!=null) && (providerId != user!.id)){
+        return
+      }
       
       if (response.success && response.agent) {
         setAgentData(response)

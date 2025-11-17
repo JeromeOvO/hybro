@@ -16,9 +16,12 @@ import {
 import { toast } from "sonner"
 import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
+import { useUser, useClerk} from "@clerk/nextjs"
 
 export default function AgentPage() {
   const router = useRouter()
+  const { user, isLoaded } = useUser()
+  const { openWaitlist } = useClerk()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [error] = useState<string | null>(null)
@@ -29,6 +32,7 @@ export default function AgentPage() {
     try {
       setLoading(true)
       const response = await getAllAgents()
+
       if (response.success && response.agents) {
         setAgents(response.agents)
       } else {
@@ -39,6 +43,20 @@ export default function AgentPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const registerAgent = async() =>{
+    if (!isLoaded){
+      return
+    }
+
+    if (isLoaded && !user?.id) {
+      openWaitlist()
+      return
+    }
+
+    router.push('/agent/registry')
+
   }
 
   useEffect(() => {
@@ -107,7 +125,7 @@ export default function AgentPage() {
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
-          <Button variant="outline" onClick={() => router.push('/agent/registry')}>
+          <Button variant="outline" onClick={registerAgent}>
             <Plus className="h-4 w-4 mr-2" />
             Register Agent
           </Button>

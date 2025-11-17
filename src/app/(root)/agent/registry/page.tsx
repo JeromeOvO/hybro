@@ -118,6 +118,11 @@ export default function RegisterAgentPage() {
       toast.error("Please complete connection inspection first")
       return
     }
+    
+    // Do nothing while Clerk is still loading to avoid unexpected waitlist popup
+    if(!isLoaded){
+      return
+    }
 
     if (isLoaded && !user?.id) {
       openWaitlist()
@@ -126,10 +131,14 @@ export default function RegisterAgentPage() {
 
     setRegistering(true)
 
+    // get provider id from clerk
+    const providerId = user!.id
+
     try {
       const registerRequest: AgentCenterRequest = {
         agent_url: url,
-        agent_card: agentData.agent_card
+        agent_card: agentData.agent_card,
+        provider_id: providerId
       }
 
       const response = await registerAgent(registerRequest)
