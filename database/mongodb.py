@@ -181,12 +181,6 @@ class MongoDB:
         """
         Get all agents
         """
-
-        # use for DB migration
-        await self.agents_collection.update_many(
-            {"provider_id": {"$exists": False}},
-            {"$set": {"provider_id": None}},
-        )
         cursor = self.agents_collection.find()
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
