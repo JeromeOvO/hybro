@@ -113,6 +113,7 @@ class DebatationCenterRequest(BaseModel):
 class AgentCenterRequest(BaseModel):
     agent_id: str | None = None
     agent_url: str | None = None
+    provider_id: str | None = None
     agent_card: AgentCard | None = None
     call_increment: int | None = 0
     call_success_increment: int | None = 0

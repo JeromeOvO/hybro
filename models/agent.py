@@ -14,6 +14,9 @@ class Agent(BaseModel):
     # Primary identification field
     agent_id: str
 
+    # Provider (register user id)
+    provider_id: str
+
     # Agent card
     agent_card: AgentCard
 

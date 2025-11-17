@@ -99,6 +99,7 @@ class DebatationCenterResponse(BaseModel):
 class AgentCenterResponse(BaseModel):
     agent_url: str | None = None
     agent_id: str | None = None
+    provider_id: str | None = None
     agent_card: AgentCard | None = None
     agent: Agent | None = None
     agents: list[Agent] | None = None

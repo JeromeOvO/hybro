@@ -181,7 +181,28 @@ class MongoDB:
         """
         Get all agents
         """
+
+        # use for DB migration
+        await self.agents_collection.update_many(
+            {"provider_id": {"$exists": False}},
+            {"$set": {"provider_id": None}},
+        )
         cursor = self.agents_collection.find()
+        results = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in results]
+
+    async def get_all_agents_by_user_id_or_public(self, user_id: str) -> list[Agent]:
+        """
+        Get all agents by user ID or public (provider_id == null)
+        """
+        cursor = self.agents_collection.find(
+            {
+                "$or": [
+                    {"provider_id": None},
+                    {"provider_id": user_id},
+                ]
+            }
+        )
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
 
