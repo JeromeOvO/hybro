@@ -79,8 +79,8 @@ export default function RoomPage() {
       )
 
       // Get user info from Clerk
-      const roomOwnerId = user.id
-      const roomOwnerName = user.fullName || user.firstName || user.username || 'Unknown User'
+      const roomOwnerId = user!.id
+      const roomOwnerName = user!.fullName || user!.firstName || user!.username || 'Unknown User'
 
       // Create extend_info with debate mode
       const extendInfo = {
