@@ -62,7 +62,13 @@ export default function RoomPage() {
   }
 
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
-    if (isLoaded && !user?.id) {
+    // 1) Do nothing while Clerk is still loading to avoid unexpected waitlist popup
+    if (!isLoaded) {
+      return
+    }
+
+    // 2) Once loaded, if there's no user, open the waitlist
+    if (!user) {
       openWaitlist()
       return
     }
@@ -79,8 +85,8 @@ export default function RoomPage() {
       )
 
       // Get user info from Clerk
-      const roomOwnerId = user!.id
-      const roomOwnerName = user!.fullName || user!.firstName || user!.username || 'Unknown User'
+      const roomOwnerId = user.id
+      const roomOwnerName = user.fullName || user.firstName || user.username || 'Unknown User'
 
       // Create extend_info with debate mode
       const extendInfo = {
