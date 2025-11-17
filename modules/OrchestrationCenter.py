@@ -10,21 +10,19 @@ from a2a.types import (
     Part,
     Role,
     Task,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
-    TaskStatusUpdateEvent,
     TextPart,
 )
 
 from common.utils.logger import get_logger
+from models.agent import Agent
 from models.error import (
     AgentNotAssignedError,
     AgentNotFoundError,
     TaskIdRequiredError,
     TaskNotFoundError,
 )
-from models.agent import Agent
 from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
@@ -1425,7 +1423,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
     def _get_text_from_message(self, message: Message | None) -> str:
         if message is None:
             return ""
-        return " ".join(
+        return "".join(
             part.root.text if part.root and hasattr(part.root, "text") else ""
             for part in message.parts
         )
@@ -1498,7 +1496,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     message_streaming_state.agent_message_id = result.message_id
 
                 # Extract text content from current chunk
-                content = " ".join(
+                content = "".join(
                     part.root.text if part.root and hasattr(part.root, "text") else ""
                     for part in message_list
                 )

@@ -15,7 +15,6 @@ from a2a.types import (
 
 from common.utils.logger import get_logger
 from config.settings import settings
-from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -1580,7 +1579,7 @@ class RoomServices:
                                         text_parts.append(part.root.text)
 
                             # Combine all text parts
-                            agent_content = " ".join(text_parts) if text_parts else ""
+                            agent_content = "".join(text_parts) if text_parts else ""
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
