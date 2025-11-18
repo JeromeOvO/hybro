@@ -256,7 +256,7 @@ export default function RoomChatPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
           <RoomChatInput
             onSubmit={handleSendMessage}
-            disabled={sending || processing}
+            disableSend={sending || processing}
             agents={agentList}
           />
         </div>

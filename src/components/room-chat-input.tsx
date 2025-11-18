@@ -12,11 +12,19 @@ interface Agent {
 
 interface RoomChatInputProps {
   onSubmit: (message: string) => void
+  /**
+   * When true, the editor itself is disabled (read-only).
+   * For normal sending-state control, prefer using disableSend.
+   */
   disabled?: boolean
+  /**
+   * When true, the Send button is disabled, but typing is still allowed.
+   */
+  disableSend?: boolean
   agents: Agent[]
 }
 
-export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps) {
+export function RoomChatInput({ onSubmit, disabled = false, disableSend = false, agents }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
@@ -413,7 +421,10 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
     } else {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-        handleSubmit()
+        // Allow typing but block submit
+        if (!disableSend && !disabled) {
+          handleSubmit()
+        }
       }
     }
   }
@@ -426,6 +437,11 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
 
   const handleSubmit = () => {
     const trimmedMessage = message.trim()
+    // If sending is disabled (e.g., previous message still processing), don't submit or clear
+    if (!trimmedMessage || disableSend || disabled) {
+      return
+    }
+
     if (trimmedMessage) {
       // if (!validateMessage(trimmedMessage)) {
       //   toast.error("Please mention at least one agent", {
@@ -501,7 +517,7 @@ export function RoomChatInput({ onSubmit, disabled, agents }: RoomChatInputProps
           <div className="flex items-center gap-2 ml-auto">
             <Button
               onClick={handleSubmit}
-              disabled={disabled || !message.trim()}
+              disabled={disableSend || disabled || !message.trim()}
               size="lg"
               className="h-12 w-12 rounded-full p-0"
             >

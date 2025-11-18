@@ -169,7 +169,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarTrigger className="hidden md:block" />
           </div>
         </SidebarHeader>
-        <SidebarContent className="group-data-[collapsible=icon]:hidden">
+        <SidebarContent>
           <NavAgent navAgents={staticNavAgents} />
           <NavMain 
             items={navMainData} 
@@ -177,7 +177,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             onRefreshRooms={loadRooms}
           />
         </SidebarContent>
-        <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+        <SidebarFooter>
           <DiscordButton />
             <NavUser />
         </SidebarFooter>
