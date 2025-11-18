@@ -46,6 +46,7 @@ export function NavAgent({
             <SidebarMenuButton
               asChild
               size="lg"
+              tooltip={item.name}
               className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
             >
               <Link href={item.url} prefetch={false} scroll={false}>

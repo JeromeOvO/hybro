@@ -36,7 +36,10 @@ export function NavUser() {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <div
+            className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+            title="Join Waitlist"
+          >
             <div
               className="flex items-center gap-2 flex-1 cursor-pointer"
               onClick={() => openWaitlist()}
@@ -74,7 +77,10 @@ export function NavUser() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-      <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+      <div
+        className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+        title={userEmail ? `${userName} (${userEmail})` : userName}
+      >
           <UserButton
             appearance={{
               elements: {
