@@ -14,8 +14,8 @@ class Agent(BaseModel):
     # Primary identification field
     agent_id: str
 
-    # Provider (register user id)
-    provider_id: str
+    # Provider (register user id) - None for legacy agents
+    provider_id: str | None = None
 
     # Agent card
     agent_card: AgentCard
