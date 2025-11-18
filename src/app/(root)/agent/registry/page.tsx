@@ -118,6 +118,11 @@ export default function RegisterAgentPage() {
       toast.error("Please complete connection inspection first")
       return
     }
+    
+    // Do nothing while Clerk is still loading to avoid unexpected waitlist popup
+    if(!isLoaded){
+      return
+    }
 
     if (isLoaded && !user?.id) {
       openWaitlist()

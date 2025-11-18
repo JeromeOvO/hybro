@@ -46,6 +46,9 @@ export default function AgentPage() {
   }
 
   const registerAgent = async() =>{
+    if (!isLoaded){
+      return
+    }
 
     if (isLoaded && !user?.id) {
       openWaitlist()
