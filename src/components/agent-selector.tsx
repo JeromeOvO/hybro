@@ -203,13 +203,13 @@ export function AgentSelector({
       {selectedAgentsList.length > 0 && (
         <div className="space-y-3">
           <h4 className="text-sm font-medium text-muted-foreground">Selected Agents</h4>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 min-h-[44px]">
             {selectedAgentsList.map((agent) => (
               <AgentCardHover key={agent.agent_id} agent={agent}>
                 <div
-                  className="flex items-center gap-2 p-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors cursor-pointer"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors cursor-pointer h-10"
                 >
-                  <Avatar className="w-6 h-6">
+                  <Avatar className="w-6 h-6 flex-shrink-0">
                     <AvatarImage src={agent.agent_card.iconUrl || undefined} />
                     <AvatarFallback className="text-xs">
                       {agent.agent_card.name.charAt(0).toUpperCase()}
@@ -219,7 +219,7 @@ export function AgentSelector({
                     {agent.agent_card.name}
                   </span>
                   <Minus 
-                    className="w-4 h-4 text-destructive ml-auto cursor-pointer hover:text-destructive/80" 
+                    className="w-4 h-4 text-destructive ml-2 flex-shrink-0 cursor-pointer hover:text-destructive/80" 
                     onClick={(e) => {
                       e.stopPropagation()
                       onAgentRemove(agent.agent_id)
@@ -236,26 +236,28 @@ export function AgentSelector({
       <div className="space-y-3">
         <h4 className="text-sm font-medium text-muted-foreground">Available Agents</h4>
         {loading ? (
-          <div className="text-center py-4 text-muted-foreground">
-            Loading agents...
+          <div className="text-center py-8 text-muted-foreground min-h-[120px] flex items-center justify-center">
+            <div className="flex flex-col items-center gap-2">
+              <div className="animate-pulse">Loading agents...</div>
+            </div>
           </div>
         ) : error ? (
-          <div className="text-center py-4 text-muted-foreground">
+          <div className="text-center py-8 text-muted-foreground min-h-[120px] flex items-center justify-center">
             Failed to load. Please try again.
           </div>
         ) : unselectedAgents.length === 0 ? (
-          <div className="text-center py-4 text-muted-foreground">
+          <div className="text-center py-8 text-muted-foreground min-h-[120px] flex items-center justify-center">
             {availableAgents.length === 0 ? 'No agents available' : 'All agents selected'}
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
+          <div className="flex flex-wrap gap-2 max-h-64 min-h-[120px] overflow-y-auto p-1">
             {unselectedAgents.map((agent) => (
               <AgentCardHover key={agent.agent_id} agent={agent}>
                 <div
-                  className="flex items-center gap-2 p-2 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer h-10"
                   onClick={() => onAgentAdd(agent)}
                 >
-                  <Avatar className="w-6 h-6">
+                  <Avatar className="w-6 h-6 flex-shrink-0">
                     <AvatarImage src={agent.agent_card.iconUrl || undefined} />
                     <AvatarFallback className="text-xs">
                       {agent.agent_card.name.charAt(0).toUpperCase()}
@@ -264,7 +266,7 @@ export function AgentSelector({
                   <span className="text-sm font-medium truncate max-w-32">
                     {agent.agent_card.name}
                   </span>
-                  <Plus className="w-4 h-4 text-primary ml-auto" />
+                  <Plus className="w-4 h-4 text-primary ml-2 flex-shrink-0" />
                 </div>
               </AgentCardHover>
             ))}

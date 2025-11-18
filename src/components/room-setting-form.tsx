@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
-import { MessageSquareMore, Users } from "lucide-react"
+import { MessageSquareMore } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
 const formSchema = z.object({
@@ -185,10 +185,6 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
 
         {/* Agent Selection */}
         <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            <FormLabel className="text-base">Select Agents</FormLabel>
-          </div>
           <AgentSelector
             selectedAgents={selectedAgents}
             onAgentAdd={handleAddAgent}
