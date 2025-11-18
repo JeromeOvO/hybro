@@ -36,7 +36,7 @@ export function NavUser() {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors">
+          <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
             <div
               className="flex items-center gap-2 flex-1 cursor-pointer"
               onClick={() => openWaitlist()}
@@ -48,7 +48,7 @@ export function NavUser() {
               >
                 <UserPlus className="h-4 w-4 text-white" />
               </div>
-              <div className="grid flex-1 text-left text-sm leading-tight">
+              <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                 <span
                   className="truncate font-medium bg-gradient-to-r 
                             from-[hsl(var(--color-hybro-hy))] 
@@ -59,7 +59,9 @@ export function NavUser() {
                 </span>
               </div>
             </div>
-            <ThemeToggle />
+            <div className="group-data-[collapsible=icon]:hidden">
+              <ThemeToggle />
+            </div>
           </div>
         </SidebarMenuItem>
       </SidebarMenu>
@@ -72,7 +74,7 @@ export function NavUser() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-      <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors">
+      <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
           <UserButton
             appearance={{
               elements: {
@@ -85,11 +87,13 @@ export function NavUser() {
             }}
             showName={false}
           />
-          <div className="grid flex-1 text-left text-sm leading-tight">
+          <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
             <span className="truncate font-medium">{userName}</span>
             <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
           </div>
-          <ThemeToggle />
+          <div className="group-data-[collapsible=icon]:hidden">
+            <ThemeToggle />
+          </div>
         </div>
       </SidebarMenuItem>
     </SidebarMenu>

@@ -25,9 +25,15 @@ export function DiscordButton() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <SidebarMenuButton size="lg" onClick={handleDiscordClick}>
-          <DiscordIcon className="h-4 w-4" />
-          <span>Join Community</span>
+        <SidebarMenuButton
+          size="lg"
+          onClick={handleDiscordClick}
+          className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+        >
+          <DiscordIcon className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
+          <span className="group-data-[collapsible=icon]:hidden">
+            Join Community
+          </span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
