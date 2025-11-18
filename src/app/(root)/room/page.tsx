@@ -161,19 +161,21 @@ export default function RoomPage() {
   return (
     <div className="container mx-auto flex items-center justify-center min-h-screen p-4">
       {/* Room Creation Form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Set up your room with a name and invite agents to join</CardTitle>
-          <CardDescription>
+      <Card className="w-full max-w-3xl">
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-2xl">Set up your room with a name and invite agents to join</CardTitle>
+          <CardDescription className="text-base">
             Welcome {user?.firstName || user?.username}! Create your AI-powered chat room.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {isCreatingRoom && (
-            <div className="flex items-center justify-center mb-6">
-              <div className="flex items-center gap-3 px-4 py-2 bg-muted rounded-lg">
-                <Loader2 className="h-4 w-4 animate-spin icon-action" />
-                <span className="text-sm">Creating room...</span>
+            <div className="flex items-center justify-center mb-6 p-4">
+              <div className="flex flex-col items-center gap-3">
+                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+                <span className="text-sm font-medium text-muted-foreground">Creating your room...</span>
               </div>
             </div>
           )}
