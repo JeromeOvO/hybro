@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -32,21 +32,18 @@ wheels = [
 
 [[package]]
 name = "a2a-sdk"
-version = "0.2.16"
+version = "0.3.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fastapi" },
+    { name = "google-api-core" },
     { name = "httpx" },
     { name = "httpx-sse" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-sdk" },
+    { name = "protobuf" },
     { name = "pydantic" },
-    { name = "sse-starlette" },
-    { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/3b/8fd1e3fe28606712c203b968a6fe2c8e7944b6df9e65c28976c66c19286c/a2a_sdk-0.2.16.tar.gz", hash = "sha256:d9638c71674183f32fe12f8865015e91a563a90a3aa9ed43020f1b23164862b3", size = 179006, upload-time = "2025-07-21T19:51:14.107Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2d/17/bc2837a6b22cfe03df58c6145e5fa2fbcf780d53e0d9a865ae6d32a3155a/a2a_sdk-0.3.13.tar.gz", hash = "sha256:c1dcc611bff0523730906833927d7046bf88d7d90b0f8d73239c43d373afcab8", size = 227869, upload-time = "2025-11-17T09:27:40.532Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/92/16bfbc2ef0ef037c5860ef3b13e482aeb1860b9643bf833ed522c995f639/a2a_sdk-0.2.16-py3-none-any.whl", hash = "sha256:54782eab3d0ad0d5842bfa07ff78d338ea836f1259ece51a825c53193c67c7d0", size = 103090, upload-time = "2025-07-21T19:51:12.613Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/da/6587ce6d08852988de7fd6f5442a53c6c572378d9242c6819f2f67c5b7ab/a2a_sdk-0.3.13-py3-none-any.whl", hash = "sha256:0dd13aae759aebd95405dc88cfa9d087e8745a6b8e598e83ccc0223330ecf78a", size = 140386, upload-time = "2025-11-17T09:27:39.294Z" },
 ]
 
 [[package]]
@@ -4021,7 +4018,7 @@ dev = [
 requires-dist = [
     { name = "a2a", specifier = ">=0.44" },
     { name = "a2a-json-rpc", specifier = ">=0.1.3" },
-    { name = "a2a-sdk", specifier = ">=0.2.7" },
+    { name = "a2a-sdk", specifier = ">=0.3.0" },
     { name = "a2a-server", specifier = ">=0.1.7" },
     { name = "absl-py", specifier = ">=2.3.0" },
     { name = "aiofiles", specifier = ">=24.1.0" },
