@@ -48,8 +48,9 @@ class AgentService:
             raise AgentCardRequiredError()
 
         new_agent_id = str(uuid.uuid4())
+        provider_id = request.provider_id
         # create agent
-        agent = Agent(agent_id=new_agent_id, agent_card=request.agent_card)
+        agent = Agent(agent_id=new_agent_id, agent_card=request.agent_card, provider_id=provider_id)
 
         # add agent to database
         try:
@@ -62,6 +63,7 @@ class AgentService:
 
         return AgentCenterResponse(
             agent_id=new_agent_id,
+            provider_id=provider_id,
             agent=agent,
             success=agent_add_result,
             error=None,

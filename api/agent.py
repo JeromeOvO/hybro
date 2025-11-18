@@ -29,11 +29,12 @@ async def get_agent_card_from_url(request: Request):
 async def register_agent(request: Request):
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
+    provider_id = request_data.get("provider_id")
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
 
-    agent_center_request = AgentCenterRequest(agent_url=agent_url)
+    agent_center_request = AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
     return agent_center_response

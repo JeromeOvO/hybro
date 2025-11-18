@@ -185,6 +185,14 @@ class MongoDB:
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
 
+    async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
+        """
+        Get all agents by user ID
+        """
+        cursor = self.agents_collection.find({"provider_id": user_id})
+        results = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in results]
+
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
     ) -> list[Agent]:
