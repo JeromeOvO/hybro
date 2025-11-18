@@ -15,7 +15,6 @@ from a2a.types import (
 
 from common.utils.logger import get_logger
 from config.settings import settings
-from models.memory import MemoryContent, RoomMemory
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -1580,7 +1579,7 @@ class RoomServices:
                                         text_parts.append(part.root.text)
 
                             # Combine all text parts
-                            agent_content = " ".join(text_parts) if text_parts else ""
+                            agent_content = "".join(text_parts) if text_parts else ""
 
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
@@ -1663,7 +1662,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with message",
+                    "OrchestrationCenter: Failed to update agent message with message: %s",
                     update_response.error,
                 )
                 return False
@@ -1712,7 +1711,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with status update",
+                    "OrchestrationCenter: Failed to update agent message with status update: %s",
                     update_response.error,
                 )
                 return False
@@ -1740,7 +1739,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with artifact update",
+                    "OrchestrationCenter: Failed to update agent message with artifact update: %s",
                     update_response.error,
                 )
                 return False

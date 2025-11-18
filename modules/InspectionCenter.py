@@ -1,5 +1,5 @@
 import httpx
-from a2a.client.client import A2ACardResolver, A2AClient
+from a2a.client import A2ACardResolver, A2AClient
 
 from common.utils.logger import get_logger
 from models.error import AgentNotFoundError

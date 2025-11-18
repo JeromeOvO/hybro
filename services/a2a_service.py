@@ -3,7 +3,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from a2a.client.client import A2ACardResolver, A2AClient
+from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import (
     AgentCard,
     JSONRPCErrorResponse,
@@ -200,9 +200,6 @@ class A2AService:
         Yields:
             Dict events (TokenStreamingEvent, TaskUpdateStreamingEvent, etc.)
         """
-        # Initialize A2A client and get agent card
-        a2a_client = await self.create_a2a_client(agent_card)
-
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
             logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
@@ -214,16 +211,11 @@ class A2AService:
                 f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
             )
             try:
-                event = await self.send_message_sync(
-                    agent_card.url, message, a2a_client
-                )
+                event = await self.send_message_sync(agent_card, message)
                 yield event
 
             except Exception as e:
-                yield A2AServiceError(
-                    error=str(e),
-                    agent_url=agent_card.url,
-                )
+                raise A2AServiceError(str(e)) from e
 
     async def dry_send_message(
         self, a2a_client: A2AClient, aegnt_card: AgentCard, message_text: str
