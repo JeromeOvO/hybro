@@ -220,6 +220,7 @@ export interface AgentSkill {
 export interface AgentCenterRequest {
   agent_url?: string | null;
   agent_id?: string | null;
+  provider_id?: string | null;
   agent_card?: AgentCard | null;
   call_increment?: number | null;
   call_success_increment?: number | null;

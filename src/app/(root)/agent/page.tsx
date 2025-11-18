@@ -29,6 +29,7 @@ export default function AgentPage() {
     try {
       setLoading(true)
       const response = await getAllAgents()
+
       if (response.success && response.agents) {
         setAgents(response.agents)
       } else {
@@ -40,7 +41,7 @@ export default function AgentPage() {
       setLoading(false)
     }
   }
-
+  
   useEffect(() => {
     loadAgents()
   }, [])

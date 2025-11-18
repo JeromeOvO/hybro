@@ -222,6 +222,7 @@ export interface AgentSkill {
 export interface AgentCenterResponse {
   agent_url?: string | null;
   agent_id?: string | null;
+  provider_id?: string | null;
   agent_card?: AgentCard | null;
   agent?: Agent | null;
   agents?: Agent[] | null;
