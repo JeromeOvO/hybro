@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import {
   BookOpen,
   VectorSquare,
@@ -8,13 +9,14 @@ import {
   InspectionPanel,
   MessageCircle,
   History,
+  PanelLeftIcon,
 } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavMain } from "@/components/nav-main"
 import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
-import { Logo } from '@/components/logo'
+import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import {
   Sidebar,
@@ -23,6 +25,7 @@ import {
   SidebarHeader,
   SidebarRail,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { Room } from "@/lib/types/room"
@@ -57,6 +60,7 @@ const staticNavAgents = [
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
+  const { state, toggleSidebar } = useSidebar()
   //const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
   //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
@@ -161,12 +165,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     ]
   }, [rooms, isLoadingRooms])
 
+  const isCollapsed = state === "collapsed"
+
   return (
       <Sidebar collapsible="icon" {...props}>
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2">
             <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
-            <SidebarTrigger className="hidden md:block" />
+            {isCollapsed ? (
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                className="hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors group"
+                aria-label="Expand sidebar"
+              >
+                <Image
+                  src="/favicon.svg"
+                  alt="Hybro"
+                  width={20}
+                  height={20}
+                  className="h-5 w-5 group-hover:hidden"
+                />
+                <PanelLeftIcon className="h-5 w-5 hidden group-hover:block" />
+              </button>
+            ) : (
+              <SidebarTrigger className="hidden md:block" />
+            )}
           </div>
         </SidebarHeader>
         <SidebarContent>

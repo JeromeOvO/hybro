@@ -1,5 +1,6 @@
-import React from 'react'
-import { cn } from '@/lib/utils'
+import React from "react"
+import Link from "next/link"
+import { cn } from "@/lib/utils"
 
 interface LogoProps {
   className?: string
@@ -25,18 +26,24 @@ export function Logo({
       hideOnMobile && "max-sm:hidden",
       className
     )}>
-      <span className={cn(
-        "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",
-        sizeClasses[size]
-      )}>
-        HY
-      </span>
-      <span className={cn(
-        "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro))]",
-        sizeClasses[size]
-      )}>
-        BRO
-      </span>
+      <Link href="/" className="flex items-center gap-0.5">
+        <span
+          className={cn(
+            "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",
+            sizeClasses[size]
+          )}
+        >
+          HY
+        </span>
+        <span
+          className={cn(
+            "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro))]",
+            sizeClasses[size]
+          )}
+        >
+          BRO
+        </span>
+      </Link>
     </div>
   )
 }
