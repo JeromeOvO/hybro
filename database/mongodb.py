@@ -185,18 +185,11 @@ class MongoDB:
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
 
-    async def get_all_agents_by_user_id_or_public(self, user_id: str) -> list[Agent]:
+    async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
         """
-        Get all agents by user ID or public (provider_id == null)
+        Get all agents by user ID
         """
-        cursor = self.agents_collection.find(
-            {
-                "$or": [
-                    {"provider_id": None},
-                    {"provider_id": user_id},
-                ]
-            }
-        )
+        cursor = self.agents_collection.find({"provider_id": user_id})
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
 
