@@ -124,7 +124,7 @@ export default function RegisterAgentPage() {
       return
     }
 
-    if (isLoaded && !user?.id) {
+    if (!user?.id) {
       openWaitlist()
       return
     }
