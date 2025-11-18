@@ -1,5 +1,5 @@
 import httpx
-from a2a.client import A2ACardResolver, A2AClient
+from a2a.client import A2AClient
 
 from common.utils.logger import get_logger
 from models.error import AgentNotFoundError
@@ -135,8 +135,9 @@ class InspectionCenter:
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                card_resolver = A2ACardResolver(client, agent_url)
-                card = await card_resolver.get_agent_card()
+                card = await a2a_service._fetch_agent_card_with_fallback(
+                    client, agent_url
+                )
 
             card_data = card.model_dump(exclude_none=False)
 
@@ -148,16 +149,16 @@ class InspectionCenter:
                 status_code=200,
             )
 
-        except httpx.RequestError:
+        except httpx.RequestError as e:
             logger.error(f"Failed to connect to agent at {agent_url}", exc_info=True)
-            errorMessage = ["Http RequestError: Failed to connect to agent: {e}"]
+            errorMessage = [f"Http RequestError: Failed to connect to agent: {e}"]
             return InspectionCenterResponse(
                 agent_url=agent_url, result=errorMessage, status_code=502
             )
-        except Exception:
+        except Exception as e:
             logger.error("An internal server error occurred", exc_info=True)
             errorMessage = [
-                "InspectionCenter Server Error: An internal server error occurred: {e}"
+                f"InspectionCenter Server Error: An internal server error occurred: {e}"
             ]
             return InspectionCenterResponse(
                 agent_url=agent_url, result=errorMessage, status_code=500
@@ -223,16 +224,17 @@ class InspectionCenter:
         # initialize a2a client
         try:
             httpx_client = httpx.AsyncClient(timeout=600.0)
-            card_resolver = A2ACardResolver(httpx_client, str(agent_url))
-            card = await card_resolver.get_agent_card()
+            card = await a2a_service._fetch_agent_card_with_fallback(
+                httpx_client, str(agent_url)
+            )
             a2a_client = A2AClient(httpx_client, agent_card=card)
 
         except Exception as e:
             logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
             return InspectionCenterResponse(
                 agent_url=agent_url,
-                agent_card=card,
-                result=["Failed to initialize a2a client"],
+                agent_card=None,
+                result=[f"Failed to initialize a2a client: {str(e)}"],
                 status_code=500,
             )
 

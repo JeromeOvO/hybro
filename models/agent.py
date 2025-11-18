@@ -34,8 +34,8 @@ class Agent(BaseModel):
 
     # Dislike count from user
     dislike_count: int = 0
-    
-    @field_serializer('agent_status')
+
+    @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:
         """Convert Enum to string value for storage"""
         if value is None:
