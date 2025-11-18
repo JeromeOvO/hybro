@@ -62,7 +62,13 @@ export default function RoomPage() {
   }
 
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
-    if (!user?.id) {
+    // 1) Do nothing while Clerk is still loading to avoid unexpected waitlist popup
+    if (!isLoaded) {
+      return
+    }
+
+    // 2) Once loaded, if there's no user, open the waitlist
+    if (!user) {
       openWaitlist()
       return
     }
