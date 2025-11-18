@@ -936,8 +936,8 @@ class OrchestrationCenter:
                 parts=[Part(root=TextPart(text=task_description_with_context))],
             )
 
-            send_response = await self.a2a_service.send_message_to_agent(
-                agent_query_result.agent.agent_card.url, message
+            send_response = await self.a2a_service.send_message_sync(
+                agent_query_result.agent.agent_card, message
             )
             logger.info("OrchestrationCenter: send response: %s", send_response)
 
@@ -1388,20 +1388,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
     async def _get_task_from_agent(
         self, agent_card: AgentCard, task_id: str
     ) -> Task | None:
-        a2a_client = await self.a2a_service.create_a2a_client(agent_card)
-        if not a2a_client:
-            return None
-        try:
-            response = await self.task_service.get_task(a2a_client, task_id)
-            if not response or isinstance(response.root, JSONRPCErrorResponse):
-                logger.error(
-                    f"Failed to get task from agent, error: {getattr(response.root, 'error', 'Unknown error')}"
-                )
-                return None
-            return response.root.result
-        except Exception as e:
-            logger.error(f"Failed to get task from agent: {e}", exc_info=True)
-            return None
+        return await self.task_service.get_task_from_agent(agent_card, task_id)
 
     def _get_message_from_task(self, task: Task) -> Message | None:
         # task.artifacts[].parts[].root -> message
@@ -1808,7 +1795,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with message",
+                    "OrchestrationCenter: Failed to update agent message with message: %s",
                     update_response.error,
                 )
                 return False

@@ -1662,7 +1662,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with message",
+                    "OrchestrationCenter: Failed to update agent message with message: %s",
                     update_response.error,
                 )
                 return False
@@ -1711,7 +1711,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with status update",
+                    "OrchestrationCenter: Failed to update agent message with status update: %s",
                     update_response.error,
                 )
                 return False
@@ -1739,7 +1739,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with artifact update",
+                    "OrchestrationCenter: Failed to update agent message with artifact update: %s",
                     update_response.error,
                 )
                 return False
