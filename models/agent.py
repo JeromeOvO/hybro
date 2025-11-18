@@ -14,8 +14,8 @@ class Agent(BaseModel):
     # Primary identification field
     agent_id: str
 
-    # Provider (register user id)
-    provider_id: str
+    # Provider (register user id) - None for legacy agents
+    provider_id: str | None = None
 
     # Agent card
     agent_card: AgentCard
@@ -34,8 +34,8 @@ class Agent(BaseModel):
 
     # Dislike count from user
     dislike_count: int = 0
-    
-    @field_serializer('agent_status')
+
+    @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:
         """Convert Enum to string value for storage"""
         if value is None:

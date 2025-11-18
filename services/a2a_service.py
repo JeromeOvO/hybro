@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import httpx
 from a2a.client import A2ACardResolver, A2AClient
+from a2a.client.errors import A2AClientHTTPError
 from a2a.types import (
     AgentCard,
     JSONRPCErrorResponse,
@@ -17,6 +18,10 @@ from a2a.types import (
     SendStreamingMessageResponse,
     TextPart,
 )
+from a2a.utils.constants import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    PREV_AGENT_CARD_WELL_KNOWN_PATH,
+)
 
 from common.utils.logger import get_logger
 from models.error import A2AServiceError, IllgalParameterError
@@ -29,14 +34,51 @@ class A2AService:
     def __init__(self):
         pass
 
+    async def _fetch_agent_card_with_fallback(
+        self, httpx_client: httpx.AsyncClient, agent_url: str
+    ) -> AgentCard:
+        """
+        Fetch agent card with fallback support.
+        First tries the new path (agent-card.json), then falls back to the old path (agent.json).
+        """
+        # Try new path first
+        card_resolver = A2ACardResolver(
+            httpx_client, str(agent_url), AGENT_CARD_WELL_KNOWN_PATH
+        )
+        try:
+            logger.debug(
+                f"Attempting to fetch agent card from {AGENT_CARD_WELL_KNOWN_PATH}"
+            )
+            card = await card_resolver.get_agent_card()
+            logger.info(
+                f"Successfully fetched agent card from {AGENT_CARD_WELL_KNOWN_PATH}"
+            )
+            return card
+        except A2AClientHTTPError as e:
+            # If 404, try the old path
+            if e.status_code == 404:
+                logger.debug(
+                    f"Agent card not found at {AGENT_CARD_WELL_KNOWN_PATH}, "
+                    f"trying fallback path {PREV_AGENT_CARD_WELL_KNOWN_PATH}"
+                )
+                card_resolver_fallback = A2ACardResolver(
+                    httpx_client, str(agent_url), PREV_AGENT_CARD_WELL_KNOWN_PATH
+                )
+                card = await card_resolver_fallback.get_agent_card()
+                logger.info(
+                    f"Successfully fetched agent card from fallback path {PREV_AGENT_CARD_WELL_KNOWN_PATH}"
+                )
+                return card
+            # If not 404, re-raise the error
+            raise
+
     async def get_agent_card_from_url(self, agent_url: str) -> AgentCard:
         if not agent_url:
             raise IllgalParameterError()
 
         try:
             httpx_client = httpx.AsyncClient(timeout=600.0)
-            card_resolver = A2ACardResolver(httpx_client, str(agent_url))
-            card = await card_resolver.get_agent_card()
+            card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
             return card
 
         except Exception as e:
@@ -51,8 +93,7 @@ class A2AService:
 
         try:
             httpx_client = httpx.AsyncClient(timeout=600.0)
-            card_resolver = A2ACardResolver(httpx_client, str(agent_url))
-            card = await card_resolver.get_agent_card()
+            card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
             a2a_client = A2AClient(httpx_client, agent_card=card)
 
             return a2a_client

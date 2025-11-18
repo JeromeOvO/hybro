@@ -47,6 +47,16 @@ class A2AServer:
         self.agent_card = agent_card
         self.app = Starlette()
         self.app.add_route(self.endpoint, self._process_request, methods=["POST"])
+
+        # Support both new and legacy agent card paths
+        # New standard path
+        self.app.add_route(
+            "/.well-known/agent-card.json", self._get_agent_card, methods=["GET"]
+        )
+        self.app.add_route(
+            "/.well-known/agent-card.json", self._handle_options, methods=["OPTIONS"]
+        )
+        # Legacy path for backward compatibility
         self.app.add_route(
             "/.well-known/agent.json", self._get_agent_card, methods=["GET"]
         )

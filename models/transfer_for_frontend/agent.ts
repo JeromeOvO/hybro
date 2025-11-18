@@ -18,6 +18,7 @@ export type AgentStatus = "active" | "inactive" | "deleted";
 
 export interface Agent {
   agent_id: string;
+  provider_id?: string | null;
   agent_card: AgentCard;
   agent_status?: AgentStatus;
   call_count?: number;
