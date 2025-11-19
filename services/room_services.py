@@ -1,4 +1,5 @@
 import re
+import uuid
 from datetime import datetime
 from uuid import uuid4
 
@@ -57,6 +58,55 @@ class RoomServices:
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
 
+    # === room_agent_set normalization helpers ===
+    @staticmethod
+    def _looks_like_agent_id(value: str) -> bool:
+        """
+        Heuristic check to determine if a string looks like an agent_id (UUID style).
+        """
+        if not isinstance(value, str):
+            return False
+        try:
+            uuid.UUID(value)
+            return True
+        except Exception:
+            return False
+
+    def _normalize_room_agent_set(self, room_agent_set: dict | None) -> dict[str, str]:
+        """
+        Normalize room_agent_set to the canonical shape: {agent_id: agent_name}.
+
+        Historically some data used {agent_name: agent_id}. This method detects
+        the dominant pattern and returns a mapping keyed by agent_id so that:
+        - Multiple agents with the same name are supported
+        - Backend logic can rely on agent_id keys.
+        """
+        if not room_agent_set:
+            return {}
+
+        # Count how many keys/values look like IDs
+        keys_look_like_ids = sum(
+            1 for k in room_agent_set.keys() if self._looks_like_agent_id(k)
+        )
+        values_look_like_ids = sum(
+            1 for v in room_agent_set.values() if self._looks_like_agent_id(v)
+        )
+
+        # If keys already look like IDs (or it's ambiguous), assume correct shape
+        if keys_look_like_ids >= values_look_like_ids:
+            # Cast to concrete type for callers
+            return dict(room_agent_set)
+
+        # Otherwise we likely have {agent_name: agent_id} and should flip it
+        normalized: dict[str, str] = {}
+        for agent_name, agent_id in room_agent_set.items():
+            if not isinstance(agent_id, str):
+                # Skip malformed entries
+                continue
+            normalized[agent_id] = str(agent_name)
+
+        return normalized
+
     # room setting management
     async def create_new_room(
         self, room_create_request: RoomCenterRoomSettingRequest
@@ -86,12 +136,15 @@ class RoomServices:
         if room_create_request.room is not None:
             room = room_create_request.room
         else:
+            normalized_agent_set = self._normalize_room_agent_set(
+                room_create_request.room_agent_set
+            )
             room = Room(
                 room_id=str(uuid4()),
                 room_name=room_create_request.room_name,
                 room_owner_id=room_create_request.room_owner_id,
                 room_owner_name=room_create_request.room_owner_name,
-                room_agent_set=room_create_request.room_agent_set or dict(),
+                room_agent_set=normalized_agent_set,
                 room_created_at=datetime.now(),
                 extend_info=room_create_request.extend_info or None,
             )
@@ -137,6 +190,13 @@ class RoomServices:
                 status_code=404,
             )
         else:
+            # Ensure room_agent_set is always returned in canonical {agent_id: agent_name} form
+            normalized_agent_set = self._normalize_room_agent_set(room.room_agent_set)
+            if normalized_agent_set != (room.room_agent_set or {}):
+                room.room_agent_set = normalized_agent_set
+                # Best-effort persistence; ignore failures here
+                await self.database_service.update_room_by_room_id(room_id, room)
+
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
                 room=room,
@@ -194,7 +254,8 @@ class RoomServices:
                 status_code=400,
             )
 
-        room.room_agent_set = request.room_agent_set
+        # Normalize incoming mapping to {agent_id: agent_name}
+        room.room_agent_set = self._normalize_room_agent_set(request.room_agent_set)
         success = await self.database_service.update_room_by_room_id(room_id, room)
         if success:
             return RoomCenterRoomSettingResponse(

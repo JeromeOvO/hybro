@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from config.settings import settings
+
 from a2a.types import Role
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -11,6 +11,7 @@ from openai.types.chat import (
 )
 
 from common.utils.logger import get_logger
+from config.settings import settings
 from models.agent import Agent
 from models.memory import ContextData, MemoryContent
 from models.room import RoomAgentMessage
@@ -764,69 +765,80 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             return fallback.strip()
 
     async def parse_user_message_by_llm(
-        self, message_text: str, room_agent_set: dict = None, is_debate_mode: bool = False
+        self,
+        message_text: str,
+        room_agent_set: dict = None,
+        is_debate_mode: bool = False,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
-        
+
         Process:
         1. Analyze if task needs decomposition
         2. If complex, break into logical steps
         3. Assign agents based on mentions or task nature
-        
+
         Debate mode: Skip decomposition, generate linear chain
         """
-        
+
+        # Canonical shape for room_agent_set is {agent_id: agent_name}
         room_agent_set = room_agent_set or {}
-        
+
         # === DEBATE MODE ===
         if is_debate_mode:
             # Extract mentions from message
             mention_pattern = r"<@([^|]+)\|([^>]+)>"
             mentions = re.findall(mention_pattern, message_text)
-            
+
             # Determine agents for debate
             if mentions:
-                # Use mentioned agents
-                debate_agents = [
-                    {
-                        "agent_id": agent_id.strip(),
-                        "agent_name": agent_name.strip(),
-                    }
-                    for agent_id, agent_name in mentions
-                    if agent_name.strip() in room_agent_set
-                ]
+                # Use mentioned agents. We trust the ID from the mention and
+                # prefer the name stored in room_agent_set when available.
+                debate_agents = []
+                for agent_id, agent_name in mentions:
+                    agent_id = agent_id.strip()
+                    agent_name = agent_name.strip()
+
+                    # Only consider agents that are actually in the room
+                    if agent_id in room_agent_set:
+                        debate_agents.append(
+                            {
+                                "agent_id": agent_id,
+                                "agent_name": room_agent_set.get(agent_id, agent_name),
+                            }
+                        )
+
                 message_type = "DEBATE_WITH_MENTIONS"
             else:
-                # Use all room agents
+                # Use all room agents from the room_agent_set mapping
                 debate_agents = [
                     {
                         "agent_id": agent_id,
                         "agent_name": agent_name,
                     }
-                    for agent_name, agent_id in room_agent_set.items()
+                    for agent_id, agent_name in room_agent_set.items()
                 ]
                 message_type = "DEBATE_NO_MENTIONS"
-            
+
             if not debate_agents:
                 raise ValueError("No agents available for debate mode")
-            
+
             # Remove mentions from content
             clean_content = message_text
             for match in re.finditer(mention_pattern, message_text):
                 clean_content = clean_content.replace(match.group(0), "")
-            clean_content = re.sub(r'\s+', ' ', clean_content).strip()
-            
+            clean_content = re.sub(r"\s+", " ", clean_content).strip()
+
             # Generate debate rounds
             num_rounds = settings.debate_rounds or 3
             task_steps = []
             previous_step_id = None
-            
+
             step_counter = 1
             for round_num in range(1, num_rounds + 1):
                 for agent in debate_agents:
                     step_id = f"step_{step_counter}"
-                    
+
                     # Use unified format: agent_id, agent_name, task_content
                     task_step = {
                         "step_id": step_id,
@@ -835,33 +847,35 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                         "task_content": clean_content,  # Changed from step_content
                         "dependencies": [previous_step_id] if previous_step_id else [],
                     }
-                    
+
                     task_steps.append(task_step)
                     previous_step_id = step_id
                     step_counter += 1
-            
+
             result = {
                 "message_type": message_type,
                 "original_text": message_text,
                 "needs_decomposition": False,
-                "task_steps": task_steps  # Unified format
+                "task_steps": task_steps,  # Unified format
             }
-            
+
             logger.info(
                 f"Generated debate chain: {len(debate_agents)} agents × "
                 f"{num_rounds} rounds = {len(task_steps)} tasks"
             )
-            
+
             return result
-        
+
         # === NORMAL MODE: Enhanced with decomposition decision ===
         agent_list = ""
         if room_agent_set:
-            agent_list = "\n".join([
-                f"- Agent ID: {aid}, Name: {aname}"
-                for aid, aname in room_agent_set.items()
-            ])
-        
+            agent_list = "\n".join(
+                [
+                    f"- Agent ID: {aid}, Name: {aname}"
+                    for aid, aname in room_agent_set.items()
+                ]
+            )
+
         system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
                 Your job is to analyze user messages, decide if decomposition is needed, then assign agents.
 
@@ -964,38 +978,38 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
                 Output JSON with your analysis."""
 
-        try:  
+        try:
             messages = [
                 ChatCompletionSystemMessageParam(role="system", content=system_prompt),
-                ChatCompletionUserMessageParam(role="user", content=user_prompt)
+                ChatCompletionUserMessageParam(role="user", content=user_prompt),
             ]
-            
+
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
                 # temperature=0.3,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
-            
+
             content = response.choices[0].message.content
             if not content:
                 raise ValueError("Empty response from LLM")
-            
+
             result = json.loads(content)
-            
+
             # Log decomposition decision
             needs_decomp = result.get("needs_decomposition", False)
             decomp_reason = result.get("decomposition_reason", "")
             steps_count = len(result.get("task_steps", []))
-            
+
             logger.info(
                 f"LLM analysis: {result.get('message_type')}, "
                 f"decomposition={'YES' if needs_decomp else 'NO'} "
                 f"({decomp_reason}), {steps_count} steps"
             )
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"LLM parsing failed: {e}")
             raise
