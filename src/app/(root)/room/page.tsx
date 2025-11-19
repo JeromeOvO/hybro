@@ -76,11 +76,11 @@ export default function RoomPage() {
     try {
       setIsCreatingRoom(true)
       
-      // Create agent set mapping: agent name -> agent id
+      // Create agent set mapping: agent id -> agent name (canonical shape)
       const roomAgentSet = Object.fromEntries(
         Object.entries(selectedAgents).map(([id, agent]) => [
-          agent.agent_card.name, // key: agent name
-          id                     // value: agent id
+          id,                     // key: agent id
+          agent.agent_card.name,  // value: agent name
         ])
       )
 

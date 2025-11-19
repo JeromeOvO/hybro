@@ -33,7 +33,7 @@ const formSchema = z.object({
 
 interface RoomFormData {
   roomName: string
-  selectedAgents: { [agentName: string]: string } // agent_name -> agent_id mapping
+  selectedAgents: { [agentId: string]: string } // agent_id -> agent_name mapping
   debateMode?: boolean // Add debateMode to interface
 }
 
@@ -84,9 +84,9 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       // Convert agent mapping back to selected agents
       const agentMapping: { [agentId: string]: Agent } = {}
       
-      // initialData.selectedAgents is { [agentName]: agentId }
-      // We need to find the corresponding Agent objects
-      Object.entries(initialData.selectedAgents).forEach(([, agentId]) => {
+      // initialData.selectedAgents is { [agentId]: agentName }
+      // We need to find the corresponding Agent objects by agentId
+      Object.entries(initialData.selectedAgents).forEach(([agentId]) => {
         const agent = availableAgents.find(a => a.agent_id === agentId)
         if (agent) {
           agentMapping[agentId] = agent

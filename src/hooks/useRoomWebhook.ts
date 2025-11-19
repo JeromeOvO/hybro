@@ -299,11 +299,11 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
     try {
       setUpdatingRoom(true)
       
-      // Create agent set mapping: agent name -> agent id (same as creation)
+      // Create agent set mapping: agent id -> agent name (canonical shape)
       const roomAgentSet = Object.fromEntries(
         Object.entries(selectedAgents).map(([id, agent]) => [
-          agent.agent_card.name, // key: agent name
-          id                     // value: agent id
+          id,                     // key: agent id
+          agent.agent_card.name,  // value: agent name
         ])
       )
       console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode })
@@ -462,7 +462,8 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   // Get agent list for @mentions
   const getAgentList = useCallback(() => {
     if (!room?.room_agent_set) return []
-    return Object.entries(room.room_agent_set).map(([name, id]) => ({ id, name }))
+    // room_agent_set is { agent_id: agent_name }
+    return Object.entries(room.room_agent_set).map(([id, name]) => ({ id, name }))
   }, [room])
 
   // Get current room data for form initialization - now includes debate mode
