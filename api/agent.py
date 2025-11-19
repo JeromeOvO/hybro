@@ -50,7 +50,16 @@ async def get_agent(agent_id: str):
         agent_center_request
     )
 
-    return agent_center_response
+    agent_center_response_without_url = agent_center_response.model_dump(
+        exclude={
+            'agent_url': True,
+            'agent': {
+                'agent_card': {'url': True}
+            }
+        }
+    )
+
+    return agent_center_response_without_url
 
 
 @router.post("/agent/deleteAgent")
@@ -71,7 +80,20 @@ async def delete_agent(request: Request):
 async def get_agent_list():
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_all_agents(agent_center_request)
-    return agent_center_response
+    agent_center_response_without_url = agent_center_response.model_dump(
+        exclude={
+            'agent_url': True,
+            'agent': {
+                'agent_card': {'url': True}
+            },
+            'agents': {
+                '__all__': {
+                    'agent_card': {'url': True}
+                }
+            }
+        }
+    )
+    return agent_center_response_without_url
 
 
 @router.post("/agent/getAgentListWithConditions")
