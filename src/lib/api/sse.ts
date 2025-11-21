@@ -1,4 +1,7 @@
 import type { SSEConnectionStatus } from '@/lib/types/sse'
+import { getApiUrl } from '../utils'
+
+const API_BASE_URL = getApiUrl('sse')
 
 export interface SSEMessage {
   type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error'
@@ -26,7 +29,6 @@ export interface SSEConnectionOptions {
 export class SSEConnection {
   private eventSource: EventSource | null = null
   private roomId: string
-  private baseUrl: string
   private options: SSEConnectionOptions
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
@@ -36,17 +38,13 @@ export class SSEConnection {
   constructor(options: SSEConnectionOptions) {
     this.roomId = options.roomId
     this.options = options
-    // Get base URL without the endpoint prefix since SSE uses different path
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-    const apiPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1'
-    this.baseUrl = `${baseUrl}${apiPrefix}`
   }
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
         this.isManualClose = false
-        const url = `${this.baseUrl}/sse/room/${this.roomId}/stream`
+        const url = `${API_BASE_URL}/room/${this.roomId}/stream`
         console.log('🔗 Connecting to SSE:', url)
         
         this.eventSource = new EventSource(url)
@@ -121,9 +119,7 @@ export class SSEConnection {
 
 // Get SSE connection status
 export async function getSSEStatus(roomId: string): Promise<SSEConnectionStatus> {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-  const apiPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1'
-  const url = `${baseUrl}${apiPrefix}/sse/room/${roomId}/status`
+  const url = `${API_BASE_URL}/room/${roomId}/status`
   
   const response = await fetch(url)
   if (!response.ok) {
