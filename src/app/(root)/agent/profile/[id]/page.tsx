@@ -11,6 +11,7 @@ import { toast } from "sonner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 import { useClerk, useUser } from "@clerk/nextjs"
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function AgentProfilePage() {
   const params = useParams()
@@ -49,7 +50,11 @@ export default function AgentProfilePage() {
   const loadAgentDetail = async () => {
 
     if (isLoaded && !user?.id) {
-      openWaitlist()
+      if (isWaitlistEnabled()) {
+        openWaitlist()
+      } else {
+        router.push("/sign-in")
+      }
       return
     }
 

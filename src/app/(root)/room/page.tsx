@@ -1,27 +1,28 @@
-'use client'
-
-import { useState, useEffect, useRef } from 'react'
-import { useUser } from '@clerk/nextjs'
-import { useRouter } from 'next/navigation'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { RoomSettingForm, type RoomSettingFormHandle } from "@/components/room-setting-form"
-import { CheckCircle, Loader2 } from "lucide-react"
-import { getAllAgents } from "@/lib/api/agent"
-import { createNewRoom } from "@/lib/api/room"
-import { toast } from "sonner"
-import type { Agent } from "@/lib/types/agent"
-import { useClerk } from '@clerk/nextjs'
-
-export default function RoomPage() {
-  const router = useRouter()
-  const { user, isLoaded } = useUser()
-  const { openWaitlist } = useClerk()
+ 'use client'
+ 
+ import { useState, useEffect, useRef } from 'react'
+ import { useUser } from '@clerk/nextjs'
+ import { useRouter } from 'next/navigation'
+ import {
+   Card,
+   CardContent,
+   CardDescription,
+   CardHeader,
+   CardTitle,
+ } from "@/components/ui/card"
+ import { RoomSettingForm, type RoomSettingFormHandle } from "@/components/room-setting-form"
+ import { CheckCircle, Loader2 } from "lucide-react"
+ import { getAllAgents } from "@/lib/api/agent"
+ import { createNewRoom } from "@/lib/api/room"
+ import { toast } from "sonner"
+ import type { Agent } from "@/lib/types/agent"
+ import { useClerk } from '@clerk/nextjs'
+ import { isWaitlistEnabled } from "@/lib/utils"
+ 
+ export default function RoomPage() {
+   const router = useRouter()
+   const { user, isLoaded } = useUser()
+   const { openWaitlist } = useClerk()
   // Ref for form reset
   const formRef = useRef<RoomSettingFormHandle>(null)
 
@@ -67,9 +68,13 @@ export default function RoomPage() {
       return
     }
 
-    // 2) Once loaded, if there's no user, open the waitlist
+    // 2) Once loaded, if there's no user, either open the waitlist or redirect to sign-in
     if (!user) {
-      openWaitlist()
+      if (isWaitlistEnabled()) {
+        openWaitlist()
+      } else {
+        router.push("/sign-in")
+      }
       return
     }
 

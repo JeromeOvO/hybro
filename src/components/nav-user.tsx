@@ -1,18 +1,19 @@
-"use client"
-
-import { UserPlus } from "lucide-react"
-import { useUser, UserButton, useClerk } from "@clerk/nextjs"
-import { ThemeToggle } from "@/components/theme-toggle"
-
-import {
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from "@/components/ui/sidebar"
-
-export function NavUser() {
-  const { user, isLoaded } = useUser()
-  const { openWaitlist } = useClerk()
+ "use client"
+ 
+ import { UserPlus } from "lucide-react"
+ import { useUser, UserButton, useClerk } from "@clerk/nextjs"
+ import { ThemeToggle } from "@/components/theme-toggle"
+ import { isWaitlistEnabled } from "@/lib/utils"
+ 
+ import {
+   SidebarMenu,
+   SidebarMenuButton,
+   SidebarMenuItem,
+ } from "@/components/ui/sidebar"
+ 
+ export function NavUser() {
+   const { user, isLoaded } = useUser()
+   const { openWaitlist } = useClerk()
 
   // Show loading state while user data is being fetched
   if (!isLoaded) {
@@ -31,18 +32,25 @@ export function NavUser() {
     )
   }
 
-  // Show sign in button if user is not logged in
+  // Show sign in / waitlist entry if user is not logged in
   if (!user) {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
           <div
             className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
-            title="Join Waitlist"
+            title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
               className="flex items-center gap-2 flex-1 cursor-pointer"
-              onClick={() => openWaitlist()}
+              onClick={() => {
+                if (isWaitlistEnabled()) {
+                  openWaitlist()
+                } else {
+                  // When waitlist is disabled, redirect to regular sign-in
+                  window.location.href = "/sign-in"
+                }
+              }}
             >
               <div
                 className="flex h-8 w-8 items-center justify-center rounded-lg 
@@ -58,7 +66,7 @@ export function NavUser() {
                             to-[hsl(var(--color-hybro-bro))]
                             bg-clip-text text-transparent"
                 >
-                  Join Waitlist
+                  {isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
                 </span>
               </div>
             </div>

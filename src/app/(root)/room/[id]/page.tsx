@@ -18,6 +18,7 @@ import { RoomChatInput } from '@/components/room-chat-input'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { getAllAgents } from '@/lib/api/agent'
 import type { Agent } from '@/lib/types/agent'
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -162,7 +163,13 @@ export default function RoomChatPage() {
   }
 
   if (isLoaded && !user?.id) {
-    openWaitlist()
+    if (isWaitlistEnabled()) {
+      openWaitlist()
+    } else {
+      if (typeof window !== "undefined") {
+        window.location.href = "/sign-in"
+      }
+    }
     return
   }
 

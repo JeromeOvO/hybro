@@ -15,6 +15,7 @@ import type {
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
 import { useUser, useClerk} from "@clerk/nextjs"
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function RegisterAgentPage() {
   const router = useRouter()
@@ -125,7 +126,11 @@ export default function RegisterAgentPage() {
     }
 
     if (!user?.id) {
-      openWaitlist()
+      if (isWaitlistEnabled()) {
+        openWaitlist()
+      } else {
+        router.push("/sign-in")
+      }
       return
     }
 

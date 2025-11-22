@@ -17,6 +17,7 @@ import type {
   Message,
   TextPart
 } from "@/lib/types"
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function ChatSessionPage() {
   const params = useParams()
@@ -257,7 +258,14 @@ export default function ChatSessionPage() {
   }
 
   if (isLoaded && !user?.id) {
-    openWaitlist()
+    if (isWaitlistEnabled()) {
+      openWaitlist()
+    } else {
+      // When waitlist is disabled, redirect to sign-in
+      if (typeof window !== "undefined") {
+        window.location.href = "/sign-in"
+      }
+    }
     return
   }
 
