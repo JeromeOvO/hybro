@@ -8,6 +8,7 @@ import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function ChatPage() {
     const { user, isLoaded } = useUser()
@@ -25,9 +26,13 @@ export default function ChatPage() {
             return
         }
         if (!user?.id) {
-            openWaitlist()
+            if (isWaitlistEnabled()) {
+                openWaitlist()
+            } else {
+                window.location.href = "/sign-in"
+            }
             return
-          }
+        }
 
         try {
             setHasError(false)

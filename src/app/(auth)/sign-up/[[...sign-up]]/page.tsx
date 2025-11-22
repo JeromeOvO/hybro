@@ -1,6 +1,26 @@
-import { Waitlist } from '@clerk/nextjs'
+import { SignUp, Waitlist } from '@clerk/nextjs'
+import { isWaitlistEnabled } from '@/lib/utils'
 
 export default function Page () {
+  const waitlistEnabled = isWaitlistEnabled()
+
+  if (!waitlistEnabled) {
+    // When waitlist is disabled, render a standard sign-up form instead
+    return (
+      <div className="flex flex-col items-center justify-center gap-4">
+        <SignUp
+          redirectUrl="/chat"
+          appearance={{
+            elements: {
+              rootBox: "mx-auto",
+              card: "shadow-lg",
+            }
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col items-center justify-center gap-4">
       <Waitlist 

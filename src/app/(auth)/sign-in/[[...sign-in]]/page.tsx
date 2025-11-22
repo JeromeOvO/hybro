@@ -1,7 +1,10 @@
 import { SignIn } from '@clerk/nextjs'
 import Link from 'next/link'
+import { isWaitlistEnabled } from '@/lib/utils'
 
 export default function Page () {
+  const waitlistEnabled = isWaitlistEnabled()
+
   return (
     <div className="flex flex-col items-center justify-center gap-4">
       <SignIn
@@ -19,7 +22,7 @@ export default function Page () {
             href="/sign-up"
             className="text-primary hover:underline font-medium"
           >
-            Join the waitlist
+            {waitlistEnabled ? "Join the waitlist" : "Create an account"}
           </Link>
         </p>
       </div>

@@ -10,3 +10,8 @@ export function getApiUrl(endpoint: string): string {
   const apiPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1';
   return `${baseUrl}${apiPrefix}/${endpoint}`;
 }
+
+// Waitlist configuration
+export function isWaitlistEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_WAITLIST === 'true';
+}

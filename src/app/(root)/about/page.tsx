@@ -13,6 +13,7 @@ import {
   Mail
 } from "lucide-react"
 import { useClerk } from "@clerk/nextjs"
+import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function AboutPage() {
   const { openWaitlist } = useClerk()
@@ -78,9 +79,15 @@ export default function AboutPage() {
               variant="outline" 
               size="lg" 
               className="px-8"
-              onClick={() => openWaitlist()}
+              onClick={() => {
+                if (isWaitlistEnabled()) {
+                  openWaitlist()
+                } else {
+                  window.location.href = "/sign-in"
+                }
+              }}
             >
-              Join Waitlist
+              {isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
               <ArrowRight className="ml-2 h-4 w-4 icon-action" />
             </Button>
           </div>
