@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     debate_rounds: int = 2 # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
+    # Clerk Authentication
+    clerk_jwks_url: str = ""  # JWKS URL for JWT token verification
+
     class Config:
         env_file = ".env"
         extra = "ignore"
