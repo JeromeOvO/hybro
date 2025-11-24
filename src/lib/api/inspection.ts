@@ -6,16 +6,19 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('inspectionCenter')
 
 // Inspect agent card
-export async function inspectAgentCard(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
+export async function inspectAgentCard(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InspectionCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/inspectAgentCard`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 
@@ -27,12 +30,14 @@ export async function inspectAgentCard(request: InspectionCenterRequest): Promis
 }
 
 // Inspect A2A connection
-export async function inspectA2AConnection(request: InspectionCenterRequest): Promise<InsepectionCenterConnectionValidationResponse> {
+export async function inspectA2AConnection(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InsepectionCenterConnectionValidationResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/inspectA2AConnection`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 

@@ -2,18 +2,21 @@
 import type { OrchestrationCenterResponse } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('orchestrationCenter')
 
 // Decompose task
-export async function decomposeTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
+export async function decomposeTask(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling decomposeTask with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/decomposeTask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -27,14 +30,16 @@ export async function decomposeTask(data: { task_id: string }): Promise<Orchestr
 }
 
 // Assign agents to meta tasks by parent task ID
-export async function assignAgentsToMetaTasks(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
+export async function assignAgentsToMetaTasks(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentsToMetaTasks with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/assignAgentsToMetaTasks`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -48,16 +53,16 @@ export async function assignAgentsToMetaTasks(data: { task_id: string }): Promis
 }
 
 // Assign agent to meta task
-export async function assignAgentToMetaTask(data: { 
-  task_id: string, 
-}): Promise<OrchestrationCenterResponse> {
+export async function assignAgentToMetaTask(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentToMetaTask with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/assignAgentToMetaTask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -71,14 +76,16 @@ export async function assignAgentToMetaTask(data: {
 }
 
 // Run workflow
-export async function runWorkflow(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
+export async function runWorkflow(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling runWorkflow with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/runWorkflow`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -92,14 +99,16 @@ export async function runWorkflow(data: { task_id: string }): Promise<Orchestrat
 }
 
 // Retry meta task
-export async function retryMetaTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
+export async function retryMetaTask(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling retryMetaTask with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/retryMetaTask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -113,14 +122,16 @@ export async function retryMetaTask(data: { task_id: string }): Promise<Orchestr
 }
 
 // Summarize meta task for base task
-export async function summarizeMetaTaskForBaseTask(data: { task_id: string }): Promise<OrchestrationCenterResponse> {
+export async function summarizeMetaTaskForBaseTask(
+  data: { task_id: string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling summarizeMetaTaskForBaseTask with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/summarizeMetaTaskForBaseTask`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 
@@ -134,14 +145,16 @@ export async function summarizeMetaTaskForBaseTask(data: { task_id: string }): P
 } 
 
 
-export async function processRoomUserMessage(data: { room_id: string, room_user_message_id: string, room_related_message_id : string }): Promise<OrchestrationCenterResponse> {
+export async function processRoomUserMessage(
+  data: { room_id: string, room_user_message_id: string, room_related_message_id : string },
+  getToken?: () => Promise<string | null>
+): Promise<OrchestrationCenterResponse> {
   console.log('Calling processRoomUserMessage with data:', data)
   
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/processRoomUserMessage`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(data),
   })
 

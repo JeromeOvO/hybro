@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useUser, useClerk } from "@clerk/nextjs"
+import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { ChatInput } from "@/components/chat-input"
 import { toast } from "sonner"
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
@@ -12,12 +12,14 @@ import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function ChatPage() {
     const { user, isLoaded } = useUser()
+    const { getToken } = useAuth()
     const [input, setInput] = useState("")
     const [hasError, setHasError] = useState(false)
     const { openWaitlist } = useClerk()
     const { creating, createAndNavigate } = useChatRoomCreation({
         userId: user?.id,
-        userName: user?.firstName || user?.username || 'User'
+        userName: user?.firstName || user?.username || 'User',
+        getToken
     })
 
     const handleSubmit = async (value: string) => {

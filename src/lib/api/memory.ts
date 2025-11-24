@@ -5,16 +5,19 @@ import type {
   } from '@/lib/types'
   
   import { getApiUrl } from '../utils'
+  import { getClientAuthHeaders } from '../auth'
   // Using Next.js API routes as proxy to avoid CORS issues
   const API_BASE_URL = getApiUrl('memoryCenter')
 
   // Add chat context
-  export async function addChatContext(request: ChatMemoryRequest): Promise<ChatMemoryResponse> {
+  export async function addChatContext(
+    request: ChatMemoryRequest,
+    getToken?: () => Promise<string | null>
+  ): Promise<ChatMemoryResponse> {
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/addChatContext`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(request),
     })
   
@@ -25,12 +28,14 @@ import type {
     return await response.json()
   }
   
-  export async function getChatContextBySessionId(request: ChatMemoryRequest): Promise<ChatMemoryResponse> {
+  export async function getChatContextBySessionId(
+    request: ChatMemoryRequest,
+    getToken?: () => Promise<string | null>
+  ): Promise<ChatMemoryResponse> {
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/getChatContextBySessionId`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(request),
     })
 
@@ -41,12 +46,14 @@ import type {
     return await response.json()
   }
 
-  export async function updateChatContextBySessionId(request: ChatMemoryRequest): Promise<ChatMemoryResponse> {
+  export async function updateChatContextBySessionId(
+    request: ChatMemoryRequest,
+    getToken?: () => Promise<string | null>
+  ): Promise<ChatMemoryResponse> {
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/updateChatContextBySessionId`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(request),
     })
 
@@ -57,12 +64,14 @@ import type {
     return await response.json()
   }
 
-  export async function deleteChatContextBySessionId(request: ChatMemoryRequest): Promise<ChatMemoryResponse> {
+  export async function deleteChatContextBySessionId(
+    request: ChatMemoryRequest,
+    getToken?: () => Promise<string | null>
+  ): Promise<ChatMemoryResponse> {
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/deleteChatContextBySessionId`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(request),
     })
 

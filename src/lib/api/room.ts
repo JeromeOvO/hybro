@@ -11,6 +11,7 @@ import type {
 } from '@/lib/types/request'
 
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('roomCenter')
 
@@ -19,6 +20,7 @@ export async function createNewRoom(
   room_name: string,
   room_owner_id: string,
   room_owner_name: string,
+  getToken?: () => Promise<string | null>,
   room_agent_set?: { [k: string]: string },
   extend_info?: { [k: string]: unknown } | null
 ): Promise<RoomCenterRoomSettingResponse> {
@@ -30,11 +32,10 @@ export async function createNewRoom(
     extend_info
   }
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/createNewRoom`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -46,16 +47,18 @@ export async function createNewRoom(
 }
 
 // Inquiry room setting
-export async function inquiryRoomSetting(room_id: string): Promise<RoomCenterRoomSettingResponse> {
+export async function inquiryRoomSetting(
+  room_id: string,
+  getToken?: () => Promise<string | null>
+): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id
   }
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/inquiryRoomSetting`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -67,16 +70,18 @@ export async function inquiryRoomSetting(room_id: string): Promise<RoomCenterRoo
 }
 
 // Inquiry rooms by room owner ID
-export async function inquiryRoomsByRoomOwnerId(room_owner_id: string): Promise<RoomCenterRoomSettingResponse> {
+export async function inquiryRoomsByRoomOwnerId(
+  room_owner_id: string,
+  getToken?: () => Promise<string | null>
+): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_owner_id
   }
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/inquiryRoomsByRoomOwnerId`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -90,18 +95,18 @@ export async function inquiryRoomsByRoomOwnerId(room_owner_id: string): Promise<
 // Update room agent set
 export async function updateRoomAgentSet(
   room_id: string,
-  room_agent_set: { [k: string]: string }
+  room_agent_set: { [k: string]: string },
+  getToken?: () => Promise<string | null>
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id,
     room_agent_set
   }
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/updateRoomAgentSet`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -113,17 +118,20 @@ export async function updateRoomAgentSet(
 }
 
 // Update room name
-export async function updateRoomName(room_id: string, room_name: string): Promise<RoomCenterRoomSettingResponse> {
+export async function updateRoomName(
+  room_id: string,
+  room_name: string,
+  getToken?: () => Promise<string | null>
+): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id,
     room_name
     }
 
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/updateRoomName`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(requestData),
     })
 
@@ -135,17 +143,20 @@ export async function updateRoomName(room_id: string, room_name: string): Promis
   }
 
 
-export async function updateRoomExtendInfo(room_id: string, extend_info: { [k: string]: unknown } | null): Promise<RoomCenterRoomSettingResponse> {
+export async function updateRoomExtendInfo(
+  room_id: string,
+  extend_info: { [k: string]: unknown } | null,
+  getToken?: () => Promise<string | null>
+): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id,
     extend_info
     }
 
+    const headers = await getClientAuthHeaders(getToken)
     const response = await fetch(`${API_BASE_URL}/updateRoomExtendInfo`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(requestData),
     })
 
@@ -160,6 +171,7 @@ export async function updateRoomExtendInfo(room_id: string, extend_info: { [k: s
 export async function createAndParseUserMessage(
   room_id: string,
   user_input: string,
+  getToken?: () => Promise<string | null>,
   user_id?: string,
   user_name?: string
 ): Promise<RoomCenterUserMessageResponse> {
@@ -183,11 +195,10 @@ export async function createAndParseUserMessage(
 
   console.log('🚀 Sending createAndParseUserMessage request:', JSON.stringify(requestData, null, 2))
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/createAndParseUserMessage`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -207,6 +218,7 @@ export async function createAndParseUserMessage(
 export async function createAndParseUserMessageWithDebate(
   room_id: string,
   user_input: string,
+  getToken?: () => Promise<string | null>,
   user_id?: string,
   user_name?: string
 ): Promise<RoomCenterUserMessageResponse> {
@@ -230,11 +242,10 @@ export async function createAndParseUserMessageWithDebate(
 
   console.log('🚀 Sending createAndParseUserMessageWithDebate request:', JSON.stringify(requestData, null, 2))
 
+ const headers = await getClientAuthHeaders(getToken)
  const response = await fetch(`${API_BASE_URL}/createAndParseUserMessageWithDebate`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -250,16 +261,18 @@ export async function createAndParseUserMessageWithDebate(
 }
 
 // Query room messages
-export async function inquiryRoomMessagesByRoomId(room_id: string): Promise<RoomCenterRoomMessageResponse> {
+export async function inquiryRoomMessagesByRoomId(
+  room_id: string,
+  getToken?: () => Promise<string | null>
+): Promise<RoomCenterRoomMessageResponse> {
   const requestData: RoomCenterRoomMessageRequest = {
     room_id
   }
 
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/inquiryRoomMessagesByRoomId`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 
@@ -274,6 +287,7 @@ export async function inquiryRoomMessagesByRoomId(room_id: string): Promise<Room
 export async function SendMessage(
   room_id: string,
   user_input: string,
+  getToken?: () => Promise<string | null>,
   user_id?: string,
   user_name?: string
 ): Promise<RoomCenterUserMessageResponse> {
@@ -297,11 +311,10 @@ export async function SendMessage(
 
   console.log('🚀 Sending SendMessage request:', JSON.stringify(requestData, null, 2))
 
+ const headers = await getClientAuthHeaders(getToken)
  const response = await fetch(`${API_BASE_URL}/sendMessage`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(requestData),
   })
 

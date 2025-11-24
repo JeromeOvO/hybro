@@ -7,16 +7,19 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('agent')
 
 // Get agent card from URL
-export async function getAgentCardFromUrl(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
+export async function getAgentCardFromUrl(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InspectionCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/getAgentCardFromUrl`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 
@@ -28,12 +31,14 @@ export async function getAgentCardFromUrl(request: InspectionCenterRequest): Pro
 }
 
 // Register agent
-export async function registerAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
+export async function registerAgent(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/registerAgent`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 
@@ -45,12 +50,14 @@ export async function registerAgent(request: AgentCenterRequest): Promise<AgentC
 }
 
 // Get agent by ID
-export async function getAgent(agentId: string): Promise<AgentCenterResponse> {
+export async function getAgent(
+  agentId: string,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/getAgent/${agentId}`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
   })
 
   if (!response.ok) {
@@ -61,12 +68,13 @@ export async function getAgent(agentId: string): Promise<AgentCenterResponse> {
 }
 
 // Get all agents
-export async function getAllAgents(): Promise<AgentCenterResponse> {
+export async function getAllAgents(
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/getAllAgents`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
   })
 
   if (!response.ok) {
@@ -77,12 +85,14 @@ export async function getAllAgents(): Promise<AgentCenterResponse> {
 }
 
 // Delete agent
-export async function deleteAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
+export async function deleteAgent(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/deleteAgent`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 
@@ -94,12 +104,14 @@ export async function deleteAgent(request: AgentCenterRequest): Promise<AgentCen
 }
 
 // Get agent list with conditions
-export async function getAgentListWithConditions(request: AgentCenterRequest): Promise<AgentCenterResponse> {
+export async function getAgentListWithConditions(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/getAgentListWithConditions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 

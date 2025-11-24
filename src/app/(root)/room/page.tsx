@@ -1,7 +1,7 @@
  'use client'
  
- import { useState, useEffect, useRef } from 'react'
- import { useUser } from '@clerk/nextjs'
+ import { useState, useEffect, useRef, useCallback } from 'react'
+ import { useUser, useAuth } from '@clerk/nextjs'
  import { useRouter } from 'next/navigation'
  import {
    Card,
@@ -22,6 +22,7 @@
  export default function RoomPage() {
    const router = useRouter()
    const { user, isLoaded } = useUser()
+   const { getToken } = useAuth()
    const { openWaitlist } = useClerk()
   // Ref for form reset
   const formRef = useRef<RoomSettingFormHandle>(null)
@@ -36,16 +37,11 @@
   const [roomCreated, setRoomCreated] = useState(false) // New state for success
   const [, setCreatedRoomName] = useState('')
 
-  // Load agents on component mount
-  useEffect(() => {
-    loadAvailableAgents()
-  }, [])
-
-  const loadAvailableAgents = async () => {
+  const loadAvailableAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
       setAgentsError(null)
-      const response = await getAllAgents()
+      const response = await getAllAgents(getToken)
       
       if (response.success && response.agents) {
         setAvailableAgents(response.agents)
@@ -60,7 +56,12 @@
     } finally {
       setLoadingAgents(false)
     }
-  }
+  }, [getToken])
+
+  // Load agents on component mount
+  useEffect(() => {
+    loadAvailableAgents()
+  }, [loadAvailableAgents])
 
   const handleFormSubmit = async (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
     // 1) Do nothing while Clerk is still loading to avoid unexpected waitlist popup
@@ -102,6 +103,7 @@
         roomName,
         roomOwnerId,
         roomOwnerName,
+        getToken,
         roomAgentSet,
         extendInfo // Pass debate mode in extend_info
       )

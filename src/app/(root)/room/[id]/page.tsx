@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
-import { useUser, useClerk } from '@clerk/nextjs'
+import { useUser, useClerk, useAuth } from '@clerk/nextjs'
 import { Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,6 +24,7 @@ export default function RoomChatPage() {
   const params = useParams()
   const roomId = params.id as string
   const { user, isLoaded } = useUser()
+  const { getToken } = useAuth()
   // State for agents in dialog
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
   const [loadingAgents, setLoadingAgents] = useState(false)
@@ -54,7 +55,8 @@ export default function RoomChatPage() {
   } = useRoomWebhook({
     roomId,
     userId: user?.id,
-    userName: user?.firstName || user?.username || 'User'
+    userName: user?.firstName || user?.username || 'User',
+    getToken
   })
 
   // Load agents when dialog opens
@@ -62,7 +64,7 @@ export default function RoomChatPage() {
     try {
       setLoadingAgents(true)
       setAgentsError(null)
-      const response = await getAllAgents()
+      const response = await getAllAgents(getToken)
       
       if (response.success && response.agents) {
         setAvailableAgents(response.agents)

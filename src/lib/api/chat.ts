@@ -2,16 +2,19 @@
 import type { ChatRequest, ChatResponse } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('chat')
 
 // Send message
-export async function sendMessage(request: ChatRequest): Promise<ChatResponse> {
+export async function sendMessage(
+  request: ChatRequest,
+  getToken?: () => Promise<string | null>
+): Promise<ChatResponse> {
+  const headers = await getClientAuthHeaders(getToken)
   const response = await fetch(`${API_BASE_URL}/sendMessage`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(request),
   })
 

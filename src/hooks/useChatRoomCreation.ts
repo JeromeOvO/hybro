@@ -8,9 +8,10 @@ import type { Agent } from '@/lib/types/agent'
 interface UseChatRoomCreationProps {
   userId?: string
   userName?: string
+  getToken?: () => Promise<string | null>
 }
 
-export function useChatRoomCreation({ userId, userName }: UseChatRoomCreationProps) {
+export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [loadingAgents, setLoadingAgents] = useState(false)
@@ -20,7 +21,7 @@ export function useChatRoomCreation({ userId, userName }: UseChatRoomCreationPro
   const loadDefaultAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
-      const response = await getAllAgents()
+      const response = await getAllAgents(getToken)
       
       if (response.success && response.agents && response.agents.length > 0) {
         // Take first 2 agents as default, or configure as needed
@@ -37,7 +38,7 @@ export function useChatRoomCreation({ userId, userName }: UseChatRoomCreationPro
     } finally {
       setLoadingAgents(false)
     }
-  }, [])
+  }, [getToken])
 
   // Create room with user message
   const createRoomWithMessage = useCallback(async (userMessage: string) => {
@@ -86,6 +87,7 @@ export function useChatRoomCreation({ userId, userName }: UseChatRoomCreationPro
         roomName,
         userId,
         userName,
+        getToken,
         roomAgentSet,
         extendInfo
       )

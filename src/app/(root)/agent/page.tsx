@@ -51,8 +51,13 @@ export default function AgentPage() {
           .map(agent => agent.agent_card.provider?.organization)
           .filter((org): org is string => org !== undefined && org !== null)
     ))
-
+  
+  const existingIds = new Set<string>()
   const filteredAgents = agents.filter(agent => {
+    if (existingIds.has(agent.agent_id)) {
+      return false
+    }
+    existingIds.add(agent.agent_id)
     const matchesSearch = 
       agent.agent_card.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       agent.agent_card.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
