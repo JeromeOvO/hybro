@@ -8,12 +8,11 @@ from functools import lru_cache
 
 import httpx
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 
 from config.settings import settings
-
 
 security = HTTPBearer()
 optional_security = HTTPBearer(auto_error=False)
@@ -171,3 +170,34 @@ async def get_optional_user(
 
     token = credentials.credentials
     return await verify_clerk_token(token)
+
+
+async def get_current_user_with_query_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+) -> ClerkUser:
+    """
+    FastAPI dependency for authentication that supports both:
+    - Authorization header (standard)
+    - Query parameter token (for SSE/EventSource which can't send custom headers)
+
+    Usage:
+        @app.get("/sse/stream")
+        async def sse_stream(user: ClerkUser = Depends(get_current_user_with_query_token)):
+            return StreamingResponse(...)
+    """
+    # Try to get token from Authorization header first
+    if credentials:
+        return await verify_clerk_token(credentials.credentials)
+
+    # Fall back to query parameter token (for SSE)
+    token = request.query_params.get("token")
+    if token:
+        return await verify_clerk_token(token)
+
+    # No token provided
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
