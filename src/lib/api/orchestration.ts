@@ -2,7 +2,7 @@
 import type { OrchestrationCenterResponse } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
-import { getClientAuthHeaders } from '../auth'
+import { apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('orchestrationCenter')
 
@@ -13,20 +13,17 @@ export async function decomposeTask(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling decomposeTask with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/decomposeTask`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('decomposeTask error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/decomposeTask`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('decomposeTask error:', error)
+    throw error
   }
-
-  return await response.json()
 }
 
 // Assign agents to meta tasks by parent task ID
@@ -36,20 +33,17 @@ export async function assignAgentsToMetaTasks(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentsToMetaTasks with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/assignAgentsToMetaTasks`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('assignAgentsToMetaTasks error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/assignAgentsToMetaTasks`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('assignAgentsToMetaTasks error:', error)
+    throw error
   }
-
-  return await response.json()
 }
 
 // Assign agent to meta task
@@ -59,20 +53,17 @@ export async function assignAgentToMetaTask(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling assignAgentToMetaTask with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/assignAgentToMetaTask`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('assignAgentToMetaTask error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/assignAgentToMetaTask`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('assignAgentToMetaTask error:', error)
+    throw error
   }
-
-  return await response.json()
 }
 
 // Run workflow
@@ -82,20 +73,17 @@ export async function runWorkflow(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling runWorkflow with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/runWorkflow`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('runWorkflow error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/runWorkflow`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('runWorkflow error:', error)
+    throw error
   }
-
-  return await response.json()
 }
 
 // Retry meta task
@@ -105,20 +93,17 @@ export async function retryMetaTask(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling retryMetaTask with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/retryMetaTask`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('retryMetaTask error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/retryMetaTask`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('retryMetaTask error:', error)
+    throw error
   }
-
-  return await response.json()
 }
 
 // Summarize meta task for base task
@@ -128,20 +113,17 @@ export async function summarizeMetaTaskForBaseTask(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling summarizeMetaTaskForBaseTask with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/summarizeMetaTaskForBaseTask`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('summarizeMetaTaskForBaseTask error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/summarizeMetaTaskForBaseTask`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('summarizeMetaTaskForBaseTask error:', error)
+    throw error
   }
-
-  return await response.json()
 } 
 
 
@@ -151,18 +133,15 @@ export async function processRoomUserMessage(
 ): Promise<OrchestrationCenterResponse> {
   console.log('Calling processRoomUserMessage with data:', data)
   
-  const headers = await getClientAuthHeaders(getToken)
-  const response = await fetch(`${API_BASE_URL}/processRoomUserMessage`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(data),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('processRoomUserMessage error:', response.status, errorText)
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+  try {
+    const result = await apiPost<OrchestrationCenterResponse>(
+      `${API_BASE_URL}/processRoomUserMessage`,
+      data,
+      getToken
+    )
+    return result
+  } catch (error) {
+    console.error('processRoomUserMessage error:', error)
+    throw error
   }
-
-  return await response.json()
 }
