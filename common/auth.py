@@ -3,19 +3,13 @@ Clerk Authentication for FastAPI
 Validates JWT tokens from Clerk and provides user authentication.
 """
 
-import json
-from functools import lru_cache
-
-import httpx
-import jwt
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from clerk_backend_api import authenticate_request
+from clerk_backend_api.security.types import AuthenticateRequestOptions
+from fastapi import HTTPException, Request, status
 from loguru import logger
+from starlette.datastructures import MutableHeaders
 
 from config.settings import settings
-
-security = HTTPBearer()
-optional_security = HTTPBearer(auto_error=False)
 
 
 class ClerkUser:
@@ -29,48 +23,13 @@ class ClerkUser:
         self.username = claims.get("username")
 
 
-async def fetch_jwks() -> dict:
-    """Fetch JWKS (JSON Web Key Set) from Clerk"""
-    jwks_url = settings.clerk_jwks_url
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(jwks_url, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
-    except Exception as e:
-        logger.error(f"Failed to fetch JWKS from Clerk: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to verify authentication",
-        ) from e
-
-
-@lru_cache(maxsize=10)
-def get_signing_key(jwks_data: str, token_kid: str):
+async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
     """
-    Get the signing key from JWKS data for a specific key ID.
-    Cached to avoid repeated parsing.
-    """
-    import json
-
-    jwks = json.loads(jwks_data)
-    for key in jwks.get("keys", []):
-        if key.get("kid") == token_kid:
-            return jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key))
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unable to find appropriate key",
-    )
-
-
-async def verify_clerk_token(token: str) -> ClerkUser:
-    """
-    Verify a Clerk JWT token and return user information.
+    Verify a Clerk JWT token from a FastAPI Request using Clerk SDK.
+    The SDK will automatically extract and verify the token from the request.
 
     Args:
-        token: The JWT token from the Authorization header
+        request: The FastAPI Request object
 
     Returns:
         ClerkUser object with user information
@@ -79,84 +38,73 @@ async def verify_clerk_token(token: str) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
-        # Get the token header to find the key ID
-        unverified_header = jwt.get_unverified_header(token)
-        kid = unverified_header.get("kid")
+        # Use Clerk SDK to authenticate the request
+        # The SDK handles JWKS fetching, caching, and JWT verification automatically
+        # Create authentication options with secret key
+        options = AuthenticateRequestOptions(secret_key=settings.clerk_secret_key)
+        request_state = authenticate_request(request, options)
 
-        if not kid:
+        if not request_state.is_signed_in:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing key ID",
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Fetch JWKS
-        jwks_data = await fetch_jwks()
+        # Extract user information from the verified token payload
+        payload = request_state.payload
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: missing payload",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-        # Get the signing key
-        signing_key = get_signing_key(
-            json.dumps(jwks_data), kid
-        )  # Convert to string for caching
-
-        # Verify and decode the token
-        payload = jwt.decode(
-            token,
-            signing_key,
-            algorithms=["RS256"],
-            options={"verify_exp": True, "verify_aud": False},  # Clerk doesn't use aud
-        )
-
-        # Extract user information
-        user_id = payload.get("sub")
-        session_id = payload.get("sid")
+        user_id = payload.get("sub")  # Subject claim contains user ID
+        session_id = payload.get("sid")  # Session ID claim
 
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing user ID",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
         return ClerkUser(user_id=user_id, session_id=session_id, claims=payload)
 
-    except jwt.ExpiredSignatureError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-        ) from e
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid token: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-        ) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Token verification failed: {e}")
+        logger.error(f"Token verification failed: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication verification failed",
+            headers={"WWW-Authenticate": "Bearer"},
         ) from e
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
 ) -> ClerkUser:
     """
     FastAPI dependency to get the current authenticated user.
+    Uses Clerk SDK for token verification.
 
     Usage:
         @app.get("/protected")
         async def protected_route(user: ClerkUser = Depends(get_current_user)):
             return {"user_id": user.user_id}
     """
-    token = credentials.credentials
-    return await verify_clerk_token(token)
+    # The Clerk SDK will verify the token from the request automatically
+    return await verify_clerk_token_from_request(request)
 
 
 async def get_optional_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
+    request: Request,
 ) -> ClerkUser | None:
     """
     FastAPI dependency for optional authentication.
-    Returns None if no token is provided, otherwise validates the token.
+    Returns None if no token is provided, otherwise validates the token using Clerk SDK.
 
     Usage:
         @app.get("/optional-auth")
@@ -165,39 +113,46 @@ async def get_optional_user(
                 return {"message": f"Hello {user.user_id}"}
             return {"message": "Hello guest"}
     """
-    if not credentials:
+    # Try to verify token from request, return None if no token provided
+    try:
+        return await verify_clerk_token_from_request(request)
+    except HTTPException:
         return None
-
-    token = credentials.credentials
-    return await verify_clerk_token(token)
 
 
 async def get_current_user_with_query_token(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(optional_security),
 ) -> ClerkUser:
     """
     FastAPI dependency for authentication that supports both:
-    - Authorization header (standard)
-    - Query parameter token (for SSE/EventSource which can't send custom headers)
+    - Query parameter token (for SSE/EventSource which can't send custom headers) - checked first
+    - Authorization header (fallback) - verified by Clerk SDK
 
     Usage:
         @app.get("/sse/stream")
         async def sse_stream(user: ClerkUser = Depends(get_current_user_with_query_token)):
             return StreamingResponse(...)
     """
-    # Try to get token from Authorization header first
-    if credentials:
-        return await verify_clerk_token(credentials.credentials)
-
-    # Fall back to query parameter token (for SSE)
+    # Check for query parameter token first (primary for SSE)
     token = request.query_params.get("token")
     if token:
-        return await verify_clerk_token(token)
+        # For query parameter tokens, we need to create a modified request
+        # with the token in the Authorization header for the SDK to verify
 
-    # No token provided
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+        # Create new headers with the Authorization header
+        new_headers = MutableHeaders(request.headers)
+        new_headers["authorization"] = f"Bearer {token}"
+
+        # Create a modified request scope
+        modified_scope = dict(request.scope)
+        modified_scope["headers"] = [
+            (k.encode(), v.encode()) for k, v in new_headers.items()
+        ]
+
+        # Create new request with modified headers
+        modified_request = Request(scope=modified_scope)
+
+        return await verify_clerk_token_from_request(modified_request)
+
+    # Fall back to Authorization header (standard auth)
+    return await verify_clerk_token_from_request(request)
