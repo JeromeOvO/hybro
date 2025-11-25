@@ -4,11 +4,12 @@ import { SSEConnection, SSEMessage } from '@/lib/api/sse'
 interface UseRoomSSEOptions {
   roomId: string
   enabled?: boolean
+  getToken?: () => Promise<string | null>
   onMessage?: (message: SSEMessage) => void
   onConnectionChange?: (connected: boolean) => void
 }
 
-export function useRoomSSE({ roomId, enabled = true, onMessage, onConnectionChange }: UseRoomSSEOptions) {
+export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConnectionChange }: UseRoomSSEOptions) {
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -41,6 +42,7 @@ export function useRoomSSE({ roomId, enabled = true, onMessage, onConnectionChan
       // Create new connection
       connectionRef.current = new SSEConnection({
         roomId,
+        getToken,
         onMessage: handleMessage,
         onOpen: () => {
           console.log('✅ SSE connected')
@@ -67,7 +69,7 @@ export function useRoomSSE({ roomId, enabled = true, onMessage, onConnectionChan
       setConnecting(false)
       handleConnectionChange(false)
     }
-  }, [roomId, enabled, handleMessage, handleConnectionChange])
+  }, [roomId, enabled, getToken, handleMessage, handleConnectionChange])
 
   const disconnect = useCallback(() => {
     if (connectionRef.current) {

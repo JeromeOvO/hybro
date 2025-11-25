@@ -5,6 +5,7 @@ import Script from "next/script"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ClerkProvider } from "@clerk/nextjs"
+import { ClerkAuthProvider } from "@/components/providers/ClerkAuthProvider"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -38,9 +39,11 @@ export default function RootLayout({
       </head>
       <body className={inter.className}>
         <ClerkProvider>
-          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-            {children}
-          </ThemeProvider>
+          <ClerkAuthProvider>
+            <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+              {children}
+            </ThemeProvider>
+          </ClerkAuthProvider>
         </ClerkProvider>
       </body>
     </html>

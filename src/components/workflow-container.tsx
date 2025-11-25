@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect } from 'react'
+import { useAuth } from '@clerk/nextjs'
 import { WorkflowMessage } from './workflow-message'
 import { useWorkflow } from '@/hooks/useWorkflow'
 import type { BaseTask, MetaTask } from '@/lib/types'
@@ -18,6 +19,7 @@ export function WorkflowContainer({
   onWorkflowComplete,
   className
 }: WorkflowContainerProps) {
+  const { getToken } = useAuth()
   const {
     metaTasks,
     agents,
@@ -27,7 +29,7 @@ export function WorkflowContainer({
     handleNext,
     handleRetry,
     handleRetryMetaTask
-  } = useWorkflow({ baseTaskId, onWorkflowComplete })
+  } = useWorkflow({ baseTaskId, onWorkflowComplete, getToken })
 
 
   useEffect(() => {

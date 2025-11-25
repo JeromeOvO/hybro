@@ -170,9 +170,14 @@ export function AgentSelector({
   className
 }: AgentSelectorProps) {
   const selectedAgentsList = Object.values(selectedAgents)
-  const unselectedAgents = availableAgents.filter(
+
+  // Remove duplicates from availableAgents
+  const uniqueAgents = Array.from(
+    new Map(availableAgents.map(agent => [agent.agent_id, agent])).values()
+  );
+  const unselectedAgents = uniqueAgents.filter(
     agent => !selectedAgents[agent.agent_id]
-  )
+  );
 
   return (
     <div className={`space-y-4 ${className}`}>
@@ -247,7 +252,7 @@ export function AgentSelector({
           </div>
         ) : unselectedAgents.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground min-h-[120px] flex items-center justify-center">
-            {availableAgents.length === 0 ? 'No agents available' : 'All agents selected'}
+            {uniqueAgents.length === 0 ? 'No agents available' : 'All agents selected'}
           </div>
         ) : (
           <div className="flex flex-wrap gap-2 max-h-64 min-h-[120px] overflow-y-auto p-1">

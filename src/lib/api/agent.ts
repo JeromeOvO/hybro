@@ -7,105 +7,75 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { apiGet, apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
 
 // Get agent card from URL
-export async function getAgentCardFromUrl(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/getAgentCardFromUrl`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function getAgentCardFromUrl(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InspectionCenterResponse> {
+  return apiPost<InspectionCenterResponse>(
+    `${API_BASE_URL}/getAgentCardFromUrl`,
+    request,
+    getToken
+  )
 }
 
 // Register agent
-export async function registerAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/registerAgent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function registerAgent(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiPost<AgentCenterResponse>(
+    `${API_BASE_URL}/registerAgent`,
+    request,
+    getToken
+  )
 }
 
 // Get agent by ID
-export async function getAgent(agentId: string): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/getAgent/${agentId}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function getAgent(
+  agentId: string,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAgent/${agentId}`,
+    getToken
+  )
 }
 
 // Get all agents
-export async function getAllAgents(): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/getAllAgents`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function getAllAgents(
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAllAgents`,
+    getToken
+  )
 }
 
 // Delete agent
-export async function deleteAgent(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/deleteAgent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function deleteAgent(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiPost<AgentCenterResponse>(
+    `${API_BASE_URL}/deleteAgent`,
+    request,
+    getToken
+  )
 }
 
 // Get agent list with conditions
-export async function getAgentListWithConditions(request: AgentCenterRequest): Promise<AgentCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/getAgentListWithConditions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function getAgentListWithConditions(
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiPost<AgentCenterResponse>(
+    `${API_BASE_URL}/getAgentListWithConditions`,
+    request,
+    getToken
+  )
 } 

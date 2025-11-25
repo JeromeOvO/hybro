@@ -6,39 +6,30 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
+import { apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('inspectionCenter')
 
 // Inspect agent card
-export async function inspectAgentCard(request: InspectionCenterRequest): Promise<InspectionCenterResponse> {
-  const response = await fetch(`${API_BASE_URL}/inspectAgentCard`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function inspectAgentCard(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InspectionCenterResponse> {
+  return apiPost<InspectionCenterResponse>(
+    `${API_BASE_URL}/inspectAgentCard`,
+    request,
+    getToken
+  )
 }
 
 // Inspect A2A connection
-export async function inspectA2AConnection(request: InspectionCenterRequest): Promise<InsepectionCenterConnectionValidationResponse> {
-  const response = await fetch(`${API_BASE_URL}/inspectA2AConnection`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-
-  return await response.json()
+export async function inspectA2AConnection(
+  request: InspectionCenterRequest,
+  getToken?: () => Promise<string | null>
+): Promise<InsepectionCenterConnectionValidationResponse> {
+  return apiPost<InsepectionCenterConnectionValidationResponse>(
+    `${API_BASE_URL}/inspectA2AConnection`,
+    request,
+    getToken
+  )
 } 

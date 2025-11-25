@@ -23,9 +23,10 @@ interface UseRoomWebhookProps {
   roomId: string
   userId?: string
   userName?: string
+  getToken?: () => Promise<string | null>
 }
 
-export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps) {
+export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
   const [room, setRoom] = useState<Room | null>(null)
   const [messages, setMessages] = useState<MessageData[]>([])
   const [loading, setLoading] = useState(true)
@@ -238,13 +239,14 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
   } = useRoomSSE({
     roomId,
     enabled: sseEnabled && !!roomId,
+    getToken,
     onMessage: handleSSEMessage,
   })
 
   // Load room settings
   const loadRoomSetting = useCallback(async () => {
     try {
-      const response = await inquiryRoomSetting(roomId)
+      const response = await inquiryRoomSetting(roomId, getToken)
       if (response.success && response.room) {
         setRoom(response.room)
         return response.room
@@ -258,13 +260,13 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       toast.error('Failed to load room settings')
       return null
     }
-  }, [roomId])
+  }, [roomId, getToken])
 
   // Load room messages and convert them to display format
   const loadRoomMessages = useCallback(async () => {
     try {
       // Fetch messages from the API
-      const response = await inquiryRoomMessagesByRoomId(roomId)
+      const response = await inquiryRoomMessagesByRoomId(roomId, getToken)
       if (response.success && response.message_list) {
         // Convert all messages with async agent name fetching
         // This processes both user and agent messages uniformly
@@ -283,7 +285,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       toast.error('Failed to load messages')
       return []
     }
-  }, [roomId, convertApiMessageToMessageData])
+  }, [roomId, convertApiMessageToMessageData, getToken])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
@@ -380,7 +382,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       isProcessingRef.current = true
       
       // Step 1: Send user message to backend using unified SendMessage API
-      const createResponse = await SendMessage(roomId, userInput, userId, userName)
+      const createResponse = await SendMessage(roomId, userInput, getToken, userId, userName)
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
@@ -446,7 +448,7 @@ export function useRoomWebhook({ roomId, userId, userName }: UseRoomWebhookProps
       setProcessing(false)
       isProcessingRef.current = false
     }
-  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected])
+  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected, getToken])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {

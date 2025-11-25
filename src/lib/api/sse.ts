@@ -1,5 +1,6 @@
 import type { SSEConnectionStatus } from '@/lib/types/sse'
 import { getApiUrl } from '../utils'
+import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('sse')
 
@@ -20,6 +21,7 @@ export interface SSEMessage {
 
 export interface SSEConnectionOptions {
   roomId: string
+  getToken?: () => Promise<string | null>
   onMessage?: (message: SSEMessage) => void
   onError?: (error: Event) => void
   onOpen?: (event: Event) => void
@@ -40,12 +42,21 @@ export class SSEConnection {
     this.options = options
   }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+  async connect(): Promise<void> {
+    return new Promise(async (resolve, reject) => {
       try {
         this.isManualClose = false
-        const url = `${API_BASE_URL}/room/${this.roomId}/stream`
-        console.log('🔗 Connecting to SSE:', url)
+        
+        // Get auth token if available
+        const token = this.options.getToken ? await this.options.getToken() : null
+        
+        // Build URL with auth token as query param for SSE (EventSource doesn't support custom headers)
+        let url = `${API_BASE_URL}/room/${this.roomId}/stream`
+        if (token) {
+          url += `?token=${encodeURIComponent(token)}`
+        }
+        
+        console.log('🔗 Connecting to SSE:', url.replace(/token=[^&]+/, 'token=***'))
         
         this.eventSource = new EventSource(url)
 
@@ -118,10 +129,14 @@ export class SSEConnection {
 }
 
 // Get SSE connection status
-export async function getSSEStatus(roomId: string): Promise<SSEConnectionStatus> {
+export async function getSSEStatus(
+  roomId: string,
+  getToken?: () => Promise<string | null>
+): Promise<SSEConnectionStatus> {
   const url = `${API_BASE_URL}/room/${roomId}/status`
   
-  const response = await fetch(url)
+  const headers = await getClientAuthHeaders(getToken)
+  const response = await fetch(url, { headers })
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`)
   }
