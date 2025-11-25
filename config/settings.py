@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     parse_confidence_threshold: float = 0.3
 
     # Clerk Authentication
-    clerk_jwks_url: str = ""  # JWKS URL for JWT token verification
+    clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
     class Config:
         env_file = ".env"
