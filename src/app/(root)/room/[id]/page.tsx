@@ -64,7 +64,7 @@ export default function RoomChatPage() {
     try {
       setLoadingAgents(true)
       setAgentsError(null)
-      const response = await getAllAgents(getToken)
+      const response = await getAllAgents()
       
       if (response.success && response.agents) {
         setAvailableAgents(response.agents)
