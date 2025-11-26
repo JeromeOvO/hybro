@@ -102,11 +102,12 @@ api_prefix = os.getenv("API_PREFIX", "/api/v1")
 
 # Add global authentication dependency to all routers
 # This requires authentication for ALL API endpoints under /api/v1
+# Agent router has mixed auth - some endpoints are public (GET), some require auth (POST/DELETE)
 app.include_router(
     agent.router,
     prefix=api_prefix,
     tags=["agent"],
-    dependencies=[Depends(get_current_user)],
+    # No global auth - handled per-route in agent.py
 )
 app.include_router(
     chat.router,
