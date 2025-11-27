@@ -21,7 +21,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
   const loadDefaultAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
-      const response = await getAllAgents(getToken)
+      const response = await getAllAgents()
       
       if (response.success && response.agents && response.agents.length > 0) {
         // Take first 2 agents as default, or configure as needed
@@ -38,7 +38,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     } finally {
       setLoadingAgents(false)
     }
-  }, [getToken])
+  }, [])
 
   // Create room with user message
   const createRoomWithMessage = useCallback(async (userMessage: string) => {

@@ -41,7 +41,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
   // Load all available agents
   const loadAgents = useCallback(async () => {
     try {
-      const response: AgentCenterResponse = await getAllAgents(getToken)
+      const response: AgentCenterResponse = await getAllAgents()
       if (response.success && response.agents) {
         setAgents(response.agents)
       }
@@ -49,7 +49,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
       console.error('Error loading agents:', error)
       toast.error('Failed to load agents')
     }
-  }, [getToken])
+  }, [])
 
   // Load meta tasks by parent task ID
   const loadMetaTasks = useCallback(async () => {
