@@ -14,25 +14,6 @@ agent_center = AgentCenter()
 # ============= PROTECTED ENDPOINTS (Auth Required) =============
 
 
-@router.post("/agent/getAgentCardFromUrl")
-async def get_agent_card_from_url(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-):
-    """Get agent card from URL - PROTECTED (requires authentication)"""
-    request_data = await request.json()
-    agent_url = request_data.get("agent_url")
-
-    if not agent_url:
-        raise HTTPException(status_code=400, detail="agent_url is required")
-
-    agent_center_request = AgentCenterRequest(agent_url=agent_url)
-    agent_center_response = await agent_center.get_agent_card_from_url(
-        agent_center_request
-    )
-    return agent_center_response
-
-
 @router.post("/agent/registerAgent")
 async def register_agent(
     request: Request,
@@ -71,6 +52,22 @@ async def delete_agent(
 
 
 # ============= PUBLIC ENDPOINTS (No Auth Required) =============
+
+
+@router.post("/agent/getAgentCardFromUrl")
+async def get_agent_card_from_url(request: Request):
+    """Get agent card from URL - PUBLIC (no authentication required)"""
+    request_data = await request.json()
+    agent_url = request_data.get("agent_url")
+
+    if not agent_url:
+        raise HTTPException(status_code=400, detail="agent_url is required")
+
+    agent_center_request = AgentCenterRequest(agent_url=agent_url)
+    agent_center_response = await agent_center.get_agent_card_from_url(
+        agent_center_request
+    )
+    return agent_center_response
 
 
 @router.get("/agent/getAgent/{agent_id}")
