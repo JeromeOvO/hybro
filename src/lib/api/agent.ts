@@ -13,18 +13,6 @@ const API_BASE_URL = getApiUrl('agent')
 
 // ============= PROTECTED ENDPOINTS (Auth Required) =============
 
-// Get agent card from URL
-export async function getAgentCardFromUrl(
-  request: InspectionCenterRequest,
-  getToken?: () => Promise<string | null>
-): Promise<InspectionCenterResponse> {
-  return apiPost<InspectionCenterResponse>(
-    `${API_BASE_URL}/getAgentCardFromUrl`,
-    request,
-    getToken
-  )
-}
-
 // Register agent
 export async function registerAgent(
   request: AgentCenterRequest,
@@ -50,6 +38,16 @@ export async function deleteAgent(
 }
 
 // ============= PUBLIC ENDPOINTS (No Auth Required) =============
+
+// Get agent card from URL - PUBLIC
+export async function getAgentCardFromUrl(
+  request: InspectionCenterRequest
+): Promise<InspectionCenterResponse> {
+  return apiPost<InspectionCenterResponse>(
+    `${API_BASE_URL}/getAgentCardFromUrl`,
+    request
+  )
+}
 
 // Get agent by ID - PUBLIC
 export async function getAgent(
