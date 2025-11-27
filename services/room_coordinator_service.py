@@ -84,19 +84,26 @@ class RoomCoordinatorService:
                 # Not enough agent answers to justify a summary
                 return
 
-            # Extract visible text from each agent message
-            debate_texts: list[str] = []
+            # Extract visible text and agent info from each agent message
+            agent_responses: list[dict[str, str]] = []
             for msg in debate_messages:
                 text = self._extract_agent_text_from_message(msg)
-                if text:
-                    debate_texts.append(text)
+                if text and msg.agent_id:
+                    # Get agent name from database
+                    agent_name = await self.database_service.get_agent_name_by_agent_id(
+                        msg.agent_id
+                    )
+                    agent_responses.append({
+                        "agent_name": agent_name or msg.agent_id,
+                        "message": text,
+                    })
 
             # Require at least two distinct non-empty answers
-            if len(debate_texts) < 2:
+            if len(agent_responses) < 2:
                 return
 
             summary_text = await self.openai_service.summarize_debate_answer(
-                debate_texts
+                agent_responses
             )
             if not summary_text:
                 return

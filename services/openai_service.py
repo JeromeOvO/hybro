@@ -507,17 +507,53 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
 
-    async def summarize_debate_answer(self, messages: list[str]) -> str:
+    async def summarize_debate_answer(
+        self, agent_responses: list[dict[str, str]]
+    ) -> str:
         """
         Summarize the answers from multiple AI agents into a single summary using Lead_ai.
+
+        Args:
+            agent_responses: List of dicts with 'agent_name' and 'message' keys
+                Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
         """
-        system_prompt = "You are an expert AI agent tasked with summarizing the debate answers from multiple agents into a concise and comprehensive summary."
+        # Get max words from env variable, default to 200 words
+        max_words = int(os.getenv("DEBATE_SUMMARY_MAX_WORDS", "200"))
+
+        system_prompt = """You are an expert debate summarizer for multi-agent systems. Your task is to analyze responses from multiple AI agents and create a structured summary that captures different perspectives, agreements, and disagreements.
+
+CORE OBJECTIVES:
+1. Extract and organize distinct viewpoints from each agent
+2. Identify areas of consensus and disagreement
+3. Highlight key insights and actionable recommendations
+4. Maintain agent attribution for all points
+5. Present information in a clear, structured format
+
+ANALYSIS APPROACH:
+- Compare agent responses to identify overlapping vs. unique points
+- Note where agents build upon each other's ideas
+- Identify contradictions or alternative approaches
+- Extract specific data, recommendations, or conclusions from each agent
+- Synthesize complementary information into coherent themes
+
+QUALITY STANDARDS:
+- Use actual agent names, never generic labels
+- Include specific details, data, and reasoning from agents
+- Keep summary concise but comprehensive
+- Focus on substance over process
+- Ensure balanced representation of all agent contributions"""
+
         answers_text = "\n\n".join(
-            [f"Agent {i + 1}: {msg}" for i, msg in enumerate(messages)]
+            [
+                f"--- {resp.get('agent_name', 'Unknown Agent')} ---\n{resp.get('message', '')}"
+                for resp in agent_responses
+            ]
         )
         prompt = (
-            f"Here are the answers from different agents:\n{answers_text}\n\n"
-            "Please provide a summary that captures the main points and consensus (if any) from these answers."
+            f"Here are responses from multiple agents with potentially different opinions:\n\n{answers_text}\n\n"
+            f"Summarize the key points from all agents in a structured format. "
+            f"Use the actual agent names when referencing their opinions. "
+            f"Keep the summary within {max_words} words."
         )
         chat_messages = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
