@@ -11,17 +11,7 @@ import { apiGet, apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
 
-// Get agent card from URL
-export async function getAgentCardFromUrl(
-  request: InspectionCenterRequest,
-  getToken?: () => Promise<string | null>
-): Promise<InspectionCenterResponse> {
-  return apiPost<InspectionCenterResponse>(
-    `${API_BASE_URL}/getAgentCardFromUrl`,
-    request,
-    getToken
-  )
-}
+// ============= PROTECTED ENDPOINTS (Auth Required) =============
 
 // Register agent
 export async function registerAgent(
@@ -31,27 +21,6 @@ export async function registerAgent(
   return apiPost<AgentCenterResponse>(
     `${API_BASE_URL}/registerAgent`,
     request,
-    getToken
-  )
-}
-
-// Get agent by ID
-export async function getAgent(
-  agentId: string,
-  getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
-    `${API_BASE_URL}/getAgent/${agentId}`,
-    getToken
-  )
-}
-
-// Get all agents
-export async function getAllAgents(
-  getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
-    `${API_BASE_URL}/getAllAgents`,
     getToken
   )
 }
@@ -68,14 +37,40 @@ export async function deleteAgent(
   )
 }
 
-// Get agent list with conditions
+// ============= PUBLIC ENDPOINTS (No Auth Required) =============
+
+// Get agent card from URL - PUBLIC
+export async function getAgentCardFromUrl(
+  request: InspectionCenterRequest
+): Promise<InspectionCenterResponse> {
+  return apiPost<InspectionCenterResponse>(
+    `${API_BASE_URL}/getAgentCardFromUrl`,
+    request
+  )
+}
+
+// Get agent by ID - PUBLIC
+export async function getAgent(
+  agentId: string
+): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAgent/${agentId}`
+  )
+}
+
+// Get all agents - PUBLIC
+export async function getAllAgents(): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAllAgents`
+  )
+}
+
+// Get agent list with conditions - PUBLIC
 export async function getAgentListWithConditions(
-  request: AgentCenterRequest,
-  getToken?: () => Promise<string | null>
+  request: AgentCenterRequest
 ): Promise<AgentCenterResponse> {
   return apiPost<AgentCenterResponse>(
     `${API_BASE_URL}/getAgentListWithConditions`,
-    request,
-    getToken
+    request
   )
 } 

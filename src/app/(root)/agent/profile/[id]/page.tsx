@@ -10,17 +10,14 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
-import { useClerk, useUser } from "@clerk/nextjs"
-import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function AgentProfilePage() {
   const params = useParams()
   const router = useRouter()
   const agentId = params.id as string
-  const { user, isLoaded } = useUser()
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const { openWaitlist } = useClerk()
+
   const getStatusColor = (status: Agent['agent_status']) => {
     switch (status) {
       case 'active':
@@ -48,16 +45,6 @@ export default function AgentProfilePage() {
   }
 
   const loadAgentDetail = async () => {
-
-    if (isLoaded && !user?.id) {
-      if (isWaitlistEnabled()) {
-        openWaitlist()
-      } else {
-        router.push("/sign-in")
-      }
-      return
-    }
-
     try {
       setLoading(true)
       const response = await getAgent(agentId)
@@ -78,10 +65,10 @@ export default function AgentProfilePage() {
   }
 
   useEffect(() => {
-    if (isLoaded && agentId) {
+    if (agentId) {
       loadAgentDetail()
     }
-  }, [agentId, isLoaded])
+  }, [agentId])
 
   if (loading) {
     return (
