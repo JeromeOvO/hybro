@@ -10,6 +10,8 @@ agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
 agent_center = AgentCenter()
 
+# ============= PROTECTED ENDPOINTS (Auth Required) =============
+
 @router.post("/agent/registerAgent")
 async def register_agent(
     request: Request,
@@ -58,11 +60,14 @@ async def delete_agent(
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
-    agent_center_response = await agent_center.remove_agent(agent_center_request)
+    agent_center_response = await agent_center.query_agent_by_agent_id(
+        agent_center_request
+    )
     agent_center_response_without_url = agent_center._mask_sensitive_information(
-        agent_center_response, ["agent_url", "agent_card.url"]
+        agent_center_response,["agent_url","agent_card.url"]
     )
     return agent_center_response_without_url
+
 
 
 # ============= PUBLIC ENDPOINTS (No Auth Required) =============
@@ -94,9 +99,7 @@ async def get_agent(agent_id: str):
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
-    agent_center_response = await agent_center.query_agent_by_agent_id(
-        agent_center_request
-    )
+    agent_center_response = await agent_center.remove_agent(agent_center_request)
     agent_center_response_without_url = agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
     )
