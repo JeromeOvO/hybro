@@ -187,3 +187,23 @@ class AgentCenter:
             AgentCenterResponse with list of similar agents ranked by relevance
         """
         return await self.agent_service.query_similar_agents(request)
+
+    def _mask_sensitive_information (
+            self, response: AgentCenterResponse, fields: list[str]
+    ) -> AgentCenterResponse:
+        """
+        Remove sensitive fields from an AgentCenterResponse.
+
+        This helper method applies field-level masking based on the
+        specified field paths (including nested attributes), and returns
+        a sanitized AgentCenterResponse suitable for API output.
+
+        Args:
+            response: AgentCenterResponse to be filtered
+            fields: list of field paths to mask (e.g., "agent_url", "agent_card.url")
+
+        Returns:
+            AgentCenterResponse with the specified fields removed
+        """
+        return self.agent_service._mask_sensitive_information(response, fields)
+
