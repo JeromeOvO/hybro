@@ -32,21 +32,6 @@ async def register_agent(
     )
     return agent_center_response_without_url
 
-
-@router.get("/agent/getAgent/{agent_id}")
-async def get_agent(agent_id: str):
-    if not agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required")
-
-    agent_center_request = AgentCenterRequest(agent_id=agent_id)
-    agent_center_response = await agent_center.query_agent_by_agent_id(
-        agent_center_request
-    )
-    agent_center_response_without_url = agent_center._mask_sensitive_information(
-        agent_center_response,["agent_url","agent_card.url"]
-    )
-    return agent_center_response_without_url
-
 @router.post("/agent/deleteAgent")
 async def delete_agent(
     request: Request,
@@ -69,9 +54,7 @@ async def delete_agent(
     return agent_center_response_without_url
 
 
-
 # ============= PUBLIC ENDPOINTS (No Auth Required) =============
-
 
 @router.post("/agent/getAgentCardFromUrl")
 async def get_agent_card_from_url(request: Request):
