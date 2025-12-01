@@ -10,6 +10,7 @@ agent_viewset = AgentViewSet()
 router.include_router(agent_viewset.get_router())
 agent_center = AgentCenter()
 
+# ============= PROTECTED ENDPOINTS (Auth Required) =============
 
 @router.post("/agent/getAgentCardFromUrl")
 async def get_agent_card_from_url(request: Request):
