@@ -5,7 +5,7 @@ import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
@@ -17,9 +17,10 @@ from api import (
     memory_center,
     orchestration_center,
     room_center,
-    task,
     sse,
+    task,
 )
+from common.auth import get_current_user
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
@@ -42,7 +43,7 @@ logging_config = LOGGING_CONFIG.copy()
 logging_config["loggers"]["uvicorn.access"]["handlers"] = ["default"]
 
 logger.remove()
-if settings.app_env == "development":    
+if settings.app_env == "development":
     logger.add(
         sys.stderr,
         enqueue=False,
@@ -67,7 +68,7 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """ Lifespan context manager to handle startup and shutdown events. """
+    """Lifespan context manager to handle startup and shutdown events."""
     # await init_db(app)        # gets "app" from FastAPI
     await mongodb.connect()
     pinecone_db.connect()
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
     finally:
         # await close_db(app)
         await mongodb.close_database_connection()
+
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
@@ -89,21 +91,70 @@ app.add_middleware(
 )
 
 
-# Health check endpoint (no prefix)
+# Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
 
 
-# Include API routers with /api/v1 prefix
+# Include API routers with /api/v1 prefix and global authentication
 api_prefix = os.getenv("API_PREFIX", "/api/v1")
-app.include_router(agent.router, prefix=api_prefix, tags=["agent"])
-app.include_router(chat.router, prefix=api_prefix, tags=["chat"])
-app.include_router(inspection_center.router, prefix=api_prefix, tags=["inspection"])
-app.include_router(memory_center.router, prefix=api_prefix, tags=["memory"])
+
+# Add global authentication dependency to all routers
+# This requires authentication for ALL API endpoints under /api/v1
+# Agent router has mixed auth - some endpoints are public (GET), some require auth (POST/DELETE)
 app.include_router(
-    orchestration_center.router, prefix=api_prefix, tags=["orchestration"]
+    agent.router,
+    prefix=api_prefix,
+    tags=["agent"],
+    # No global auth - handled per-route in agent.py
 )
-app.include_router(room_center.router, prefix=api_prefix, tags=["room"])
-app.include_router(task.router, prefix=api_prefix, tags=["task"])
-app.include_router(sse.router, prefix=api_prefix, tags=["sse"])
+app.include_router(
+    chat.router,
+    prefix=api_prefix,
+    tags=["chat"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    inspection_center.router,
+    prefix=api_prefix,
+    tags=["inspection"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    memory_center.router,
+    prefix=api_prefix,
+    tags=["memory"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    orchestration_center.router,
+    prefix=api_prefix,
+    tags=["orchestration"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    room_center.router,
+    prefix=api_prefix,
+    tags=["room"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    task.router,
+    prefix=api_prefix,
+    tags=["task"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    sse.router,
+    prefix=api_prefix,
+    tags=["sse"],
+    # SSE endpoints handle auth via get_current_user_with_query_token (supports ?token= for EventSource)
+)
+# For APIs that do not require authentication (user is optional)
+# app.include_router(
+#     router,
+#     prefix=api_prefix,
+#     tags=["public-apis"],
+#     dependencies=[Depends(get_optional_user)]
+# )

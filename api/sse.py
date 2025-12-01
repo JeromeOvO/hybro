@@ -2,9 +2,10 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Path
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import StreamingResponse
 
+from common.auth import ClerkUser, get_current_user_with_query_token
 from common.utils.logger import get_logger
 from services.sse_services import sse_manager
 
@@ -13,12 +14,16 @@ router = APIRouter()
 
 
 @router.get("/sse/room/{room_id}/stream")
-async def stream_room_messages(room_id: str = Path(..., description="room ID")):
+async def stream_room_messages(
+    room_id: str = Path(..., description="room ID"),
+    user: ClerkUser = Depends(get_current_user_with_query_token),
+):
     """
     create SSE message stream for specified room
 
     Args:
         room_id: room ID
+        user: Authenticated user (from header or query param token)
 
     Returns:
         StreamingResponse: SSE stream response
@@ -72,12 +77,16 @@ async def stream_room_messages(room_id: str = Path(..., description="room ID")):
 
 
 @router.get("/sse/room/{room_id}/status")
-async def get_room_sse_status(room_id: str = Path(..., description="room ID")):
+async def get_room_sse_status(
+    room_id: str = Path(..., description="room ID"),
+    user: ClerkUser = Depends(get_current_user_with_query_token),
+):
     """
     get SSE connection status for specified room
 
     Args:
         room_id: room ID
+        user: Authenticated user (from header or query param token)
 
     Returns:
         dict: room connection status information
