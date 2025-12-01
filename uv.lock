@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -902,6 +902,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/0d/4c4ef76bc62294eaad4bf2d2abc1f9a7d83823501763dfe16f8e7a8974f3/chuk_tool_processor-0.6.4.tar.gz", hash = "sha256:4946fb7574d6a97e1e70efbf79443303e24d2177aa58b0a1bc60f9a66cb76d0c", size = 90796, upload-time = "2025-07-28T13:36:37.168Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/e6/7f34214070eff044b1dcb8251524fad122afd9ec009f112237d843c2831e/chuk_tool_processor-0.6.4-py3-none-any.whl", hash = "sha256:f7300ffadca97e4dbc47badbedda8572eaff9eb263431d44b8a061af0baeeb70", size = 113285, upload-time = "2025-07-28T13:36:35.723Z" },
+]
+
+[[package]]
+name = "clerk-backend-api"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "httpcore" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pyjwt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3f/9f/d95ce5694bb9b606d33590490b179c9a875fde4c6cefa9b93a2604d2640c/clerk_backend_api-4.0.0.tar.gz", hash = "sha256:29a29a1cf4c5584fb9c18fdb23b7311276ea9f1ff3d4a263628d28d9041e8b22", size = 197311, upload-time = "2025-11-10T21:22:00.635Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/93/6532a0485f0711b5304b78397b0952519e2575836345ca73c9ca09dae3eb/clerk_backend_api-4.0.0-py3-none-any.whl", hash = "sha256:9f9031f493ceb98efc8e94e20ca215b029cc67afd37cea4ec075e28ec0dd8aa7", size = 400398, upload-time = "2025-11-10T21:21:59.102Z" },
 ]
 
 [[package]]
@@ -3704,6 +3720,7 @@ dependencies = [
     { name = "chuk-mcp" },
     { name = "chuk-session-manager" },
     { name = "chuk-tool-processor" },
+    { name = "clerk-backend-api" },
     { name = "click" },
     { name = "cloudevents" },
     { name = "cohere" },
@@ -4063,6 +4080,7 @@ requires-dist = [
     { name = "chuk-mcp", specifier = ">=0.1.12" },
     { name = "chuk-session-manager", specifier = ">=0.1.0" },
     { name = "chuk-tool-processor", specifier = ">=0.4.1" },
+    { name = "clerk-backend-api", specifier = ">=1.0.0" },
     { name = "click", specifier = ">=8.2.1" },
     { name = "cloudevents", specifier = ">=1.12.0" },
     { name = "cohere", specifier = ">=5.15.0" },
