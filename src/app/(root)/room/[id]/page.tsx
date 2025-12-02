@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useClerk, useAuth } from '@clerk/nextjs'
-import { Settings } from 'lucide-react'
+import { Settings, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -12,12 +12,21 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { RoomSettingForm } from '@/components/room-setting-form'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { getAllAgents } from '@/lib/api/agent'
+import { listAgentGroups } from '@/lib/api/agent-group'
 import type { Agent } from '@/lib/types/agent'
+import type { AgentGroup } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 import { isWaitlistEnabled } from "@/lib/utils"
 
 export default function RoomChatPage() {
@@ -33,6 +42,11 @@ export default function RoomChatPage() {
   const { openWaitlist } = useClerk()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
+  
+  // Group selector state
+  const [groups, setGroups] = useState<AgentGroup[]>([])
+  const [loadingGroups, setLoadingGroups] = useState(false)
+  const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ROOM_TEAM)
   
   const {
     room,
@@ -86,6 +100,37 @@ export default function RoomChatPage() {
     }
   }, [dialogOpen])
 
+  // Load user's groups
+  useEffect(() => {
+    const loadGroups = async () => {
+      if (!user?.id) return
+      
+      setLoadingGroups(true)
+      try {
+        const response = await listAgentGroups(user.id, getToken)
+        if (response.success && response.groups) {
+          setGroups(response.groups)
+        }
+      } catch (error) {
+        console.error('Failed to load groups:', error)
+      } finally {
+        setLoadingGroups(false)
+      }
+    }
+
+    if (isLoaded && user?.id) {
+      loadGroups()
+    }
+  }, [isLoaded, user?.id, getToken])
+
+  // Set default group based on room's agent set
+  useEffect(() => {
+    if (room) {
+      const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
+      setSelectedGroup(hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS)
+    }
+  }, [room])
+
   // Check for and send initial message from chat page
   useEffect(() => {
     // Only proceed if:
@@ -110,8 +155,8 @@ export default function RoomChatPage() {
       // Clear from sessionStorage
       sessionStorage.removeItem(storageKey)
       
-      // Send the message
-      sendUserMessage(initialMessage).then((success) => {
+      // Send the message with "All Agents" as target (for new chats)
+      sendUserMessage(initialMessage, BUILTIN_GROUP_ALL_AGENTS).then((success) => {
         if (success) {
           console.log('✅ Initial message sent successfully')
         } else {
@@ -124,9 +169,9 @@ export default function RoomChatPage() {
   }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
-  const handleSendMessage = async (userInput: string) => {
-    console.log('handleSendMessage called with:', userInput)
-    const success = await sendUserMessage(userInput)
+  const handleSendMessage = async (userInput: string, targetGroup?: string) => {
+    console.log('handleSendMessage called with:', userInput, 'targetGroup:', targetGroup)
+    const success = await sendUserMessage(userInput, targetGroup || selectedGroup)
     console.log('Message send result:', success)
   }
 
@@ -147,6 +192,9 @@ export default function RoomChatPage() {
 
   // Get room form data for initialization
   const roomFormData = getRoomFormData()
+
+  // Room agent count
+  const roomAgentCount = room?.room_agent_set ? Object.keys(room.room_agent_set).length : 0
 
   if (!isLoaded || loading) {
     return (
@@ -182,16 +230,42 @@ export default function RoomChatPage() {
           {/* Fixed Header - Never scrolls */}
           <header className="flex-shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
             <div className="flex items-center gap-3">
-              <div>
+              <div className="space-y-1">
                 <h1 className="text-xl font-semibold">{room.room_name}</h1>
-                {debateMode && (
-                  <div className="flex items-center gap-1 mt-1">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
-                    <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
-                      Debate Mode Active
-                    </span>
-                  </div>
-                )}
+                
+                {/* Room team / Debate mode info */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Show agent count if room has agents */}
+                  {roomAgentCount > 0 && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <Users className="h-3 w-3" />
+                            <span>Team: {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}</span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <div className="space-y-1">
+                            <p className="font-medium">Room team:</p>
+                            {Object.values(room.room_agent_set || {}).map((name, i) => (
+                              <p key={i} className="text-xs">{name}</p>
+                            ))}
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                  
+                  {debateMode && (
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
+                      <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
+                        Debate Mode
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
               
               {/* Simple SSE Connection Status - Just a dot */}
@@ -267,6 +341,12 @@ export default function RoomChatPage() {
             onSubmit={handleSendMessage}
             disableSend={sending || processing}
             agents={agentList}
+            showGroupSelector={true}
+            groups={groups}
+            loadingGroups={loadingGroups}
+            selectedGroup={selectedGroup}
+            onGroupChange={setSelectedGroup}
+            roomAgentCount={roomAgentCount}
           />
         </div>
       </div>

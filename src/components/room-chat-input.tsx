@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { Send } from 'lucide-react'
 // import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { GroupSelector } from '@/components/group-selector'
+import type { AgentGroup } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 
 interface Agent {
   id: string
@@ -11,7 +14,7 @@ interface Agent {
 }
 
 interface RoomChatInputProps {
-  onSubmit: (message: string) => void
+  onSubmit: (message: string, targetGroup?: string) => void
   /**
    * When true, the editor itself is disabled (read-only).
    * For normal sending-state control, prefer using disableSend.
@@ -22,9 +25,29 @@ interface RoomChatInputProps {
    */
   disableSend?: boolean
   agents: Agent[]
+  // Group selector props
+  groups?: AgentGroup[]
+  loadingGroups?: boolean
+  selectedGroup?: string
+  onGroupChange?: (groupId: string) => void
+  roomAgentCount?: number
+  onManageGroups?: () => void
+  showGroupSelector?: boolean
 }
 
-export function RoomChatInput({ onSubmit, disabled = false, disableSend = false, agents }: RoomChatInputProps) {
+export function RoomChatInput({ 
+  onSubmit, 
+  disabled = false, 
+  disableSend = false, 
+  agents,
+  groups = [],
+  loadingGroups = false,
+  selectedGroup = BUILTIN_GROUP_ROOM_TEAM,
+  onGroupChange,
+  roomAgentCount = 0,
+  onManageGroups,
+  showGroupSelector = true,
+}: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
@@ -429,11 +452,16 @@ export function RoomChatInput({ onSubmit, disabled = false, disableSend = false,
     }
   }
 
-  // const validateMessage = (messageText: string): boolean => {
-  //   const mentionPattern = /<@[^|]+\|[^>]+>/g
-  //   const mentions = messageText.match(mentionPattern)
-  //   return mentions !== null && mentions.length > 0
-  // }
+  // Extract mentioned agents from the message
+  const mentionedAgents = useMemo(() => {
+    const mentionPattern = /<@([^|]+)\|([^>]+)>/g
+    const mentions: { id: string; name: string }[] = []
+    let match
+    while ((match = mentionPattern.exec(message)) !== null) {
+      mentions.push({ id: match[1], name: match[2] })
+    }
+    return mentions
+  }, [message])
 
   const handleSubmit = () => {
     const trimmedMessage = message.trim()
@@ -443,15 +471,11 @@ export function RoomChatInput({ onSubmit, disabled = false, disableSend = false,
     }
 
     if (trimmedMessage) {
-      // if (!validateMessage(trimmedMessage)) {
-      //   toast.error("Please mention at least one agent", {
-      //     description: "Use @agentName to mention an agent"
-      //   })
-      //   return
-      // }
+      // Determine target group: if mentions, use them; otherwise use selected group
+      const targetGroup = mentionedAgents.length > 0 ? undefined : selectedGroup
       
-      console.log('🚀 Submitting message (storage format):', trimmedMessage)
-      onSubmit(trimmedMessage)
+      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup)
+      onSubmit(trimmedMessage, targetGroup)
       setMessage('')
       if (editorRef.current) {
         editorRef.current.innerHTML = ''
@@ -496,6 +520,25 @@ export function RoomChatInput({ onSubmit, disabled = false, disableSend = false,
       )}
 
       <div className="group relative flex flex-col rounded-3xl bg-background border border-border shadow-lg transition-all duration-300 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:border-blue-500/50 focus-within:shadow-[0_0_25px_rgba(59,130,246,0.4)] focus-within:border-blue-500/70">
+        {/* Group Selector - Top section */}
+        {showGroupSelector && (
+          <div className="px-4 pt-3 pb-1 border-b border-border/50">
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <span>To:</span>
+              <GroupSelector
+                selectedGroup={selectedGroup}
+                onGroupChange={onGroupChange || (() => {})}
+                groups={groups}
+                loadingGroups={loadingGroups}
+                roomAgentCount={roomAgentCount}
+                mentionedAgents={mentionedAgents}
+                onManageGroups={onManageGroups}
+                disabled={disabled}
+              />
+            </div>
+          </div>
+        )}
+
         {/* Contenteditable div */}
         <div className="flex-1 p-4 pb-3">
           <div

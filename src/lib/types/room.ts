@@ -150,6 +150,7 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
+  applied_from_group?: string | null;  // Group ID if agents were applied from a group
   extend_info?: unknown;
 }
 export interface RoomAgentMessage {

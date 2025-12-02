@@ -356,7 +356,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   }, [room, roomId, loadRoomSetting, getDebateMode])
 
   // Complete user message sending workflow - using unified SendMessage API
-  const sendUserMessage = useCallback(async (userInput: string) => {
+  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents") => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
     }
@@ -382,7 +382,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = true
       
       // Step 1: Send user message to backend using unified SendMessage API
-      const createResponse = await SendMessage(roomId, userInput, getToken, userId, userName)
+      const createResponse = await SendMessage(roomId, userInput, getToken, userId, userName, targetGroup)
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)

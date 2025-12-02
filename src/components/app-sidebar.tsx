@@ -5,9 +5,8 @@ import Image from "next/image"
 import {
   BookOpen,
   VectorSquare,
-  HousePlus,
   InspectionPanel,
-  MessageCircle,
+  MessageCirclePlus,
   History,
   PanelLeftIcon,
 } from "lucide-react"
@@ -32,14 +31,9 @@ import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
   {
-    name: "Start a new Chat",
+    name: "New Chat",
     url: "/chat",
-    icon: MessageCircle,
-  },
-  {
-    name: "Create a new Room",
-    url: "/room",
-    icon: HousePlus,
+    icon: MessageCirclePlus,
   },
   {
     name: "Agent Network",
