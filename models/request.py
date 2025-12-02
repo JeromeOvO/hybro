@@ -197,6 +197,7 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_owner_name: str | None = None
     room_agent_set: Dict[str, str] | None = None
     room_created_at: datetime | None = None
+    applied_from_group: str | None = None  # Group ID if agents applied from a group
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
 
@@ -239,3 +240,26 @@ class RoomCenterRoomMessageRequest(BaseModel):
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomMessage | None = None
+
+
+# Agent Group Requests
+class AgentGroupRequest(BaseModel):
+    group_id: str | None = None
+    name: str | None = None
+    description: str | None = None
+    owner_id: str | None = None
+    agents: list[str] | None = None  # List of agent IDs
+
+
+class AgentGroupCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    owner_id: str
+    agents: list[str] = []
+
+
+class AgentGroupUpdateRequest(BaseModel):
+    group_id: str
+    name: str | None = None
+    description: str | None = None
+    agents: list[str] | None = None

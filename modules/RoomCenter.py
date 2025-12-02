@@ -73,6 +73,6 @@ class RoomCenter:
         return self.room_services.inquiry_agent_messages_by_related_message_id(request)
 
     def send_message_to_room(
-        self, request: RoomCenterUserMessageRequest
+        self, request: RoomCenterUserMessageRequest, target_group: str = "all_agents"
     ) -> RoomCenterUserMessageResponse:
-        return self.room_services.send_message_to_room(request)
+        return self.room_services.send_message_to_room(request, target_group)

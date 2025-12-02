@@ -8,6 +8,7 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.agent import Agent
 from models.memory import ChatContext, RoomMemory
+from models.agent_group import AgentGroup
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
 from services.openai_service import openai_service
@@ -777,6 +778,72 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to update room memory {room_id} in databases: {str(e)}"
+            )
+            return False
+
+    # Agent Group management
+    async def add_agent_group(self, agent_group: AgentGroup) -> bool:
+        """
+        Add an agent group to the database
+        """
+        if not agent_group.group_id:
+            agent_group.group_id = str(uuid.uuid4())
+        try:
+            await self.mongo.add_agent_group(agent_group)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to add agent group {agent_group.group_id}: {str(e)}"
+            )
+            return False
+
+    async def get_agent_groups_by_owner(self, owner_id: str) -> list[AgentGroup]:
+        """
+        Get all agent groups owned by a user
+        """
+        try:
+            return await self.mongo.get_agent_groups_by_owner(owner_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to get agent groups for owner {owner_id}: {str(e)}"
+            )
+            return []
+
+    async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None:
+        """
+        Get an agent group by its ID
+        """
+        try:
+            return await self.mongo.get_agent_group_by_id(group_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to get agent group {group_id}: {str(e)}"
+            )
+            return None
+
+    async def update_agent_group(
+        self, group_id: str, updates: dict
+    ) -> bool:
+        """
+        Update an agent group by its ID
+        """
+        try:
+            return await self.mongo.update_agent_group(group_id, updates)
+        except Exception as e:
+            logger.error(
+                f"Failed to update agent group {group_id}: {str(e)}"
+            )
+            return False
+
+    async def delete_agent_group(self, group_id: str) -> bool:
+        """
+        Delete an agent group by its ID
+        """
+        try:
+            return await self.mongo.delete_agent_group(group_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to delete agent group {group_id}: {str(e)}"
             )
             return False
 
