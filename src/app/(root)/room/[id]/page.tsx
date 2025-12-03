@@ -21,6 +21,7 @@ import {
 import { RoomSettingForm } from '@/components/room-setting-form'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
+import { GroupManagementModal } from '@/components/group-management-modal'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { getAllAgents } from '@/lib/api/agent'
 import { listAgentGroups } from '@/lib/api/agent-group'
@@ -47,6 +48,7 @@ export default function RoomChatPage() {
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ROOM_TEAM)
+  const [groupManagementOpen, setGroupManagementOpen] = useState(false)
   
   const {
     room,
@@ -122,6 +124,27 @@ export default function RoomChatPage() {
       loadGroups()
     }
   }, [isLoaded, user?.id, getToken])
+
+  // Refresh groups after changes in modal
+  const handleGroupsChange = async () => {
+    if (!user?.id) return
+    try {
+      const response = await listAgentGroups(user.id, getToken)
+      if (response.success && response.groups) {
+        setGroups(response.groups)
+      }
+    } catch (error) {
+      console.error('Failed to refresh groups:', error)
+    }
+  }
+
+  // Open group management modal
+  const handleManageGroups = () => {
+    if (availableAgents.length === 0) {
+      loadAvailableAgents()
+    }
+    setGroupManagementOpen(true)
+  }
 
   // Set default group based on room's agent set
   useEffect(() => {
@@ -347,9 +370,22 @@ export default function RoomChatPage() {
             selectedGroup={selectedGroup}
             onGroupChange={setSelectedGroup}
             roomAgentCount={roomAgentCount}
+            onManageGroups={handleManageGroups}
           />
         </div>
       </div>
+
+      {/* Group Management Modal */}
+      <GroupManagementModal
+        open={groupManagementOpen}
+        onOpenChange={setGroupManagementOpen}
+        groups={groups}
+        onGroupsChange={handleGroupsChange}
+        availableAgents={availableAgents}
+        loadingAgents={loadingAgents}
+        userId={user?.id || ''}
+        getToken={getToken}
+      />
     </div>
   )
 }

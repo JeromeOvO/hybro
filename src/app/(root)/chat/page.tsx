@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { ChatInput } from "@/components/chat-input"
+import { GroupManagementModal } from "@/components/group-management-modal"
 import { toast } from "sonner"
 import { 
     Loader2, 
@@ -19,7 +20,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { listAgentGroups } from "@/lib/api/agent-group"
+import { getAllAgents } from "@/lib/api/agent"
 import type { AgentGroup } from "@/lib/types/agent-group"
+import type { Agent } from "@/lib/types/agent"
 import { BUILTIN_GROUP_ALL_AGENTS } from "@/lib/types/agent-group"
 
 const quickStartTemplates = [
@@ -38,6 +41,11 @@ export default function ChatPage() {
     const [groups, setGroups] = useState<AgentGroup[]>([])
     const [loadingGroups, setLoadingGroups] = useState(false)
     const { openWaitlist } = useClerk()
+    
+    // Group management modal state
+    const [groupManagementOpen, setGroupManagementOpen] = useState(false)
+    const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
+    const [loadingAgents, setLoadingAgents] = useState(false)
     
     const { 
         creating, 
@@ -70,6 +78,41 @@ export default function ChatPage() {
             loadGroups()
         }
     }, [isLoaded, user?.id, getToken])
+
+    // Load agents for group management modal
+    const loadAvailableAgents = async () => {
+        if (availableAgents.length > 0) return
+        setLoadingAgents(true)
+        try {
+            const response = await getAllAgents()
+            if (response.success && response.agents) {
+                setAvailableAgents(response.agents)
+            }
+        } catch (error) {
+            console.error('Failed to load agents:', error)
+        } finally {
+            setLoadingAgents(false)
+        }
+    }
+
+    // Refresh groups after changes in modal
+    const handleGroupsChange = async () => {
+        if (!user?.id) return
+        try {
+            const response = await listAgentGroups(user.id, getToken)
+            if (response.success && response.groups) {
+                setGroups(response.groups)
+            }
+        } catch (error) {
+            console.error('Failed to refresh groups:', error)
+        }
+    }
+
+    // Open group management modal
+    const handleManageGroups = () => {
+        loadAvailableAgents()
+        setGroupManagementOpen(true)
+    }
 
     const handleSubmit = async (value: string, targetGroup?: string) => {
         if (!value.trim()) {
@@ -207,6 +250,7 @@ export default function ChatPage() {
                             selectedGroup={selectedGroup}
                             onGroupChange={setSelectedGroup}
                             roomAgentCount={0}
+                            onManageGroups={handleManageGroups}
                         />
                     </div>
 
@@ -241,6 +285,18 @@ export default function ChatPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Group Management Modal */}
+            <GroupManagementModal
+                open={groupManagementOpen}
+                onOpenChange={setGroupManagementOpen}
+                groups={groups}
+                onGroupsChange={handleGroupsChange}
+                availableAgents={availableAgents}
+                loadingAgents={loadingAgents}
+                userId={user?.id || ''}
+                getToken={getToken}
+            />
         </div>
     )
 }
