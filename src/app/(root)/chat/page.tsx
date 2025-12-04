@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
-import { ChatInput } from "@/components/chat-input"
+import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
 import { toast } from "sonner"
 import { 
@@ -51,7 +51,7 @@ const quickStartTemplates = [
 export default function ChatPage() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
-    const [input, setInput] = useState("")
+    const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
     const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ALL_AGENTS)
     const [isOverride, setIsOverride] = useState(false)  // Track if override is active
@@ -104,7 +104,7 @@ export default function ChatPage() {
         }
     }, [isLoaded, user?.id, getToken])
 
-    // Load agents for group management modal
+    // Load agents for group management modal and mention suggestions
     const loadAvailableAgents = async () => {
         if (availableAgents.length > 0) return
         setLoadingAgents(true)
@@ -119,6 +119,50 @@ export default function ChatPage() {
             setLoadingAgents(false)
         }
     }
+    
+    // Load agents on mount for mention suggestions
+    useEffect(() => {
+        if (isLoaded && user?.id && availableAgents.length === 0) {
+            loadAvailableAgents()
+        }
+    }, [isLoaded, user?.id])
+    
+    // Compute agent list for mentions based on selected group
+    const agentListForMentions = useMemo(() => {
+        // Room Team (pre-configured agents)
+        if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM && preConfiguredRoom?.selectedAgents) {
+            return preConfiguredRoom.selectedAgents.map(agent => ({
+                id: agent.agent_id,
+                name: agent.agent_card.name
+            }))
+        }
+        
+        // All Agents: use all available agents
+        if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
+            return availableAgents.map(agent => ({
+                id: agent.agent_id,
+                name: agent.agent_card.name
+            }))
+        }
+        
+        // Custom group: filter available agents by group's agent IDs
+        const customGroup = groups.find(g => g.group_id === selectedGroup)
+        if (customGroup) {
+            const groupAgentIds = new Set(customGroup.agents)
+            return availableAgents
+                .filter(agent => groupAgentIds.has(agent.agent_id))
+                .map(agent => ({
+                    id: agent.agent_id,
+                    name: agent.agent_card.name
+                }))
+        }
+        
+        // Fallback to all agents
+        return availableAgents.map(agent => ({
+            id: agent.agent_id,
+            name: agent.agent_card.name
+        }))
+    }, [selectedGroup, preConfiguredRoom?.selectedAgents, availableAgents, groups])
 
     // Refresh groups after changes in modal
     const handleGroupsChange = async () => {
@@ -210,7 +254,7 @@ export default function ChatPage() {
             const success = await createAndNavigate(value, options)
             
             if (success) {
-                setInput("")
+                // RoomChatInput clears its own state after submission
                 setPreConfiguredRoom(null) // Clear pre-configured settings after successful creation
             } else {
                 throw new Error('Failed to create room')
@@ -223,13 +267,16 @@ export default function ChatPage() {
     }
 
     const handleQuickStart = (prompt: string) => {
-        setInput(prompt)
+        setQuickStartValue(prompt)
+    }
+
+    const handleClearQuickStart = () => {
+        setQuickStartValue("")
     }
 
     const handleRetry = () => {
-        if (input.trim()) {
-            handleSubmit(input, selectedGroup)
-        }
+        // Retry functionality - user needs to re-enter the message
+        setHasError(false)
     }
 
     if (!isLoaded) {
@@ -383,12 +430,10 @@ export default function ChatPage() {
                     
                     {/* Chat Input with Group Selector */}
                     <div className="mb-6">
-                        <ChatInput
+                        <RoomChatInput
                             onSubmit={handleSubmit}
-                            disabled={creating}
-                            placeholder={creating ? "Starting chat..." : "Ask anything..."}
-                            value={input}
-                            onChange={setInput}
+                            disableSend={creating}
+                            agents={agentListForMentions}
                             showGroupSelector={true}
                             groups={groups}
                             loadingGroups={loadingGroups}
@@ -398,6 +443,8 @@ export default function ChatPage() {
                             onManageGroups={handleManageGroups}
                             isOverride={isOverride}
                             onClearOverride={handleClearOverride}
+                            externalValue={quickStartValue}
+                            onExternalValueConsumed={handleClearQuickStart}
                         />
                     </div>
 

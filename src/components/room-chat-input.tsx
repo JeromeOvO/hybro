@@ -35,6 +35,16 @@ interface RoomChatInputProps {
   showGroupSelector?: boolean
   isOverride?: boolean
   onClearOverride?: () => void
+  /**
+   * External value to set in the editor (for quick start templates etc.)
+   * When this changes to a non-empty value, it updates the editor content.
+   */
+  externalValue?: string
+  /**
+   * Callback when external value has been consumed (set in editor).
+   * Call this to reset externalValue to empty after it's been applied.
+   */
+  onExternalValueConsumed?: () => void
 }
 
 export function RoomChatInput({ 
@@ -51,6 +61,8 @@ export function RoomChatInput({
   showGroupSelector = true,
   isOverride = false,
   onClearOverride,
+  externalValue,
+  onExternalValueConsumed,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -119,6 +131,25 @@ export function RoomChatInput({
 
     return parts.join('')
   }
+
+  // Handle external value changes (e.g., quick start templates)
+  useEffect(() => {
+    if (externalValue && externalValue !== message) {
+      setMessage(externalValue)
+      if (editorRef.current) {
+        editorRef.current.innerHTML = convertToDisplayHTML(externalValue)
+        // Set cursor at the end
+        const range = document.createRange()
+        const selection = window.getSelection()
+        range.selectNodeContents(editorRef.current)
+        range.collapse(false)
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+        editorRef.current.focus()
+      }
+      onExternalValueConsumed?.()
+    }
+  }, [externalValue])
 
   // Get plain text from editor (display format)
   const getEditorText = (): string => {

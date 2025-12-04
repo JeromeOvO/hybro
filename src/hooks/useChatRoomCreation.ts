@@ -101,9 +101,11 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       // If no agents selected, room starts empty (messages use target_group)
 
       // Use custom room name if provided, otherwise auto-generate from message
-      const roomName = customRoomName || (userMessage.length > 30 
-        ? `${userMessage.substring(0, 30)}...` 
-        : userMessage)
+      // Strip mentions from room name (e.g., <@id|name> -> "")
+      const displayMessage = userMessage.replace(/<@[^|]+\|[^>]+>\s*/g, '').trim()
+      const roomName = customRoomName || (displayMessage.length > 30 
+        ? `${displayMessage.substring(0, 30)}...` 
+        : displayMessage) || 'New Chat'
 
       // Create room with settings
       const extendInfo = {
