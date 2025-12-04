@@ -51,6 +51,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     initializing: false,
     roomId: null
   })
+  // Token to invalidate stale async initializations across rapid navigation
+  const initTokenRef = useRef(0)
+  
+  // AbortController for cancelling in-flight requests on navigation
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Get debate mode from room's extend_info
   const getDebateMode = useCallback((): boolean => {
@@ -244,11 +249,17 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   })
 
   // Load room settings
-  const loadRoomSetting = useCallback(async () => {
+  const loadRoomSetting = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await inquiryRoomSetting(roomId, getToken)
+      const response = await inquiryRoomSetting(roomId, getToken, signal)
       if (response.success && response.room) {
         setRoom(response.room)
+        // Pre-populate agent name cache from room's agent set to avoid API calls
+        if (response.room.room_agent_set) {
+          Object.entries(response.room.room_agent_set).forEach(([agentId, agentName]) => {
+            agentNameCache.current[agentId] = agentName as string
+          })
+        }
         return response.room
       } else {
         console.error('Failed to load room setting:', response.error)
@@ -256,6 +267,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         return null
       }
     } catch (error) {
+      // Don't show error toast if request was aborted (user navigated away)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Room setting request was cancelled')
+        return null
+      }
       console.error('Error loading room setting:', error)
       toast.error('Failed to load room settings')
       return null
@@ -263,10 +279,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   }, [roomId, getToken])
 
   // Load room messages and convert them to display format
-  const loadRoomMessages = useCallback(async () => {
+  const loadRoomMessages = useCallback(async (signal?: AbortSignal) => {
     try {
       // Fetch messages from the API
-      const response = await inquiryRoomMessagesByRoomId(roomId, getToken)
+      const response = await inquiryRoomMessagesByRoomId(roomId, getToken, signal)
       if (response.success && response.message_list) {
         // Convert all messages with async agent name fetching
         // This processes both user and agent messages uniformly
@@ -281,6 +297,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         return []
       }
     } catch (error) {
+      // Don't show error toast if request was aborted (user navigated away)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Room messages request was cancelled')
+        return []
+      }
       console.error('Error loading messages:', error)
       toast.error('Failed to load messages')
       return []
@@ -391,7 +412,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Extract message_id from createResponse
       const messageId = createResponse.message_id || createResponse.message?.message_id || ""
 
-      // Step 2: Call processRoomUserMessage to process the message using returned message_id
+      // Step 2: Call processRoomUserMessage to trigger background processing
+      // The backend now returns immediately (202 Accepted) and processes agents in background
+      // Agent responses will arrive via SSE
       setProcessing(true)
       
       const processResponse = await processRoomUserMessage({
@@ -414,15 +437,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         )
       )
       
-      // If SSE is not connected, refresh all messages to ensure sync
-      if (!sseConnected) {
-        console.log('📡 SSE not connected, manually refreshing messages as fallback...')
-        await loadRoomMessages()
-      } else {
-        console.log('📡 SSE connected, user message kept in UI, waiting for agent responses...')
-      }
+      // Processing continues in background - SSE will send "completed" status when done
+      // Keep processing=true until SSE delivers the completion status
+      console.log('📡 Message queued for processing, waiting for agent responses via SSE...')
       
-      toast.success('Message sent successfully')
+      // If SSE is not connected, we need to poll or refresh manually
+      if (!sseConnected) {
+        console.log('⚠️ SSE not connected, processing will complete but updates may be delayed')
+        // Don't turn off processing here - let user manually refresh if needed
+      }
       
       return true
       
@@ -442,11 +465,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         console.error('Failed to reload messages after error:', reloadError)
       }
       
+      // Only turn off processing on error
+      setProcessing(false)
+      
       return false
     } finally {
       setSending(false)
-      setProcessing(false)
       isProcessingRef.current = false
+      // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
   }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected, getToken])
 
@@ -494,29 +520,79 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Check if initialization is needed
     if (!roomId || 
         initRef.initialized || 
-        initRef.initializing || 
-        initRef.roomId === roomId) {
+        initRef.initializing) {
       return
     }
+
+    // Ensure loading starts for the new room
+    setLoading(true)
+
+    // Cancel any in-flight requests from previous initialization
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    
+    // Create new AbortController for this initialization
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
+    // Increment init token to invalidate older async continuations
+    const startToken = ++initTokenRef.current
 
     // Mark initialization start
     initRef.initializing = true
     initRef.roomId = roomId
+    
+    // Loading timeout - clear loading state after 30 seconds to prevent infinite loading
+    // This allows the UI to recover even if the backend is completely unresponsive
+    const LOADING_TIMEOUT_MS = 30000
+    let loadingTimedOut = false
+    const loadingTimeoutId = setTimeout(() => {
+      if (!abortController.signal.aborted && initRef.initializing) {
+        loadingTimedOut = true
+        setLoading(false)
+        initRef.initializing = false
+        initRef.roomId = null
+        console.warn('Room initialization timed out after 30 seconds')
+        toast.error('Loading timed out. Please check your connection and try refreshing.')
+      }
+    }, LOADING_TIMEOUT_MS)
 
     const initializeRoom = async () => {
       try {
         setLoading(true)
         
-        // Load room settings and messages in parallel
-        const [roomData, messagesData] = await Promise.all([
-          loadRoomSetting(),
-          loadRoomMessages()
-        ])
+        // Load room settings first to populate agent name cache
+        const roomData = await loadRoomSetting(abortController.signal)
+        
+        // Check if request was aborted, timed out, or stale
+        if (abortController.signal.aborted || loadingTimedOut || startToken !== initTokenRef.current) {
+          return
+        }
         
         if (!roomData) {
           console.error('Failed to load room data')
+          initRef.initialized = false
+          initRef.initializing = false
+          initRef.roomId = null
+          setLoading(false)
+          return
         }
+        
+        // Then load messages (agent names will be in cache)
+        const messagesData = await loadRoomMessages(abortController.signal)
+        
+        // Check if request was aborted, timed out, or stale
+        if (abortController.signal.aborted || loadingTimedOut || startToken !== initTokenRef.current) {
+          return
+        }
+        
         if (!messagesData || messagesData.length === 0) {
+          initRef.initialized = false
+          initRef.initializing = false
+          initRef.roomId = null
+          setLoading(false)
+          return
         }
         
         // Mark initialization complete
@@ -524,22 +600,56 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         initRef.initializing = false
         
       } catch (error) {
+        // Don't update state if request was aborted or timed out
+        if (error instanceof Error && error.name === 'AbortError') {
+          console.log('Room initialization was cancelled')
+          initRef.initializing = false
+          initRef.roomId = null
+          initTokenRef.current++
+          setLoading(false)
+          return
+        }
+        if (loadingTimedOut) {
+          return
+        }
         console.error('Error initializing room webhook:', error)
         toast.error('Failed to initialize room')
-        initRef.initialized = true
+        initRef.initialized = false
         initRef.initializing = false
-      } finally {
+        initRef.roomId = null
         setLoading(false)
+      } finally {
+        clearTimeout(loadingTimeoutId)
+        // Only set loading to false if not aborted and not timed out
+        if (!abortController.signal.aborted && !loadingTimedOut && startToken === initTokenRef.current) {
+          setLoading(false)
+        }
       }
     }
 
     initializeRoom()
+    
+    // Cleanup: abort the request and clear timeout when effect re-runs or component unmounts
+    return () => {
+      clearTimeout(loadingTimeoutId)
+      abortController.abort()
+      setLoading(false)
+      initRef.initializing = false
+      initRef.roomId = null
+      initTokenRef.current++
+    }
   }, [roomId, loadRoomSetting, loadRoomMessages])
 
   // Reset initialization state when roomId changes
   useEffect(() => {
     const initRef = initializationRef.current
     if (initRef.roomId !== roomId) {
+      // Cancel any in-flight requests
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
+      
       initRef.initialized = false
       initRef.initializing = false
       initRef.roomId = null
@@ -556,6 +666,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Cleanup function
   useEffect(() => {
     return () => {
+      // Cancel any in-flight requests when component unmounts
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+        abortControllerRef.current = null
+      }
+      
       // Clear state when component unmounts
       isProcessingRef.current = false
       const initRef = initializationRef.current

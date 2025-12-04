@@ -1,11 +1,19 @@
 'use client'
 
-import React, { useRef, useEffect, useState, useCallback } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import { cn } from '@/lib/utils'
-import { Bot, Zap } from 'lucide-react'
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
+import { 
+  Bot, 
+  Zap, 
+  Layers, 
+  List, 
+  ChevronsDownUp, 
+  ChevronsUpDown,
+  Map
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { ConversationRound, type ConversationRoundData } from './conversation-round'
+import { ConversationNavigator } from './conversation-navigator'
+import { MessageBubble } from './message-bubble'
 
 export interface MessageData {
   id: string
@@ -43,165 +51,56 @@ function ProcessingStatus({ processing }: { processing: boolean }) {
   )
 }
 
-// Message Component with enhanced @mention parsing and markdown support
-function MessageBubble({ message }: { message: MessageData }) {
-  const isUser = message.type === 'user'
-  const isAgent = message.type === 'agent'
+/**
+ * Groups a flat array of messages into conversation rounds.
+ * A "round" starts with a user message and includes all subsequent
+ * agent messages until the next user message.
+ */
+function groupMessagesIntoRounds(
+  messages: MessageData[],
+  collapsedRounds: Set<number>
+): { rounds: ConversationRoundData[]; orphanedAgentMessages: MessageData[] } {
+  const rounds: ConversationRoundData[] = []
+  const orphanedAgentMessages: MessageData[] = []
+  
+  let currentRound: ConversationRoundData | null = null
+  let roundNumber = 0
 
-  const renderContent = (content: string) => {
-    const displayContent = content !== "" ? content : "No message content received"
-    
-    // For user messages, render as plain text with mention parsing only
-    if (isUser) {
-      return renderWithMentions(displayContent)
-    }
-    
-    // For agent messages, render with full markdown support
-    if (isAgent) {
-      return renderWithMarkdown(displayContent)
-    }
-    
-    // Fallback to mention parsing
-    return renderWithMentions(displayContent)
-  }
-
-  const renderWithMentions = (content: string) => {
-    // Parse mentions in the format <@agent_id|agent_name>
-    const parts: (string | React.JSX.Element)[] = []
-    let lastIndex = 0
-    
-    // Regex to match <@agent_id|agent_name> format
-    const mentionRegex = /<@([^|]+)\|([^>]+)>/g
-    let match
-    let mentionIndex = 0
-    
-    while ((match = mentionRegex.exec(content)) !== null) {
-      // Add text before the mention
-      if (match.index > lastIndex) {
-        parts.push(content.slice(lastIndex, match.index))
+  for (const message of messages) {
+    if (message.type === 'user') {
+      // Save previous round if exists
+      if (currentRound) {
+        rounds.push(currentRound)
       }
       
-      // Extract agent_id and agent_name
-      const agentId = match[1]
-      const agentName = match[2]
+      roundNumber++
       
-      // Add the mention as a styled span, showing only the agent name
-      parts.push(
-        <span
-          key={`mention-${mentionIndex++}`}
-          className="bg-blue-100 text-blue-800 px-1 rounded font-medium dark:bg-blue-900 dark:text-blue-200"
-          title={`Agent ID: ${agentId}`} // Show ID on hover
-        >
-          @{agentName}
-        </span>
-      )
+      // Create new round with this user message
+      currentRound = {
+        id: `round-${roundNumber}-${message.id}`,
+        roundNumber,
+        userMessage: message,
+        agentResponses: [],
+        timestamp: message.timestamp,
+        isCollapsed: collapsedRounds.has(roundNumber)
+      }
       
-      lastIndex = match.index + match[0].length
+    } else if (message.type === 'agent') {
+      if (currentRound) {
+        currentRound.agentResponses.push(message)
+      } else {
+        // Agent message before any user message
+        orphanedAgentMessages.push(message)
+      }
     }
-    
-    // Add remaining text after the last mention
-    if (lastIndex < content.length) {
-      parts.push(content.slice(lastIndex))
-    }
-    
-    // If no mentions found, return the original content
-    if (parts.length === 0) {
-      return content
-    }
-    
-    return parts
   }
-
-  const renderWithMarkdown = (content: string) => {
-    // First process mentions in the content, then render as markdown
-    const processedContent = content.replace(
-      /<@([^|]+)\|([^>]+)>/g,
-      '<span class="mention" data-agent-id="$1" title="Agent ID: $1">@$2</span>'
-    )
-
-    return (
-      <div className="prose prose-sm max-w-none dark:prose-invert leading-relaxed">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={{
-            // Custom mention component
-            span: ({ className, children, ...props }) => {
-              if (className === 'mention') {
-                return (
-                  <span
-                    className="bg-blue-100 text-blue-800 px-1 rounded font-medium dark:bg-blue-900 dark:text-blue-200"
-                    {...props}
-                  >
-                    {children}
-                  </span>
-                )
-              }
-              return <span className={className} {...props}>{children}</span>
-            },
-            // Customize code blocks
-            code: ({ className, children, ...props }) => {
-              const match = /language-(\w+)/.exec(className || '')
-              const isInline = !match
-              return isInline ? (
-                <code className="bg-muted px-1 py-0.5 rounded text-sm" {...props}>
-                  {children}
-                </code>
-              ) : (
-                <pre className="bg-muted p-3 rounded-md overflow-x-auto">
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
-                </pre>
-              )
-            },
-            // Customize paragraphs to reduce spacing
-            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-            // Customize lists
-            ul: ({ children }) => <ul className="mb-2 ml-4">{children}</ul>,
-            ol: ({ children }) => <ol className="mb-2 ml-4">{children}</ol>,
-            // Customize headers to be smaller in room context
-            h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-            h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-            h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-            h4: ({ children }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
-            h5: ({ children }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
-            h6: ({ children }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
-          }}
-        >
-          {processedContent}
-        </ReactMarkdown>
-      </div>
-    )
+  
+  // Don't forget the last round
+  if (currentRound) {
+    rounds.push(currentRound)
   }
-
-  return (
-    <div
-      className={cn(
-        "flex w-full mb-4",
-        message.type === 'user' ? "justify-end" : "justify-start"
-      )}
-    >
-      <div
-        className={cn(
-          "max-w-[80%] rounded-lg p-3 shadow-sm",
-          message.type === 'user'
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted"
-        )}
-      >
-        <div className="text-xs opacity-70 mb-1">
-          {message.sender_name} • {new Date(message.timestamp).toLocaleTimeString()}
-        </div>
-        <div className={cn(
-          "leading-relaxed",
-          isUser ? "text-sm" : "text-sm" // Keep consistent text size for both
-        )}>
-          {renderContent(message.content)}
-        </div>
-      </div>
-    </div>
-  )
+  
+  return { rounds, orphanedAgentMessages }
 }
 
 interface RoomMessagesProps {
@@ -210,18 +109,99 @@ interface RoomMessagesProps {
   processing?: boolean
 }
 
+type ViewMode = 'rounds' | 'timeline'
+
 export function RoomMessages({ messages, loading, processing = false }: RoomMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
   const previousMessageCountRef = useRef(messages.length)
+  
+  // View mode state
+  const [viewMode, setViewMode] = useState<ViewMode>('rounds')
+  
+  // Collapsed rounds tracking
+  const [collapsedRounds, setCollapsedRounds] = useState<Set<number>>(new Set())
+  
+  // Navigator visibility
+  const [showNavigator, setShowNavigator] = useState(false)
+  const [currentRound, setCurrentRound] = useState(0)
+
+  // Group messages into rounds
+  const { rounds, orphanedAgentMessages } = useMemo(() => {
+    return groupMessagesIntoRounds(messages, collapsedRounds)
+  }, [messages, collapsedRounds])
+
+  // Update collapsed state when rounds change
+  useEffect(() => {
+    setCollapsedRounds(prev => {
+      const updated = new Set<number>()
+      prev.forEach(roundNum => {
+        if (roundNum <= rounds.length) {
+          updated.add(roundNum)
+        }
+      })
+      return updated
+    })
+  }, [rounds.length])
+
+  // Toggle individual round
+  const toggleRound = useCallback((roundNumber: number) => {
+    setCollapsedRounds(prev => {
+      const next = new Set(prev)
+      if (next.has(roundNumber)) {
+        next.delete(roundNumber)
+      } else {
+        next.add(roundNumber)
+      }
+      return next
+    })
+  }, [])
+
+  // Bulk collapse/expand
+  const collapseAll = useCallback(() => {
+    setCollapsedRounds(new Set(rounds.map(r => r.roundNumber)))
+  }, [rounds])
+
+  const expandAll = useCallback(() => {
+    setCollapsedRounds(new Set())
+  }, [])
+
+  // Auto-collapse old rounds when many rounds exist
+  const collapseOldRounds = useCallback((keepLastN: number = 2) => {
+    const toCollapse = rounds
+      .slice(0, -keepLastN)
+      .map(r => r.roundNumber)
+    setCollapsedRounds(new Set(toCollapse))
+  }, [rounds])
+
+  // Navigate to specific round
+  const navigateToRound = useCallback((roundIndex: number) => {
+    const round = rounds[roundIndex]
+    if (round) {
+      setCurrentRound(roundIndex)
+      // Expand the target round if collapsed
+      if (collapsedRounds.has(round.roundNumber)) {
+        setCollapsedRounds(prev => {
+          const next = new Set(prev)
+          next.delete(round.roundNumber)
+          return next
+        })
+      }
+      // Scroll to round
+      const element = document.getElementById(`round-${round.roundNumber}`)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }
+  }, [rounds, collapsedRounds])
 
   // Track if user is near bottom of scroll
   const checkIfNearBottom = useCallback(() => {
     const container = scrollContainerRef.current
     if (!container) return false
     
-    const threshold = 100 // pixels from bottom
+    const threshold = 100
     const isNearBottom = 
       container.scrollHeight - container.scrollTop - container.clientHeight < threshold
     return isNearBottom
@@ -231,16 +211,28 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const handleScroll = useCallback(() => {
     const isNearBottom = checkIfNearBottom()
     setShouldAutoScroll(isNearBottom)
-  }, [checkIfNearBottom])
+    
+    // Update current round based on scroll position
+    if (viewMode === 'rounds' && rounds.length > 0) {
+      const container = scrollContainerRef.current
+      if (!container) return
+      
+      const scrollTop = container.scrollTop
+      for (let i = rounds.length - 1; i >= 0; i--) {
+        const element = document.getElementById(`round-${rounds[i].roundNumber}`)
+        if (element && element.offsetTop <= scrollTop + 100) {
+          setCurrentRound(i)
+          break
+        }
+      }
+    }
+  }, [checkIfNearBottom, viewMode, rounds])
 
-  // Auto scroll logic - only scroll if user is at bottom or just sent a message
+  // Auto scroll when new messages arrive
   useEffect(() => {
     const messageCountIncreased = messages.length > previousMessageCountRef.current
     const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === 'user'
     
-    // Auto-scroll if:
-    // 1. User just sent a message (new user message added), OR
-    // 2. User is already at the bottom (shouldAutoScroll is true)
     if (messageCountIncreased && (lastMessageIsUser || shouldAutoScroll)) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
@@ -248,12 +240,20 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     previousMessageCountRef.current = messages.length
   }, [messages, shouldAutoScroll])
 
-  // Auto scroll when processing state changes only if at bottom
+  // Auto scroll when processing state changes
   useEffect(() => {
     if (shouldAutoScroll) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [processing, shouldAutoScroll])
+
+  // Auto-collapse old rounds when conversation gets long
+  useEffect(() => {
+    if (rounds.length > 5 && collapsedRounds.size === 0) {
+      // Suggest collapsing by auto-collapsing rounds older than the last 2
+      collapseOldRounds(2)
+    }
+  }, [rounds.length, collapsedRounds.size, collapseOldRounds])
 
   if (loading) {
     return (
@@ -264,12 +264,14 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }
 
   return (
+    <div className="h-full flex relative">
+      {/* Main Content */}
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="h-full w-full overflow-y-auto"
+        className="flex-1 h-full w-full overflow-y-auto"
     >
-      <div className="py-4 min-h-full">
+        <div className="py-4 min-h-full px-1">
         {messages.length === 0 && !processing ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center text-muted-foreground">
@@ -278,18 +280,129 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
             </div>
           </div>
         ) : (
+            <>
+              {/* View Controls - Sticky header */}
+              {rounds.length > 0 && (
+                <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-2 z-10 mb-4 flex items-center justify-between border-b">
+                  <div className="flex gap-1">
+                    <Button 
+                      variant={viewMode === 'rounds' ? 'default' : 'ghost'} 
+                      size="sm"
+                      onClick={() => setViewMode('rounds')}
+                      className="h-8"
+                    >
+                      <Layers className="h-4 w-4 mr-1.5" /> 
+                      Rounds
+                    </Button>
+                    <Button 
+                      variant={viewMode === 'timeline' ? 'default' : 'ghost'} 
+                      size="sm"
+                      onClick={() => setViewMode('timeline')}
+                      className="h-8"
+                    >
+                      <List className="h-4 w-4 mr-1.5" /> 
+                      Timeline
+                    </Button>
+                  </div>
+                  
+                  {viewMode === 'rounds' && rounds.length > 1 && (
+                    <div className="flex items-center gap-1">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={expandAll}
+                        className="h-8 text-xs"
+                      >
+                        <ChevronsDownUp className="h-3.5 w-3.5 mr-1" /> 
+                        Expand
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={collapseAll}
+                        className="h-8 text-xs"
+                      >
+                        <ChevronsUpDown className="h-3.5 w-3.5 mr-1" /> 
+                        Collapse
+                      </Button>
+                      
+                      {/* Navigator toggle for many rounds */}
+                      {rounds.length > 3 && (
+                        <Button
+                          variant={showNavigator ? 'default' : 'ghost'}
+                          size="sm"
+                          onClick={() => setShowNavigator(!showNavigator)}
+                          className="h-8 text-xs ml-2"
+                        >
+                          <Map className="h-3.5 w-3.5 mr-1" />
+                          Map
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Orphaned agent messages (before first user message) */}
+              {orphanedAgentMessages.length > 0 && (
+                <div className="mb-6 space-y-3 opacity-70">
+                  <div className="text-xs text-muted-foreground mb-2">
+                    Earlier messages
+                  </div>
+                  {orphanedAgentMessages.map(msg => (
+                    <MessageBubble key={msg.id} message={msg} />
+                  ))}
+                </div>
+              )}
+
+              {/* Messages Display */}
+              {viewMode === 'rounds' ? (
+                // Round-based view
+                <div className="space-y-6">
+                  {rounds.map((round, index) => (
+                    <ConversationRound
+                      key={round.id}
+                      round={{
+                        ...round,
+                        isCollapsed: collapsedRounds.has(round.roundNumber)
+                      }}
+                      onToggle={() => toggleRound(round.roundNumber)}
+                      isLatest={index === rounds.length - 1}
+                    />
+                  ))}
+                </div>
+              ) : (
+                // Timeline view (flat chronological)
           <div className="space-y-4">
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+                  {messages.map(msg => (
+                    <MessageBubble key={msg.id} message={msg} />
             ))}
+                </div>
+              )}
             
-            {/* Processing Status - appears after messages */}
+              {/* Processing Status */}
             <ProcessingStatus processing={processing} />
             
-            <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} className="h-4" />
+            </>
+          )}
           </div>
-        )}
       </div>
+
+      {/* Navigation Sidebar - Only visible in rounds mode with many rounds */}
+      {viewMode === 'rounds' && showNavigator && rounds.length > 3 && (
+        <div className="absolute right-4 top-16 z-20">
+          <ConversationNavigator
+            rounds={rounds.map(r => ({
+              ...r,
+              isCollapsed: collapsedRounds.has(r.roundNumber)
+            }))}
+            currentRound={currentRound}
+            onNavigate={navigateToRound}
+            onClose={() => setShowNavigator(false)}
+          />
+        </div>
+      )}
     </div>
   )
 }

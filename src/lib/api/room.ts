@@ -44,7 +44,8 @@ export async function createNewRoom(
 // Inquiry room setting
 export async function inquiryRoomSetting(
   room_id: string,
-  getToken?: () => Promise<string | null>
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id
@@ -53,7 +54,8 @@ export async function inquiryRoomSetting(
   return apiPost<RoomCenterRoomSettingResponse>(
     `${API_BASE_URL}/inquiryRoomSetting`,
     requestData,
-    getToken
+    getToken,
+    signal
   )
 }
 
@@ -215,7 +217,8 @@ export async function createAndParseUserMessageWithDebate(
 // Query room messages
 export async function inquiryRoomMessagesByRoomId(
   room_id: string,
-  getToken?: () => Promise<string | null>
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal
 ): Promise<RoomCenterRoomMessageResponse> {
   const requestData: RoomCenterRoomMessageRequest = {
     room_id
@@ -224,7 +227,8 @@ export async function inquiryRoomMessagesByRoomId(
   return apiPost<RoomCenterRoomMessageResponse>(
     `${API_BASE_URL}/inquiryRoomMessagesByRoomId`,
     requestData,
-    getToken
+    getToken,
+    signal
   )
 }
 
