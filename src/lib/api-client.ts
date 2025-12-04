@@ -12,9 +12,12 @@ interface ApiClientOptions {
   getToken?: () => Promise<string | null>
 }
 
+// Default timeout for API requests (30 seconds)
+const DEFAULT_TIMEOUT_MS = 30000
+
 /**
  * Make an authenticated API request
- * Automatically includes authentication headers
+ * Automatically includes authentication headers and request timeout
  */
 export async function apiClient<T = unknown>(
   url: string,
@@ -31,9 +34,14 @@ export async function apiClient<T = unknown>(
     ...customHeaders,
   }
 
+  // Add timeout to prevent infinite hangs
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+
   const fetchOptions: RequestInit = {
     method,
     headers,
+    signal: controller.signal,
   }
 
   // Add body for non-GET requests
@@ -41,14 +49,23 @@ export async function apiClient<T = unknown>(
     fetchOptions.body = JSON.stringify(body)
   }
 
-  const response = await fetch(url, fetchOptions)
+  try {
+    const response = await fetch(url, fetchOptions)
+    clearTimeout(timeoutId)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+    }
+
+    return await response.json()
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timeout - please try again')
+    }
+    throw error
   }
-
-  return await response.json()
 }
 
 /**

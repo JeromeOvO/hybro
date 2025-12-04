@@ -65,12 +65,19 @@ export async function GET(
     
     console.log(`Proxying GET request to: ${API_BASE_URL}/roomCenter/${endpoint}`)
     
+    // Add fetch timeout (60 seconds for GET requests)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60000)
+    
     const response = await fetch(`${API_BASE_URL}/roomCenter/${endpoint}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
       },
+      signal: controller.signal
     })
+
+    clearTimeout(timeoutId)
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -85,6 +92,12 @@ export async function GET(
     return NextResponse.json(data)
   } catch (error) {
     console.error('Proxy error:', error)
+    if (error instanceof Error && error.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'Request timeout' },
+        { status: 504 }
+      )
+    }
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

@@ -60,7 +60,6 @@ export default function RoomChatPage() {
     updatingRoom,
     sendUserMessage,
     updateRoomSettings,
-    getAgentList,
     getRoomFormData,
     // SSE state
     sseConnected,
@@ -96,19 +95,12 @@ export default function RoomChatPage() {
     }
   }
 
-  // Load agents when dialog opens OR when a non-room-team group is selected for mentions
+  // Load agents on mount for mention suggestions
   useEffect(() => {
-    if (dialogOpen && availableAgents.length === 0) {
+    if (isLoaded && user?.id && availableAgents.length === 0) {
       loadAvailableAgents()
     }
-  }, [dialogOpen])
-  
-  // Load agents on mount when needed for mention suggestions (non-room-team groups)
-  useEffect(() => {
-    if (isLoaded && user?.id && availableAgents.length === 0 && selectedGroup !== BUILTIN_GROUP_ROOM_TEAM) {
-      loadAvailableAgents()
-    }
-  }, [isLoaded, user?.id, selectedGroup, availableAgents.length])
+  }, [isLoaded, user?.id, availableAgents.length])
 
   // Load user's groups
   useEffect(() => {
@@ -200,8 +192,7 @@ export default function RoomChatPage() {
           setIsOverride(true)
           localStorage.setItem(localStorageKey, sessionStorageGroup)
         }
-        // Clear from sessionStorage after reading
-        sessionStorage.removeItem(sessionStorageKey)
+        // Note: sessionStorage is cleared by the "send initial message" effect after successful send
       } else {
         // Fall back to determining based on room agents (default, no override)
         const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
@@ -236,10 +227,6 @@ export default function RoomChatPage() {
       const targetGroupKey = `room-${roomId}-target-group`
       const storedTargetGroup = sessionStorage.getItem(targetGroupKey)
       
-      // Clear only the initial message from sessionStorage
-      // Note: target group is cleared in the "set default group" effect after being read
-      sessionStorage.removeItem(storageKey)
-      
       // Use the stored target group, or fall back to determining based on room agents
       const targetGroup = storedTargetGroup || (
         room.room_agent_set && Object.keys(room.room_agent_set).length > 0 
@@ -252,9 +239,12 @@ export default function RoomChatPage() {
       sendUserMessage(initialMessage, targetGroup).then((success) => {
         if (success) {
           console.log('✅ Initial message sent successfully')
+          // Only clear sessionStorage AFTER successful send
+          sessionStorage.removeItem(storageKey)
+          sessionStorage.removeItem(targetGroupKey)
         } else {
           console.error('❌ Failed to send initial message')
-          // Reset the flag if sending failed so user can retry
+          // Reset the flag so user can retry (message still in sessionStorage)
           initialMessageSentRef.current = false
         }
       })
@@ -280,39 +270,13 @@ export default function RoomChatPage() {
     }
   }
 
-  // Extract agent list for @mentions based on selected group
-  const roomAgentList = getAgentList()
-  
-  // Compute agent list for mentions based on selected group
+  // Extract agent list for @mentions - always show all available agents
   const agentList = useMemo(() => {
-    // Room Team: use room agents
-    if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
-      return roomAgentList
-    }
-    
-    // All Agents: use all available agents
-    if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
-      return availableAgents.map(agent => ({
-        id: agent.agent_id,
-        name: agent.agent_card.name
-      }))
-    }
-    
-    // Custom group: filter available agents by group's agent IDs
-    const customGroup = groups.find(g => g.group_id === selectedGroup)
-    if (customGroup) {
-      const groupAgentIds = new Set(customGroup.agents)
-      return availableAgents
-        .filter(agent => groupAgentIds.has(agent.agent_id))
-        .map(agent => ({
-          id: agent.agent_id,
-          name: agent.agent_card.name
-        }))
-    }
-    
-    // Fallback to room agents
-    return roomAgentList
-  }, [selectedGroup, roomAgentList, availableAgents, groups])
+    return availableAgents.map(agent => ({
+      id: agent.agent_id,
+      name: agent.agent_card.name
+    }))
+  }, [availableAgents])
 
   // Get room form data for initialization
   const roomFormData = getRoomFormData()

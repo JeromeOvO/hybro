@@ -24,7 +24,6 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from "@/components/ui/dialog"
 import {
     Tooltip,
@@ -125,44 +124,15 @@ export default function ChatPage() {
         if (isLoaded && user?.id && availableAgents.length === 0) {
             loadAvailableAgents()
         }
-    }, [isLoaded, user?.id])
+    }, [isLoaded, user?.id, availableAgents.length])
     
-    // Compute agent list for mentions based on selected group
+    // Agent list for mentions - always show all available agents regardless of selected scope
     const agentListForMentions = useMemo(() => {
-        // Room Team (pre-configured agents)
-        if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM && preConfiguredRoom?.selectedAgents) {
-            return preConfiguredRoom.selectedAgents.map(agent => ({
-                id: agent.agent_id,
-                name: agent.agent_card.name
-            }))
-        }
-        
-        // All Agents: use all available agents
-        if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
-            return availableAgents.map(agent => ({
-                id: agent.agent_id,
-                name: agent.agent_card.name
-            }))
-        }
-        
-        // Custom group: filter available agents by group's agent IDs
-        const customGroup = groups.find(g => g.group_id === selectedGroup)
-        if (customGroup) {
-            const groupAgentIds = new Set(customGroup.agents)
-            return availableAgents
-                .filter(agent => groupAgentIds.has(agent.agent_id))
-                .map(agent => ({
-                    id: agent.agent_id,
-                    name: agent.agent_card.name
-                }))
-        }
-        
-        // Fallback to all agents
         return availableAgents.map(agent => ({
             id: agent.agent_id,
             name: agent.agent_card.name
         }))
-    }, [selectedGroup, preConfiguredRoom?.selectedAgents, availableAgents, groups])
+    }, [availableAgents])
 
     // Refresh groups after changes in modal
     const handleGroupsChange = async () => {
@@ -224,7 +194,7 @@ export default function ChatPage() {
         setRoomSettingsOpen(true)
     }
 
-    const handleSubmit = async (value: string, targetGroup?: string) => {
+    const handleSubmit = async (value: string) => {
         if (!value.trim()) {
             toast.error("Please enter a message")
             return
