@@ -48,6 +48,7 @@ export default function RoomChatPage() {
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ROOM_TEAM)
+  const [isOverride, setIsOverride] = useState(false)  // Track if override is active
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
   
   const {
@@ -146,13 +147,62 @@ export default function RoomChatPage() {
     setGroupManagementOpen(true)
   }
 
-  // Set default group based on room's agent set
+  // Handle group change (override) with localStorage persistence
+  const handleGroupChange = (groupId: string) => {
+    setSelectedGroup(groupId)
+    setIsOverride(true)
+    // Persist to localStorage
+    localStorage.setItem(`room-${roomId}-override-group`, groupId)
+  }
+
+  // Handle clear override - revert to default
+  const handleClearOverride = () => {
+    setIsOverride(false)
+    // Default: Room Team if agents exist, otherwise All Agents
+    const hasRoomAgents = room?.room_agent_set && Object.keys(room.room_agent_set).length > 0
+    const defaultGroup = hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS
+    setSelectedGroup(defaultGroup)
+    // Clear from localStorage
+    localStorage.removeItem(`room-${roomId}-override-group`)
+  }
+
+  // Set default group based on stored selection or room's agent set (runs once when room loads)
+  const initialGroupSetRef = useRef(false)
   useEffect(() => {
-    if (room) {
-      const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
-      setSelectedGroup(hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS)
+    if (room && !initialGroupSetRef.current) {
+      initialGroupSetRef.current = true
+      
+      // Priority: localStorage (persistent override) > sessionStorage (from chat page) > default
+      const localStorageKey = `room-${roomId}-override-group`
+      const sessionStorageKey = `room-${roomId}-target-group`
+      
+      const localStorageOverride = localStorage.getItem(localStorageKey)
+      const sessionStorageGroup = sessionStorage.getItem(sessionStorageKey)
+      
+      if (localStorageOverride) {
+        // Use persisted override from localStorage
+        setSelectedGroup(localStorageOverride)
+        setIsOverride(true)
+      } else if (sessionStorageGroup) {
+        // Use the stored selection from chat page (first navigation)
+        setSelectedGroup(sessionStorageGroup)
+        // If it's not the default, mark as override and persist to localStorage
+        const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
+        const defaultGroup = hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS
+        if (sessionStorageGroup !== defaultGroup) {
+          setIsOverride(true)
+          localStorage.setItem(localStorageKey, sessionStorageGroup)
+        }
+        // Clear from sessionStorage after reading
+        sessionStorage.removeItem(sessionStorageKey)
+      } else {
+        // Fall back to determining based on room agents (default, no override)
+        const hasRoomAgents = room.room_agent_set && Object.keys(room.room_agent_set).length > 0
+        setSelectedGroup(hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS)
+        setIsOverride(false)
+      }
     }
-  }, [room])
+  }, [room, roomId])
 
   // Check for and send initial message from chat page
   useEffect(() => {
@@ -175,11 +225,24 @@ export default function RoomChatPage() {
       // Mark as sent immediately to prevent duplicate sends
       initialMessageSentRef.current = true
       
-      // Clear from sessionStorage
+      // Get the target group from sessionStorage (set by chat page)
+      const targetGroupKey = `room-${roomId}-target-group`
+      const storedTargetGroup = sessionStorage.getItem(targetGroupKey)
+      
+      // Clear only the initial message from sessionStorage
+      // Note: target group is cleared in the "set default group" effect after being read
       sessionStorage.removeItem(storageKey)
       
-      // Send the message with "All Agents" as target (for new chats)
-      sendUserMessage(initialMessage, BUILTIN_GROUP_ALL_AGENTS).then((success) => {
+      // Use the stored target group, or fall back to determining based on room agents
+      const targetGroup = storedTargetGroup || (
+        room.room_agent_set && Object.keys(room.room_agent_set).length > 0 
+          ? BUILTIN_GROUP_ROOM_TEAM 
+          : BUILTIN_GROUP_ALL_AGENTS
+      )
+      
+      console.log('📨 Sending with target group:', targetGroup, 'storedTargetGroup:', storedTargetGroup)
+      
+      sendUserMessage(initialMessage, targetGroup).then((success) => {
         if (success) {
           console.log('✅ Initial message sent successfully')
         } else {
@@ -368,9 +431,11 @@ export default function RoomChatPage() {
             groups={groups}
             loadingGroups={loadingGroups}
             selectedGroup={selectedGroup}
-            onGroupChange={setSelectedGroup}
+            onGroupChange={handleGroupChange}
             roomAgentCount={roomAgentCount}
             onManageGroups={handleManageGroups}
+            isOverride={isOverride}
+            onClearOverride={handleClearOverride}
           />
         </div>
       </div>

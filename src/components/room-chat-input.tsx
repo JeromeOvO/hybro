@@ -33,6 +33,8 @@ interface RoomChatInputProps {
   roomAgentCount?: number
   onManageGroups?: () => void
   showGroupSelector?: boolean
+  isOverride?: boolean
+  onClearOverride?: () => void
 }
 
 export function RoomChatInput({ 
@@ -47,6 +49,8 @@ export function RoomChatInput({
   roomAgentCount = 0,
   onManageGroups,
   showGroupSelector = true,
+  isOverride = false,
+  onClearOverride,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -534,6 +538,8 @@ export function RoomChatInput({
                 mentionedAgents={mentionedAgents}
                 onManageGroups={onManageGroups}
                 disabled={disabled}
+                isOverride={isOverride}
+                onClearOverride={onClearOverride}
               />
             </div>
           </div>

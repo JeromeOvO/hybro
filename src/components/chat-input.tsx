@@ -42,6 +42,8 @@ interface ChatInputProps {
   onGroupChange?: (groupId: string) => void
   roomAgentCount?: number
   onManageGroups?: () => void
+  isOverride?: boolean
+  onClearOverride?: () => void
 }
 
 export function ChatInput({
@@ -65,6 +67,8 @@ export function ChatInput({
   onGroupChange,
   roomAgentCount = 0,
   onManageGroups,
+  isOverride = false,
+  onClearOverride,
 }: ChatInputProps) {
   const [internalValue, setInternalValue] = React.useState("")
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -164,6 +168,8 @@ export function ChatInput({
               roomAgentCount={roomAgentCount}
               onManageGroups={onManageGroups}
               disabled={disabled}
+              isOverride={isOverride}
+              onClearOverride={onClearOverride}
             />
           </div>
         </div>

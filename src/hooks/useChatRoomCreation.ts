@@ -15,6 +15,8 @@ interface CreateRoomOptions {
   selectedAgents?: Agent[]
   appliedFromGroup?: string
   debateMode?: boolean
+  roomName?: string
+  targetGroup?: string  // Group to use for the first message
 }
 
 export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
@@ -67,7 +69,9 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     const { 
       selectedAgents = [], 
       appliedFromGroup,
-      debateMode = false 
+      debateMode = false,
+      roomName: customRoomName,
+      targetGroup
     } = options
 
     if (!userId || !userName) {
@@ -96,10 +100,10 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       }
       // If no agents selected, room starts empty (messages use target_group)
 
-      // Generate a room name based on user message (truncated)
-      const roomName = userMessage.length > 30 
+      // Use custom room name if provided, otherwise auto-generate from message
+      const roomName = customRoomName || (userMessage.length > 30 
         ? `${userMessage.substring(0, 30)}...` 
-        : userMessage
+        : userMessage)
 
       // Create room with settings
       const extendInfo = {
@@ -121,8 +125,11 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         const roomId = response.room.room_id
         console.log('✅ Room created successfully:', roomId)
         
-        // Store initial message in sessionStorage for the room page to pick up
+        // Store initial message and target group in sessionStorage for the room page to pick up
         sessionStorage.setItem(`room-${roomId}-initial-message`, userMessage)
+        if (targetGroup) {
+          sessionStorage.setItem(`room-${roomId}-target-group`, targetGroup)
+        }
         
         return roomId
       } else {
