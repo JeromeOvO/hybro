@@ -480,6 +480,8 @@ export default function RoomChatPage() {
         loadingAgents={loadingAgents}
         userId={user?.id || ''}
         getToken={getToken}
+        loadAgents={loadAvailableAgents}
+        agentsError={agentsError}
       />
     </div>
   )

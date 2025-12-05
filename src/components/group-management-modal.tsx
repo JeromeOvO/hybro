@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Plus, Pencil, Trash2, Users, Loader2, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,6 +33,8 @@ interface GroupManagementModalProps {
   loadingAgents: boolean
   userId: string
   getToken?: () => Promise<string | null>
+  loadAgents?: () => Promise<void>
+  agentsError?: string | null
 }
 
 type Mode = 'list' | 'create' | 'edit' | 'delete-confirm'
@@ -46,6 +48,8 @@ export function GroupManagementModal({
   loadingAgents,
   userId,
   getToken,
+  loadAgents,
+  agentsError,
 }: GroupManagementModalProps) {
   const [mode, setMode] = useState<Mode>('list')
   const [editingGroup, setEditingGroup] = useState<AgentGroup | null>(null)
@@ -55,6 +59,7 @@ export function GroupManagementModal({
   const [saving, setSaving] = useState(false)
   const [groupToDelete, setGroupToDelete] = useState<AgentGroup | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const didRequestAgents = useRef(false)
 
   // Filter out built-in groups for the list
   const userGroups = groups.filter(g => g.type === 'user')
@@ -118,6 +123,40 @@ export function GroupManagementModal({
     }
     setSelectedAgents(agentsMap)
   }
+
+  // Ensure agents are loaded when modal opens
+  useEffect(() => {
+    if (open && availableAgents.length === 0 && !loadingAgents && !didRequestAgents.current) {
+      didRequestAgents.current = true
+      loadAgents?.().finally(() => {
+        didRequestAgents.current = false
+      })
+    }
+  }, [open, availableAgents.length, loadingAgents, loadAgents])
+
+  // Ensure agents are loaded when entering create/edit if still missing
+  useEffect(() => {
+    if ((mode === 'create' || mode === 'edit') && availableAgents.length === 0 && !loadingAgents && !didRequestAgents.current) {
+      didRequestAgents.current = true
+      loadAgents?.().finally(() => {
+        didRequestAgents.current = false
+      })
+    }
+  }, [mode, availableAgents.length, loadingAgents, loadAgents])
+
+  // When editing and agents arrive later, repopulate selected agents
+  useEffect(() => {
+    if (mode === 'edit' && editingGroup && availableAgents.length > 0) {
+      const agentsMap: { [agentId: string]: Agent } = {}
+      for (const agentId of editingGroup.agents) {
+        const agent = availableAgents.find((a) => a.agent_id === agentId)
+        if (agent) {
+          agentsMap[agentId] = agent
+        }
+      }
+      setSelectedAgents(agentsMap)
+    }
+  }, [mode, editingGroup, availableAgents])
 
   const handleBack = () => {
     setMode('list')
@@ -336,6 +375,8 @@ export function GroupManagementModal({
                   onAgentRemove={handleAgentRemove}
                   availableAgents={availableAgents}
                   loading={loadingAgents}
+                  error={agentsError || undefined}
+                  onRetry={loadAgents}
                 />
               </div>
             </div>
