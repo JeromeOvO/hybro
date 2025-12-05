@@ -78,6 +78,8 @@ export default function RoomChatPage() {
   })
 
   useEffect(() => {
+    // Ensure ref is set on mount (StrictMode double-mount can leave it false)
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
       if (loadAgentsControllerRef.current) {
@@ -480,8 +482,8 @@ export default function RoomChatPage() {
         loadingAgents={loadingAgents}
         userId={user?.id || ''}
         getToken={getToken}
-        loadAgents={loadAvailableAgents}
-        agentsError={agentsError}
+        //loadAgents={loadAvailableAgents}
+        //agentsError={agentsError}
       />
     </div>
   )
