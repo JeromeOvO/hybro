@@ -40,6 +40,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     setSseConnected,
     setSseError,
     addLiveMessage,
+    replaceLiveMessage,
     resetRoomState,
   } = useRoomUiStore()
 
@@ -475,6 +476,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Extract message_id from createResponse
       const messageId = createResponse.message_id || createResponse.message?.message_id || ""
 
+      if (!messageId) {
+        console.warn('SendMessage returned no message_id; keeping optimistic message')
+        return true
+      }
+
       // Step 2: Call processRoomUserMessage to trigger background processing
       // The backend now returns immediately (202 Accepted) and processes agents in background
       // Agent responses will arrive via SSE
@@ -491,7 +497,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       }
       
       // Step 3: Replace optimistic message ID with real message ID
-      addLiveMessage(roomId, { ...optimisticUserMessage, id: messageId })
+      replaceLiveMessage(roomId, tempMessageId, { ...optimisticUserMessage, id: messageId })
       
       // Processing continues in background - SSE will send "completed" status when done
       // Keep processing=true until SSE delivers the completion status
@@ -530,7 +536,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = false
       // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
