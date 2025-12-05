@@ -129,7 +129,7 @@ function AgentAvatar({ agentName, agentId }: { agentName: string; agentId: strin
   return (
     <div 
       className={cn(
-        "w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 flex-shrink-0",
+        "w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0",
         colors.bg,
         colors.border,
         colors.text
@@ -169,6 +169,7 @@ export function AgentMessageBubble({ message, compact = false }: MessageBubblePr
   const displayContent = message.content || "No message content"
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
+  const nameColor = colors.border.replace(/border-/g, 'text-')
 
   return (
     <div className="flex gap-3 w-full">
@@ -182,13 +183,12 @@ export function AgentMessageBubble({ message, compact = false }: MessageBubblePr
       <div 
         className={cn(
           "flex-1 max-w-[calc(100%-3rem)] rounded-lg p-3 shadow-sm border",
-          colors.bg,
           colors.border
         )}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-1">
-          <span className={cn("text-xs font-medium", colors.text)}>
+          <span className={cn("text-xs font-medium", nameColor)}>
             {message.sender_name}
           </span>
           <span className="text-xs text-muted-foreground">

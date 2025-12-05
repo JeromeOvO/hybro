@@ -3,55 +3,55 @@
  * Each agent gets a unique color based on their ID hash
  */
 
-// Color palette for agent identification - distinguishable and accessible
+// Futuristic yet simple palette for both light and dark themes
 export const AGENT_COLOR_PALETTE = [
   {
-    bg: 'bg-blue-50 dark:bg-blue-950',
-    border: 'border-blue-200 dark:border-blue-800',
-    accent: 'bg-blue-500',
-    text: 'text-blue-700 dark:text-blue-300',
+    bg: 'bg-cyan-50 dark:bg-cyan-950',
+    border: 'border-cyan-200 dark:border-cyan-800',
+    accent: 'bg-cyan-400 dark:bg-cyan-300',
+    text: 'text-cyan-900 dark:text-cyan-100',
+  },
+  {
+    bg: 'bg-sky-50 dark:bg-sky-950',
+    border: 'border-sky-200 dark:border-sky-800',
+    accent: 'bg-sky-400 dark:bg-sky-300',
+    text: 'text-sky-900 dark:text-sky-100',
+  },
+  {
+    bg: 'bg-indigo-50 dark:bg-indigo-950',
+    border: 'border-indigo-200 dark:border-indigo-800',
+    accent: 'bg-indigo-400 dark:bg-indigo-300',
+    text: 'text-indigo-900 dark:text-indigo-100',
   },
   {
     bg: 'bg-emerald-50 dark:bg-emerald-950',
     border: 'border-emerald-200 dark:border-emerald-800',
-    accent: 'bg-emerald-500',
-    text: 'text-emerald-700 dark:text-emerald-300',
+    accent: 'bg-emerald-400 dark:bg-emerald-300',
+    text: 'text-emerald-900 dark:text-emerald-100',
+  },
+  {
+    bg: 'bg-fuchsia-50 dark:bg-fuchsia-950',
+    border: 'border-fuchsia-200 dark:border-fuchsia-800',
+    accent: 'bg-fuchsia-400 dark:bg-fuchsia-300',
+    text: 'text-fuchsia-900 dark:text-fuchsia-100',
   },
   {
     bg: 'bg-amber-50 dark:bg-amber-950',
     border: 'border-amber-200 dark:border-amber-800',
-    accent: 'bg-amber-500',
-    text: 'text-amber-700 dark:text-amber-300',
+    accent: 'bg-amber-400 dark:bg-amber-300',
+    text: 'text-amber-900 dark:text-amber-100',
+  },
+  {
+    bg: 'bg-lime-50 dark:bg-lime-950',
+    border: 'border-lime-200 dark:border-lime-800',
+    accent: 'bg-lime-400 dark:bg-lime-300',
+    text: 'text-lime-900 dark:text-lime-100',
   },
   {
     bg: 'bg-rose-50 dark:bg-rose-950',
     border: 'border-rose-200 dark:border-rose-800',
-    accent: 'bg-rose-500',
-    text: 'text-rose-700 dark:text-rose-300',
-  },
-  {
-    bg: 'bg-violet-50 dark:bg-violet-950',
-    border: 'border-violet-200 dark:border-violet-800',
-    accent: 'bg-violet-500',
-    text: 'text-violet-700 dark:text-violet-300',
-  },
-  {
-    bg: 'bg-cyan-50 dark:bg-cyan-950',
-    border: 'border-cyan-200 dark:border-cyan-800',
-    accent: 'bg-cyan-500',
-    text: 'text-cyan-700 dark:text-cyan-300',
-  },
-  {
-    bg: 'bg-orange-50 dark:bg-orange-950',
-    border: 'border-orange-200 dark:border-orange-800',
-    accent: 'bg-orange-500',
-    text: 'text-orange-700 dark:text-orange-300',
-  },
-  {
-    bg: 'bg-pink-50 dark:bg-pink-950',
-    border: 'border-pink-200 dark:border-pink-800',
-    accent: 'bg-pink-500',
-    text: 'text-pink-700 dark:text-pink-300',
+    accent: 'bg-rose-400 dark:bg-rose-300',
+    text: 'text-rose-900 dark:text-rose-100',
   },
 ]
 
