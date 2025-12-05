@@ -310,20 +310,16 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        onClick={expandAll}
-                        className="h-8 text-xs"
+                        onClick={collapsedRounds.size > 0 ? expandAll : collapseAll}
+                        className="h-8 w-8 p-0"
+                        title={collapsedRounds.size > 0 ? 'Expand all' : 'Collapse all'}
+                        aria-label={collapsedRounds.size > 0 ? 'Expand all rounds' : 'Collapse all rounds'}
                       >
-                        <ChevronsDownUp className="h-3.5 w-3.5 mr-1" /> 
-                        Expand
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={collapseAll}
-                        className="h-8 text-xs"
-                      >
-                        <ChevronsUpDown className="h-3.5 w-3.5 mr-1" /> 
-                        Collapse
+                        {collapsedRounds.size > 0 ? (
+                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronsDownUp className="h-3.5 w-3.5" /> 
+                        )}
                       </Button>
                       
                       {/* Navigator toggle for many rounds */}

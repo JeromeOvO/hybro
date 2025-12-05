@@ -210,7 +210,7 @@ export function AgentMessageBubble({ message, compact = false }: MessageBubblePr
             onClick={() => setIsExpanded(!isExpanded)}
             className={cn(
               "flex items-center gap-1 text-xs mt-2 hover:underline",
-              colors.text
+              colors.border
             )}
           >
             {isExpanded ? (
