@@ -154,6 +154,9 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     const roomId = await createRoomWithMessage(userMessage, options)
     
     if (roomId) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('rooms:refresh'))
+      }
       toast.success('Chat started!')
       router.push(`/room/${roomId}`)
       return true

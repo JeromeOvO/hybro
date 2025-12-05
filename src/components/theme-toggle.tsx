@@ -25,7 +25,7 @@ export function ThemeToggle() {
         className="h-8 w-8"
         disabled
       >
-        <Sun className="h-[1.2rem] w-[1.2rem] icon-sun" />
+        <Sun className="h-[1.2rem] w-[1.2rem] text-amber-500" />
         <span className="sr-only">Toggle theme</span>
       </Button>
     )
@@ -39,7 +39,7 @@ export function ThemeToggle() {
       className="h-8 w-8"
     >
       {resolvedTheme === "light" ? (
-        <Sun className="h-[1.2rem] w-[1.2rem] icon-sun" />
+        <Sun className="h-[1.2rem] w-[1.2rem] text-amber-500 dark:icon-sun" strokeWidth={2.25} />
       ) : (
         <Moon className="h-[1.2rem] w-[1.2rem] icon-moon" /> 
       )}

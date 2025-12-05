@@ -55,35 +55,9 @@ const staticNavAgents = [
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar } = useSidebar()
-  //const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
-  //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
   
-  // Get user's chat session list
-  /**
-  const loadChatSessions = React.useCallback(async () => {
-    if (!isLoaded || !isSignedIn || !user?.id) return
-
-    try {
-      setIsLoadingSessions(true)
-      const response: TaskCenterResponse = await getAllSessions(user.id)
-      
-      if (response.success && response.task_sessions) {
-        setChatSessions(response.task_sessions)
-      } else {
-        console.error('Failed to load chat sessions:', response.error)
-        setChatSessions([])
-      }
-    } catch (error) {
-      console.error('Error loading chat sessions:', error)
-      setChatSessions([])
-    } finally {
-      setIsLoadingSessions(false)
-    }
-  }, [isLoaded, isSignedIn, user?.id])
-  */
-
   // Get user's room list
   const loadRooms = React.useCallback(async () => {
     if (!isLoaded || !isSignedIn || !user?.id) return
@@ -113,14 +87,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [isLoaded, isSignedIn, user?.id, loadRooms])
 
+  // Refresh rooms when a new room is created elsewhere
+  React.useEffect(() => {
+    const handleRefresh = () => loadRooms()
+    window.addEventListener("rooms:refresh", handleRefresh)
+    return () => window.removeEventListener("rooms:refresh", handleRefresh)
+  }, [loadRooms])
+
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
-    // const chatHistoryItems = [...chatSessions].reverse().map(session => ({
-    //   title: session.session_name,
-    //   url: `/chat/${session.session_id}`,
-    //   id: session.session_id,
-    // }))
-
     const roomItems = [...rooms].reverse().map(room => ({
       title: room.room_name || 'Unnamed Room',
       url: `/room/${room.room_id}`,
@@ -142,20 +117,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ],
         isLoading: isLoadingRooms,
       },
-      // {
-      //   title: "Chat Sessions",
-      //   url: "#",
-      //   icon: History,
-      //   isActive: true,
-      //   items: chatHistoryItems.length > 0 ? chatHistoryItems : [
-      //     {
-      //       title: isLoadingSessions ? "Loading..." : "No sessions yet",
-      //       url: "#",
-      //       id: "no-sessions",
-      //     }
-      //   ],
-      //   isLoading: isLoadingSessions,
-      // },
     ]
   }, [rooms, isLoadingRooms])
 
@@ -189,11 +150,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarHeader>
         <SidebarContent>
           <NavAgent navAgents={staticNavAgents} />
-          <NavMain 
-            items={navMainData} 
-            //onRefreshSessions={loadChatSessions}
-            onRefreshRooms={loadRooms}
-          />
+          <NavMain items={navMainData} />
         </SidebarContent>
         <SidebarFooter>
           <DiscordButton />

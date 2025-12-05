@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/tooltip"
 import { RoomSettingForm } from "@/components/room-setting-form"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
-import { isWaitlistEnabled } from "@/lib/utils"
+import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { listAgentGroups } from "@/lib/api/agent-group"
 import { getAllAgents } from "@/lib/api/agent"
 import type { AgentGroup } from "@/lib/types/agent-group"
@@ -104,7 +104,7 @@ export default function ChatPage() {
     }, [isLoaded, user?.id, getToken])
 
     // Load agents for group management modal and mention suggestions
-    const loadAvailableAgents = async () => {
+    const loadAvailableAgents = useCallback(async () => {
         if (availableAgents.length > 0) return
         setLoadingAgents(true)
         try {
@@ -117,14 +117,14 @@ export default function ChatPage() {
         } finally {
             setLoadingAgents(false)
         }
-    }
+    }, [availableAgents.length])
     
     // Load agents on mount for mention suggestions
     useEffect(() => {
         if (isLoaded && user?.id && availableAgents.length === 0) {
             loadAvailableAgents()
         }
-    }, [isLoaded, user?.id, availableAgents.length])
+    }, [isLoaded, user?.id, loadAvailableAgents, availableAgents.length])
     
     // Agent list for mentions - always show all available agents regardless of selected scope
     const agentListForMentions = useMemo(() => {
@@ -304,8 +304,8 @@ export default function ChatPage() {
     return (
         <div className="flex flex-col h-full bg-background">
             {/* Fixed Header - Same position as room page */}
-            <header className="flex-shrink-0 w-full max-w-4xl mx-auto px-4 sm:px-6">
-                <div className="flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+            <header className="shrink-0 w-full max-w-4xl mx-auto px-4 sm:px-6">
+                <div className="flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
                     <div className="flex items-center gap-3">
                         {/* Pre-configured room indicator - Same style as room page */}
                         <div className="space-y-1">
@@ -378,10 +378,21 @@ export default function ChatPage() {
                     {/* Header */}
                     <div className="text-center mb-8">
                         <h1 className="text-4xl font-bold mb-2">
-                            <span className="bg-gradient-to-r from-[hsl(var(--color-hybro-hy))] to-[hsl(var(--color-hybro-bro))] bg-clip-text text-transparent">
-                                HYBRO
+                        <span
+                            className={cn(
+                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",
+                            )}
+                            >
+                            HY
                             </span>
-                            <span className="ml-2 text-foreground">AI</span>
+                            <span
+                            className={cn(
+                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro))]",
+                            )}
+                            >
+                            BRO
+                            </span>
+                            <span className="ml-2 text-foreground inline-block skew-x-150">!</span>
                         </h1>
                         <p className="text-muted-foreground">
                             What would you like to work on today?

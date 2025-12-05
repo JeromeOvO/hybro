@@ -2,7 +2,7 @@
 @import "tailwindcss";
 
 @theme {
-  /* 字体 */
+  /* Fonts */
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
   
@@ -61,24 +61,24 @@
   --color-hybro-bro: 280 70% 45%;
 
   /* Semantic icon colors - Light mode (enhanced for better contrast) */
-  --color-icon-success: 142 80% 32%;
-  --color-icon-warning: 45 95% 42%;
-  --color-icon-error: 0 90% 50%;
-  --color-icon-info: 217 95% 45%;
-  --color-icon-neutral: 215 40% 45%;
-  --color-icon-action: 195 100% 45%;
-  --color-icon-navigation: 215 50% 38%;
-  --color-icon-sun: 45 95% 42%;
-  --color-icon-moon: 217 95% 45%;
+  --color-icon-success: 142 72% 30%;
+  --color-icon-warning: 40 95% 40%;
+  --color-icon-error: 0 85% 46%;
+  --color-icon-info: 217 90% 38%;
+  --color-icon-neutral: 215 35% 32%;
+  --color-icon-action: 195 100% 40%;
+  --color-icon-navigation: 215 45% 32%;
+  --color-icon-sun: 42 95% 42%;
+  --color-icon-moon: 217 90% 40%;
   
   /* Professional category colors - Light mode (enhanced for better contrast) */
-  --color-icon-create: 142 80% 38%;
-  --color-icon-network: 195 100% 45%;
-  --color-icon-learn: 280 80% 42%;
-  --color-icon-workflow: 160 85% 35%;
-  --color-icon-collaboration: 320 80% 45%;
-  --color-icon-architecture: 240 75% 45%;
-  --color-icon-contact: 215 50% 38%;
+  --color-icon-create: 142 75% 32%;
+  --color-icon-network: 195 95% 40%;
+  --color-icon-learn: 280 75% 40%;
+  --color-icon-workflow: 160 80% 32%;
+  --color-icon-collaboration: 320 75% 42%;
+  --color-icon-architecture: 240 65% 38%;
+  --color-icon-contact: 215 45% 32%;
 
   /* Modern border radius */
   --radius: 0.875rem;
@@ -214,10 +214,8 @@
   
   /* Dark mode with neon grid */
   .dark body {
-    background-image: 
-      linear-gradient(rgba(0, 255, 255, 0.08) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 255, 255, 0.08) 1px, transparent 1px);
-    background-size: 40px 40px;
+    background-image: none;
+    background-size: auto;
   }
 }
 
