@@ -55,7 +55,8 @@ export class SSEConnection {
         
         // If a disconnect was requested while awaiting token, abort
         if (this.isManualClose || this.connectCancelled) {
-          return reject(new Error('SSE connect cancelled'))
+          console.debug('SSE connect cancelled before establishing connection')
+          return resolve()
         }
         
         // Build URL with auth token as query param for SSE (EventSource doesn't support custom headers)
