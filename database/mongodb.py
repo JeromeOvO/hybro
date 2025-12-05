@@ -706,11 +706,11 @@ class MongoDB:
         """
         # Add updated_at timestamp
         from datetime import datetime
+
         updates["updated_at"] = datetime.now()
-        
+
         result = await self.agent_groups_collection.update_one(
-            {"group_id": group_id},
-            {"$set": updates}
+            {"group_id": group_id}, {"$set": updates}
         )
         return result.modified_count > 0
 

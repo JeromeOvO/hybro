@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from models.request import OrchestrationCenterRequest
+from models.response import OrchestrationCenterResponse
 from modules.OrchestrationCenter import OrchestrationCenter
 
 router = APIRouter()
@@ -110,19 +111,50 @@ async def summarize_meta_task_for_base_task(request: Request):
 
 
 @router.post("/orchestrationCenter/processRoomUserMessage")
-async def process_room_user_message(request: Request):
+async def process_room_user_message(
+    request: Request, background_tasks: BackgroundTasks
+):
+    """
+    Process a room user message asynchronously.
+
+    This endpoint returns immediately after validation and queues the actual
+    processing as a background task. Agent responses are delivered via SSE.
+    """
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_user_message_id = request_data.get("room_user_message_id")
     room_related_message_id = request_data.get("room_related_message_id")
+
+    # Validate required fields early
+    if not room_id:
+        return OrchestrationCenterResponse(
+            success=False,
+            error="Room id is required",
+            status_code=400,
+        )
+    if not room_user_message_id:
+        return OrchestrationCenterResponse(
+            success=False,
+            error="Room user message id is required",
+            status_code=400,
+        )
+
     orchestration_center_request = OrchestrationCenterRequest(
         room_id=room_id,
         room_user_message_id=room_user_message_id,
         room_related_message_id=room_related_message_id,
     )
-    orchestration_center_response = (
-        await orchestration_center.process_room_user_message(
-            orchestration_center_request
-        )
+
+    # Queue the actual processing as a background task
+    # This returns immediately while agents process in the background
+    background_tasks.add_task(
+        orchestration_center.process_room_user_message, orchestration_center_request
     )
-    return orchestration_center_response
+
+    # Return success immediately - actual results come via SSE
+    return OrchestrationCenterResponse(
+        room_id=room_id,
+        success=True,
+        error=None,
+        status_code=202,  # 202 Accepted - processing started
+    )
