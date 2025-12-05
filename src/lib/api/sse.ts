@@ -36,6 +36,8 @@ export class SSEConnection {
   private maxReconnectAttempts = 5
   private reconnectDelay = 1000
   private isManualClose = false
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private connectCancelled = false
 
   constructor(options: SSEConnectionOptions) {
     this.roomId = options.roomId
@@ -46,9 +48,15 @@ export class SSEConnection {
     return new Promise(async (resolve, reject) => {
       try {
         this.isManualClose = false
+        this.connectCancelled = false
         
         // Get auth token if available
         const token = this.options.getToken ? await this.options.getToken() : null
+        
+        // If a disconnect was requested while awaiting token, abort
+        if (this.isManualClose || this.connectCancelled) {
+          return reject(new Error('SSE connect cancelled'))
+        }
         
         // Build URL with auth token as query param for SSE (EventSource doesn't support custom headers)
         let url = `${API_BASE_URL}/room/${this.roomId}/stream`
@@ -86,18 +94,37 @@ export class SSEConnection {
         this.eventSource.onerror = (event) => {
           console.error('❌ SSE connection error for room:', this.roomId, event)
           this.options.onError?.(event)
-          
+
+          // Always close the current EventSource on error to avoid dangling connections
+          if (this.eventSource) {
+            this.eventSource.close()
+            this.eventSource = null
+          }
+
+          // If we're intentionally closing (e.g., room change) or cancelled, do not attempt reconnect
+          if (this.isManualClose || this.connectCancelled) {
+            if (this.reconnectTimer) {
+              clearTimeout(this.reconnectTimer)
+              this.reconnectTimer = null
+            }
+            return resolve()
+          }
+
           // Auto-reconnect if not manually closed
-          if (!this.isManualClose && this.reconnectAttempts < this.maxReconnectAttempts) {
+          if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++
             console.log(`🔄 Attempting to reconnect SSE (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`)
-            
-            setTimeout(() => {
-              if (!this.isManualClose) {
+
+            // Clear any pending timer then schedule a new reconnect
+            if (this.reconnectTimer) {
+              clearTimeout(this.reconnectTimer)
+            }
+            this.reconnectTimer = setTimeout(() => {
+              if (!this.isManualClose && !this.connectCancelled) {
                 this.connect().catch(console.error)
               }
             }, this.reconnectDelay * this.reconnectAttempts)
-          } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          } else {
             console.error('❌ Max SSE reconnection attempts reached')
             reject(new Error('Max reconnection attempts reached'))
           }
@@ -112,6 +139,11 @@ export class SSEConnection {
 
   disconnect(): void {
     this.isManualClose = true
+    this.connectCancelled = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     if (this.eventSource) {
       this.eventSource.close()
       this.eventSource = null

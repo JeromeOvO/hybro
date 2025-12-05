@@ -43,6 +43,8 @@ export default function RoomChatPage() {
   const { openWaitlist } = useClerk()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
+  const loadAgentsControllerRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
   
   // Group selector state
   const [groups, setGroups] = useState<AgentGroup[]>([])
@@ -75,23 +77,49 @@ export default function RoomChatPage() {
     getToken
   })
 
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      if (loadAgentsControllerRef.current) {
+        loadAgentsControllerRef.current.abort()
+      }
+    }
+  }, [])
+
   // Load agents when dialog opens
   const loadAvailableAgents = async () => {
     try {
+      // cancel any in-flight request
+      if (loadAgentsControllerRef.current) {
+        loadAgentsControllerRef.current.abort()
+      }
+      const controller = new AbortController()
+      loadAgentsControllerRef.current = controller
+
       setLoadingAgents(true)
       setAgentsError(null)
-      const response = await getAllAgents()
+      const response = await getAllAgents(controller.signal, 15000) // 15s safety timeout
       
       if (response.success && response.agents) {
-        setAvailableAgents(response.agents)
+        if (mountedRef.current) {
+          setAvailableAgents(response.agents)
+        }
       } else {
         throw new Error(response.error || 'Failed to load agents')
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        // silent cancel
+        return
+      }
       console.error('Failed to load agents:', error)
-      setAgentsError(error instanceof Error ? error.message : 'Failed to load agents')
+      if (mountedRef.current) {
+        setAgentsError(error instanceof Error ? error.message : 'Failed to load agents')
+      }
     } finally {
-      setLoadingAgents(false)
+      if (mountedRef.current) {
+        setLoadingAgents(false)
+      }
     }
   }
 
@@ -316,7 +344,7 @@ export default function RoomChatPage() {
       <div className="flex-1 overflow-hidden">
         <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 h-full flex flex-col">
           {/* Fixed Header - Never scrolls */}
-          <header className="flex-shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10">
+          <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10">
             <div className="flex items-center gap-3">
               <div className="space-y-1">
                 <h1 className="text-xl font-semibold">{room.room_name}</h1>

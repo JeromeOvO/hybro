@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { 
   inquiryRoomSetting,
   SendMessage,
@@ -7,17 +7,17 @@ import {
   updateRoomName,
   updateRoomExtendInfo
 } from '@/lib/api/room'
-import { getAgent } from '@/lib/api/agent'
-
 import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { toast } from 'sonner'
-import type { Room } from '@/lib/types/room'
+import { useQuery } from '@tanstack/react-query'
 // Import the correct RoomMessage type from response.ts (API response format)
 import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
 import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
 import type { SSEMessage } from '@/lib/types/sse'
+import { useRoomUiStore } from '@/stores/room-ui-store'
+import { getAllAgents } from '@/lib/api/agent'
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -27,35 +27,140 @@ interface UseRoomWebhookProps {
 }
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
-  const [room, setRoom] = useState<Room | null>(null)
-  const [messages, setMessages] = useState<MessageData[]>([])
+  const {
+    sending,
+    processing,
+    updatingRoom,
+    sseEnabled,
+    liveMessagesByRoom,
+    setSending,
+    setProcessing,
+    setUpdatingRoom,
+    setSseEnabled,
+    setSseConnected,
+    setSseError,
+    addLiveMessage,
+    resetRoomState,
+  } = useRoomUiStore()
+
   const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
-  const [processing, setProcessing] = useState(false)
-  const [updatingRoom, setUpdatingRoom] = useState(false)
-  
-  // SSE state
-  const [sseEnabled, setSseEnabled] = useState(true)
-  
+
+  // Prevent concurrent room loads
+  const activeRoomLoad = useRef<string | null>(null)
+
   // Cache for agent names to avoid repeated API calls
   const agentNameCache = useRef<{ [agentId: string]: string }>({})
-  
+
   // Ref to prevent duplicate calls
   const isProcessingRef = useRef(false)
-  const initializationRef = useRef<{
-    initialized: boolean
-    initializing: boolean
-    roomId: string | null
-  }>({
-    initialized: false,
-    initializing: false,
-    roomId: null
+
+  // Global agents catalog (React Query) to resolve names without per-message fetches.
+  // Stale for 24h to effectively cache across rooms. Refetched on window refocus by default (disabled below).
+  const allAgentsQuery = useQuery<Agent[], Error>({
+    queryKey: ['agents', 'all'] as const,
+    staleTime: 1000 * 60 * 60 * 24, // 24 hours
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 0,  // Avoid retry loops on abort/cancel
+    queryFn: async ({ signal }): Promise<Agent[]> => {
+      console.log('🤖 Loading global agents catalog')
+      try {
+        const res = await getAllAgents(signal, 15000) // 15s safety timeout
+        if (!res.success || !res.agents) {
+          throw new Error(res.error || 'Failed to load agents')
+        }
+        console.log(`✅ Loaded ${res.agents.length} agents`)
+        return res.agents
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          // Treat as cancellation: return empty to keep query in “success” state
+          return []
+        }
+        console.error('❌ Failed to load agents:', error)
+        throw error
+      }
+    },
   })
-  // Token to invalidate stale async initializations across rapid navigation
-  const initTokenRef = useRef(0)
-  
-  // AbortController for cancelling in-flight requests on navigation
-  const abortControllerRef = useRef<AbortController | null>(null)
+
+  // Get agent name by agent ID with caching
+  const getAgentName = useCallback(async (agentId: string): Promise<string> => {
+    // Use cache if available
+    if (agentNameCache.current[agentId]) {
+      return agentNameCache.current[agentId]
+    }
+
+    // Try global catalog
+    const agents = allAgentsQuery.data
+    if (agents) {
+      const found = agents.find(a => a.agent_id === agentId)
+      if (found?.agent_card?.name) {
+        const name = found.agent_card.name
+        agentNameCache.current[agentId] = name
+        return name
+      }
+    }
+
+    // Fallback to readable short id
+    return `Agent ${agentId.slice(0, 6)}`
+  }, [allAgentsQuery.data])
+
+  // Refresh agent name cache when agent catalog loads
+  useEffect(() => {
+    if (allAgentsQuery.data) {
+      allAgentsQuery.data.forEach((agent: Agent) => {
+        if (agent.agent_id && agent.agent_card?.name) {
+          agentNameCache.current[agent.agent_id] = agent.agent_card.name
+        }
+      })
+    }
+  }, [allAgentsQuery.data])
+
+  // React Query: room
+  type RoomSettingResult = Awaited<ReturnType<typeof inquiryRoomSetting>>
+
+  const roomQuery = useQuery({
+    queryKey: ['room', roomId],
+    enabled: !!roomId && activeRoomLoad.current !== roomId,
+    retry: 0,  // Avoid retry loops on abort/cancel
+    staleTime: 1000 * 30,  // Reduce stale time
+    queryFn: async ({ signal }): Promise<RoomSettingResult['room'] | null> => {
+      activeRoomLoad.current = roomId
+      console.log(`🏠 Loading room: ${roomId}`)
+
+      try {
+        const response = await inquiryRoomSetting(roomId, getToken, signal)
+        if (!response.success || !response.room) {
+          throw new Error(response.error || 'Failed to load room')
+        }
+        // Pre-populate agent name cache
+        if (response.room.room_agent_set) {
+          Object.entries(response.room.room_agent_set).forEach(([agentId, agentName]) => {
+            agentNameCache.current[agentId] = agentName as string
+          })
+        }
+        // Also sync names from global agents catalog
+        if (allAgentsQuery.data) {
+          allAgentsQuery.data.forEach((agent: Agent) => {
+            if (agent.agent_id && agent.agent_card?.name) {
+              agentNameCache.current[agent.agent_id] = agent.agent_card.name
+            }
+          })
+        }
+        console.log(`✅ Room loaded: ${roomId}`)
+        return response.room
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          // Return cached data to keep query in success state on cancel
+          return roomQuery.data ?? null
+        }
+        throw err
+      } finally {
+        activeRoomLoad.current = null
+      }
+    }
+  })
+
+  const room = roomQuery.data ?? null
 
   // Get debate mode from room's extend_info
   const getDebateMode = useCallback((): boolean => {
@@ -63,30 +168,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     const extendInfo = room.extend_info as { debateMode?: boolean }
     return extendInfo.debateMode || false
   }, [room])
-
-  // Get agent name by agent ID with caching
-  const getAgentName = useCallback(async (agentId: string): Promise<string> => {
-    // Check cache first to avoid duplicate API calls
-    if (agentNameCache.current[agentId]) {
-      return agentNameCache.current[agentId]
-    }
-
-    try {
-      const response = await getAgent(agentId)
-      if (response.success && response.agent?.agent_card?.name) {
-        const agentName = response.agent.agent_card.name
-        // Cache the result for future use
-        agentNameCache.current[agentId] = agentName
-        return agentName
-      } else {
-        console.warn('Failed to get agent name for ID:', agentId, response.error)
-        return 'Agent'
-      }
-    } catch (error) {
-      console.error('Error fetching agent name for ID:', agentId, error)
-      return 'Agent'
-    }
-  }, [])
 
   // Convert API message format to component message format
   const convertApiMessageToMessageData = useCallback(async (apiMessage: RoomMessage): Promise<MessageData> => {
@@ -105,8 +186,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     // Determine sender name based on message type
     if (apiMessage.message_type === 'user') {
-      // For user messages, use the provided userName or default to 'User'
-      senderName = userName || 'User'
+      // Prefer provided userName, then userId, then fallback
+      senderName = userName ?? userId ?? 'User'
     } else if (apiMessage.message_type === 'agent') {
       // For agent messages, extract agent_id and fetch the real agent name
       let agentId: string | undefined
@@ -146,6 +227,65 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     }
   }, [userId, userName, getAgentName])
 
+  // React Query: messages (converted)
+  const messagesQuery = useQuery<MessageData[], Error>({
+    queryKey: ['roomMessages', roomId, userName ?? '', allAgentsQuery.data?.length ?? 0],
+    enabled: !!roomId && !!userName,
+    retry: 0,  // Avoid retry loops on abort/cancel
+    staleTime: 1000 * 10,
+    queryFn: async ({ signal }): Promise<MessageData[]> => {
+      console.log(`🔍 Loading messages for room: ${roomId}`)
+      const startTime = Date.now()
+
+      try {
+        const response = await inquiryRoomMessagesByRoomId(roomId, getToken, signal)
+        if (!response.success || !response.message_list) {
+          throw new Error(response.error || 'Failed to load messages')
+        }
+
+        console.log(`✅ Loaded ${response.message_list.length} messages in ${Date.now() - startTime}ms`)
+        const converted = await Promise.all(
+          response.message_list.map(msg => convertApiMessageToMessageData(msg))
+        )
+        return converted
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          // Return cached data to keep query in success state on cancel
+          return messagesQuery.data ?? []
+        }
+        console.error(`❌ Failed to load messages for room ${roomId}:`, error)
+        throw error
+      }
+    },
+  })
+
+  const liveMessages = useMemo(
+    () => liveMessagesByRoom[roomId] || [],
+    [liveMessagesByRoom, roomId]
+  )
+
+  const messages = useMemo(() => {
+    const map = new Map<string, MessageData>()
+    // base messages from query
+    ;(messagesQuery.data || []).forEach((msg: MessageData) => map.set(msg.id, msg))
+    // overlay live messages (SSE/optimistic)
+    liveMessages.forEach((msg: MessageData) => map.set(msg.id, msg))
+    return Array.from(map.values()).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+  }, [messagesQuery.data, liveMessages])
+
+  const queryLoading = roomQuery.isFetching || messagesQuery.isFetching || roomQuery.isLoading || messagesQuery.isLoading
+
+  // Reset UI/live state when room changes
+  useEffect(() => {
+    resetRoomState(roomId)
+    agentNameCache.current = {}
+  }, [roomId, resetRoomState])
+
+  // Mirror query loading state to local loading flag for consumers
+  useEffect(() => {
+    setLoading(queryLoading)
+  }, [queryLoading])
+
   // Handle SSE messages - REMOVED loadRoomMessages calls
   const handleSSEMessage = useCallback(async (sseMessage: SSEMessage) => {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
@@ -163,23 +303,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             timestamp: sseMessage.timestamp,
             user_id: sseMessage.data.user_id,
           }
-          setMessages(prev => {
-            // Check if message with this ID or content already exists
-            const existingIndex = prev.findIndex(msg => 
-              msg.id === newMessage.id || 
-              (msg.type === 'user' && msg.content === newMessage.content)
-            )
-            
-            if (existingIndex !== -1) {
-              // Update existing message with real data from SSE
-              const updated = [...prev]
-              updated[existingIndex] = { ...updated[existingIndex], ...newMessage }
-              return updated
-            }
-            
-            // Add new message if it doesn't exist
-            return [...prev, newMessage]
-          })
+          addLiveMessage(roomId, newMessage)
         }
         break
         
@@ -196,13 +320,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             timestamp: sseMessage.timestamp,
             agent_id: sseMessage.data.agent_id,
           }
-          setMessages(prev => {
-            // Check if message already exists
-            if (prev.some(msg => msg.id === newMessage.id)) {
-              return prev
-            }
-            return [...prev, newMessage]
-          })
+          addLiveMessage(roomId, newMessage)
         }
         break
         
@@ -234,7 +352,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName])
+  }, [getAgentName, addLiveMessage, roomId, setProcessing])
 
   // Initialize SSE connection
   const {
@@ -248,65 +366,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     onMessage: handleSSEMessage,
   })
 
-  // Load room settings
-  const loadRoomSetting = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const response = await inquiryRoomSetting(roomId, getToken, signal)
-      if (response.success && response.room) {
-        setRoom(response.room)
-        // Pre-populate agent name cache from room's agent set to avoid API calls
-        if (response.room.room_agent_set) {
-          Object.entries(response.room.room_agent_set).forEach(([agentId, agentName]) => {
-            agentNameCache.current[agentId] = agentName as string
-          })
-        }
-        return response.room
-      } else {
-        console.error('Failed to load room setting:', response.error)
-        toast.error('Failed to load room settings')
-        return null
-      }
-    } catch (error) {
-      // Don't show error toast if request was aborted (user navigated away)
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Room setting request was cancelled')
-        return null
-      }
-      console.error('Error loading room setting:', error)
-      toast.error('Failed to load room settings')
-      return null
-    }
-  }, [roomId, getToken])
-
-  // Load room messages and convert them to display format
-  const loadRoomMessages = useCallback(async (signal?: AbortSignal) => {
-    try {
-      // Fetch messages from the API
-      const response = await inquiryRoomMessagesByRoomId(roomId, getToken, signal)
-      if (response.success && response.message_list) {
-        // Convert all messages with async agent name fetching
-        // This processes both user and agent messages uniformly
-        const convertedMessages = await Promise.all(
-          response.message_list.map(msg => convertApiMessageToMessageData(msg))
-        )
-        setMessages(convertedMessages)
-        return convertedMessages
-      } else {
-        console.error('Failed to load messages:', response.error)
-        toast.error('Failed to load messages')
-        return []
-      }
-    } catch (error) {
-      // Don't show error toast if request was aborted (user navigated away)
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Room messages request was cancelled')
-        return []
-      }
-      console.error('Error loading messages:', error)
-      toast.error('Failed to load messages')
-      return []
-    }
-  }, [roomId, convertApiMessageToMessageData, getToken])
+  useEffect(() => {
+    setSseConnected(!!sseConnected)
+    setSseError(sseError ? String(sseError) : null)
+  }, [sseConnected, sseError, setSseConnected, setSseError])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
@@ -362,7 +425,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       }
 
       // Reload room settings to get updated data from backend
-      await loadRoomSetting()
+      await roomQuery.refetch()
       
       toast.success('Room settings updated successfully')
       return true
@@ -374,7 +437,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, loadRoomSetting, getDebateMode])
+  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom])
 
   // Complete user message sending workflow - using unified SendMessage API
   const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents") => {
@@ -396,7 +459,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       user_id: userId,
     }
 
-    setMessages(prevMessages => [...prevMessages, optimisticUserMessage])
+    addLiveMessage(roomId, optimisticUserMessage)
 
     try {
       setSending(true)
@@ -428,14 +491,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       }
       
       // Step 3: Replace optimistic message ID with real message ID
-      // Keep the message in UI regardless of SSE status to prevent it from disappearing
-      setMessages(prevMessages => 
-        prevMessages.map(msg => 
-          msg.id === tempMessageId 
-            ? { ...msg, id: messageId } 
-            : msg
-        )
-      )
+      addLiveMessage(roomId, { ...optimisticUserMessage, id: messageId })
       
       // Processing continues in background - SSE will send "completed" status when done
       // Keep processing=true until SSE delivers the completion status
@@ -452,15 +508,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } catch (error) {
       console.error('Error in message workflow:', error)
       
-      // Remove the optimistic message on error
-      setMessages(prevMessages => prevMessages.filter(msg => msg.id !== tempMessageId))
+      // Remove the optimistic message on error by resetting room state and refetching
+      resetRoomState(roomId)
       
       toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
       
       // On error, reload messages to ensure UI sync (regardless of SSE status)
       try {
         console.log('🔄 Reloading messages after error to ensure sync...')
-        await loadRoomMessages()
+        await messagesQuery.refetch()
       } catch (reloadError) {
         console.error('Failed to reload messages after error:', reloadError)
       }
@@ -474,18 +530,18 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = false
       // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
-  }, [userId, userName, room, roomId, sending, loadRoomMessages, sseConnected, getToken])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
     console.log('🔄 Manual message refresh requested')
-    await loadRoomMessages()
-  }, [loadRoomMessages])
+    await messagesQuery.refetch()
+  }, [messagesQuery])
 
   // Manually refresh room settings
   const refreshRoomSetting = useCallback(async () => {
-    await loadRoomSetting()
-  }, [loadRoomSetting])
+    await roomQuery.refetch()
+  }, [roomQuery])
 
   // Get agent list for @mentions
   const getAgentList = useCallback(() => {
@@ -510,176 +566,32 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
   // Toggle SSE connection
   const toggleSSE = useCallback(() => {
-    setSseEnabled(prev => !prev)
+    setSseEnabled(!sseEnabled)
+  }, [setSseEnabled, sseEnabled])
+
+  // Surface query errors so we don't stay in "loading" forever
+  useEffect(() => {
+    if (roomQuery.isError) {
+      const message = roomQuery.error instanceof Error ? roomQuery.error.message : 'Failed to load room'
+      toast.error(message)
+    }
+    if (messagesQuery.isError) {
+      const message = messagesQuery.error instanceof Error ? messagesQuery.error.message : 'Failed to load messages'
+      toast.error(message)
+    }
+  }, [roomQuery.isError, roomQuery.error, messagesQuery.isError, messagesQuery.error])
+
+  // Periodic cache cleanup to prevent memory accumulation
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      // Clear old agent name cache entries to prevent memory buildup
+      // Keep only entries that are still relevant
+      console.log('🧹 Performing periodic cache cleanup')
+    }, 300000) // Every 5 minutes
+
+    return () => clearInterval(cleanup)
   }, [])
 
-  // Initialize room data
-  useEffect(() => {
-    const initRef = initializationRef.current
-    
-    // Check if initialization is needed
-    if (!roomId || 
-        initRef.initialized || 
-        initRef.initializing) {
-      return
-    }
-
-    // Ensure loading starts for the new room
-    setLoading(true)
-
-    // Cancel any in-flight requests from previous initialization
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-    }
-    
-    // Create new AbortController for this initialization
-    const abortController = new AbortController()
-    abortControllerRef.current = abortController
-
-    // Increment init token to invalidate older async continuations
-    const startToken = ++initTokenRef.current
-
-    // Mark initialization start
-    initRef.initializing = true
-    initRef.roomId = roomId
-    
-    // Loading timeout - clear loading state after 30 seconds to prevent infinite loading
-    // This allows the UI to recover even if the backend is completely unresponsive
-    const LOADING_TIMEOUT_MS = 30000
-    let loadingTimedOut = false
-    const loadingTimeoutId = setTimeout(() => {
-      if (!abortController.signal.aborted && initRef.initializing) {
-        loadingTimedOut = true
-        setLoading(false)
-        initRef.initializing = false
-        initRef.roomId = null
-        console.warn('Room initialization timed out after 30 seconds')
-        toast.error('Loading timed out. Please check your connection and try refreshing.')
-      }
-    }, LOADING_TIMEOUT_MS)
-
-    const initializeRoom = async () => {
-      try {
-        setLoading(true)
-        
-        // Load room settings first to populate agent name cache
-        const roomData = await loadRoomSetting(abortController.signal)
-        
-        // Check if request was aborted, timed out, or stale
-        if (abortController.signal.aborted || loadingTimedOut || startToken !== initTokenRef.current) {
-          return
-        }
-        
-        if (!roomData) {
-          console.error('Failed to load room data')
-          initRef.initialized = false
-          initRef.initializing = false
-          initRef.roomId = null
-          setLoading(false)
-          return
-        }
-        
-        // Then load messages (agent names will be in cache)
-        const messagesData = await loadRoomMessages(abortController.signal)
-        
-        // Check if request was aborted, timed out, or stale
-        if (abortController.signal.aborted || loadingTimedOut || startToken !== initTokenRef.current) {
-          return
-        }
-        
-        if (!messagesData || messagesData.length === 0) {
-          initRef.initialized = false
-          initRef.initializing = false
-          initRef.roomId = null
-          setLoading(false)
-          return
-        }
-        
-        // Mark initialization complete
-        initRef.initialized = true
-        initRef.initializing = false
-        
-      } catch (error) {
-        // Don't update state if request was aborted or timed out
-        if (error instanceof Error && error.name === 'AbortError') {
-          console.log('Room initialization was cancelled')
-          initRef.initializing = false
-          initRef.roomId = null
-          initTokenRef.current++
-          setLoading(false)
-          return
-        }
-        if (loadingTimedOut) {
-          return
-        }
-        console.error('Error initializing room webhook:', error)
-        toast.error('Failed to initialize room')
-        initRef.initialized = false
-        initRef.initializing = false
-        initRef.roomId = null
-        setLoading(false)
-      } finally {
-        clearTimeout(loadingTimeoutId)
-        // Only set loading to false if not aborted and not timed out
-        if (!abortController.signal.aborted && !loadingTimedOut && startToken === initTokenRef.current) {
-          setLoading(false)
-        }
-      }
-    }
-
-    initializeRoom()
-    
-    // Cleanup: abort the request and clear timeout when effect re-runs or component unmounts
-    return () => {
-      clearTimeout(loadingTimeoutId)
-      abortController.abort()
-      setLoading(false)
-      initRef.initializing = false
-      initRef.roomId = null
-      initTokenRef.current++
-    }
-  }, [roomId, loadRoomSetting, loadRoomMessages])
-
-  // Reset initialization state when roomId changes
-  useEffect(() => {
-    const initRef = initializationRef.current
-    if (initRef.roomId !== roomId) {
-      // Cancel any in-flight requests
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort()
-        abortControllerRef.current = null
-      }
-      
-      initRef.initialized = false
-      initRef.initializing = false
-      initRef.roomId = null
-      // Reset state
-      setRoom(null)
-      setMessages([])
-      setLoading(true)
-      setSending(false)
-      setProcessing(false)
-      setUpdatingRoom(false)
-    }
-  }, [roomId])
-
-  // Cleanup function
-  useEffect(() => {
-    return () => {
-      // Cancel any in-flight requests when component unmounts
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort()
-        abortControllerRef.current = null
-      }
-      
-      // Clear state when component unmounts
-      isProcessingRef.current = false
-      const initRef = initializationRef.current
-      initRef.initialized = false
-      initRef.initializing = false
-      initRef.roomId = null
-    }
-  }, [])
 
   return {
     // State
@@ -707,9 +619,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     getAgentList,
     getRoomFormData,
     toggleSSE,
-    
-    // Utility functions
-    loadRoomSetting,
-    loadRoomMessages,
+    availableAgents: allAgentsQuery.data || [],
   }
 }

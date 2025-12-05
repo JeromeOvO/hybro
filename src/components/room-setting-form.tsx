@@ -80,7 +80,8 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   // Use appropriate schema based on requireRoomName prop
   const formSchema = requireRoomName ? formSchemaRequired : formSchemaOptional
 
-  const form = useForm<z.infer<typeof formSchemaRequired>>({
+  // Use optional schema as the form type to cover both required and optional cases
+  const form = useForm<z.infer<typeof formSchemaOptional>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
@@ -134,8 +135,11 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     })
   }
 
-  function handleSubmit(values: z.infer<typeof formSchema>) {
-    onSubmit(values.roomName, selectedAgents, values.debateMode)
+  function handleSubmit(values: z.infer<typeof formSchemaOptional>) {
+    // roomName can be optional when requireRoomName is false; fall back to empty string
+    const roomName = values.roomName ?? ""
+    const debateMode = values.debateMode ?? false
+    onSubmit(roomName, selectedAgents, debateMode)
   }
 
   // Reset form function
