@@ -4,7 +4,7 @@ import "@/app/globals.css"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Header } from "@/components/header"
-import { Toaster } from "@/components/ui/sonner"
+import { BannerHost } from "@/components/ui/banner"
 
 export const metadata: Metadata = {
   title: "Hybro AI",
@@ -18,6 +18,7 @@ export default function RootLayout({
 }) {
   return (
     <div className="min-h-screen bg-background">
+      <BannerHost />
       <SidebarProvider>
           <AppSidebar />
           <SidebarInset>
@@ -28,7 +29,6 @@ export default function RootLayout({
           </main>
         </SidebarInset>
       </SidebarProvider>
-      <Toaster />
     </div>
   )
 }

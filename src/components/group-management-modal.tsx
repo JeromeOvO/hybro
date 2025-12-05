@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { AgentSelector } from '@/components/agent-selector'
-import { toast } from 'sonner'
+import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import {
@@ -182,12 +182,12 @@ export function GroupManagementModal({
 
   const handleSave = async () => {
     if (!groupName.trim()) {
-      toast.error('Group name is required')
+      banner.error('Group name is required')
       return
     }
 
     if (Object.keys(selectedAgents).length === 0) {
-      toast.error('Please select at least one agent')
+      banner.error('Please select at least one agent')
       return
     }
 
@@ -204,7 +204,7 @@ export function GroupManagementModal({
         }, getToken)
 
         if (response.success) {
-          toast.success('Group created successfully')
+          banner.success('Group created successfully')
           onGroupsChange()
           handleBack()
         } else {
@@ -219,7 +219,7 @@ export function GroupManagementModal({
         }, getToken)
 
         if (response.success) {
-          toast.success('Group updated successfully')
+          banner.success('Group updated successfully')
           onGroupsChange()
           handleBack()
         } else {
@@ -228,7 +228,7 @@ export function GroupManagementModal({
       }
     } catch (error) {
       console.error('Failed to save group:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to save group')
+      banner.error(error instanceof Error ? error.message : 'Failed to save group')
     } finally {
       setSaving(false)
     }
@@ -247,7 +247,7 @@ export function GroupManagementModal({
       const response = await deleteAgentGroup(groupToDelete.group_id, getToken)
 
       if (response.success) {
-        toast.success('Group deleted successfully')
+        banner.success('Group deleted successfully')
         onGroupsChange()
         handleBack()
       } else {
@@ -255,7 +255,7 @@ export function GroupManagementModal({
       }
     } catch (error) {
       console.error('Failed to delete group:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to delete group')
+      banner.error(error instanceof Error ? error.message : 'Failed to delete group')
     } finally {
       setDeleting(false)
     }

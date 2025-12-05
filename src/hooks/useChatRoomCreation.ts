@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
 import { getAllAgents } from '@/lib/api/agent'
-import { toast } from 'sonner'
+import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 
 interface UseChatRoomCreationProps {
@@ -40,7 +40,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       }
     } catch (error) {
       console.error('Failed to load agents:', error)
-      toast.error('Failed to load agents')
+      banner.error('Failed to load agents')
       return []
     } finally {
       setLoadingAgents(false)
@@ -75,12 +75,12 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     } = options
 
     if (!userId || !userName) {
-      toast.error('User information not available')
+      banner.error('User information not available')
       return null
     }
 
     if (!userMessage.trim()) {
-      toast.error('Message cannot be empty')
+      banner.error('Message cannot be empty')
       return null
     }
 
@@ -139,7 +139,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       }
     } catch (error) {
       console.error('Failed to create room:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to create room')
+      banner.error(error instanceof Error ? error.message : 'Failed to create room')
       return null
     } finally {
       setCreating(false)
@@ -157,7 +157,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('rooms:refresh'))
       }
-      toast.success('Chat started!')
+      banner.success('Chat started!')
       router.push(`/room/${roomId}`)
       return true
     }
@@ -172,7 +172,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     options: Omit<CreateRoomOptions, 'selectedAgents'> = {}
   ) => {
     if (selectedAgents.length === 0) {
-      toast.error('Please select at least one agent')
+      banner.error('Please select at least one agent')
       return false
     }
 

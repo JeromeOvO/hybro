@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
-import { toast } from "sonner"
+import { banner } from "@/components/ui/banner"
 import { 
     Loader2, 
     AlertCircle, 
@@ -185,7 +185,7 @@ export default function ChatPage() {
             setSelectedGroup(BUILTIN_GROUP_ALL_AGENTS)
         }
         setRoomSettingsOpen(false)
-        toast.success('Room settings saved')
+        banner.success('Room settings saved')
     }
 
     // Open room settings dialog
@@ -196,7 +196,7 @@ export default function ChatPage() {
 
     const handleSubmit = async (value: string) => {
         if (!value.trim()) {
-            toast.error("Please enter a message")
+            banner.error("Please enter a message")
             return
         }
         if (!user?.id) {
@@ -232,7 +232,7 @@ export default function ChatPage() {
         } catch (error) {
             console.error('Error creating room:', error)
             setHasError(true)
-            toast.error('Failed to start chat')
+            banner.error('Failed to start chat')
         }
     }
 

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
-import { toast } from "sonner"
+import { banner } from "@/components/ui/banner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 
@@ -53,12 +53,12 @@ export default function AgentProfilePage() {
         setAgentData(response)
       } else {
         const errorMessage = response.error || "Failed to load agent details"
-        toast.error("Failed to load agent details", {
+        banner.error("Failed to load agent details", {
           description: errorMessage
         })
       }
     } catch { 
-      toast.error("Failed to load agent details")
+      banner.error("Failed to load agent details")
     } finally {
       setLoading(false)
     }

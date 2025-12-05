@@ -8,7 +8,7 @@ import {
   updateRoomExtendInfo
 } from '@/lib/api/room'
 import { processRoomUserMessage } from '@/lib/api/orchestration'
-import { toast } from 'sonner'
+import { banner } from "@/components/ui/banner"
 import { useQuery } from '@tanstack/react-query'
 // Import the correct RoomMessage type from response.ts (API response format)
 import type { RoomMessage } from '@/lib/types/response'
@@ -335,14 +335,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             // Don't reload messages, they should come via SSE
           } else if (sseMessage.data.status === 'failed') {
             setProcessing(false)
-            toast.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+            banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
           }
         }
         break
         
       case 'error':
         console.error('❌ SSE error message:', sseMessage.data)
-        toast.error(`Real-time update error: ${sseMessage.data?.details || 'Unknown error'}`)
+        banner.error(`Real-time update error: ${sseMessage.data?.details || 'Unknown error'}`)
         break
         
       case 'heartbeat':
@@ -379,7 +379,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     debateMode: boolean
   ) => {
     if (!room) {
-      toast.error('Room data not available')
+      banner.error('Room data not available')
       return false
     }
 
@@ -428,12 +428,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Reload room settings to get updated data from backend
       await roomQuery.refetch()
       
-      toast.success('Room settings updated successfully')
+      banner.success('Room settings updated successfully')
       return true
       
     } catch (error) {
       console.error('Error updating room settings:', error)
-      toast.error(`Failed to update room settings: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      banner.error(`Failed to update room settings: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     } finally {
       setUpdatingRoom(false)
@@ -517,7 +517,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Remove the optimistic message on error by resetting room state and refetching
       resetRoomState(roomId)
       
-      toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
       
       // On error, reload messages to ensure UI sync (regardless of SSE status)
       try {
@@ -579,11 +579,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   useEffect(() => {
     if (roomQuery.isError) {
       const message = roomQuery.error instanceof Error ? roomQuery.error.message : 'Failed to load room'
-      toast.error(message)
+      banner.error(message)
     }
     if (messagesQuery.isError) {
       const message = messagesQuery.error instanceof Error ? messagesQuery.error.message : 'Failed to load messages'
-      toast.error(message)
+      banner.error(message)
     }
   }, [roomQuery.isError, roomQuery.error, messagesQuery.isError, messagesQuery.error])
 
