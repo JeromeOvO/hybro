@@ -1,6 +1,4 @@
 'use client'
-
-import { useState, useEffect } from 'react'
 import { ChevronDown, Globe, Users, Star, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,7 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 
 interface MentionedAgent {
   id: string
@@ -109,7 +107,6 @@ export function GroupSelector({
   const displayInfo = getDisplayInfo()
 
   // Filter groups by type
-  const builtinGroups = groups.filter(g => g.type === 'builtin')
   const userGroups = groups.filter(g => g.type === 'user')
 
   if (loadingGroups) {

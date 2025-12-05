@@ -95,7 +95,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     return () => {
       disconnect()
     }
-  }, [roomId, enabled]) // Note: not including connect/disconnect to avoid infinite loops
+  }, [roomId, enabled, connect, disconnect])
 
   // Cleanup on unmount
   useEffect(() => {

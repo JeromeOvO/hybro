@@ -5,7 +5,6 @@
 import { getApiUrl } from '../utils'
 import { apiPost } from '../api-client'
 import type { 
-  AgentGroup, 
   AgentGroupCreateRequest, 
   AgentGroupUpdateRequest,
   AgentGroupResponse,

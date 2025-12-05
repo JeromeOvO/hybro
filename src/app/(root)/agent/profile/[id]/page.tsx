@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Bot, RefreshCw, ExternalLink } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -44,7 +44,7 @@ export default function AgentProfilePage() {
     }
   }
 
-  const loadAgentDetail = async () => {
+  const loadAgentDetail = useCallback(async () => {
     try {
       setLoading(true)
       const response = await getAgent(agentId)
@@ -62,13 +62,13 @@ export default function AgentProfilePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [agentId])
 
   useEffect(() => {
     if (agentId) {
       loadAgentDetail()
     }
-  }, [agentId])
+  }, [agentId, loadAgentDetail])
 
   if (loading) {
     return (

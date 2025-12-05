@@ -6,7 +6,7 @@ import { Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 
 interface Agent {
   id: string
@@ -149,7 +149,7 @@ export function RoomChatInput({
       }
       onExternalValueConsumed?.()
     }
-  }, [externalValue])
+  }, [externalValue, message, onExternalValueConsumed])
 
   // Get plain text from editor (display format)
   const getEditorText = (): string => {

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useImperativeHandle, forwardRef, useEffect } from "react"
+import React, { useState, useImperativeHandle, forwardRef, useEffect, useCallback } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -143,15 +143,15 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   }
 
   // Reset form function
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     form.reset()
     setSelectedAgents({})
-  }
+  }, [form])
 
   // Expose reset function to parent
   useImperativeHandle(ref, () => ({
     reset: resetForm
-  }), [form])
+  }), [resetForm])
 
   return (
     <Form {...form}>

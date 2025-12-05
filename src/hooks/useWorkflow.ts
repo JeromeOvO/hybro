@@ -16,10 +16,9 @@ import type { WorkflowStage } from '@/components/workflow-message'
 interface UseWorkflowProps {
   baseTaskId: string
   onWorkflowComplete?: (baseTask: BaseTask) => void
-  getToken?: () => Promise<string | null>
 }
 
-export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWorkflowProps) {
+export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps) {
   const [metaTasks, setMetaTasks] = useState<MetaTask[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [stage, setStage] = useState<WorkflowStage>('decomposed')
@@ -297,7 +296,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
     }
 
     initializeWorkflow()
-  }, [baseTaskId])
+  }, [baseTaskId, handleDecomposeTask, loadAgents, loadMetaTasks])
 
   // Reset initialization state when baseTaskId changes
   useEffect(() => {
