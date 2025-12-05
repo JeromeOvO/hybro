@@ -20,6 +20,11 @@ interface ConversationRoundProps {
   round: ConversationRoundData
   onToggle: () => void
   isLatest?: boolean
+  lastAgentMessageId?: string | null
+  collapseSignal?: number
+  autoCollapseVersion?: number
+  userExpandedIds?: Set<string>
+  onUserToggle?: (id: string, expanded: boolean) => void
 }
 
 /**
@@ -129,7 +134,16 @@ function groupResponsesByAgent(responses: MessageData[]): AgentResponseGroup[] {
 /**
  * A single conversation round containing user message and all agent responses
  */
-export function ConversationRound({ round, onToggle, isLatest = false }: ConversationRoundProps) {
+export function ConversationRound({
+  round,
+  onToggle,
+  isLatest = false,
+  lastAgentMessageId,
+  collapseSignal = 0,
+  autoCollapseVersion = 0,
+  userExpandedIds,
+  onUserToggle,
+}: ConversationRoundProps) {
   const [viewByAgent, setViewByAgent] = useState(false)
   
   const groupedByAgent = useMemo(
@@ -154,7 +168,7 @@ export function ConversationRound({ round, onToggle, isLatest = false }: Convers
       )}
     >
       {/* Round indicator line */}
-      <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gradient-to-b from-primary/40 to-primary/10 rounded-full" />
+      <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-linear-to-b from-primary/40 to-primary/10 rounded-full" />
       
       <div className="pl-4">
         {/* Round Header - Clickable */}
@@ -261,7 +275,17 @@ export function ConversationRound({ round, onToggle, isLatest = false }: Convers
                       </div>
                       <div className="space-y-2">
                         {group.messages.map(msg => (
-                          <AgentMessageBubble key={msg.id} message={msg} compact />
+                          <AgentMessageBubble
+                            key={msg.id}
+                            message={msg}
+                            compact
+                            defaultExpanded={msg.id === lastAgentMessageId}
+                            collapseSignal={collapseSignal}
+                            autoCollapseVersion={autoCollapseVersion}
+                            isLatestAgent={msg.id === lastAgentMessageId}
+                            isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
+                            onUserToggle={onUserToggle}
+                          />
                         ))}
                       </div>
                     </div>
@@ -272,7 +296,16 @@ export function ConversationRound({ round, onToggle, isLatest = false }: Convers
               // Timeline view (chronological)
               <div className="space-y-3">
                 {round.agentResponses.map(msg => (
-                  <AgentMessageBubble key={msg.id} message={msg} />
+                  <AgentMessageBubble
+                    key={msg.id}
+                    message={msg}
+                    defaultExpanded={msg.id === lastAgentMessageId}
+                    collapseSignal={collapseSignal}
+                    autoCollapseVersion={autoCollapseVersion}
+                    isLatestAgent={msg.id === lastAgentMessageId}
+                    isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
+                    onUserToggle={onUserToggle}
+                  />
                 ))}
               </div>
             )}

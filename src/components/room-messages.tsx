@@ -116,6 +116,18 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
   const previousMessageCountRef = useRef(messages.length)
+  const [collapseSignal, setCollapseSignal] = useState(0)
+  const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
+  const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
+  const prevLatestAgentIdRef = useRef<string | null>(null)
+  const lastAgentMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'agent') {
+        return messages[i].id
+      }
+    }
+    return null
+  }, [messages])
   
   // View mode state
   const [viewMode, setViewMode] = useState<ViewMode>('rounds')
@@ -126,6 +138,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   // Navigator visibility
   const [showNavigator, setShowNavigator] = useState(false)
   const [currentRound, setCurrentRound] = useState(0)
+  const prevRoundCountRef = useRef(0)
 
   // Group messages into rounds
   const { rounds, orphanedAgentMessages } = useMemo(() => {
@@ -145,6 +158,37 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     })
   }, [rounds.length])
 
+  // Keep newly added latest round expanded by default (but allow user collapses afterward)
+  useEffect(() => {
+    if (rounds.length > prevRoundCountRef.current && rounds.length > 0) {
+      const latestRoundNumber = rounds[rounds.length - 1].roundNumber
+      setCollapsedRounds((prev) => {
+        if (!prev.has(latestRoundNumber)) return prev
+        const next = new Set(prev)
+        next.delete(latestRoundNumber)
+        return next
+      })
+    }
+    prevRoundCountRef.current = rounds.length
+  }, [rounds.length, rounds])
+
+  // Track newest agent message to auto-collapse prior non-user-expanded responses
+  useEffect(() => {
+    if (lastAgentMessageId && lastAgentMessageId !== prevLatestAgentIdRef.current) {
+      setAutoCollapseVersion((v) => v + 1)
+    }
+    prevLatestAgentIdRef.current = lastAgentMessageId
+  }, [lastAgentMessageId])
+
+  const handleUserToggle = useCallback((id: string, expanded: boolean) => {
+    setUserExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (expanded) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
   // Toggle individual round
   const toggleRound = useCallback((roundNumber: number) => {
     setCollapsedRounds(prev => {
@@ -153,6 +197,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
         next.delete(roundNumber)
       } else {
         next.add(roundNumber)
+        setCollapseSignal((v) => v + 1)
       }
       return next
     })
@@ -161,6 +206,8 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   // Bulk collapse/expand
   const collapseAll = useCallback(() => {
     setCollapsedRounds(new Set(rounds.map(r => r.roundNumber)))
+    setCollapseSignal((v) => v + 1)
+    setUserExpandedIds(new Set())
   }, [rounds])
 
   const expandAll = useCallback(() => {
@@ -234,7 +281,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === 'user'
     
     if (messageCountIncreased && (lastMessageIsUser || shouldAutoScroll)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
     }
     
     previousMessageCountRef.current = messages.length
@@ -243,7 +290,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   // Auto scroll when processing state changes
   useEffect(() => {
     if (shouldAutoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
     }
   }, [processing, shouldAutoScroll])
 
@@ -310,12 +357,12 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        onClick={collapsedRounds.size > 0 ? expandAll : collapseAll}
+                        onClick={collapsedRounds.size === rounds.length ? expandAll : collapseAll}
                         className="h-8 w-8 p-0"
-                        title={collapsedRounds.size > 0 ? 'Expand all' : 'Collapse all'}
-                        aria-label={collapsedRounds.size > 0 ? 'Expand all rounds' : 'Collapse all rounds'}
+                        title={collapsedRounds.size === rounds.length ? 'Expand all' : 'Collapse all'}
+                        aria-label={collapsedRounds.size === rounds.length ? 'Expand all rounds' : 'Collapse all rounds'}
                       >
-                        {collapsedRounds.size > 0 ? (
+                        {collapsedRounds.size === rounds.length ? (
                           <ChevronsUpDown className="h-3.5 w-3.5" />
                         ) : (
                           <ChevronsDownUp className="h-3.5 w-3.5" /> 
@@ -346,7 +393,16 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                     Earlier messages
                   </div>
                   {orphanedAgentMessages.map(msg => (
-                    <MessageBubble key={msg.id} message={msg} />
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      defaultExpanded={msg.id === lastAgentMessageId}
+                  collapseSignal={collapseSignal}
+                  autoCollapseVersion={autoCollapseVersion}
+                  isLatestAgent={msg.id === lastAgentMessageId}
+                  isUserExpanded={userExpandedIds.has(msg.id)}
+                  onUserToggle={handleUserToggle}
+                    />
                   ))}
                 </div>
               )}
@@ -364,6 +420,11 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                       }}
                       onToggle={() => toggleRound(round.roundNumber)}
                       isLatest={index === rounds.length - 1}
+                  lastAgentMessageId={lastAgentMessageId}
+                  collapseSignal={collapseSignal}
+                  autoCollapseVersion={autoCollapseVersion}
+                  userExpandedIds={userExpandedIds}
+                  onUserToggle={handleUserToggle}
                     />
                   ))}
                 </div>
@@ -371,7 +432,16 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                 // Timeline view (flat chronological)
           <div className="space-y-4">
                   {messages.map(msg => (
-                    <MessageBubble key={msg.id} message={msg} />
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      defaultExpanded={msg.id === lastAgentMessageId}
+                      collapseSignal={collapseSignal}
+                      autoCollapseVersion={autoCollapseVersion}
+                      isLatestAgent={msg.id === lastAgentMessageId}
+                      isUserExpanded={userExpandedIds.has(msg.id)}
+                      onUserToggle={handleUserToggle}
+                    />
             ))}
                 </div>
               )}

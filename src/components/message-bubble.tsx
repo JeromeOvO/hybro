@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -12,6 +12,12 @@ import type { MessageData } from './room-messages'
 interface MessageBubbleProps {
   message: MessageData
   compact?: boolean
+  defaultExpanded?: boolean
+  collapseSignal?: number
+  autoCollapseVersion?: number
+  isLatestAgent?: boolean
+  isUserExpanded?: boolean
+  onUserToggle?: (id: string, expanded: boolean) => void
 }
 
 /**
@@ -164,8 +170,48 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
 /**
  * Agent message bubble - with avatar and optional expand/collapse for long messages
  */
-export function AgentMessageBubble({ message, compact = false }: MessageBubbleProps) {
-  const [isExpanded, setIsExpanded] = useState(!compact && message.content.length < 500)
+export function AgentMessageBubble({
+  message,
+  compact = false,
+  defaultExpanded = false,
+  collapseSignal = 0,
+  autoCollapseVersion = 0,
+  isLatestAgent = false,
+  isUserExpanded = false,
+  onUserToggle,
+}: MessageBubbleProps) {
+  const [isExpanded, setIsExpanded] = useState(
+    defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
+  )
+  const prevCollapseSignal = useRef(collapseSignal)
+  const prevAutoCollapseVersion = useRef(autoCollapseVersion)
+
+  useEffect(() => {
+    setIsExpanded(false)
+    onUserToggle?.(message.id, false)
+  }, [collapseSignal, message.id, onUserToggle])
+
+  useEffect(() => {
+    if (defaultExpanded && collapseSignal === prevCollapseSignal.current) {
+      setIsExpanded(true)
+    }
+    prevCollapseSignal.current = collapseSignal
+  }, [defaultExpanded, collapseSignal])
+
+  // Collapse older agent responses when a new agent message arrives,
+  // unless the user explicitly expanded this one.
+  useEffect(() => {
+    if (
+      autoCollapseVersion !== undefined &&
+      prevAutoCollapseVersion.current !== undefined &&
+      autoCollapseVersion !== prevAutoCollapseVersion.current &&
+      !isLatestAgent &&
+      !isUserExpanded
+    ) {
+      setIsExpanded(false)
+    }
+    prevAutoCollapseVersion.current = autoCollapseVersion
+  }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   const displayContent = message.content || "No message content"
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
@@ -207,7 +253,11 @@ export function AgentMessageBubble({ message, compact = false }: MessageBubblePr
         {/* Expand/Collapse button */}
         {isLongMessage && (
           <button 
-            onClick={() => setIsExpanded(!isExpanded)}
+            onClick={() => {
+              const next = !isExpanded
+              setIsExpanded(next)
+              onUserToggle?.(message.id, next)
+            }}
             className={cn(
               "flex items-center gap-1 text-xs mt-2 hover:underline",
               colors.border
@@ -234,10 +284,30 @@ export function AgentMessageBubble({ message, compact = false }: MessageBubblePr
 /**
  * Generic message bubble that delegates to the appropriate type
  */
-export function MessageBubble({ message, compact = false }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  compact = false,
+  defaultExpanded = false,
+  collapseSignal = 0,
+  autoCollapseVersion = 0,
+  isLatestAgent = false,
+  isUserExpanded = false,
+  onUserToggle,
+}: MessageBubbleProps) {
   if (message.type === 'user') {
     return <UserMessageBubble message={message} />
   }
-  return <AgentMessageBubble message={message} compact={compact} />
+  return (
+    <AgentMessageBubble
+      message={message}
+      compact={compact}
+      defaultExpanded={defaultExpanded}
+      collapseSignal={collapseSignal}
+      autoCollapseVersion={autoCollapseVersion}
+      isLatestAgent={isLatestAgent}
+      isUserExpanded={isUserExpanded}
+      onUserToggle={onUserToggle}
+    />
+  )
 }
 
