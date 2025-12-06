@@ -119,6 +119,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
+  const [skipAutoCollapseUntilNewRound, setSkipAutoCollapseUntilNewRound] = useState(false)
   const allAgentIds = useMemo(
     () => messages.filter(m => m.type === 'agent').map(m => m.id),
     [messages]
@@ -128,6 +129,15 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     [allAgentIds, userExpandedIds]
   )
   const prevLatestAgentIdRef = useRef<string | null>(null)
+  const prevLatestUserIdRef = useRef<string | null>(null)
+  const lastUserMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'user') {
+        return messages[i].id
+      }
+    }
+    return null
+  }, [messages])
   const lastAgentMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].type === 'agent') {
@@ -188,6 +198,18 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     prevLatestAgentIdRef.current = lastAgentMessageId
   }, [lastAgentMessageId])
 
+  // When a new user message starts a fresh round, re-enable auto-collapse if it was skipped
+  useEffect(() => {
+    if (
+      skipAutoCollapseUntilNewRound &&
+      lastUserMessageId &&
+      lastUserMessageId !== prevLatestUserIdRef.current
+    ) {
+      setSkipAutoCollapseUntilNewRound(false)
+    }
+    prevLatestUserIdRef.current = lastUserMessageId
+  }, [lastUserMessageId, skipAutoCollapseUntilNewRound])
+
   const handleUserToggle = useCallback((id: string, expanded: boolean) => {
     setUserExpandedIds((prev) => {
       const next = new Set(prev)
@@ -220,6 +242,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
 
   const expandAll = useCallback(() => {
     setCollapsedRounds(new Set())
+    setSkipAutoCollapseUntilNewRound(true)
   }, [])
 
   // Timeline bulk collapse/expand (for agent message bubbles)
@@ -314,11 +337,15 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
 
   // Auto-collapse old rounds when conversation gets long
   useEffect(() => {
+    if (skipAutoCollapseUntilNewRound) {
+      return
+    }
+
     if (rounds.length > 5 && collapsedRounds.size === 0) {
       // Suggest collapsing by auto-collapsing rounds older than the last 2
       collapseOldRounds(2)
     }
-  }, [rounds.length, collapsedRounds.size, collapseOldRounds])
+  }, [rounds.length, collapsedRounds.size, collapseOldRounds, skipAutoCollapseUntilNewRound])
 
   if (loading) {
     return (
