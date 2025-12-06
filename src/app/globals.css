@@ -58,7 +58,9 @@
   
   /* Brand colors for HYBRO */
   --color-hybro-hy: 195 100% 40%;
+  --color-hybro-hy-strong: 270 80% 70%;
   --color-hybro-bro: 280 70% 45%;
+  --color-hybro-bro-strong: 270 80% 70%;
 
   /* Semantic icon colors - Light mode (enhanced for better contrast) */
   --color-icon-success: 142 72% 30%;

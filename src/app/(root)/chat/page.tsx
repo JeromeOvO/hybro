@@ -380,19 +380,19 @@ export default function ChatPage() {
                         <h1 className="text-4xl font-bold mb-2">
                         <span
                             className={cn(
-                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",
+                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mr-2",
                             )}
                             >
                             HY
                             </span>
                             <span
                             className={cn(
-                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro))]",
+                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro-strong))] dark:text-[hsl(var(--color-hybro-bro))]",
                             )}
                             >
                             BRO
                             </span>
-                            <span className="ml-2 text-foreground inline-block skew-x-150">!</span>
+                            <span className="ml-2 text-foreground inline-block text-3xl skew-x-150 scale-125 rotate-6">!</span>
                         </h1>
                         <p className="text-muted-foreground">
                             What would you like to work on today?
