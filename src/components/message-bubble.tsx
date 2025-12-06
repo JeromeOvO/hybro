@@ -191,6 +191,13 @@ export function AgentMessageBubble({
     onUserToggle?.(message.id, false)
   }, [collapseSignal, message.id, onUserToggle])
 
+  // Sync expansion when parent marks message as user-expanded (e.g., timeline expand-all)
+  useEffect(() => {
+    if (isUserExpanded && !isExpanded) {
+      setIsExpanded(true)
+    }
+  }, [isUserExpanded, isExpanded])
+
   useEffect(() => {
     if (defaultExpanded && collapseSignal === prevCollapseSignal.current) {
       setIsExpanded(true)

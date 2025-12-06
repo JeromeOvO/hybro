@@ -119,6 +119,14 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
+  const allAgentIds = useMemo(
+    () => messages.filter(m => m.type === 'agent').map(m => m.id),
+    [messages]
+  )
+  const allTimelineExpanded = useMemo(
+    () => allAgentIds.length > 0 && allAgentIds.every(id => userExpandedIds.has(id)),
+    [allAgentIds, userExpandedIds]
+  )
   const prevLatestAgentIdRef = useRef<string | null>(null)
   const lastAgentMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -213,6 +221,16 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const expandAll = useCallback(() => {
     setCollapsedRounds(new Set())
   }, [])
+
+  // Timeline bulk collapse/expand (for agent message bubbles)
+  const collapseAllTimeline = useCallback(() => {
+    setCollapseSignal((v) => v + 1)
+    setUserExpandedIds(new Set())
+  }, [])
+
+  const expandAllTimeline = useCallback(() => {
+    setUserExpandedIds(new Set(allAgentIds))
+  }, [allAgentIds])
 
   // Auto-collapse old rounds when many rounds exist
   const collapseOldRounds = useCallback((keepLastN: number = 2) => {
@@ -333,22 +351,24 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                 <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-2 z-10 mb-4 flex items-center justify-between border-b">
                   <div className="flex gap-1">
                     <Button 
-                      variant={viewMode === 'rounds' ? 'default' : 'ghost'} 
+                      variant="default"
                       size="sm"
-                      onClick={() => setViewMode('rounds')}
+                      onClick={() => setViewMode(prev => prev === 'rounds' ? 'timeline' : 'rounds')}
                       className="h-8"
+                      aria-label="Toggle view mode"
+                      title={viewMode === 'rounds' ? 'Show Timeline' : 'Show Rounds'}
                     >
-                      <Layers className="h-4 w-4 mr-1.5" /> 
-                      Rounds
-                    </Button>
-                    <Button 
-                      variant={viewMode === 'timeline' ? 'default' : 'ghost'} 
-                      size="sm"
-                      onClick={() => setViewMode('timeline')}
-                      className="h-8"
-                    >
-                      <List className="h-4 w-4 mr-1.5" /> 
-                      Timeline
+                      {viewMode === 'rounds' ? (
+                        <>
+                          <Layers className="h-4 w-4 mr-1.5" /> 
+                          Rounds
+                        </>
+                      ) : (
+                        <>
+                          <List className="h-4 w-4 mr-1.5" /> 
+                          Timeline
+                        </>
+                      )}
                     </Button>
                   </div>
                   
@@ -381,6 +401,25 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                           Map
                         </Button>
                       )}
+                    </div>
+                  )}
+
+                  {viewMode === 'timeline' && allAgentIds.length > 0 && (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={allTimelineExpanded ? collapseAllTimeline : expandAllTimeline}
+                        className="h-8 w-8 p-0"
+                        title={allTimelineExpanded ? 'Collapse all' : 'Expand all'}
+                        aria-label={allTimelineExpanded ? 'Collapse all timeline messages' : 'Expand all timeline messages'}
+                      >
+                        {allTimelineExpanded ? (
+                          <ChevronsDownUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
                     </div>
                   )}
                 </div>

@@ -230,22 +230,18 @@ export function ConversationRound({
             {uniqueAgentCount > 1 && (
               <div className="flex gap-1 mb-2">
                 <button
-                  onClick={(e) => { e.stopPropagation(); setViewByAgent(false) }}
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    setViewByAgent(prev => !prev) 
+                  }}
                   className={cn(
                     "px-2 py-1 text-xs rounded-md transition-colors",
-                    !viewByAgent ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"
+                    "bg-primary text-primary-foreground"
                   )}
+                  title={viewByAgent ? "Show timeline" : "Group by agent"}
+                  aria-label={viewByAgent ? "Show timeline" : "Group by agent"}
                 >
-                  Timeline
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setViewByAgent(true) }}
-                  className={cn(
-                    "px-2 py-1 text-xs rounded-md transition-colors",
-                    viewByAgent ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"
-                  )}
-                >
-                  By Agent
+                  {viewByAgent ? "By Agent" : "Timeline"}
                 </button>
               </div>
             )}
