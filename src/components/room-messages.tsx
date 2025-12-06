@@ -389,7 +389,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
       onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
     >
-        <div className="py-4 min-h-full px-1">
+        <div className="py-4 min-h-full px-4 sm:px-6 max-w-4xl mx-auto">
         {messages.length === 0 && !processing ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center text-muted-foreground">
