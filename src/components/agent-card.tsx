@@ -1,4 +1,5 @@
-import { Bot, CircleCheck, CircleMinus, PartyPopper, XCircle } from "lucide-react"
+import Image from "next/image"
+import { Bot, CircleCheck, CircleMinus, XCircle } from "lucide-react"
 import {
   Card,
   CardContent,
@@ -13,8 +14,6 @@ import type { Agent, AgentCard } from '@/lib/types'
 interface AgentCardProps {
   agent: Agent
 }
-
-const DEFAULT_AGENT_ICON = 'https://api.example.com/support-agent'
 
 export function AgentCard({ 
   agent, 
@@ -91,7 +90,7 @@ export function AgentCard({
                              transition-all duration-300 ease-out
                              group-hover:shadow-xl group-hover:shadow-primary/35 
                              dark:group-hover:shadow-primary/35 group-hover:scale-110">
-              <AvatarImage src={agent.agent_card.iconUrl || DEFAULT_AGENT_ICON} alt={agent.agent_card.name} />
+              <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
               <AvatarFallback className="group-hover:bg-primary/20 transition-colors duration-300">
                 <Bot className="h-6 w-6 group-hover:text-primary transition-colors duration-300" />
               </AvatarFallback>
@@ -129,7 +128,14 @@ export function StatsCards({ agents }: { agents: Agent[] }) {
       <Card
         className="@container/card border-none bg-transparent shadow-none flex flex-col items-center gap-3 px-8 py-6 w-52"
       >
-        <PartyPopper className="w-7 h-7 icon-action" />
+        <Image
+          src="/favicon.svg"
+          alt="Hybro logo"
+          width={28}
+          height={28}
+          className="w-9 h-9 icon-action"
+          priority
+        />
         <CardDescription className="font-medium text-muted-foreground whitespace-nowrap">
           Total&nbsp;Agents
         </CardDescription>
