@@ -120,6 +120,8 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
   const [skipAutoCollapseUntilNewRound, setSkipAutoCollapseUntilNewRound] = useState(false)
+  const mapButtonRef = useRef<HTMLButtonElement>(null)
+  const navigatorRef = useRef<HTMLDivElement>(null)
   const allAgentIds = useMemo(
     () => messages.filter(m => m.type === 'agent').map(m => m.id),
     [messages]
@@ -209,6 +211,30 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     }
     prevLatestUserIdRef.current = lastUserMessageId
   }, [lastUserMessageId, skipAutoCollapseUntilNewRound])
+
+  // Close navigator when clicking outside of it or the toggle button
+  useEffect(() => {
+    if (!showNavigator) return
+
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      const navEl = navigatorRef.current
+      const btnEl = mapButtonRef.current
+      const target = event.target as Node
+
+      if (navEl?.contains(target)) return
+      if (btnEl?.contains(target)) return
+
+      setShowNavigator(false)
+    }
+
+    document.addEventListener('mousedown', handleOutside)
+    document.addEventListener('touchstart', handleOutside)
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutside)
+      document.removeEventListener('touchstart', handleOutside)
+    }
+  }, [showNavigator])
 
   const handleUserToggle = useCallback((id: string, expanded: boolean) => {
     setUserExpandedIds((prev) => {
@@ -419,6 +445,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                       {/* Navigator toggle for many rounds */}
                       {rounds.length > 3 && (
                         <Button
+                          ref={mapButtonRef}
                           variant={showNavigator ? 'default' : 'ghost'}
                           size="sm"
                           onClick={() => setShowNavigator(!showNavigator)}
@@ -523,7 +550,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
 
       {/* Navigation Sidebar - Only visible in rounds mode with many rounds */}
       {viewMode === 'rounds' && showNavigator && rounds.length > 3 && (
-        <div className="absolute right-4 top-16 z-20">
+        <div ref={navigatorRef} className="absolute right-4 top-16 z-20">
           <ConversationNavigator
             rounds={rounds.map(r => ({
               ...r,
