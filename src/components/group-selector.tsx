@@ -1,5 +1,5 @@
 'use client'
-import { ChevronDown, Globe, Users, Star, X, Loader2 } from 'lucide-react'
+import { ChevronDown, Globe, Users, UserCog, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -94,7 +94,7 @@ export function GroupSelector({
     const customGroup = groups.find(g => g.group_id === selectedGroup)
     if (customGroup) {
       return {
-        icon: <Star className="h-3.5 w-3.5" />,
+        icon: <Users className="h-3.5 w-3.5" />,
         label: customGroup.name,
         description: `${customGroup.agents.length} agents`,
       }
@@ -197,7 +197,7 @@ export function GroupSelector({
                     isOverride && selectedGroup === group.group_id && "bg-accent"
                   )}
                 >
-                  <Star className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                  <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
                   <div className="flex-1">
                     <div className="font-medium">{group.name}</div>
                     <div className="text-xs text-muted-foreground">
@@ -214,7 +214,7 @@ export function GroupSelector({
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onManageGroups} className="text-muted-foreground">
-                <Star className="h-4 w-4 mr-2" />
+                <UserCog className="h-4 w-4 mr-2" />
                 Manage groups...
               </DropdownMenuItem>
             </>
