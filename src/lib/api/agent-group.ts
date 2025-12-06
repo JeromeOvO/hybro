@@ -3,9 +3,9 @@
  */
 
 import { getApiUrl } from '../utils'
-import { apiPost } from '../api-client'
-import type { 
-  AgentGroupCreateRequest, 
+import { apiDelete, apiGet, apiPost, apiPut } from '../api-client'
+import type {
+  AgentGroupCreateRequest,
   AgentGroupUpdateRequest,
   AgentGroupResponse,
   AgentGroupListResponse
@@ -21,7 +21,7 @@ export async function createAgentGroup(
   getToken?: () => Promise<string | null>
 ): Promise<AgentGroupResponse> {
   return apiPost<AgentGroupResponse>(
-    `${API_BASE_URL}/create`,
+    `${API_BASE_URL}`,
     request,
     getToken
   )
@@ -31,12 +31,16 @@ export async function createAgentGroup(
  * List all agent groups for a user (including built-in groups)
  */
 export async function listAgentGroups(
-  owner_id: string,
+  owner_id?: string,
   getToken?: () => Promise<string | null>
 ): Promise<AgentGroupListResponse> {
-  return apiPost<AgentGroupListResponse>(
-    `${API_BASE_URL}/list`,
-    { owner_id },
+  const url = new URL(API_BASE_URL)
+  if (owner_id) {
+    url.searchParams.set('owner_id', owner_id)
+  }
+
+  return apiGet<AgentGroupListResponse>(
+    url.toString(),
     getToken
   )
 }
@@ -48,9 +52,8 @@ export async function getAgentGroup(
   group_id: string,
   getToken?: () => Promise<string | null>
 ): Promise<AgentGroupResponse> {
-  return apiPost<AgentGroupResponse>(
-    `${API_BASE_URL}/get`,
-    { group_id },
+  return apiGet<AgentGroupResponse>(
+    `${API_BASE_URL}/${group_id}`,
     getToken
   )
 }
@@ -62,9 +65,10 @@ export async function updateAgentGroup(
   request: AgentGroupUpdateRequest,
   getToken?: () => Promise<string | null>
 ): Promise<AgentGroupResponse> {
-  return apiPost<AgentGroupResponse>(
-    `${API_BASE_URL}/update`,
-    request,
+  const { group_id, ...updateFields } = request
+  return apiPut<AgentGroupResponse>(
+    `${API_BASE_URL}/${group_id}`,
+    updateFields,
     getToken
   )
 }
@@ -76,9 +80,8 @@ export async function deleteAgentGroup(
   group_id: string,
   getToken?: () => Promise<string | null>
 ): Promise<{ success: boolean; error?: string; status_code?: number }> {
-  return apiPost<{ success: boolean; error?: string; status_code?: number }>(
-    `${API_BASE_URL}/delete`,
-    { group_id },
+  return apiDelete<{ success: boolean; error?: string; status_code?: number }>(
+    `${API_BASE_URL}/${group_id}`,
     getToken
   )
 }
