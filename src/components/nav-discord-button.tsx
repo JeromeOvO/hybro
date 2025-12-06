@@ -29,7 +29,7 @@ export function DiscordButton() {
           size="lg"
           onClick={handleDiscordClick}
           tooltip="Join Community"
-          className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
         >
           <DiscordIcon className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
           <span className="group-data-[collapsible=icon]:hidden">

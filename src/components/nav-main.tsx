@@ -62,7 +62,7 @@ export function NavMain({
                     <SidebarMenuButton
                       tooltip={item.title}
                       size="lg"
-                      className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                      className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
                     >
                       {item.icon && (
                         <item.icon className={`${getIconClass(item.title)} group-data-[collapsible=icon]:mx-auto`} />

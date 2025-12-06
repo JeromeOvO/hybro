@@ -47,7 +47,7 @@ export function NavAgent({
               asChild
               size="lg"
               tooltip={item.name}
-              className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+              className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             >
               <Link href={item.url} prefetch={false} scroll={false}>
                 <item.icon
