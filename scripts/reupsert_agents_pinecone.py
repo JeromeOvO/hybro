@@ -1,5 +1,4 @@
 import asyncio
-from typing import List
 
 from common.utils.logger import get_logger
 from models.agent import Agent
@@ -17,25 +16,33 @@ async def reupsert_agents() -> None:
       From repo root: python scripts/reupsert_agents_pinecone.py
       Ensure env vars for Mongo/Pinecone/OpenAI are set (same as app runtime).
     """
-    agents: List[Agent] = await db_service.get_all_agents()
-    logger.info("Re-upserting %d agents into Pinecone", len(agents))
+    await db_service.mongo.connect()
+    if db_service.mongo.client is None:
+        raise ConnectionError(
+            "MongoDB connection failed. Check MONGODB_URL/MONGODB_DB_NAME env vars."
+        )
 
-    for agent in agents:
-        try:
-            embedding = await db_service.ai_service.get_embedding(
-                agent.agent_card.description
-            )
-            vector = {
-                "id": str(agent.agent_id),
-                "values": embedding,
-                "metadata": {"type": "a2a_agent", "agent_id": str(agent.agent_id)},
-            }
-            db_service.pinecone.upsert([vector])
-            logger.info("Upserted agent %s into Pinecone", agent.agent_id)
-        except Exception as e:  # pragma: no cover - operational script
-            logger.error("Failed to upsert agent %s: %s", agent.agent_id, e)
+    try:
+        agents: list[Agent] = await db_service.get_all_agents()
+        logger.info("Re-upserting %d agents into Pinecone", len(agents))
+
+        for agent in agents:
+            try:
+                embedding = await db_service.ai_service.get_embedding(
+                    agent.agent_card.description
+                )
+                vector = {
+                    "id": str(agent.agent_id),
+                    "values": embedding,
+                    "metadata": {"type": "a2a_agent", "agent_id": str(agent.agent_id)},
+                }
+                db_service.pinecone.upsert([vector])
+                logger.info("Upserted agent %s into Pinecone", agent.agent_id)
+            except Exception as e:  # pragma: no cover - operational script
+                logger.error("Failed to upsert agent %s: %s", agent.agent_id, e)
+    finally:
+        await db_service.mongo.close_database_connection()
 
 
 if __name__ == "__main__":
     asyncio.run(reupsert_agents())
-
