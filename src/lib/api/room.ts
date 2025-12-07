@@ -171,49 +171,6 @@ export async function createAndParseUserMessage(
   }
 }
 
-
-
-export async function createAndParseUserMessageWithDebate(
-  room_id: string,
-  user_input: string,
-  getToken?: () => Promise<string | null>,
-  user_id?: string,
-  user_name?: string
-): Promise<RoomCenterUserMessageResponse> {
-  const requestData: RoomCenterUserMessageRequest = {
-    room_id,
-    user_id: user_id || "",
-    user_name: user_name || "",
-    user_input,
-    message: {
-      room_id,
-      message_id: "",
-      message_type: "user",
-      related_message_id: null,
-      message_content: {
-        message_text: user_input
-      },
-      user_id: user_id || "",
-      extend_info: null
-    }
-  }
-
-  console.log('🚀 Sending createAndParseUserMessageWithDebate request:', JSON.stringify(requestData, null, 2))
-
-  try {
-    const result = await apiPost<RoomCenterUserMessageResponse>(
-      `${API_BASE_URL}/createAndParseUserMessageWithDebate`,
-      requestData,
-      getToken
-    )
-    console.log('✅ API Response:', result)
-    return result
-  } catch (error) {
-    console.error('❌ API Error:', error)
-    throw error
-  }
-}
-
 // Query room messages
 export async function inquiryRoomMessagesByRoomId(
   room_id: string,
