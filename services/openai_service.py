@@ -767,7 +767,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
     async def parse_user_message_by_llm(
         self,
         message_text: str,
-        room_agent_set: dict = None,
+        selected_agent_set: dict = None,
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
     ) -> dict:
@@ -781,7 +781,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
         Args:
             message_text: The user's message
-            room_agent_set: Dict of {agent_id: agent_name}
+            selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will assign agents from pool
                                If False (Curated mode), only assign if @mentioned
@@ -789,8 +789,8 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         Debate mode: Skip decomposition, generate linear chain
         """
 
-        # Canonical shape for room_agent_set is {agent_id: agent_name}
-        room_agent_set = room_agent_set or {}
+        # Canonical shape for selected_agent_set is {agent_id: agent_name}
+        selected_agent_set = selected_agent_set or {}
 
         # === DEBATE MODE ===
         if is_debate_mode:
@@ -801,30 +801,32 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             # Determine agents for debate
             if mentions:
                 # Use mentioned agents. We trust the ID from the mention and
-                # prefer the name stored in room_agent_set when available.
+                # prefer the name stored in selected_agent_set when available.
                 debate_agents = []
                 for agent_id, agent_name in mentions:
                     agent_id = agent_id.strip()
                     agent_name = agent_name.strip()
 
                     # Only consider agents that are actually in the room
-                    if agent_id in room_agent_set:
+                    if agent_id in selected_agent_set:
                         debate_agents.append(
                             {
                                 "agent_id": agent_id,
-                                "agent_name": room_agent_set.get(agent_id, agent_name),
+                                "agent_name": selected_agent_set.get(
+                                    agent_id, agent_name
+                                ),
                             }
                         )
 
                 message_type = "DEBATE_WITH_MENTIONS"
             else:
-                # Use all room agents from the room_agent_set mapping
+                # Use all agents from the selected_agent_set mapping
                 debate_agents = [
                     {
                         "agent_id": agent_id,
                         "agent_name": agent_name,
                     }
-                    for agent_id, agent_name in room_agent_set.items()
+                    for agent_id, agent_name in selected_agent_set.items()
                 ]
                 message_type = "DEBATE_NO_MENTIONS"
 
@@ -876,16 +878,16 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
         # === NORMAL MODE: Enhanced with decomposition decision ===
         agent_list = ""
-        if room_agent_set:
+        if selected_agent_set:
             agent_list = "\n".join(
                 [
                     f"- Agent ID: {aid}, Name: {aname}"
-                    for aid, aname in room_agent_set.items()
+                    for aid, aname in selected_agent_set.items()
                 ]
             )
 
         # Build different prompts based on auto_assign_agents mode
-        if auto_assign_agents and room_agent_set:
+        if auto_assign_agents and selected_agent_set:
             # AUTO MODE: Automatically assign best agents from pool
             system_prompt = f"""You are an expert task analyzer and decomposer for multi-agent collaboration systems.
                 Your job is to analyze user messages, decide if decomposition is needed, then assign the most appropriate agents.
@@ -1086,17 +1088,15 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             raise
 
     async def analyze_message_routing(
-        self,
-        message_text: str,
-        candidate_agents: list[Agent]
+        self, message_text: str, candidate_agents: list[Agent]
     ) -> dict:
         """
         Analyze a user message and decide the optimal routing strategy.
-        
+
         Args:
             message_text: The user's message to analyze
             candidate_agents: List of candidate agents from vector search
-            
+
         Returns:
             Dict with:
             - strategy: "single" | "parallel" | "sequential"
@@ -1108,14 +1108,18 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         # Build agent descriptions for the prompt
         agent_descriptions = []
         for agent in candidate_agents:
-            skills = ", ".join([s.name for s in agent.agent_card.skills]) if agent.agent_card.skills else "General assistance"
+            skills = (
+                ", ".join([s.name for s in agent.agent_card.skills])
+                if agent.agent_card.skills
+                else "General assistance"
+            )
             agent_descriptions.append(
                 f"- Agent ID: {agent.agent_id}\n"
                 f"  Name: {agent.agent_card.name}\n"
                 f"  Description: {agent.agent_card.description}\n"
                 f"  Skills: {skills}"
             )
-        
+
         agents_info = "\n".join(agent_descriptions)
 
         system_prompt = """You are an intelligent message router for a multi-agent AI system.
@@ -1208,14 +1212,14 @@ Decide which agent(s) should handle this message and why."""
                         first_agent.agent_id: "Fallback to best match due to analysis error"
                     },
                     "reasoning": f"Fallback selection due to error: {str(e)}",
-                    "needs_debate": False
+                    "needs_debate": False,
                 }
             return {
                 "strategy": "single",
                 "agent_ids": [],
                 "agent_reasons": {},
                 "reasoning": "No agents available",
-                "needs_debate": False
+                "needs_debate": False,
             }
 
 

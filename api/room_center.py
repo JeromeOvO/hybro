@@ -18,7 +18,9 @@ async def create_new_room(request: Request):
     room_owner_id = request_data.get("room_owner_id")
     room_owner_name = request_data.get("room_owner_name")
     room_agent_set = request_data.get("room_agent_set")
-    applied_from_group = request_data.get("applied_from_group")  # Group ID if agents from a group
+    applied_from_group = request_data.get(
+        "applied_from_group"
+    )  # Group ID if agents from a group
     extend_info = request_data.get("extend_info")
     room_center_request = RoomCenterRoomSettingRequest(
         room_name=room_name,
@@ -130,9 +132,13 @@ async def send_message(request: Request):
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
-    target_group = request_data.get("target_group", "all_agents")  # Group ID: "all_agents", "room_team", or custom group ID
+    target_group = request_data.get(
+        "target_group", "room_team"
+    )  # Group ID: "all_agents", "room_team", or custom group ID
     room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
-    room_center_response = await room_center.send_message_to_room(room_center_request, target_group)
+    room_center_response = await room_center.send_message_to_room(
+        room_center_request, target_group
+    )
     return room_center_response
 
 
@@ -143,28 +149,22 @@ async def suggest_agents(request: Request):
     Used for Auto mode to preview which agents will be selected.
     """
     from services.agent_selection_service import agent_selection_service
-    
+
     request_data = await request.json()
     message_text = request_data.get("message_text", "")
     top_k = request_data.get("top_k", 3)
-    
+
     if not message_text:
         return {
             "success": False,
             "error": "message_text is required",
-            "status_code": 400
+            "status_code": 400,
         }
-    
+
     try:
-        suggestion_result = await agent_selection_service.suggest_agents(message_text, top_k)
-        return {
-            "success": True,
-            **suggestion_result,
-            "status_code": 200
-        }
+        suggestion_result = await agent_selection_service.suggest_agents(
+            message_text, top_k
+        )
+        return {"success": True, **suggestion_result, "status_code": 200}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "status_code": 500
-        }
+        return {"success": False, "error": str(e), "status_code": 500}
