@@ -448,7 +448,7 @@ class RoomServices:
         self,
         message_text: str,
         target_agent_id: str,
-        target_agent_name: str,
+        target_agent_name: str,  # kept for signature compatibility
         all_mentions: list,
     ) -> str:
         """
@@ -921,12 +921,87 @@ class RoomServices:
     async def send_message_to_room(
         self, request: RoomCenterUserMessageRequest, target_group: str = "room_team"
     ) -> RoomCenterUserMessageResponse:
-        """Add and parse user message to room and send processing status to client
+        """Add and parse user message to room and send processing status to client."""
 
-        Args:
-            request: The user message request
-            target_group: Group ID for routing - "all_agents", "room_team", or custom group ID
-        """
+        validation_response = self._validate_send_message_request(request)
+        if validation_response:
+            return validation_response
+
+        user_message = request.message
+        if not await self._persist_user_message(user_message):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Failed to add message",
+                status_code=500,
+            )
+
+        await self._send_processing_status(request.room_id, user_message.message_id)
+
+        memory_response = await self._initialize_room_memory(request, user_message)
+        if memory_response:
+            return memory_response
+
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        if not room:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=True,
+                error="Room not found, but message saved",
+                status_code=200,
+            )
+
+        is_debate_mode = (
+            room.extend_info.get("debateMode", False) if room.extend_info else False
+        )
+
+        message_text = user_message.message_content.message_text
+        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
+
+        if mentions:
+            return await self._handle_mentions_flow(request, user_message, mentions)
+
+        selected_agent_set, auto_assign = await self._resolve_agent_selection(
+            room, message_text, target_group, is_debate_mode
+        )
+
+        if not selected_agent_set:
+            return await self._handle_no_agents_fallback(
+                request, user_message, target_group
+            )
+
+        parse_user_message_success = await self.parse_user_message(
+            request.room_id,
+            user_message.message_id,
+            message_text,
+            selected_agent_set,
+            is_debate_mode,
+            auto_assign_agents=auto_assign,
+            target_group=target_group,
+        )
+        if not parse_user_message_success:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=False,
+                error="Failed to parse user message",
+                status_code=500,
+            )
+
+        return RoomCenterUserMessageResponse(
+            message_id=user_message.message_id,
+            message=user_message,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
+    def _validate_send_message_request(
+        self, request: RoomCenterUserMessageRequest
+    ) -> RoomCenterUserMessageResponse | None:
+        """Validate required fields for send_message_to_room."""
         if request.room_id is None:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -944,28 +1019,26 @@ class RoomServices:
                 error="Message is required",
                 status_code=400,
             )
-        user_message = request.message
-        add_message_success = await self.database_service.add_room_user_message(
-            user_message
-        )
-        if not add_message_success:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
-            )
 
-        # send processing status via sse to client
+        return None
+
+    async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
+        """Persist user message to the database."""
+        return await self.database_service.add_room_user_message(user_message)
+
+    async def _send_processing_status(self, room_id: str, message_id: str) -> None:
+        """Notify client that processing has started."""
         logger.info(
-            f"RoomServices: Sending processing status to room {request.room_id} for message {user_message.message_id}"
+            "RoomServices: Sending processing status to room %s for message %s",
+            room_id,
+            message_id,
         )
-        await sse_manager.send_processing_status(
-            request.room_id, "processing", user_message.message_id
-        )
+        await sse_manager.send_processing_status(room_id, "processing", message_id)
 
-        # Initialize or update room memory
+    async def _initialize_room_memory(
+        self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
+    ) -> RoomCenterUserMessageResponse | None:
+        """Initialize or update room memory; return error response if failed."""
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
@@ -982,28 +1055,34 @@ class RoomServices:
                 error="Failed to initialize or update room memory",
                 status_code=500,
             )
+        return None
 
-        # Parse user message
+    async def _handle_mentions_flow(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        mentions: list[dict],
+    ) -> RoomCenterUserMessageResponse:
+        """Deterministically fan out to mentioned agents and finish."""
         room = await self.database_service.get_room_by_room_id(request.room_id)
-        is_debate_mode = (
-            room.extend_info.get("debateMode", False) if room.extend_info else False
+        mention_response = await self.parse_user_message_with_mentions(
+            room, user_message, mentions
         )
+        await self.sse_manager.send_processing_status(
+            request.room_id, "completed", user_message.message_id
+        )
+        return mention_response
 
-        # Extract @mentions from message using structured parser
-        message_text = user_message.message_content.message_text
-        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
-
-        # Determine agent set and auto_assign based on routing logic:
-        # 1. @mentions → use mentioned agents
-        # 2. target_group == "all_agents" → network search
-        # 3. target_group == "room_team" → use room.room_agent_set
-        # 4. custom group → fetch group's agents
-
-        selected_agent_set = {}
-        auto_assign = False
+    async def _resolve_agent_selection(
+        self,
+        room: Room,
+        message_text: str,
+        target_group: str,
+        is_debate_mode: bool,
+    ) -> tuple[dict, bool]:
+        """Resolve selected agents and auto-assign flag based on target_group."""
 
         async def select_agents_all_agents_mode() -> tuple[dict, bool]:
-            """Shared all-agents selection path to avoid duplication."""
             from services.agent_selection_service import agent_selection_service
 
             try:
@@ -1039,126 +1118,86 @@ class RoomServices:
                 )
                 return room.room_agent_set, True
 
-        if mentions:
-            # Mention-only path: deterministically fan out to mentioned agents and return
-            mention_response = await self.parse_user_message_with_mentions(
-                room, user_message, mentions
-            )
+        if target_group == "all_agents":
+            return await select_agents_all_agents_mode()
 
-            # Notify client that processing is complete
-            await self.sse_manager.send_processing_status(
-                request.room_id, "completed", user_message.message_id
-            )
-
-            return mention_response
-
-        elif target_group == "all_agents":
-            selected_agent_set, auto_assign = await select_agents_all_agents_mode()
-
-        elif target_group == "room_team":
+        if target_group == "room_team":
             if room.room_agent_set:
-                # Use room's agent set
-                selected_agent_set = room.room_agent_set
-                auto_assign = True
                 logger.info(
-                    f"Room Team mode: Using {len(selected_agent_set)} room agents"
+                    "Room Team mode: Using %s room agents", len(room.room_agent_set)
                 )
-            else:
-                # Fallback: no room team defined, reuse all_agents selection path
-                logger.warning(
-                    "Room Team mode: room has no agents, falling back to all_agents selection"
-                )
-                selected_agent_set, auto_assign = await select_agents_all_agents_mode()
+                return room.room_agent_set, True
 
-        else:
-            # Custom group - fetch from database
-
-            group = await self.database_service.get_agent_group_by_id(target_group)
-            if group and group.agents:
-                # Fetch agent details to get names
-                agents = []
-                for agent_id in group.agents:
-                    agent = await self.database_service.get_agent_by_agent_id(agent_id)
-                    if agent:
-                        agents.append(agent)
-
-                selected_agent_set = {
-                    agent.agent_id: agent.agent_card.name for agent in agents
-                }
-                auto_assign = True
-                logger.info(
-                    f"Custom group '{group.name}': Using {len(selected_agent_set)} agents"
-                )
-            else:
-                logger.warning(
-                    f"Custom group {target_group} not found, falling back to room agents"
-                )
-                selected_agent_set = room.room_agent_set
-                auto_assign = True
-
-        # Guard: if no agents resolved, send a system agent response and exit early
-        if not selected_agent_set:
             logger.warning(
-                "No room agents and none found via selection; sending system agent response"
+                "Room Team mode: room has no agents, falling back to all_agents selection"
             )
+            return await select_agents_all_agents_mode()
 
-            fallback_agent_message = self._generate_new_agent_message(
-                room_id=request.room_id,
-                related_message_id=user_message.message_id,
-                agent_id="system",
-                content=(
-                    "I couldn't find any agents for this room or via selection. "
-                    "Please choose agents or a group and try again."
-                ),
-                extend_info={
-                    "system_fallback": True,
-                    "reason": "no_agents_found",
-                    "target_group": target_group,
-                },
+        # Custom group
+        group = await self.database_service.get_agent_group_by_id(target_group)
+        if group and group.agents:
+            agents = []
+            for agent_id in group.agents:
+                agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                if agent:
+                    agents.append(agent)
+
+            selected_agent_set = {
+                agent.agent_id: agent.agent_card.name for agent in agents
+            }
+            logger.info(
+                "Custom group '%s': Using %s agents",
+                group.name,
+                len(selected_agent_set),
             )
+            return selected_agent_set, True
 
-            added = await self.database_service.add_room_agent_message(
-                fallback_agent_message
-            )
-            if not added:
-                return RoomCenterUserMessageResponse(
-                    message_id=user_message.message_id,
-                    message=user_message,
-                    success=False,
-                    error="Failed to add fallback agent message",
-                    status_code=500,
-                )
-
-            # Notify client that processing is complete (no agents found)
-            await self.sse_manager.send_processing_status(
-                request.room_id, "completed", user_message.message_id
-            )
-
-            return RoomCenterUserMessageResponse(
-                message_id=user_message.message_id,
-                message=user_message,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-
-        parse_user_message_success = await self.parse_user_message(
-            request.room_id,
-            user_message.message_id,
-            message_text,
-            selected_agent_set,
-            is_debate_mode,
-            auto_assign_agents=auto_assign,
-            target_group=target_group,
+        logger.warning(
+            "Custom group %s not found, falling back to room agents", target_group
         )
-        if not parse_user_message_success:
+        return room.room_agent_set, True
+
+    async def _handle_no_agents_fallback(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        target_group: str,
+    ) -> RoomCenterUserMessageResponse:
+        """Send a system message when no agents are available."""
+        logger.warning(
+            "No room agents and none found via selection; sending system agent response"
+        )
+
+        fallback_agent_message = self._generate_new_agent_message(
+            room_id=request.room_id,
+            related_message_id=user_message.message_id,
+            agent_id="system",
+            content=(
+                "I couldn't find any agents for this room or via selection. "
+                "Please choose agents or a group and try again."
+            ),
+            extend_info={
+                "system_fallback": True,
+                "reason": "no_agents_found",
+                "target_group": target_group,
+            },
+        )
+
+        added = await self.database_service.add_room_agent_message(
+            fallback_agent_message
+        )
+        if not added:
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
                 success=False,
-                error="Failed to parse user message",
+                error="Failed to add fallback agent message",
                 status_code=500,
             )
+
+        await self.sse_manager.send_processing_status(
+            request.room_id, "completed", user_message.message_id
+        )
 
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -1248,14 +1287,6 @@ class RoomServices:
             room, message, mentions
         )
         return mention_response
-
-        return RoomCenterUserMessageResponse(
-            message_id=message.message_id,
-            message=message,
-            success=True,
-            error=None,
-            status_code=200,
-        )
 
     async def parse_user_message_with_mentions(
         self,
