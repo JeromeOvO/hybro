@@ -57,11 +57,6 @@ class RoomCenter:
     ) -> RoomCenterUserMessageResponse:
         return self.room_services.create_and_parse_user_message(request)
 
-    def create_and_parse_user_message_with_debate(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        return self.room_services.create_and_parse_user_message_with_debate(request)
-
     def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest
     ) -> RoomCenterRoomMessageResponse:
