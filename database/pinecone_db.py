@@ -18,12 +18,17 @@ class PineconeDB:
         # Get the existing index
         self.index = pc.Index(self.index_name)
 
-    def query(self, vector, top_k=5):
-        """Query the vector database for similar vectors"""
+    def query(self, vector, top_k=5, filter=None):
+        """Query the vector database for similar vectors with optional metadata filter"""
         if not self.index:
             self.connect()
 
-        results = self.index.query(vector=vector, top_k=top_k, include_metadata=True)
+        results = self.index.query(
+            vector=vector,
+            top_k=top_k,
+            include_metadata=True,
+            filter=filter,
+        )
 
         return results
 

@@ -2004,11 +2004,48 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return True
 
     async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
-        """Assign an agent to the message by inferring from content.
+        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided."""
+        # Gather any scoped agent list from extend_info (mentions/room) and merge with group agents for future group mentions
+        allowed_agent_ids: list[str] = []
+        target_group = None
+        if isinstance(current_message.extend_info, dict):
+            allowed_agent_ids = (
+                current_message.extend_info.get("allowed_agent_ids") or []
+            )
+            target_group = current_message.extend_info.get("target_group")
 
-        Returns:
-            Agent object if successfully assigned, None if failed
-        """
+        # Normalize target_group into a list (support multiple groups)
+        target_groups: list[str] = []
+        if isinstance(target_group, (list, tuple)):
+            target_groups = [str(g) for g in target_group]
+        elif isinstance(target_group, str) and target_group:
+            target_groups = [target_group]
+
+        # If target groups exist, merge their agents into the allowed list
+        merged_ids = set(str(aid) for aid in allowed_agent_ids)
+        for tg in target_groups:
+            if tg in ["all_agents", "room_team"]:
+                continue
+            try:
+                group = await self.database_service.get_agent_group_by_id(tg)
+                if group and group.agents:
+                    merged_ids |= set(str(aid) for aid in group.agents)
+                    logger.info(
+                        "OrchestrationCenter: Merged %d agents from group %s (total allowed=%d) for message %s",
+                        len(group.agents),
+                        tg,
+                        len(merged_ids),
+                        current_message.message_id,
+                    )
+            except Exception as e:
+                logger.error(
+                    "OrchestrationCenter: Failed to load agents for group %s: %s",
+                    tg,
+                    e,
+                )
+
+        allowed_agent_ids = list(merged_ids)
+
         # Log parts data
         parts = current_message.message_content.message_task.history[0].parts
         content = "".join(
@@ -2017,21 +2054,28 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
 
         logger.info(
-            "OrchestrationCenter: Inferring agent for message %s from content (length: %d chars)",
+            "OrchestrationCenter: Inferring agent for message %s from content (length: %d chars) scoped_ids=%d target_group=%s",
             current_message.message_id,
             len(content),
+            len(allowed_agent_ids),
+            target_group,
         )
 
         # Infer agent from content
         user_input = (
             current_message.message_content.message_task.history[0].parts[0].root.text
         )
-        matched_agents = await self.database_service.query_similar_agents(user_input)
+
+        matched_agents = await self.database_service.query_similar_agents(
+            user_input,
+            allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
+        )
 
         if len(matched_agents) == 0:
             logger.error(
-                "OrchestrationCenter: No similar agent found for message %s",
+                "OrchestrationCenter: No similar agent found for message %s (allowed_ids=%d)",
                 current_message.message_id,
+                len(allowed_agent_ids),
             )
             return None
 
