@@ -41,6 +41,7 @@ from services.database_service import db_service
 from services.debate_service import debate_service
 from services.memory_service import chat_memory_service, room_memory_service
 from services.openai_service import openai_service
+from services.room_coordinator_service import room_coordinator_service
 from services.room_services import room_services
 from services.sse_services import sse_manager
 from services.task_service import task_service
@@ -123,6 +124,7 @@ class OrchestrationCenter:
         self.database_service = db_service  # Use singleton
         self.debate_service = debate_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
+        self.room_coordinator_service = room_coordinator_service  # Use singleton
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1889,6 +1891,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 error="Failed to process agent messages",
                 status_code=500,
             )
+
+        # Let the local room coordinator perform any post-processing logic
+        # such as generating debate summaries. Coordination failures should
+        # not break the main message processing flow.
+        await self.room_coordinator_service.on_room_user_message_completed(
+            room_id, room_user_message_id
+        )
 
         # Send completion status
         await self.sse_manager.send_processing_status(

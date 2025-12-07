@@ -146,6 +146,7 @@ class RoomServices:
                 room_owner_name=room_create_request.room_owner_name,
                 room_agent_set=normalized_agent_set,
                 room_created_at=datetime.now(),
+                applied_from_group=room_create_request.applied_from_group,
                 extend_info=room_create_request.extend_info or None,
             )
 
@@ -873,13 +874,22 @@ class RoomServices:
         message_text: str,
         room_agent_set: dict,
         is_debate_mode: bool = False,
+        auto_assign_agents: bool = False,
     ) -> bool:
         """
         Parse user message
+        
+        Args:
+            room_id: The room ID
+            user_message_id: The user message ID
+            message_text: The message text to parse
+            room_agent_set: Dict of {agent_id: agent_name}
+            is_debate_mode: Whether to use debate mode
+            auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
         """
         # Parse user message
         parsed_result = await self.openai_service.parse_user_message_by_llm(
-            message_text, room_agent_set, is_debate_mode
+            message_text, room_agent_set, is_debate_mode, auto_assign_agents
         )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -895,9 +905,14 @@ class RoomServices:
         return True if agent_messages else False
 
     async def send_message_to_room(
-        self, request: RoomCenterUserMessageRequest
+        self, request: RoomCenterUserMessageRequest, target_group: str = "all_agents"
     ) -> RoomCenterUserMessageResponse:
-        """Add and parese user message to room and send processing status to client"""
+        """Add and parse user message to room and send processing status to client
+        
+        Args:
+            request: The user message request
+            target_group: Group ID for routing - "all_agents", "room_team", or custom group ID
+        """
         if request.room_id is None:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -959,12 +974,96 @@ class RoomServices:
         is_debate_mode = (
             room.extend_info.get("debateMode", False) if room.extend_info else False
         )
+        
+        # Extract @mentions from message
+        import re
+        message_text = user_message.message_content.message_text
+        mention_pattern = r"<@([^|]+)\|([^>]+)>"
+        mentions = re.findall(mention_pattern, message_text)
+        
+        # Determine agent set and auto_assign based on routing logic:
+        # 1. @mentions → use mentioned agents
+        # 2. target_group == "all_agents" → network search
+        # 3. target_group == "room_team" → use room.room_agent_set
+        # 4. custom group → fetch group's agents
+        
+        room_agent_set = {}
+        auto_assign = False
+        
+        if mentions:
+            # Route to explicitly mentioned agents
+            room_agent_set = {
+                agent_id.strip(): agent_name.strip()
+                for agent_id, agent_name in mentions
+            }
+            auto_assign = False
+            logger.info(f"Routing to {len(mentions)} mentioned agents")
+            
+        elif target_group == "all_agents":
+            # Network search - use agent selection service
+            from services.agent_selection_service import agent_selection_service
+            
+            try:
+                selection_result = await agent_selection_service.select_agents_for_message(
+                    message_text
+                )
+                
+                if selection_result.agents:
+                    room_agent_set = {
+                        agent.agent_id: agent.agent_name
+                        for agent in selection_result.agents
+                    }
+                    auto_assign = True
+                    logger.info(
+                        f"All Agents mode: Selected {len(selection_result.agents)} agents "
+                        f"with strategy={selection_result.strategy.value}"
+                    )
+                    
+                    if selection_result.needs_debate and not is_debate_mode:
+                        logger.info("All Agents mode: Debate mode suggested")
+                else:
+                    logger.warning("All Agents mode: No agents found, falling back to room agents")
+                    room_agent_set = room.room_agent_set
+            except Exception as e:
+                logger.error(f"All Agents mode selection failed: {e}, using room agents")
+                room_agent_set = room.room_agent_set
+                
+        elif target_group == "room_team":
+            # Use room's agent set
+            room_agent_set = room.room_agent_set
+            auto_assign = False
+            logger.info(f"Room Team mode: Using {len(room_agent_set)} room agents")
+            
+        else:
+            # Custom group - fetch from database
+            from models.agent_group import AgentGroup
+            
+            group = await self.database_service.get_agent_group_by_id(target_group)
+            if group and group.agents:
+                # Fetch agent details to get names
+                agents = []
+                for agent_id in group.agents:
+                    agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                    if agent:
+                        agents.append(agent)
+                
+                room_agent_set = {
+                    agent.agent_id: agent.agent_card.name
+                    for agent in agents
+                }
+                auto_assign = False
+                logger.info(f"Custom group '{group.name}': Using {len(room_agent_set)} agents")
+            else:
+                logger.warning(f"Custom group {target_group} not found, falling back to room agents")
+                room_agent_set = room.room_agent_set
+        
         parse_user_message_success = await self.parse_user_message(
             request.room_id,
             user_message.message_id,
-            user_message.message_content.message_text,
-            room.room_agent_set,
+            message_text,
+            room_agent_set,
             is_debate_mode,
+            auto_assign_agents=auto_assign,
         )
         if not parse_user_message_success:
             return RoomCenterUserMessageResponse(

@@ -769,6 +769,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         message_text: str,
         room_agent_set: dict = None,
         is_debate_mode: bool = False,
+        auto_assign_agents: bool = False,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
@@ -777,6 +778,13 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         1. Analyze if task needs decomposition
         2. If complex, break into logical steps
         3. Assign agents based on mentions or task nature
+
+        Args:
+            message_text: The user's message
+            room_agent_set: Dict of {agent_id: agent_name}
+            is_debate_mode: Whether to use debate mode
+            auto_assign_agents: If True (Auto mode), LLM will assign agents from pool
+                               If False (Curated mode), only assign if @mentioned
 
         Debate mode: Skip decomposition, generate linear chain
         """
@@ -876,7 +884,70 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 ]
             )
 
-        system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+        # Build different prompts based on auto_assign_agents mode
+        if auto_assign_agents and room_agent_set:
+            # AUTO MODE: Automatically assign best agents from pool
+            system_prompt = f"""You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+                Your job is to analyze user messages, decide if decomposition is needed, then assign the most appropriate agents.
+
+                AVAILABLE AGENTS:
+                {agent_list}
+
+                PROCESS:
+                1. ANALYZE TASK COMPLEXITY
+                - Simple task: Single action, can be completed in one step
+                - Complex task: Multiple logical steps, dependencies between actions
+                
+                2. DECIDE DECOMPOSITION
+                - If simple: Keep as single step
+                - If complex: Break into logical sub-tasks with clear dependencies
+                
+                3. ASSIGN AGENTS (AUTO MODE)
+                - You MUST assign an agent from the available pool to EACH step
+                - Choose the most appropriate agent based on their name and the task content
+                - If only one agent is available, assign that agent to all steps
+                - Match agent capabilities to task requirements
+                - If task mentions a specific agent with <@...>, prioritize that agent for relevant steps
+
+                CRITICAL RULES:
+                - EVERY step MUST have an agent_id and agent_name assigned from the available agents
+                - Do NOT leave agent_id as null - always pick the best matching agent
+                - If unsure, assign the first available agent
+                - If "needs_decomposition" is false, there MUST be exactly one task step
+
+                OUTPUT STRUCTURE (strict JSON):
+                {{
+                "message_type": "AUTO_ASSIGNED" | "SINGLE_MENTION" | "MULTIPLE_MENTIONS",
+                "original_text": "original message",
+                "needs_decomposition": true | false,
+                "decomposition_reason": "why decomposed or not" | null,
+                "task_steps": [
+                    {{
+                    "step_id": "step_1",
+                    "agent_id": "uuid from available agents",
+                    "agent_name": "name from available agents",
+                    "task_content": "what to do (clean text, remove all <@...> mentions)",
+                    "dependencies": ["step_id", ...]
+                    }}
+                ]
+                }}
+
+                DECOMPOSITION GUIDELINES:
+                - Break by logical phases (prepare → execute → review)
+                - Break by functional areas (data → analysis → visualization)
+                - Break by sequential dependencies (A must complete before B)
+                - Keep steps granular but not too fine (3-7 steps optimal)
+                - Each step should be independently executable
+
+                DEPENDENCY RULES:
+                - Empty [] = no dependencies, can start immediately
+                - ["step_1"] = depends on step_1 completing
+                - ["step_1", "step_2"] = depends on both (usually use last one)
+
+                Output valid JSON only, no explanation."""
+        else:
+            # CURATED MODE: Only assign if explicitly mentioned
+            system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
                 Your job is to analyze user messages, decide if decomposition is needed, then assign agents.
 
                 PROCESS:
@@ -1013,6 +1084,139 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         except Exception as e:
             logger.error(f"LLM parsing failed: {e}")
             raise
+
+    async def analyze_message_routing(
+        self,
+        message_text: str,
+        candidate_agents: list[Agent]
+    ) -> dict:
+        """
+        Analyze a user message and decide the optimal routing strategy.
+        
+        Args:
+            message_text: The user's message to analyze
+            candidate_agents: List of candidate agents from vector search
+            
+        Returns:
+            Dict with:
+            - strategy: "single" | "parallel" | "sequential"
+            - agent_ids: List of selected agent IDs
+            - agent_reasons: Dict mapping agent_id to reason for selection
+            - reasoning: Overall explanation of the routing decision
+            - needs_debate: Whether debate mode would benefit this conversation
+        """
+        # Build agent descriptions for the prompt
+        agent_descriptions = []
+        for agent in candidate_agents:
+            skills = ", ".join([s.name for s in agent.agent_card.skills]) if agent.agent_card.skills else "General assistance"
+            agent_descriptions.append(
+                f"- Agent ID: {agent.agent_id}\n"
+                f"  Name: {agent.agent_card.name}\n"
+                f"  Description: {agent.agent_card.description}\n"
+                f"  Skills: {skills}"
+            )
+        
+        agents_info = "\n".join(agent_descriptions)
+
+        system_prompt = """You are an intelligent message router for a multi-agent AI system.
+Your job is to analyze user messages and decide the optimal routing strategy.
+
+ROUTING STRATEGIES:
+1. "single" - Route to ONE best agent
+   Use when: Simple question, single domain, straightforward task
+   Example: "What's the weather?" -> Weather agent only
+
+2. "parallel" - Route to 2-3 agents simultaneously
+   Use when: Question benefits from multiple perspectives, comparison needed, or touches multiple domains
+   Example: "Compare Python and Rust for web development" -> Python expert AND Rust expert
+   Example: "Help me plan a healthy meal that's also budget-friendly" -> Nutrition agent AND Finance agent
+
+3. "sequential" - Route to agents in a specific order (dependency chain)
+   Use when: Task has clear steps where one agent's output feeds into another
+   Example: "Research this topic, then write a blog post about it" -> Researcher -> Writer
+
+DECISION FACTORS:
+- Task complexity (simple vs multi-faceted)
+- Domain coverage (single domain vs cross-domain)
+- Need for multiple perspectives
+- Dependency between subtasks
+
+OUTPUT FORMAT (strict JSON):
+{
+    "strategy": "single" | "parallel" | "sequential",
+    "agent_ids": ["agent-id-1", "agent-id-2"],
+    "agent_reasons": {
+        "agent-id-1": "Why this agent was selected",
+        "agent-id-2": "Why this agent was selected"
+    },
+    "reasoning": "Brief explanation of the routing decision",
+    "needs_debate": true | false
+}
+
+Set needs_debate=true if:
+- Question is subjective or opinion-based
+- Multiple valid approaches exist
+- User might benefit from seeing different perspectives discussed
+
+Output valid JSON only."""
+
+        user_prompt = f"""Analyze this message and decide the routing strategy:
+
+USER MESSAGE:
+{message_text}
+
+AVAILABLE AGENTS:
+{agents_info}
+
+Decide which agent(s) should handle this message and why."""
+
+        try:
+            messages = [
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=user_prompt),
+            ]
+
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from LLM")
+
+            result = json.loads(content)
+
+            logger.info(
+                f"Routing analysis: strategy={result.get('strategy')}, "
+                f"agents={len(result.get('agent_ids', []))}, "
+                f"debate={result.get('needs_debate')}"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Routing analysis failed: {e}")
+            # Return safe default
+            if candidate_agents:
+                first_agent = candidate_agents[0]
+                return {
+                    "strategy": "single",
+                    "agent_ids": [first_agent.agent_id],
+                    "agent_reasons": {
+                        first_agent.agent_id: "Fallback to best match due to analysis error"
+                    },
+                    "reasoning": f"Fallback selection due to error: {str(e)}",
+                    "needs_debate": False
+                }
+            return {
+                "strategy": "single",
+                "agent_ids": [],
+                "agent_reasons": {},
+                "reasoning": "No agents available",
+                "needs_debate": False
+            }
 
 
 openai_service = OpenAIService()
