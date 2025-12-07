@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useImperativeHandle, forwardRef, useEffect } from "react"
+import React, { useState, useImperativeHandle, forwardRef, useEffect, useCallback } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -22,12 +22,21 @@ import { AgentSelector } from "@/components/agent-selector"
 import { MessageSquareMore } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
-const formSchema = z.object({
+// Schema with required room name (for editing existing rooms)
+const formSchemaRequired = z.object({
   roomName: z.string().min(2, {
     message: "Room name must be at least 2 characters.",
   }).max(50, {
     message: "Room name must be less than 50 characters.",
   }),
+  debateMode: z.boolean(),
+})
+
+// Schema with optional room name (for pre-configuration)
+const formSchemaOptional = z.object({
+  roomName: z.string().max(50, {
+    message: "Room name must be less than 50 characters.",
+  }).optional().or(z.literal('')),
   debateMode: z.boolean(),
 })
 
@@ -46,6 +55,8 @@ interface RoomSettingFormProps {
   isEditing?: boolean
   onRetryLoadAgents?: () => void
   initialData?: RoomFormData | null
+  requireRoomName?: boolean
+  submitButtonText?: string
 }
 
 export interface RoomSettingFormHandle {
@@ -60,11 +71,17 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   agentsError = null,
   isEditing = false,
   onRetryLoadAgents,
-  initialData = null
+  initialData = null,
+  requireRoomName = true,
+  submitButtonText,
 }, ref) => {
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
+  
+  // Use appropriate schema based on requireRoomName prop
+  const formSchema = requireRoomName ? formSchemaRequired : formSchemaOptional
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  // Use optional schema as the form type to cover both required and optional cases
+  const form = useForm<z.infer<typeof formSchemaOptional>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
@@ -118,20 +135,23 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     })
   }
 
-  function handleSubmit(values: z.infer<typeof formSchema>) {
-    onSubmit(values.roomName, selectedAgents, values.debateMode)
+  function handleSubmit(values: z.infer<typeof formSchemaOptional>) {
+    // roomName can be optional when requireRoomName is false; fall back to empty string
+    const roomName = values.roomName ?? ""
+    const debateMode = values.debateMode ?? false
+    onSubmit(roomName, selectedAgents, debateMode)
   }
 
   // Reset form function
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     form.reset()
     setSelectedAgents({})
-  }
+  }, [form])
 
   // Expose reset function to parent
   useImperativeHandle(ref, () => ({
     reset: resetForm
-  }), [form])
+  }), [resetForm])
 
   return (
     <Form {...form}>
@@ -142,10 +162,13 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
           name="roomName"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Room Name</FormLabel>
+              <FormLabel>
+                Room Name
+                {!requireRoomName && <span className="text-muted-foreground font-normal ml-1">(optional)</span>}
+              </FormLabel>
               <FormControl>
                 <Input 
-                  placeholder="Enter your room name" 
+                  placeholder={requireRoomName ? "Enter your room name" : "Auto-generated from first message if empty"} 
                   {...field} 
                 />
               </FormControl>
@@ -199,25 +222,17 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
         <Separator />
 
         {/* Submit Button */}
-        {!isEditing ? (
-          <Button 
-            type="submit" 
-            variant="outline"
-            className="w-full"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Creating Room..." : "Create Room"}
-          </Button>
-        ) : (
-          <Button 
-            type="submit" 
-            variant="outline"
-            className="w-full"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Updating Room..." : "Update Room"}
-          </Button>
-        )}
+        <Button 
+          type="submit" 
+          variant="outline"
+          className="w-full"
+          disabled={isSubmitting}
+        >
+          {isSubmitting 
+            ? (submitButtonText ? `${submitButtonText}...` : (isEditing ? "Updating Room..." : "Creating Room..."))
+            : (submitButtonText || (isEditing ? "Update Room" : "Create Room"))
+          }
+        </Button>
       </form>
     </Form>
   )

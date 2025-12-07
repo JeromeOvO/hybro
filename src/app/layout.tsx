@@ -6,6 +6,7 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ClerkProvider } from "@clerk/nextjs"
 import { ClerkAuthProvider } from "@/components/providers/ClerkAuthProvider"
+import { QueryProvider } from "@/components/providers/query-provider"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -41,7 +42,9 @@ export default function RootLayout({
         <ClerkProvider>
           <ClerkAuthProvider>
             <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-              {children}
+              <QueryProvider>
+                {children}
+              </QueryProvider>
             </ThemeProvider>
           </ClerkAuthProvider>
         </ClerkProvider>

@@ -5,7 +5,7 @@ import { useParams } from "next/navigation"
 import { useUser, useClerk } from "@clerk/nextjs"
 import { ChatSession } from "@/components/chat-session"
 import { ChatInput } from "@/components/chat-input"
-import { toast } from "sonner"
+import { banner } from "@/components/ui/banner"
 import { getBaseTasksBySessionId, sendMessage, getMetaTasksByParentId } from "@/lib/api"
 import { useTaskPolling } from "@/hooks/useTaskPolling"
 import type { 
@@ -109,7 +109,7 @@ export default function ChatSessionPage() {
     // Stop polling
     stopPolling(baseTask.task_id)
     
-    toast.success('Workflow completed successfully!')
+    banner.success('Workflow completed successfully!')
   }, [stopPolling])
 
   // Convert BaseTask to MessageData, including thinking messages and workflow messages
@@ -165,7 +165,7 @@ export default function ChatSessionPage() {
   // Handle polling errors
   const handleTaskError = useCallback((error: string) => {
     console.error('Polling error:', error)
-    toast.error(error)
+    banner.error(error)
   }, [])
 
   // Load session messages
@@ -195,7 +195,7 @@ export default function ChatSessionPage() {
       })
     } catch (error) {
       console.error('Error loading session messages:', error)
-      toast.error('Failed to load session messages')
+      banner.error('Failed to load session messages')
     } finally {
       setIsLoading(false)
     }
@@ -233,7 +233,7 @@ export default function ChatSessionPage() {
       
     } catch (error) {
       console.error('Error sending message:', error)
-      toast.error('Failed to send message')
+      banner.error('Failed to send message')
     } finally {
       setIsSubmitting(false)
     }

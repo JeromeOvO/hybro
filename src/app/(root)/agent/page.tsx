@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { toast } from "sonner"
+import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
 
@@ -33,10 +33,10 @@ export default function AgentPage() {
       if (response.success && response.agents) {
         setAgents(response.agents)
       } else {
-        toast.error(response.error || 'Failed to load agents')
+        banner.error(response.error || 'Failed to load agents')
       }
     } catch {
-      toast.error('Failed to load agents')
+      banner.error('Failed to load agents')
     } finally {
       setLoading(false)
     }

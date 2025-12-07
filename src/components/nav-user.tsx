@@ -20,7 +20,11 @@
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton size="lg" disabled>
+          <SidebarMenuButton
+            size="lg"
+            disabled
+            className="group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+          >
             <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
             <div className="grid flex-1 text-left text-sm leading-tight">
               <div className="h-4 w-20 bg-muted animate-pulse rounded" />
@@ -38,7 +42,7 @@
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+            className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
@@ -86,7 +90,7 @@
     <SidebarMenu>
       <SidebarMenuItem>
       <div
-        className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+        className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
         title={userEmail ? `${userName} (${userEmail})` : userName}
       >
           <UserButton

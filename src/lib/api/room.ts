@@ -22,13 +22,15 @@ export async function createNewRoom(
   room_owner_name: string,
   getToken?: () => Promise<string | null>,
   room_agent_set?: { [k: string]: string },
-  extend_info?: { [k: string]: unknown } | null
+  extend_info?: { [k: string]: unknown } | null,
+  applied_from_group?: string  // Group ID if agents applied from a group
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_name,
     room_owner_id,
     room_owner_name,
     room_agent_set,
+    applied_from_group,
     extend_info
   }
 
@@ -42,7 +44,8 @@ export async function createNewRoom(
 // Inquiry room setting
 export async function inquiryRoomSetting(
   room_id: string,
-  getToken?: () => Promise<string | null>
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id
@@ -51,7 +54,8 @@ export async function inquiryRoomSetting(
   return apiPost<RoomCenterRoomSettingResponse>(
     `${API_BASE_URL}/inquiryRoomSetting`,
     requestData,
-    getToken
+    getToken,
+    signal
   )
 }
 
@@ -213,7 +217,8 @@ export async function createAndParseUserMessageWithDebate(
 // Query room messages
 export async function inquiryRoomMessagesByRoomId(
   room_id: string,
-  getToken?: () => Promise<string | null>
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal
 ): Promise<RoomCenterRoomMessageResponse> {
   const requestData: RoomCenterRoomMessageRequest = {
     room_id
@@ -222,7 +227,8 @@ export async function inquiryRoomMessagesByRoomId(
   return apiPost<RoomCenterRoomMessageResponse>(
     `${API_BASE_URL}/inquiryRoomMessagesByRoomId`,
     requestData,
-    getToken
+    getToken,
+    signal
   )
 }
 
@@ -232,13 +238,15 @@ export async function SendMessage(
   user_input: string,
   getToken?: () => Promise<string | null>,
   user_id?: string,
-  user_name?: string
+  user_name?: string,
+  target_group: string = "all_agents"  // Group ID: "all_agents", "room_team", or custom group ID
 ): Promise<RoomCenterUserMessageResponse> {
-  const requestData: RoomCenterUserMessageRequest = {
+  const requestData = {
     room_id,
     user_id: user_id || "",
     user_name: user_name || "",
     user_input,
+    target_group,
     message: {
       room_id,
       message_id: "",
@@ -266,4 +274,32 @@ export async function SendMessage(
     console.error('❌ API Error:', error)
     throw error
   }
+}
+
+// Agent suggestion response type
+export interface SuggestAgentsResponse {
+  success: boolean
+  routing_strategy?: "single" | "parallel" | "sequential"
+  reasoning?: string
+  needs_debate?: boolean
+  suggested_agents?: Array<{
+    agent_id: string
+    name: string
+    reason: string
+  }>
+  error?: string
+  status_code?: number
+}
+
+// Suggest agents for a message (preview for "All Agents" group)
+export async function suggestAgents(
+  message_text: string,
+  top_k: number = 3,
+  getToken?: () => Promise<string | null>
+): Promise<SuggestAgentsResponse> {
+  return apiPost<SuggestAgentsResponse>(
+    `${API_BASE_URL}/suggestAgents`,
+    { message_text, top_k },
+    getToken
+  )
 }

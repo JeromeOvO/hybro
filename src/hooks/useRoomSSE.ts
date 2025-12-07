@@ -84,6 +84,8 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   // Auto connect/disconnect based on enabled and roomId
   useEffect(() => {
     if (enabled && roomId) {
+      // Ensure previous connection is closed before creating a new one
+      disconnect()
       connect()
     } else {
       disconnect()
@@ -93,7 +95,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     return () => {
       disconnect()
     }
-  }, [roomId, enabled]) // Note: not including connect/disconnect to avoid infinite loops
+  }, [roomId, enabled, connect, disconnect])
 
   // Cleanup on unmount
   useEffect(() => {

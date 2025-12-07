@@ -9,17 +9,16 @@ import {
   queryBaseTask
 } from '@/lib/api'
 import { getAllAgents } from '@/lib/api'
-import { toast } from 'sonner'
+import { banner } from "@/components/ui/banner"
 import type { MetaTask, Agent, OrchestrationCenterResponse, AgentCenterResponse, BaseTask } from '@/lib/types'
 import type { WorkflowStage } from '@/components/workflow-message'
 
 interface UseWorkflowProps {
   baseTaskId: string
   onWorkflowComplete?: (baseTask: BaseTask) => void
-  getToken?: () => Promise<string | null>
 }
 
-export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWorkflowProps) {
+export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps) {
   const [metaTasks, setMetaTasks] = useState<MetaTask[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [stage, setStage] = useState<WorkflowStage>('decomposed')
@@ -47,7 +46,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
       }
     } catch (error) {
       console.error('Error loading agents:', error)
-      toast.error('Failed to load agents')
+      banner.error('Failed to load agents')
     }
   }, [])
 
@@ -87,13 +86,13 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
         // Load meta tasks after decomposition
         await loadMetaTasks()
         setStage('decomposed')
-        toast.success('Task decomposed successfully')
+        banner.success('Task decomposed successfully')
       } else {
         throw new Error(response.error || 'Failed to decompose task')
       }
     } catch (error) {
       console.error('Error decomposing task:', error)
-      toast.error('Failed to decompose task')
+      banner.error('Failed to decompose task')
     } finally {
       setIsLoading(false)
     }
@@ -111,13 +110,13 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
         // Refresh meta tasks to get assigned agents
         await loadMetaTasks()
         setStage('agents_assigned')
-        toast.success('Agents assigned successfully')
+        banner.success('Agents assigned successfully')
       } else {
         throw new Error(response.error || 'Failed to assign agents')
       }
     } catch (error) {
       console.error('Error assigning agents:', error)
-      toast.error('Failed to assign agents')
+      banner.error('Failed to assign agents')
     } finally {
       setIsLoading(false)
     }
@@ -133,7 +132,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
           
           if (response.success) {
             setStage('completed')
-            toast.success('Workflow completed successfully')
+            banner.success('Workflow completed successfully')
             
             // Get updated baseTask
             const baseTaskResponse = await queryBaseTask(baseTaskId)
@@ -147,7 +146,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
           }
         } catch (error) {
           console.error('Error summarizing results:', error)
-          toast.error('Failed to summarize results')
+          banner.error('Failed to summarize results')
         } finally {
           setIsLoading(false)
         }
@@ -164,7 +163,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
       if (response.success) {
         // First set stage to running to ensure UI shows execution state
         setStage('running')
-        toast.success('Workflow finished running, summarizing…')
+        banner.success('Workflow finished running, summarizing…')
 
         // ★ Key modification: call summarize directly instead of polling
         await handleSummarizeResults()
@@ -186,7 +185,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
       }
     } catch (error) {
       console.error('Error running workflow:', error)
-      toast.error('Failed to start workflow')
+      banner.error('Failed to start workflow')
     } finally {
       setIsLoading(false)
     }
@@ -240,13 +239,13 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
       if (response.success) {
         // Refresh meta tasks to get updated assignment
         await loadMetaTasks()
-        toast.success('Meta task retried successfully')
+        banner.success('Meta task retried successfully')
       } else {
         throw new Error(response.error || 'Failed to retry meta task')
       }
     } catch (error) {
       console.error('Error retrying meta task:', error)
-      toast.error('Failed to retry meta task')
+      banner.error('Failed to retry meta task')
     } finally {
       setIsLoading(false)
     }
@@ -297,7 +296,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete, getToken }: UseWor
     }
 
     initializeWorkflow()
-  }, [baseTaskId])
+  }, [baseTaskId, handleDecomposeTask, loadAgents, loadMetaTasks])
 
   // Reset initialization state when baseTaskId changes
   useEffect(() => {

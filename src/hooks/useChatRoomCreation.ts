@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { createNewRoom } from '@/lib/api/room'
+import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
 import { getAllAgents } from '@/lib/api/agent'
-import { toast } from 'sonner'
+import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 
 interface UseChatRoomCreationProps {
@@ -11,76 +11,106 @@ interface UseChatRoomCreationProps {
   getToken?: () => Promise<string | null>
 }
 
+interface CreateRoomOptions {
+  selectedAgents?: Agent[]
+  appliedFromGroup?: string
+  debateMode?: boolean
+  roomName?: string
+  targetGroup?: string  // Group to use for the first message
+}
+
 export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [loadingAgents, setLoadingAgents] = useState(false)
+  const [suggestingAgents, setSuggestingAgents] = useState(false)
   const [defaultAgents, setDefaultAgents] = useState<Agent[]>([])
 
-  // Load default agents (you can configure which agents to use by default)
+  // Load all available agents
   const loadDefaultAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
       const response = await getAllAgents()
       
       if (response.success && response.agents && response.agents.length > 0) {
-        // Take first 2 agents as default, or configure as needed
-        const selectedAgents = response.agents.slice(0, 2)
-        setDefaultAgents(selectedAgents)
-        return selectedAgents
+        setDefaultAgents(response.agents)
+        return response.agents
       } else {
         throw new Error(response.error || 'No agents available')
       }
     } catch (error) {
-      console.error('Failed to load default agents:', error)
-      toast.error('Failed to load agents')
+      console.error('Failed to load agents:', error)
+      banner.error('Failed to load agents')
       return []
     } finally {
       setLoadingAgents(false)
     }
   }, [])
 
+  // Get agent suggestions (preview for All Agents mode)
+  const getAgentSuggestions = useCallback(async (messageText: string): Promise<SuggestAgentsResponse | null> => {
+    try {
+      setSuggestingAgents(true)
+      const response = await suggestAgents(messageText, 3, getToken)
+      return response
+    } catch (error) {
+      console.error('Failed to get agent suggestions:', error)
+      return null
+    } finally {
+      setSuggestingAgents(false)
+    }
+  }, [getToken])
+
   // Create room with user message
-  const createRoomWithMessage = useCallback(async (userMessage: string) => {
+  const createRoomWithMessage = useCallback(async (
+    userMessage: string,
+    options: CreateRoomOptions = {}
+  ) => {
+    const { 
+      selectedAgents = [], 
+      appliedFromGroup,
+      debateMode = false,
+      roomName: customRoomName,
+      targetGroup
+    } = options
+
     if (!userId || !userName) {
-      toast.error('User information not available')
+      banner.error('User information not available')
       return null
     }
 
     if (!userMessage.trim()) {
-      toast.error('Message cannot be empty')
+      banner.error('Message cannot be empty')
       return null
     }
 
     try {
       setCreating(true)
 
-      // Load default agents if not loaded
-      let agents = defaultAgents
-      if (agents.length === 0) {
-        agents = await loadDefaultAgents()
-        if (agents.length === 0) {
-          throw new Error('No agents available to create room')
-        }
+      // Build room agent set if agents are selected
+      let roomAgentSet: { [k: string]: string } = {}
+      
+      if (selectedAgents.length > 0) {
+        roomAgentSet = Object.fromEntries(
+          selectedAgents.map((agent) => [
+            agent.agent_id,
+            agent.agent_card.name,
+          ])
+        )
       }
+      // If no agents selected, room starts empty (messages use target_group)
 
-      // Create room agent set mapping: agent name -> agent id
-      const roomAgentSet = Object.fromEntries(
-        agents.map((agent) => [
-          agent.agent_card.name, // key: agent name
-          agent.agent_id,        // value: agent id
-        ])
-      )
+      // Use custom room name if provided, otherwise auto-generate from message
+      // Strip mentions from room name (e.g., <@id|name> -> "")
+      const displayMessage = userMessage.replace(/<@[^|]+\|[^>]+>\s*/g, '').trim()
+      const roomName = customRoomName || (displayMessage.length > 30 
+        ? `${displayMessage.substring(0, 30)}...` 
+        : displayMessage) || 'New Chat'
 
-      // Generate a room name based on user message (truncated)
-      const roomName = userMessage.length > 30 
-        ? `${userMessage.substring(0, 30)}...` 
-        : userMessage
-
-      // Create room with default settings (debate mode off)
+      // Create room with settings
       const extendInfo = {
-        debateMode: false,
-        initialMessage: userMessage // Store initial message in extend_info
+        debateMode,
+        initialMessage: userMessage
       }
 
       const response = await createNewRoom(
@@ -89,15 +119,19 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         userName,
         getToken,
         roomAgentSet,
-        extendInfo
+        extendInfo,
+        appliedFromGroup
       )
 
       if (response.success && response.room) {
         const roomId = response.room.room_id
         console.log('✅ Room created successfully:', roomId)
         
-        // Store initial message in sessionStorage for the room page to pick up
+        // Store initial message and target group in sessionStorage for the room page to pick up
         sessionStorage.setItem(`room-${roomId}-initial-message`, userMessage)
+        if (targetGroup) {
+          sessionStorage.setItem(`room-${roomId}-target-group`, targetGroup)
+        }
         
         return roomId
       } else {
@@ -105,20 +139,25 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       }
     } catch (error) {
       console.error('Failed to create room:', error)
-      toast.error(error instanceof Error ? error.message : 'Failed to create room')
+      banner.error(error instanceof Error ? error.message : 'Failed to create room')
       return null
     } finally {
       setCreating(false)
     }
-  }, [userId, userName, defaultAgents, loadDefaultAgents])
+  }, [userId, userName, getToken])
 
-  // Create room and navigate
-  const createAndNavigate = useCallback(async (userMessage: string) => {
-    const roomId = await createRoomWithMessage(userMessage)
+  // Create room and navigate (main entry point)
+  const createAndNavigate = useCallback(async (
+    userMessage: string, 
+    options: CreateRoomOptions = {}
+  ) => {
+    const roomId = await createRoomWithMessage(userMessage, options)
     
     if (roomId) {
-      toast.success('Room created successfully!')
-      // Navigate to room page
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('rooms:refresh'))
+      }
+      banner.success('Chat started!')
       router.push(`/room/${roomId}`)
       return true
     }
@@ -126,12 +165,32 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     return false
   }, [createRoomWithMessage, router])
 
+  // Create room with specific agents and navigate
+  const createWithAgentsAndNavigate = useCallback(async (
+    userMessage: string,
+    selectedAgents: Agent[],
+    options: Omit<CreateRoomOptions, 'selectedAgents'> = {}
+  ) => {
+    if (selectedAgents.length === 0) {
+      banner.error('Please select at least one agent')
+      return false
+    }
+
+    return createAndNavigate(userMessage, { 
+      ...options,
+      selectedAgents,
+    })
+  }, [createAndNavigate])
+
   return {
     creating,
     loadingAgents,
+    suggestingAgents,
+    defaultAgents,
     createRoomWithMessage,
     createAndNavigate,
+    createWithAgentsAndNavigate,
     loadDefaultAgents,
+    getAgentSuggestions,
   }
 }
-

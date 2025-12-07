@@ -51,17 +51,23 @@ export async function getAgentCardFromUrl(
 
 // Get agent by ID - PUBLIC
 export async function getAgent(
-  agentId: string
+  agentId: string,
+  signal?: AbortSignal
 ): Promise<AgentCenterResponse> {
   return apiGet<AgentCenterResponse>(
-    `${API_BASE_URL}/getAgent/${agentId}`
+    `${API_BASE_URL}/getAgent/${agentId}`,
+    undefined,
+    signal
   )
 }
 
-// Get all agents - PUBLIC
-export async function getAllAgents(): Promise<AgentCenterResponse> {
+// Get all agents - PUBLIC, with optional timeout override
+export async function getAllAgents(signal?: AbortSignal, timeoutMs?: number): Promise<AgentCenterResponse> {
   return apiGet<AgentCenterResponse>(
-    `${API_BASE_URL}/getAllAgents`
+    `${API_BASE_URL}/getAllAgents`,
+    undefined,
+    signal,
+    timeoutMs
   )
 }
 

@@ -5,9 +5,8 @@ import Image from "next/image"
 import {
   BookOpen,
   VectorSquare,
-  HousePlus,
   InspectionPanel,
-  MessageCircle,
+  MessageCirclePlus,
   History,
   PanelLeftIcon,
 } from "lucide-react"
@@ -24,7 +23,6 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
@@ -32,14 +30,9 @@ import type { Room } from "@/lib/types/room"
 
 const staticNavAgents = [
   {
-    name: "Start a new Chat",
+    name: "New Chat",
     url: "/chat",
-    icon: MessageCircle,
-  },
-  {
-    name: "Create a new Room",
-    url: "/room",
-    icon: HousePlus,
+    icon: MessageCirclePlus,
   },
   {
     name: "Agent Network",
@@ -61,35 +54,9 @@ const staticNavAgents = [
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar } = useSidebar()
-  //const [chatSessions, setChatSessions] = React.useState<TaskSession[]>([])
-  //const [isLoadingSessions, setIsLoadingSessions] = React.useState(false)
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
   
-  // Get user's chat session list
-  /**
-  const loadChatSessions = React.useCallback(async () => {
-    if (!isLoaded || !isSignedIn || !user?.id) return
-
-    try {
-      setIsLoadingSessions(true)
-      const response: TaskCenterResponse = await getAllSessions(user.id)
-      
-      if (response.success && response.task_sessions) {
-        setChatSessions(response.task_sessions)
-      } else {
-        console.error('Failed to load chat sessions:', response.error)
-        setChatSessions([])
-      }
-    } catch (error) {
-      console.error('Error loading chat sessions:', error)
-      setChatSessions([])
-    } finally {
-      setIsLoadingSessions(false)
-    }
-  }, [isLoaded, isSignedIn, user?.id])
-  */
-
   // Get user's room list
   const loadRooms = React.useCallback(async () => {
     if (!isLoaded || !isSignedIn || !user?.id) return
@@ -119,14 +86,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [isLoaded, isSignedIn, user?.id, loadRooms])
 
+  // Refresh rooms when a new room is created elsewhere
+  React.useEffect(() => {
+    const handleRefresh = () => loadRooms()
+    window.addEventListener("rooms:refresh", handleRefresh)
+    return () => window.removeEventListener("rooms:refresh", handleRefresh)
+  }, [loadRooms])
+
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
-    // const chatHistoryItems = [...chatSessions].reverse().map(session => ({
-    //   title: session.session_name,
-    //   url: `/chat/${session.session_id}`,
-    //   id: session.session_id,
-    // }))
-
     const roomItems = [...rooms].reverse().map(room => ({
       title: room.room_name || 'Unnamed Room',
       url: `/room/${room.room_id}`,
@@ -148,20 +116,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ],
         isLoading: isLoadingRooms,
       },
-      // {
-      //   title: "Chat Sessions",
-      //   url: "#",
-      //   icon: History,
-      //   isActive: true,
-      //   items: chatHistoryItems.length > 0 ? chatHistoryItems : [
-      //     {
-      //       title: isLoadingSessions ? "Loading..." : "No sessions yet",
-      //       url: "#",
-      //       id: "no-sessions",
-      //     }
-      //   ],
-      //   isLoading: isLoadingSessions,
-      // },
     ]
   }, [rooms, isLoadingRooms])
 
@@ -170,36 +124,34 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
       <Sidebar collapsible="icon" {...props}>
         <SidebarHeader>
-          <div className="flex items-center gap-2 px-2">
+          <div className="flex h-12 items-center gap-2 px-2">
             <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
-            {isCollapsed ? (
-              <button
-                type="button"
-                onClick={toggleSidebar}
-                className="hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors group"
-                aria-label="Expand sidebar"
-              >
-                <Image
-                  src="/favicon.svg"
-                  alt="Hybro"
-                  width={20}
-                  height={20}
-                  className="h-5 w-5 group-hover:hidden"
-                />
-                <PanelLeftIcon className="h-5 w-5 hidden group-hover:block" />
-              </button>
-            ) : (
-              <SidebarTrigger className="hidden md:block" />
-            )}
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors leading-none group"
+              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {isCollapsed ? (
+                <div className="relative h-5 w-5">
+                  <Image
+                    src="/favicon.svg"
+                    alt="Hybro"
+                    width={20}
+                    height={20}
+                    className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 group-hover:opacity-0"
+                  />
+                  <PanelLeftIcon className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 opacity-0 group-hover:opacity-100" />
+                </div>
+              ) : (
+                <PanelLeftIcon className="h-5 w-5" />
+              )}
+            </button>
           </div>
         </SidebarHeader>
         <SidebarContent>
           <NavAgent navAgents={staticNavAgents} />
-          <NavMain 
-            items={navMainData} 
-            //onRefreshSessions={loadChatSessions}
-            onRefreshRooms={loadRooms}
-          />
+          <NavMain items={navMainData} />
         </SidebarContent>
         <SidebarFooter>
           <DiscordButton />

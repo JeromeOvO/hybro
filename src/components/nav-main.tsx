@@ -18,12 +18,9 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { Button } from "@/components/ui/button"
 
 export function NavMain({
   items,
-  onRefreshSessions,
-  onRefreshRooms,
 }: {
   items: {
     title: string
@@ -37,19 +34,12 @@ export function NavMain({
       id?: string
     }[]
   }[]
-  onRefreshSessions?: () => void
-  onRefreshRooms?: () => void
 }) {
   const { state } = useSidebar()
-  const getRefreshHandler = (itemTitle: string) => {
-    if (itemTitle === "Chat Sessions" && onRefreshSessions) {
-      return onRefreshSessions
-    }
-    if (itemTitle === "History" && onRefreshRooms) {
-      return onRefreshRooms
-    }
-    return undefined
-  }
+  const getIconClass = (title: string) =>
+    title === "History"
+      ? "text-foreground dark:icon-navigation"
+      : "icon-navigation"
 
   return (
     <SidebarGroup>
@@ -59,8 +49,6 @@ export function NavMain({
             return null
           }
 
-          const refreshHandler = getRefreshHandler(item.title)
-          
           return (
             <Collapsible
               key={item.title}
@@ -74,10 +62,10 @@ export function NavMain({
                     <SidebarMenuButton
                       tooltip={item.title}
                       size="lg"
-                      className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                      className="text-base group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
                     >
                       {item.icon && (
-                        <item.icon className="icon-navigation group-data-[collapsible=icon]:mx-auto" />
+                        <item.icon className={`${getIconClass(item.title)} group-data-[collapsible=icon]:mx-auto`} />
                       )}
                       <span className="group-data-[collapsible=icon]:hidden">
                         {item.title}
@@ -89,16 +77,6 @@ export function NavMain({
                       )}
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
-                  {refreshHandler && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={refreshHandler}
-                      className="h-6 w-6 p-0 opacity-60 hover:opacity-100 ml-1 flex-shrink-0 group-data-[collapsible=icon]:hidden"
-                    >
-                      <RefreshCw className="h-3 w-3 icon-action" />
-                    </Button>
-                  )}
                 </div>
                 <CollapsibleContent>
                   <SidebarMenuSub className="gap-1.5">

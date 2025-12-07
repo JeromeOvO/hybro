@@ -1,5 +1,3 @@
-/* tslint:disable */
-/* eslint-disable */
 /**
 /* This file was automatically generated from pydantic models by running pydantic2ts.
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
@@ -429,6 +427,7 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
+  applied_from_group?: string | null;
   extend_info?: unknown;
 }
 export interface RoomAgentMessage {
@@ -514,6 +513,7 @@ export interface RoomCenterRoomSettingRequest {
     [k: string]: string;
   } | null;
   room_created_at?: string | null;
+  applied_from_group?: string | null;
   extend_info?: {
     [k: string]: unknown;
   } | null;

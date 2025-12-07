@@ -16,21 +16,34 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { GroupSelector } from "@/components/group-selector"
+import type { AgentGroup } from "@/lib/types/agent-group"
+import { BUILTIN_GROUP_ALL_AGENTS } from "@/lib/types/agent-group"
 
 interface ChatInputProps {
   placeholder?: string
   value?: string
   onChange?: (value: string) => void
-  onSubmit?: (value: string) => void
+  onSubmit?: (value: string, targetGroup?: string) => void
   disabled?: boolean
   className?: string
   showTools?: boolean
   showVoice?: boolean
   showSend?: boolean
+  showGroupSelector?: boolean
   maxRows?: number
   maxHeight?: number
   onFileUpload?: (files: FileList) => void
   onImageUpload?: (files: FileList) => void
+  // Group selector props
+  groups?: AgentGroup[]
+  loadingGroups?: boolean
+  selectedGroup?: string
+  onGroupChange?: (groupId: string) => void
+  roomAgentCount?: number
+  onManageGroups?: () => void
+  isOverride?: boolean
+  onClearOverride?: () => void
 }
 
 export function ChatInput({
@@ -42,10 +55,20 @@ export function ChatInput({
   className,
   showTools = false,
   showSend = true,
+  showGroupSelector = false,
   maxRows = 6,
   maxHeight = 300,
   onFileUpload,
   onImageUpload,
+  // Group selector props
+  groups = [],
+  loadingGroups = false,
+  selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
+  onGroupChange,
+  roomAgentCount = 0,
+  onManageGroups,
+  isOverride = false,
+  onClearOverride,
 }: ChatInputProps) {
   const [internalValue, setInternalValue] = React.useState("")
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -60,7 +83,7 @@ export function ChatInput({
     if (textarea) {
       textarea.style.height = "auto"
       const scrollHeight = textarea.scrollHeight
-      const lineHeight = parseInt(getComputedStyle(textarea).lineHeight) || 28 // Increase line height
+      const lineHeight = parseInt(getComputedStyle(textarea).lineHeight) || 28
       const maxHeightFromRows = lineHeight * maxRows
       const finalMaxHeight = Math.min(maxHeightFromRows, maxHeight)
       textarea.style.height = `${Math.min(scrollHeight, finalMaxHeight)}px`
@@ -81,7 +104,7 @@ export function ChatInput({
 
   const handleSubmit = () => {
     if (currentValue.trim() && onSubmit) {
-      onSubmit(currentValue.trim())
+      onSubmit(currentValue.trim(), selectedGroup)
       handleValueChange?.("")
     }
   }
@@ -112,7 +135,7 @@ export function ChatInput({
         "w-full max-w-7xl mx-auto",
         className
       )}
-      style={{ maxHeight: `${maxHeight + 80}px` }} // Increase overall height
+      style={{ maxHeight: `${maxHeight + 120}px` }}
     >
       {/* Hidden file inputs */}
       <input
@@ -132,8 +155,28 @@ export function ChatInput({
         accept="image/*"
       />
 
-      {/* Textarea - Upper section */}
-      <div className="flex-1 p-4 pb-3"> {/* Increase padding from p-4 to p-6 */}
+      {/* Group Selector - Top section */}
+      {showGroupSelector && (
+        <div className="px-4 pt-3 pb-1 border-b border-border/50">
+          <div className="flex items-center gap-1 text-sm text-muted-foreground">
+            <span>To:</span>
+            <GroupSelector
+              selectedGroup={selectedGroup}
+              onGroupChange={onGroupChange || (() => {})}
+              groups={groups}
+              loadingGroups={loadingGroups}
+              roomAgentCount={roomAgentCount}
+              onManageGroups={onManageGroups}
+              disabled={disabled}
+              isOverride={isOverride}
+              onClearOverride={onClearOverride}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Textarea - Middle section */}
+      <div className="flex-1 p-4 pb-3">
         <Textarea
           ref={textareaRef}
           value={currentValue}
@@ -142,7 +185,7 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled}
           className={cn(
-            "min-h-[50px] resize-none border-0 bg-transparent p-0 text-lg placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0", // Increase font size from text-base to text-lg, min height from 40px to 50px
+            "min-h-[50px] resize-none border-0 bg-transparent p-0 text-lg placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0",
             "scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent w-full"
           )}
           style={{ 
@@ -154,9 +197,9 @@ export function ChatInput({
       </div>
 
       {/* Controls - Lower section */}
-      <div className="flex items-center justify-between px-6 pb-4 pt-2"> {/* Increase padding */}
+      <div className="flex items-center justify-between px-6 pb-4 pt-2">
         {/* Left side - Tools */}
-        <div className="flex items-center gap-2"> {/* Increase gap */}
+        <div className="flex items-center gap-2">
           {showTools && (
             <>
               <DropdownMenu>
@@ -167,17 +210,17 @@ export function ChatInput({
                     disabled={disabled}
                     className="h-12 w-12 rounded-full p-0 hover:bg-muted"
                   >
-                    <Plus className="h-5 w-5 icon-action" /> {/* Increase icon size */}
+                    <Plus className="h-5 w-5 icon-action" />
                   </Button>
                 </DropdownMenuTrigger>
-            <DropdownMenuContent 
+                <DropdownMenuContent 
                   align="start" 
-                  side="bottom" // Change to prefer downward expansion
-                  sideOffset={12} // Increase offset
+                  side="bottom"
+                  sideOffset={12}
                   alignOffset={-4}
-              className="w-52 bg-background/95 backdrop-blur-sm shadow-lg"
+                  className="w-52 bg-background/95 backdrop-blur-sm shadow-lg"
                   avoidCollisions={true}
-                  collisionPadding={16} // Increase collision padding
+                  collisionPadding={16}
                 >
                   <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
                     <Paperclip className="h-4 w-4 mr-2 icon-neutral" />
@@ -193,20 +236,20 @@ export function ChatInput({
           )}
         </div>
 
-        {/* Right side - Voice and Send Controls */}
-        <div className="flex items-center gap-2"> {/* Increase gap */}
+        {/* Right side - Send Controls */}
+        <div className="flex items-center gap-2">
           {showSend && (
             <Button
               onClick={handleSubmit}
               disabled={disabled || !hasContent}
               size="lg"
-              className="h-12 w-12 rounded-full p-0 ml-1" // Increase button size
+              className="h-12 w-12 rounded-full p-0 ml-1"
             >
-              <Send className="h-5 w-5 icon-action" /> {/* Increase icon size */}
+              <Send className="h-5 w-5 icon-action" />
             </Button>
           )}
         </div>
       </div>
     </div>
   )
-} 
+}
