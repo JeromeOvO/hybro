@@ -1,4 +1,7 @@
 {
+  "workbench.colorTheme": "Monokai Dimmed",
+  "workbench.preferredDarkColorTheme": "Monokai Dimmed",
+  "workbench.iconTheme": "vs-seti",
   "git.ignoreLimitWarning": true,
   "[python]": {
     "editor.formatOnSave": true,
@@ -11,5 +14,11 @@
   "ruff.enable": true,
   "ruff.nativeServer": "on",
   "ruff.lineLength": 88,
-  "ruff.lint.enable": true
+  "ruff.lint.enable": true,
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic"
 }
