@@ -79,6 +79,11 @@ export function RoomChatInput({
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
   )
 
+  const agentNameMap = useMemo(
+    () => Object.fromEntries(agents.map(a => [a.id, a.name])),
+    [agents]
+  )
+
   // Reset selected index when filtered agents change
   useEffect(() => {
     setSelectedAgentIndex(0)
@@ -574,6 +579,7 @@ export function RoomChatInput({
                 onCreateGroup={onCreateGroup}
                 onEditGroup={onEditGroup}
                 onDeleteGroup={onDeleteGroup}
+                  agentNameMap={agentNameMap}
                 disabled={disabled}
                 isOverride={isOverride}
                 onClearOverride={onClearOverride}

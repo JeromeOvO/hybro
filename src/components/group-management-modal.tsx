@@ -29,6 +29,7 @@ interface GroupManagementModalProps {
   onOpenChange: (open: boolean) => void
   groups: AgentGroup[]
   onGroupsChange: () => void
+  onGroupCreated?: (group: AgentGroup) => void
   availableAgents: Agent[]
   loadingAgents: boolean
   userId: string
@@ -48,6 +49,7 @@ export function GroupManagementModal({
   onOpenChange,
   groups,
   onGroupsChange,
+  onGroupCreated,
   availableAgents,
   loadingAgents,
   userId,
@@ -70,6 +72,39 @@ export function GroupManagementModal({
   // Filter out built-in groups for the list
   const userGroups = groups.filter(g => g.type === 'user')
 
+  const resetForm = useCallback(() => {
+    setGroupName('')
+    setGroupDescription('')
+    setSelectedAgents({})
+  }, [])
+
+  const handleCreate = useCallback(() => {
+    setMode('create')
+    resetForm()
+  }, [resetForm])
+
+  const handleEdit = useCallback((group: AgentGroup) => {
+    setMode('edit')
+    setEditingGroup(group)
+    setGroupName(group.name)
+    setGroupDescription(group.description || '')
+    
+    // Build selected agents from group's agent IDs
+    const agentsMap: { [agentId: string]: Agent } = {}
+    for (const agentId of group.agents) {
+      const agent = availableAgents.find(a => a.agent_id === agentId)
+      if (agent) {
+        agentsMap[agentId] = agent
+      }
+    }
+    setSelectedAgents(agentsMap)
+  }, [availableAgents])
+
+  const handleDeleteClick = useCallback((group: AgentGroup) => {
+    setGroupToDelete(group)
+    setMode('delete-confirm')
+  }, [])
+
   // Reset all state when modal closes and ensure body styles are cleaned up
   useEffect(() => {
     if (!open) {
@@ -89,7 +124,7 @@ export function GroupManagementModal({
       const timeoutId = setTimeout(cleanup, 250)
       return () => clearTimeout(timeoutId)
     }
-  }, [open])
+  }, [open, resetForm])
   
   // Safe close handler that ensures proper state reset
   const handleOpenChange = useCallback((newOpen: boolean) => {
@@ -101,7 +136,7 @@ export function GroupManagementModal({
       resetForm()
     }
     onOpenChange(newOpen)
-  }, [onOpenChange])
+  }, [onOpenChange, resetForm])
 
   // Apply initial action when the modal is opened from external triggers
   useEffect(() => {
@@ -118,35 +153,7 @@ export function GroupManagementModal({
     } else if (initialAction.type === 'delete' && initialAction.group) {
       handleDeleteClick(initialAction.group)
     }
-  }, [open, initialAction])
-
-  const resetForm = () => {
-    setGroupName('')
-    setGroupDescription('')
-    setSelectedAgents({})
-  }
-
-  const handleCreate = () => {
-    setMode('create')
-    resetForm()
-  }
-
-  const handleEdit = (group: AgentGroup) => {
-    setMode('edit')
-    setEditingGroup(group)
-    setGroupName(group.name)
-    setGroupDescription(group.description || '')
-    
-    // Build selected agents from group's agent IDs
-    const agentsMap: { [agentId: string]: Agent } = {}
-    for (const agentId of group.agents) {
-      const agent = availableAgents.find(a => a.agent_id === agentId)
-      if (agent) {
-        agentsMap[agentId] = agent
-      }
-    }
-    setSelectedAgents(agentsMap)
-  }
+  }, [open, initialAction, handleCreate, handleEdit, handleDeleteClick])
 
   // Ensure agents are loaded when modal opens
   useEffect(() => {
@@ -226,6 +233,9 @@ export function GroupManagementModal({
 
         if (response.success) {
           banner.success('Group created successfully')
+          if (response.group) {
+            onGroupCreated?.(response.group)
+          }
           onGroupsChange()
           handleBack()
         } else {
@@ -253,11 +263,6 @@ export function GroupManagementModal({
     } finally {
       setSaving(false)
     }
-  }
-
-  const handleDeleteClick = (group: AgentGroup) => {
-    setGroupToDelete(group)
-    setMode('delete-confirm')
   }
 
   const handleDeleteConfirm = async () => {

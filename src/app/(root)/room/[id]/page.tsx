@@ -193,6 +193,18 @@ export default function RoomChatPage() {
     setGroupManagementOpen(true)
   }
 
+  const handleGroupCreated = (group: AgentGroup) => {
+    setGroups(prev => {
+      const exists = prev.some(g => g.group_id === group.group_id)
+      return exists
+        ? prev.map(g => g.group_id === group.group_id ? group : g)
+        : [...prev, group]
+    })
+    setSelectedGroup(group.group_id)
+    setIsOverride(true)
+    localStorage.setItem(`room-${roomId}-override-group`, group.group_id)
+  }
+
   // Open room settings dialog (prefetch agents to avoid visible delay)
   const handleOpenRoomSettings = async () => {
     if (availableAgents.length === 0 && !loadingAgents) {
@@ -528,6 +540,7 @@ export default function RoomChatPage() {
         }}
         groups={groups}
         onGroupsChange={handleGroupsChange}
+        onGroupCreated={handleGroupCreated}
         availableAgents={availableAgents}
         loadingAgents={loadingAgents}
         userId={user?.id || ''}

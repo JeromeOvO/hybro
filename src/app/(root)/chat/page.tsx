@@ -167,6 +167,17 @@ export default function ChatPage() {
         setGroupManagementOpen(true)
     }
 
+    const handleGroupCreated = (group: AgentGroup) => {
+        setGroups(prev => {
+            const exists = prev.some(g => g.group_id === group.group_id)
+            return exists
+                ? prev.map(g => g.group_id === group.group_id ? group : g)
+                : [...prev, group]
+        })
+        setSelectedGroup(group.group_id)
+        setIsOverride(true)
+    }
+
     // Handle group change (override)
     const handleGroupChange = (groupId: string) => {
         setSelectedGroup(groupId)
@@ -488,6 +499,7 @@ export default function ChatPage() {
                 }}
                 groups={groups}
                 onGroupsChange={handleGroupsChange}
+                onGroupCreated={handleGroupCreated}
                 availableAgents={availableAgents}
                 loadingAgents={loadingAgents}
                 userId={user?.id || ''}
