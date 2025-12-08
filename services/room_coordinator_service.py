@@ -87,7 +87,7 @@ class RoomCoordinatorService:
                 text = self._extract_agent_text_from_message(msg)
                 if text and msg.agent_id:
                     # Skip summary messages from previous summaries
-                    if msg.agent_id in ("debate_summary", "overview"):
+                    if msg.agent_id in ("debate_summary", "non_debate_summary"):
                         continue
                     # Get agent name from database
                     agent_name = await self.database_service.get_agent_name_by_agent_id(
@@ -107,7 +107,7 @@ class RoomCoordinatorService:
             summary_text = await self.openai_service.summarize_agent_responses(
                 agent_responses, mode=summary_mode
             )
-            coordinator_agent_id = "debate_summary" if is_debate_mode else "overview"
+            coordinator_agent_id = "debate_summary" if is_debate_mode else "non_debate_summary"
 
             if not summary_text:
                 return
@@ -207,7 +207,7 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         summary_text: str,
-        coordinator_agent_id: str = "overview",
+        coordinator_agent_id: str = "non_debate_summary",
     ) -> None:
         """
         Create a coordinator summary RoomAgentMessage and emit it via SSE.
@@ -217,7 +217,7 @@ class RoomCoordinatorService:
             room_user_message_id: The user message ID this summary relates to
             summary_text: The summary text content
             coordinator_agent_id: The agent ID to use for the summary message
-                                  (e.g., "debate_summary" or "overview")
+                                  (e.g., "debate_summary" or "non_debate_summary")
         """
         # Build an A2A-style message and task for storage, similar to
         # RoomServices._generate_agent_message_content.

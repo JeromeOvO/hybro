@@ -510,7 +510,7 @@ Your response should be an complete answer with all the specific details the use
     async def summarize_agent_responses(
         self,
         agent_responses: list[dict[str, str]],
-        mode: str = "synthesis",
+        mode: str = "non_debate",
     ) -> str:
         """
         Summarize the answers from multiple AI agents into a single summary using Lead_ai.
@@ -518,9 +518,9 @@ Your response should be an complete answer with all the specific details the use
         Args:
             agent_responses: List of dicts with 'agent_name' and 'message' keys
                 Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
-            mode: Summary mode - "debate" or "synthesis"
+            mode: Summary mode - "debate" or "non_debate"
                 - "debate": Compares viewpoints, highlights agreements/disagreements
-                - "synthesis": Combines contributions into a unified response
+                - "non_debate": Combines contributions into a unified response
 
         Returns:
             Summary text string
@@ -560,7 +560,7 @@ QUALITY STANDARDS:
                 "Keep the summary within {max_words} words."
             )
         else:
-            # Default: synthesis mode
+            # Default: non_debate mode
             system_prompt = """You are an expert synthesizer for multi-agent collaboration systems. Your task is to combine responses from multiple AI agents into a unified, coherent summary that presents the complete answer to the user's question.
 
 CORE OBJECTIVES:
@@ -570,7 +570,7 @@ CORE OBJECTIVES:
 4. Highlight the most important insights and recommendations
 5. Create a seamless narrative that flows naturally
 
-SYNTHESIS APPROACH:
+Synthesis APPROACH:
 - Identify how each agent's contribution adds to the complete answer
 - Merge overlapping information, keeping the most detailed version
 - Organize information in a logical flow (context → analysis → recommendations)
@@ -633,8 +633,8 @@ QUALITY STANDARDS:
     async def summarize_non_debate_answer(
         self, agent_responses: list[dict[str, str]]
     ) -> str:
-        """Alias for summarize_agent_responses with mode='synthesis'."""
-        return await self.summarize_agent_responses(agent_responses, mode="synthesis")
+        """Alias for summarize_agent_responses with mode='non_debate'."""
+        return await self.summarize_agent_responses(agent_responses, mode="non_debate")
 
     async def generate_chat_context(
         self, user_input: str, agent_response: str, context_data: ContextData
