@@ -461,13 +461,15 @@ export default function RoomChatPage() {
                             variant="ghost" 
                             size="icon" 
                             onClick={handleOpenRoomSettings}
+                            className="text-primary hover:text-primary hover:bg-primary/10 shadow-sm"
+                            aria-label="Room settings"
                             onMouseEnter={() => {
                               if (availableAgents.length === 0 && !loadingAgents) {
                                 loadAvailableAgents()
                               }
                             }}
                           >
-                            <Settings className="h-5 w-5 icon-neutral" />
+                            <Settings className="h-5 w-5" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>

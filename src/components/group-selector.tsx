@@ -251,7 +251,7 @@ export function GroupSelector({
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-7 w-7 text-destructive hover:text-destructive"
+                                  className="h-7 w-7 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                                   title={`Delete ${group.name}`}
                                   onClick={(e) => {
                                     e.preventDefault()

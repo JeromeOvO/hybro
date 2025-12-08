@@ -339,7 +339,7 @@ export function GroupManagementModal({
                           variant="ghost"
                           size="icon"
                           onClick={() => handleDeleteClick(group)}
-                          className="text-destructive hover:text-destructive"
+                          className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -436,8 +436,8 @@ export function GroupManagementModal({
         return (
           <>
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
+              <DialogTitle className="flex items-center gap-2 text-amber-700">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
                 Delete Group
               </DialogTitle>
               <DialogDescription>
@@ -463,9 +463,10 @@ export function GroupManagementModal({
                 Cancel
               </Button>
               <Button
-                variant="destructive"
+                variant="default"
                 onClick={handleDeleteConfirm}
                 disabled={deleting}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
               >
                 {deleting ? (
                   <>
