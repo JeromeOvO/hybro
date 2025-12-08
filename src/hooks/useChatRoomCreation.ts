@@ -157,7 +157,6 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('rooms:refresh'))
       }
-      banner.success('Chat started!')
       router.push(`/room/${roomId}`)
       return true
     }
