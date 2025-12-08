@@ -86,8 +86,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Special system agent display names
   const SYSTEM_AGENT_NAMES: Record<string, string> = {
     'debate_summary': 'Debate Summary',
-    'lead_ai_summary': 'Lead AI Summary',
-    'system': 'System',
+    'overview': 'Overview',
   }
 
   // Get agent name by agent ID with caching
