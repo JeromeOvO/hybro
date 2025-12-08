@@ -1,6 +1,5 @@
 "use client"
 
-import { type LucideIcon } from "lucide-react"
 import Link from "next/link"
 
 import {
@@ -9,33 +8,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-
-// Professional color mapping for navigation icons
-const getIconColorClass = (itemName: string): string => {
-  switch (itemName) {
-    case "Start a new Chat":
-      return "icon-create"
-    case "Create a new Room":
-      return "icon-create"
-    case "Agent Network":
-      return "icon-network"
-    case "A2A Agent Inspector":
-      return "icon-inspection"
-    case "About HYBRO":
-      return "icon-learn"
-    default:
-      return "icon-navigation"
-  }
-}
+import type { NavAgentItem } from "@/lib/nav-items"
 
 export function NavAgent({
   navAgents,
 }: {
-  navAgents: {
-    name: string
-    url: string
-    icon: LucideIcon
-  }[]
+  navAgents: NavAgentItem[]
 }) {
 
   return (
@@ -51,7 +29,7 @@ export function NavAgent({
             >
               <Link href={item.url} prefetch={false} scroll={false}>
                 <item.icon
-                  className={`${getIconColorClass(item.name)} group-data-[collapsible=icon]:mx-auto`}
+                  className={`${item.colorClass ?? "icon-navigation"} group-data-[collapsible=icon]:mx-auto`}
                 />
                 <span className="leading-7 group-data-[collapsible=icon]:hidden">
                   {item.name}

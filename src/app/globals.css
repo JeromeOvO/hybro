@@ -72,6 +72,8 @@
   --color-icon-navigation: 215 45% 32%;
   --color-icon-sun: 42 95% 42%;
   --color-icon-moon: 217 90% 40%;
+  --color-icon-exclaim: 200 32% 60%;
+  --color-icon-exclaim-foreground: 210 30% 98%;
   
   /* Professional category colors - Light mode (enhanced for better contrast) */
   --color-icon-create: 142 75% 32%;
@@ -144,6 +146,8 @@
   --color-icon-navigation: 210 30% 75%;
   --color-icon-sun: 45 93% 65%;
   --color-icon-moon: 217 91% 75%;
+  --color-icon-exclaim: 200 36% 72%;
+  --color-icon-exclaim-foreground: 230 25% 8%;
   
   /* Professional category colors - Dark mode */
   --color-icon-create: 142 70% 65%;
@@ -347,6 +351,7 @@
 .icon-navigation { color: hsl(var(--color-icon-navigation)); }
 .icon-sun { color: hsl(var(--color-icon-sun)); }
 .icon-moon { color: hsl(var(--color-icon-moon)); }
+.icon-exclaim { color: hsl(var(--color-icon-exclaim)); }
 
 /* Professional category color utilities */
 .icon-create { color: hsl(var(--color-icon-create)); }

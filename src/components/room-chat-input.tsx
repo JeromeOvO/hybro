@@ -566,7 +566,7 @@ export function RoomChatInput({
       <div className="group relative flex flex-col rounded-3xl bg-background border border-border shadow-lg transition-all duration-300 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:border-blue-500/50 focus-within:shadow-[0_0_25px_rgba(59,130,246,0.4)] focus-within:border-blue-500/70">
         {/* Group Selector - Top section */}
         {showGroupSelector && (
-          <div className="px-4 pt-3 pb-1 border-b border-border/50">
+          <div className="px-4 pt-3 pb-1 border-b border-border/20">
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               <span>To:</span>
               <GroupSelector
@@ -595,7 +595,7 @@ export function RoomChatInput({
             contentEditable={!disabled}
             onInput={handleInput}
             onKeyDown={handleKeyDown}
-            className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-lg leading-7 text-foreground focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
+            className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-base leading-7 text-foreground focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/3"
             data-placeholder="Type a message... Use @ to mention agents"
             suppressContentEditableWarning
             style={{
