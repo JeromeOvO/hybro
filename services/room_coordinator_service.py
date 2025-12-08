@@ -48,7 +48,7 @@ class RoomCoordinatorService:
         - If there are at least two non-empty agent responses in the dependency
           chain for this user message, generate a coordinator summary.
         - In debate mode: Uses debate-style summary (comparing viewpoints)
-        - In normal mode: Uses synthesis-style summary (combining contributions)
+        - In normal mode: Uses non_debate-style summary (combining contributions)
 
         Future extensions:
         - Track pending clarification questions that individual agents ask the user
@@ -103,7 +103,7 @@ class RoomCoordinatorService:
                 return
 
             # Use different summary approach based on mode
-            summary_mode = "debate" if is_debate_mode else "synthesis"
+            summary_mode = "debate" if is_debate_mode else "non_debate"
             summary_text = await self.openai_service.summarize_agent_responses(
                 agent_responses, mode=summary_mode
             )
@@ -254,7 +254,7 @@ class RoomCoordinatorService:
             extend_info={
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
-                "summary_type": "debate" if coordinator_agent_id == "debate_summary" else "synthesis",
+                "summary_type": "debate" if coordinator_agent_id == "debate_summary" else "non_debate",
             },
         )
 
