@@ -83,8 +83,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     },
   })
 
+  // Special system agent display names
+  const SYSTEM_AGENT_NAMES: Record<string, string> = {
+    'debate_summary': 'Debate Coordinator',
+    'non_debate_summary': 'Summary Agent',
+  }
+
   // Get agent name by agent ID with caching
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
+    // Check for system agents first
+    if (SYSTEM_AGENT_NAMES[agentId]) {
+      return SYSTEM_AGENT_NAMES[agentId]
+    }
+
     // Use cache if available
     if (agentNameCache.current[agentId]) {
       return agentNameCache.current[agentId]
