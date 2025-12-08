@@ -7,8 +7,8 @@ from common.utils.logger import get_logger
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.agent import Agent
-from models.memory import ChatContext, RoomMemory
 from models.agent_group import AgentGroup
+from models.memory import ChatContext, RoomMemory
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
 from services.openai_service import openai_service
@@ -60,7 +60,7 @@ class DatabaseService:
         vector_data = {
             "id": str(agent.agent_id),
             "values": embedding_data,
-            "metadata": {"type": "a2a_agent"},
+            "metadata": {"type": "a2a_agent", "agent_id": str(agent.agent_id)},
         }
 
         mongo_id = None
@@ -143,7 +143,10 @@ class DatabaseService:
         return await self.mongo.get_agents_with_conditions(query, limit)
 
     async def query_similar_agents(
-        self, query_text: str, count: int = 5
+        self,
+        query_text: str,
+        count: int = 5,
+        allowed_agent_ids: list[str] | None = None,
     ) -> list[Agent]:
         """
         Find similar agents based on task description embedding and return their full information
@@ -158,8 +161,19 @@ class DatabaseService:
         # Make sure to await the embedding generation
         embedding = await self.ai_service.get_embedding(query_text)
 
+        top_k = count
+        pinecone_filter = None
+        if allowed_agent_ids:
+            # Limit search to the allowed IDs; bump top_k to avoid truncation.
+            top_k = max(len(allowed_agent_ids), count)
+            pinecone_filter = {
+                "agent_id": {"$in": [str(aid) for aid in allowed_agent_ids]}
+            }
+
         # Then use the embedding with Pinecone - remove the incompatible parameter
-        results = self.pinecone.query(vector=embedding, top_k=count)
+        results = self.pinecone.query(
+            vector=embedding, top_k=top_k, filter=pinecone_filter
+        )
 
         # Extract agent IDs from Pinecone results
         agent_ids = (
@@ -167,6 +181,11 @@ class DatabaseService:
             if results
             else []
         )
+
+        if allowed_agent_ids:
+            # Ensure we only keep allowed IDs, even if filter was empty
+            allowed_set = set(str(aid) for aid in allowed_agent_ids)
+            agent_ids = [aid for aid in agent_ids if aid in allowed_set]
 
         if not agent_ids:
             return []
@@ -200,7 +219,7 @@ class DatabaseService:
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
-            "metadata": {"type": "a2a_agent"},
+            "metadata": {"type": "a2a_agent", "agent_id": str(agent_id)},
         }
 
         try:
@@ -232,7 +251,7 @@ class DatabaseService:
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
-            "metadata": {"type": "a2a_agent"},
+            "metadata": {"type": "a2a_agent", "agent_id": str(agent_id)},
         }
 
         try:
@@ -792,9 +811,7 @@ class DatabaseService:
             await self.mongo.add_agent_group(agent_group)
             return True
         except Exception as e:
-            logger.error(
-                f"Failed to add agent group {agent_group.group_id}: {str(e)}"
-            )
+            logger.error(f"Failed to add agent group {agent_group.group_id}: {str(e)}")
             return False
 
     async def get_agent_groups_by_owner(self, owner_id: str) -> list[AgentGroup]:
@@ -804,9 +821,7 @@ class DatabaseService:
         try:
             return await self.mongo.get_agent_groups_by_owner(owner_id)
         except Exception as e:
-            logger.error(
-                f"Failed to get agent groups for owner {owner_id}: {str(e)}"
-            )
+            logger.error(f"Failed to get agent groups for owner {owner_id}: {str(e)}")
             return []
 
     async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None:
@@ -816,23 +831,17 @@ class DatabaseService:
         try:
             return await self.mongo.get_agent_group_by_id(group_id)
         except Exception as e:
-            logger.error(
-                f"Failed to get agent group {group_id}: {str(e)}"
-            )
+            logger.error(f"Failed to get agent group {group_id}: {str(e)}")
             return None
 
-    async def update_agent_group(
-        self, group_id: str, updates: dict
-    ) -> bool:
+    async def update_agent_group(self, group_id: str, updates: dict) -> bool:
         """
         Update an agent group by its ID
         """
         try:
             return await self.mongo.update_agent_group(group_id, updates)
         except Exception as e:
-            logger.error(
-                f"Failed to update agent group {group_id}: {str(e)}"
-            )
+            logger.error(f"Failed to update agent group {group_id}: {str(e)}")
             return False
 
     async def delete_agent_group(self, group_id: str) -> bool:
@@ -842,9 +851,7 @@ class DatabaseService:
         try:
             return await self.mongo.delete_agent_group(group_id)
         except Exception as e:
-            logger.error(
-                f"Failed to delete agent group {group_id}: {str(e)}"
-            )
+            logger.error(f"Failed to delete agent group {group_id}: {str(e)}")
             return False
 
 

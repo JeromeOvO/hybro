@@ -15,7 +15,6 @@ from a2a.types import (
 )
 
 from common.utils.logger import get_logger
-from config.settings import settings
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -448,7 +447,7 @@ class RoomServices:
         self,
         message_text: str,
         target_agent_id: str,
-        target_agent_name: str,
+        target_agent_name: str,  # kept for signature compatibility
         all_mentions: list,
     ) -> str:
         """
@@ -773,7 +772,11 @@ class RoomServices:
         )
 
     async def _generate_agent_messages_based_on_parsed_result(
-        self, parsed_result: dict, user_message_id: str, room_id: str
+        self,
+        parsed_result: dict,
+        user_message_id: str,
+        room_id: str,
+        extend_info: dict | None = None,
     ) -> list[RoomAgentMessage]:
         """
         Generate agent messages based on parsed result from LLM.
@@ -844,7 +847,11 @@ class RoomServices:
 
             # Create a2a Message
             agent_message = self._generate_new_agent_message(
-                room_id, related_message_id, agent_id, task_content
+                room_id,
+                related_message_id,
+                agent_id,
+                task_content,
+                extend_info=extend_info,
             )
 
             agent_messages.append(agent_message)
@@ -872,24 +879,25 @@ class RoomServices:
         room_id: str,
         user_message_id: str,
         message_text: str,
-        room_agent_set: dict,
+        selected_agent_set: dict,
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
+        target_group: str | None = None,
     ) -> bool:
         """
         Parse user message
-        
+
         Args:
             room_id: The room ID
             user_message_id: The user message ID
             message_text: The message text to parse
-            room_agent_set: Dict of {agent_id: agent_name}
+            selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
         """
         # Parse user message
         parsed_result = await self.openai_service.parse_user_message_by_llm(
-            message_text, room_agent_set, is_debate_mode, auto_assign_agents
+            message_text, selected_agent_set, is_debate_mode, auto_assign_agents
         )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -898,21 +906,101 @@ class RoomServices:
             logger.warning("No parsed result from LLM")
             return False
 
+        extend_info = {
+            "allowed_agent_ids": list(selected_agent_set.keys()),
+            "target_group": target_group,
+        }
+
         agent_messages = await self._generate_agent_messages_based_on_parsed_result(
-            parsed_result, user_message_id, room_id
+            parsed_result, user_message_id, room_id, extend_info=extend_info
         )
 
         return True if agent_messages else False
 
     async def send_message_to_room(
-        self, request: RoomCenterUserMessageRequest, target_group: str = "all_agents"
+        self, request: RoomCenterUserMessageRequest, target_group: str = "room_team"
     ) -> RoomCenterUserMessageResponse:
-        """Add and parse user message to room and send processing status to client
-        
-        Args:
-            request: The user message request
-            target_group: Group ID for routing - "all_agents", "room_team", or custom group ID
-        """
+        """Add and parse user message to room and send processing status to client."""
+
+        validation_response = self._validate_send_message_request(request)
+        if validation_response:
+            return validation_response
+
+        user_message = request.message
+        if not await self._persist_user_message(user_message):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="Failed to add message",
+                status_code=500,
+            )
+
+        await self._send_processing_status(request.room_id, user_message.message_id)
+
+        memory_response = await self._initialize_room_memory(request, user_message)
+        if memory_response:
+            return memory_response
+
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        if not room:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=True,
+                error="Room not found, but message saved",
+                status_code=200,
+            )
+
+        is_debate_mode = (
+            room.extend_info.get("debateMode", False) if room.extend_info else False
+        )
+
+        message_text = user_message.message_content.message_text
+        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
+
+        if mentions:
+            return await self._handle_mentions_flow(request, user_message, mentions)
+
+        selected_agent_set, auto_assign = await self._resolve_agent_selection(
+            room, message_text, target_group, is_debate_mode
+        )
+
+        if not selected_agent_set:
+            return await self._handle_no_agents_fallback(
+                request, user_message, target_group
+            )
+
+        parse_user_message_success = await self.parse_user_message(
+            request.room_id,
+            user_message.message_id,
+            message_text,
+            selected_agent_set,
+            is_debate_mode,
+            auto_assign_agents=auto_assign,
+            target_group=target_group,
+        )
+        if not parse_user_message_success:
+            return RoomCenterUserMessageResponse(
+                message_id=user_message.message_id,
+                message=user_message,
+                success=False,
+                error="Failed to parse user message",
+                status_code=500,
+            )
+
+        return RoomCenterUserMessageResponse(
+            message_id=user_message.message_id,
+            message=user_message,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
+    def _validate_send_message_request(
+        self, request: RoomCenterUserMessageRequest
+    ) -> RoomCenterUserMessageResponse | None:
+        """Validate required fields for send_message_to_room."""
         if request.room_id is None:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -930,28 +1018,26 @@ class RoomServices:
                 error="Message is required",
                 status_code=400,
             )
-        user_message = request.message
-        add_message_success = await self.database_service.add_room_user_message(
-            user_message
-        )
-        if not add_message_success:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
-            )
 
-        # send processing status via sse to client
+        return None
+
+    async def _persist_user_message(self, user_message: RoomUserMessage) -> bool:
+        """Persist user message to the database."""
+        return await self.database_service.add_room_user_message(user_message)
+
+    async def _send_processing_status(self, room_id: str, message_id: str) -> None:
+        """Notify client that processing has started."""
         logger.info(
-            f"RoomServices: Sending processing status to room {request.room_id} for message {user_message.message_id}"
+            "RoomServices: Sending processing status to room %s for message %s",
+            room_id,
+            message_id,
         )
-        await sse_manager.send_processing_status(
-            request.room_id, "processing", user_message.message_id
-        )
+        await sse_manager.send_processing_status(room_id, "processing", message_id)
 
-        # Initialize or update room memory
+    async def _initialize_room_memory(
+        self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
+    ) -> RoomCenterUserMessageResponse | None:
+        """Initialize or update room memory; return error response if failed."""
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
@@ -968,111 +1054,149 @@ class RoomServices:
                 error="Failed to initialize or update room memory",
                 status_code=500,
             )
+        return None
 
-        # Parse user message
+    async def _handle_mentions_flow(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        mentions: list[dict],
+    ) -> RoomCenterUserMessageResponse:
+        """Deterministically fan out to mentioned agents and finish."""
         room = await self.database_service.get_room_by_room_id(request.room_id)
-        is_debate_mode = (
-            room.extend_info.get("debateMode", False) if room.extend_info else False
+        mention_response = await self.parse_user_message_with_mentions(
+            room, user_message, mentions
         )
-        
-        # Extract @mentions from message
-        import re
-        message_text = user_message.message_content.message_text
-        mention_pattern = r"<@([^|]+)\|([^>]+)>"
-        mentions = re.findall(mention_pattern, message_text)
-        
-        # Determine agent set and auto_assign based on routing logic:
-        # 1. @mentions → use mentioned agents
-        # 2. target_group == "all_agents" → network search
-        # 3. target_group == "room_team" → use room.room_agent_set
-        # 4. custom group → fetch group's agents
-        
-        room_agent_set = {}
-        auto_assign = False
-        
-        if mentions:
-            # Route to explicitly mentioned agents
-            room_agent_set = {
-                agent_id.strip(): agent_name.strip()
-                for agent_id, agent_name in mentions
-            }
-            auto_assign = False
-            logger.info(f"Routing to {len(mentions)} mentioned agents")
-            
-        elif target_group == "all_agents":
-            # Network search - use agent selection service
+        await self.sse_manager.send_processing_status(
+            request.room_id, "completed", user_message.message_id
+        )
+        return mention_response
+
+    async def _resolve_agent_selection(
+        self,
+        room: Room,
+        message_text: str,
+        target_group: str,
+        is_debate_mode: bool,
+    ) -> tuple[dict, bool]:
+        """Resolve selected agents and auto-assign flag based on target_group."""
+
+        async def select_agents_all_agents_mode() -> tuple[dict, bool]:
             from services.agent_selection_service import agent_selection_service
-            
+
             try:
-                selection_result = await agent_selection_service.select_agents_for_message(
-                    message_text
+                selection_result = (
+                    await agent_selection_service.select_agents_for_message(
+                        message_text
+                    )
                 )
-                
+
                 if selection_result.agents:
-                    room_agent_set = {
+                    selected = {
                         agent.agent_id: agent.agent_name
                         for agent in selection_result.agents
                     }
-                    auto_assign = True
                     logger.info(
-                        f"All Agents mode: Selected {len(selection_result.agents)} agents "
-                        f"with strategy={selection_result.strategy.value}"
+                        "All Agents mode: Selected %s agents with strategy=%s",
+                        len(selection_result.agents),
+                        selection_result.strategy.value,
                     )
-                    
+
                     if selection_result.needs_debate and not is_debate_mode:
                         logger.info("All Agents mode: Debate mode suggested")
-                else:
-                    logger.warning("All Agents mode: No agents found, falling back to room agents")
-                    room_agent_set = room.room_agent_set
+
+                    return selected, True
+
+                logger.warning(
+                    "All Agents mode: No agents found, falling back to room agents"
+                )
+                return room.room_agent_set, True
             except Exception as e:
-                logger.error(f"All Agents mode selection failed: {e}, using room agents")
-                room_agent_set = room.room_agent_set
-                
-        elif target_group == "room_team":
-            # Use room's agent set
-            room_agent_set = room.room_agent_set
-            auto_assign = False
-            logger.info(f"Room Team mode: Using {len(room_agent_set)} room agents")
-            
-        else:
-            # Custom group - fetch from database
-            from models.agent_group import AgentGroup
-            
-            group = await self.database_service.get_agent_group_by_id(target_group)
-            if group and group.agents:
-                # Fetch agent details to get names
-                agents = []
-                for agent_id in group.agents:
-                    agent = await self.database_service.get_agent_by_agent_id(agent_id)
-                    if agent:
-                        agents.append(agent)
-                
-                room_agent_set = {
-                    agent.agent_id: agent.agent_card.name
-                    for agent in agents
-                }
-                auto_assign = False
-                logger.info(f"Custom group '{group.name}': Using {len(room_agent_set)} agents")
-            else:
-                logger.warning(f"Custom group {target_group} not found, falling back to room agents")
-                room_agent_set = room.room_agent_set
-        
-        parse_user_message_success = await self.parse_user_message(
-            request.room_id,
-            user_message.message_id,
-            message_text,
-            room_agent_set,
-            is_debate_mode,
-            auto_assign_agents=auto_assign,
+                logger.error(
+                    "All Agents mode selection failed: %s, using room agents", e
+                )
+                return room.room_agent_set, True
+
+        if target_group == "all_agents":
+            return await select_agents_all_agents_mode()
+
+        if target_group == "room_team":
+            if room.room_agent_set:
+                logger.info(
+                    "Room Team mode: Using %s room agents", len(room.room_agent_set)
+                )
+                return room.room_agent_set, True
+
+            logger.warning(
+                "Room Team mode: room has no agents, falling back to all_agents selection"
+            )
+            return await select_agents_all_agents_mode()
+
+        # Custom group
+        group = await self.database_service.get_agent_group_by_id(target_group)
+        if group and group.agents:
+            agents = []
+            for agent_id in group.agents:
+                agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                if agent:
+                    agents.append(agent)
+
+            selected_agent_set = {
+                agent.agent_id: agent.agent_card.name for agent in agents
+            }
+            logger.info(
+                "Custom group '%s': Using %s agents",
+                group.name,
+                len(selected_agent_set),
+            )
+            return selected_agent_set, True
+
+        logger.warning(
+            "Custom group %s not found, falling back to room agents", target_group
         )
-        if not parse_user_message_success:
+        return room.room_agent_set, True
+
+    async def _handle_no_agents_fallback(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+        target_group: str,
+    ) -> RoomCenterUserMessageResponse:
+        """Send a system message when no agents are available."""
+        logger.warning(
+            "No room agents and none found via selection; sending system agent response"
+        )
+
+        fallback_agent_message = self._generate_new_agent_message(
+            room_id=request.room_id,
+            related_message_id=user_message.message_id,
+            agent_id="system",
+            content=(
+                "I couldn't find any agents for this room or via selection. "
+                "Please choose agents or a group and try again."
+            ),
+            extend_info={
+                "system_fallback": True,
+                "reason": "no_agents_found",
+                "target_group": target_group,
+            },
+        )
+
+        added = await self.database_service.add_room_agent_message(
+            fallback_agent_message
+        )
+        if not added:
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
                 success=False,
-                error="Failed to parse user message",
+                error="Failed to add fallback agent message",
                 status_code=500,
             )
+
+        await self.sse_manager.send_processing_status(
+            request.room_id, "completed", user_message.message_id
+        )
 
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -1154,21 +1278,40 @@ class RoomServices:
                 status_code=200,
             )
 
-        # Parse @agent mentions
-        message_text = message.message_content.message_text
-        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
+        # Parse @agent mentions and deterministically fan out messages to each mention
+        mentions = self.parse_agent_mentions(
+            message.message_content.message_text, room.room_agent_set
+        )
+        mention_response = await self.parse_user_message_with_mentions(
+            room, message, mentions
+        )
+        return mention_response
+
+    async def parse_user_message_with_mentions(
+        self,
+        room: Room,
+        message: RoomUserMessage,
+        mentions: list[dict],
+    ) -> RoomCenterUserMessageResponse:
+        """
+        Deterministically handle messages that contain @mentions by creating one task per mention.
+
+        This bypasses LLM routing/assignment to guarantee every mentioned agent receives a task.
+        """
+        room_id = room.room_id
 
         # Group mentions by context and detect consecutive patterns
-        context_groups = self.group_mentions_by_context(message_text, mentions)
+        context_groups = self.group_mentions_by_context(
+            message.message_content.message_text, mentions
+        )
 
-        # Create tasks with appropriate dependency chains
         created_agent_messages = []
         for context_text, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
             is_consecutive = group_info["is_consecutive"]
 
             try:
-                # Create shared message content
+                # Create shared message content for this context
                 shared_content = self.create_shared_message_content(
                     context_text, mentions_in_context
                 )
@@ -1179,7 +1322,7 @@ class RoomServices:
                 )
 
                 if is_consecutive:
-                    # Consecutive mentions: create dependency chain
+                    # Consecutive mentions: chain dependencies in order
                     previous_message_id = (
                         message.message_id
                     )  # Start with user message ID
@@ -1188,7 +1331,7 @@ class RoomServices:
                         agent_message = RoomAgentMessage(
                             room_id=room_id,
                             message_id=str(uuid4()),
-                            related_message_id=previous_message_id,  # Chain dependency
+                            related_message_id=previous_message_id,
                             agent_id=task_info["agent_id"],
                             message_content=MessageContent(
                                 message_task=task_info["task"]
@@ -1196,7 +1339,6 @@ class RoomServices:
                             message_created_at=datetime.now(),
                         )
 
-                        # Save to database
                         agent_message_success = (
                             await self.database_service.add_room_agent_message(
                                 agent_message
@@ -1204,15 +1346,14 @@ class RoomServices:
                         )
                         if agent_message_success:
                             created_agent_messages.append(agent_message)
-                            # Update previous_message_id for next agent in chain
                             previous_message_id = agent_message.message_id
                 else:
-                    # Non-consecutive mentions: all relate directly to user message
+                    # Non-consecutive: relate all to the user message
                     for task_info in tasks_group:
                         agent_message = RoomAgentMessage(
                             room_id=room_id,
                             message_id=str(uuid4()),
-                            related_message_id=message.message_id,  # All relate to user message
+                            related_message_id=message.message_id,
                             agent_id=task_info["agent_id"],
                             message_content=MessageContent(
                                 message_task=task_info["task"]
@@ -1220,180 +1361,6 @@ class RoomServices:
                             message_created_at=datetime.now(),
                         )
 
-                        # Save to database
-                        agent_message_success = (
-                            await self.database_service.add_room_agent_message(
-                                agent_message
-                            )
-                        )
-                        if agent_message_success:
-                            created_agent_messages.append(agent_message)
-
-            except Exception as e:
-                print(
-                    f"Error creating agent messages for context '{context_text}': {e}"
-                )
-
-        return RoomCenterUserMessageResponse(
-            message_id=message.message_id,
-            message=message,
-            success=True,
-            error=None,
-            status_code=200,
-        )
-
-    async def create_and_parse_user_message_with_debate(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        """Send user message and handle @agent parsing with context grouping in debate mode"""
-
-        if request.room_id is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        message = request.message
-        if message is None:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Message is required",
-                status_code=400,
-            )
-
-        # Save user message
-        add_message_success = await self.database_service.add_room_user_message(message)
-        if not add_message_success:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="Failed to add message",
-                status_code=500,
-            )
-
-        # send processing status via sse to client
-        logger.debug(
-            f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}"
-        )
-        await sse_manager.send_processing_status(
-            room_id, "processing", message.message_id
-        )
-
-        # Initialize or update room memory
-        room_memory_initialize_or_update_response = (
-            await self.room_memory_service.initialize_or_update_room_memory(
-                RoomCenterMemoryRequest(
-                    room_id=room_id, memory_content=message.message_content.message_text
-                )
-            )
-        )
-        if not room_memory_initialize_or_update_response.success:
-            return RoomCenterUserMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                success=False,
-                error="Failed to initialize or update room memory",
-                status_code=500,
-            )
-
-        # Get room information
-        room = await self.database_service.get_room_by_room_id(room_id)
-        if not room:
-            return RoomCenterUserMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                success=True,
-                error="Room not found, but message saved",
-                status_code=200,
-            )
-
-        # Parse @agent mentions
-        message_text = message.message_content.message_text
-        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
-
-        # Group mentions by context and detect consecutive patterns
-        context_groups = self.group_mentions_by_context(message_text, mentions)
-
-        # Create tasks with appropriate dependency chains
-        created_agent_messages = []
-        for context_text, group_info in context_groups.items():
-            mentions_in_context = group_info["mentions"]
-            is_consecutive = group_info["is_consecutive"]
-
-            try:
-                # Create shared message content
-                shared_content = self.create_shared_message_content(
-                    context_text, mentions_in_context
-                )
-
-                # Create tasks for all agents in this context
-                tasks_group = await self.create_task_for_agents_group(
-                    message, mentions_in_context, shared_content
-                )
-
-                if is_consecutive:
-                    # Consecutive mentions: create dependency chain
-                    iteration_rounds = (
-                        settings.debate_rounds
-                    )  # todo: can be as parameter
-
-                    previous_message_id = (
-                        message.message_id
-                    )  # Start with user message ID
-
-                    for round_num in range(1, iteration_rounds + 1):
-                        for i, task_info in enumerate(tasks_group):
-                            agent_message = RoomAgentMessage(
-                                room_id=room_id,
-                                message_id=str(uuid4()),
-                                related_message_id=previous_message_id,  # Chain dependency
-                                agent_id=task_info["agent_id"],
-                                message_content=MessageContent(
-                                    message_task=task_info[
-                                        "task"
-                                    ]  # use original task content, not add iteration mark
-                                ),
-                                message_created_at=datetime.now(),
-                                extend_info={
-                                    "iteration_round": round_num,
-                                    "total_rounds": iteration_rounds,
-                                    "agent_sequence": i + 1,
-                                    "total_agents": len(tasks_group),
-                                },
-                            )
-
-                            # Save to database
-                            agent_message_success = (
-                                await self.database_service.add_room_agent_message(
-                                    agent_message
-                                )
-                            )
-                            if agent_message_success:
-                                created_agent_messages.append(agent_message)
-                                # Update previous_message_id for next agent in chain
-                                previous_message_id = agent_message.message_id
-                else:
-                    # Non-consecutive mentions: all relate directly to user message
-                    for task_info in tasks_group:
-                        agent_message = RoomAgentMessage(
-                            room_id=room_id,
-                            message_id=str(uuid4()),
-                            related_message_id=message.message_id,  # All relate to user message
-                            agent_id=task_info["agent_id"],
-                            message_content=MessageContent(
-                                message_task=task_info["task"]
-                            ),
-                            message_created_at=datetime.now(),
-                        )
-
-                        # Save to database
                         agent_message_success = (
                             await self.database_service.add_room_agent_message(
                                 agent_message

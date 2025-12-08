@@ -13,7 +13,6 @@ from uvicorn.config import LOGGING_CONFIG
 from api import (
     agent,
     agent_group,
-    chat,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -109,12 +108,6 @@ app.include_router(
     prefix=api_prefix,
     tags=["agent"],
     # No global auth - handled per-route in agent.py
-)
-app.include_router(
-    chat.router,
-    prefix=api_prefix,
-    tags=["chat"],
-    dependencies=[Depends(get_current_user)],
 )
 app.include_router(
     inspection_center.router,

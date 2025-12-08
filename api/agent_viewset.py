@@ -7,11 +7,7 @@ from api.viewset import REPO_ACTIONS_MAP
 from database.pinecone_db import pinecone_db
 from database.repository import Repository
 from models.request import AgentCreate, AgentPatch, AgentUpdate
-from models.response import (
-    AgentResponse,
-    PaginatedResponse,
-    PaginationMeta,
-)
+from models.response import AgentResponse, PaginatedResponse, PaginationMeta
 from services.openai_service import openai_service
 
 
@@ -20,6 +16,7 @@ class AgentViewSet(viewset.ViewSet):
     CRUD router for managing agents.
     Override update, create, delete methods to update pinecone index as needed.
     """
+
     def __init__(self):
         super().__init__(
             resource_name="agents",
@@ -27,7 +24,10 @@ class AgentViewSet(viewset.ViewSet):
             schema_out=AgentResponse,
             schema_in=AgentCreate,
             schemas={
-                viewset.LIST: {"out": PaginatedResponse[AgentResponse], "meta": PaginationMeta},
+                viewset.LIST: {
+                    "out": PaginatedResponse[AgentResponse],
+                    "meta": PaginationMeta,
+                },
                 viewset.CREATE: {"out": AgentResponse, "in": AgentCreate},
                 viewset.RETRIEVE: {"out": AgentResponse},
                 viewset.UPDATE: {"out": AgentResponse, "in": AgentUpdate},
@@ -40,13 +40,11 @@ class AgentViewSet(viewset.ViewSet):
     async def update_pinecone_index(self, agent_id: str, description: str):
         """Update Pinecone index when an agent is created or updated."""
         # get embedding of agent description
-        embedding_data = await openai_service.get_embedding(
-            description
-        )
+        embedding_data = await openai_service.get_embedding(description)
         vector_data = {
             "id": str(agent_id),
             "values": embedding_data,
-            "metadata": {"type": "a2a_agent"},
+            "metadata": {"type": "a2a_agent", "agent_id": str(agent_id)},
         }
         pinecone_db.upsert([vector_data])
 
@@ -61,13 +59,19 @@ class AgentViewSet(viewset.ViewSet):
             primary_key = args[0]
             existing_agent = await repo.get(primary_key)
             if existing_agent:
-                existing_description = existing_agent.get('agent_card', {}).get('description', '') if existing_agent else ''
+                existing_description = (
+                    existing_agent.get("agent_card", {}).get("description", "")
+                    if existing_agent
+                    else ""
+                )
             else:
                 raise HTTPException(status_code=404, detail="Agent not found")
         if action in [viewset.CREATE, viewset.UPDATE, viewset.PATCH]:
             schema = args[0] if action == viewset.CREATE else args[1]
             # agent_card field is optional and may be None in schema
-            new_description = schema.agent_card.description if schema.agent_card else None
+            new_description = (
+                schema.agent_card.description if schema.agent_card else None
+            )
         if action == viewset.PATCH and new_description is None:
             # For patch, if description not provided, keep existing one
             new_description = existing_description
@@ -83,10 +87,14 @@ class AgentViewSet(viewset.ViewSet):
                 pinecone_db.delete([str(primary_key)])
         return result
 
-
     async def _handle_operation(self, action: str, db: AsyncIOMotorDatabase, *args):
         """Generic handler for CRUD operations."""
-        repo = Repository(collection_name=self.collection_name, db=db, pinecone=None, pk_field=self.pk_field)
+        repo = Repository(
+            collection_name=self.collection_name,
+            db=db,
+            pinecone=None,
+            pk_field=self.pk_field,
+        )
         repo_method = getattr(repo, REPO_ACTIONS_MAP.get(action, action))
         if action in [viewset.LIST, viewset.RETRIEVE]:
             # No update to Pinecone index for read operations
@@ -98,20 +106,19 @@ class AgentViewSet(viewset.ViewSet):
                     return await self._update_db_and_pinecone(repo, action, *args)
         return await self._update_db_and_pinecone(repo, action, *args)
 
-
     def get_filters(self, db, filter_params):
         base_query = super().get_filters(db, filter_params)
         filters = filter_params.filters if filter_params else {}
 
         # Always exclude null agent_ids
         base_query["agent_id"] = {"$ne": None}
-    
+
         if "search" in filters:
             search_term = filters.pop("search")
             base_query["$or"] = [
                 {"name": {"$regex": search_term, "$options": "i"}},
                 {"agent_card.description": {"$regex": search_term, "$options": "i"}},
-                {"tags": {"$in": [search_term]}}
+                {"tags": {"$in": [search_term]}},
             ]
 
         return base_query
