@@ -507,22 +507,108 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
 
-    async def summarize_debate_answer(self, messages: list[str]) -> str:
+    async def summarize_agent_responses(
+        self,
+        agent_responses: list[dict[str, str]],
+        mode: str = "non_debate",
+    ) -> str:
         """
         Summarize the answers from multiple AI agents into a single summary using Lead_ai.
+
+        Args:
+            agent_responses: List of dicts with 'agent_name' and 'message' keys
+                Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
+            mode: Summary mode - "debate" or "non_debate"
+                - "debate": Compares viewpoints, highlights agreements/disagreements
+                - "non_debate": Combines contributions into a unified response
+
+        Returns:
+            Summary text string
         """
-        system_prompt = "You are an expert AI agent tasked with summarizing the debate answers from multiple agents into a concise and comprehensive summary."
+        # Get max words from env variable, default to 200 words
+        max_words = int(os.getenv("SUMMARY_MAX_WORDS", "200"))
+
+        # Select system prompt based on mode
+        if mode == "debate":
+            system_prompt = """You are an expert debate summarizer for multi-agent systems. Your task is to analyze responses from multiple AI agents and create a structured summary that captures different perspectives, agreements, and disagreements.
+
+CORE OBJECTIVES:
+1. Extract and organize distinct viewpoints from each agent
+2. Identify areas of consensus and disagreement
+3. Highlight key insights and actionable recommendations
+4. Maintain agent attribution for all points
+5. Present information in a clear, structured format
+
+ANALYSIS APPROACH:
+- Compare agent responses to identify overlapping vs. unique points
+- Note where agents build upon each other's ideas
+- Identify contradictions or alternative approaches
+- Extract specific data, recommendations, or conclusions from each agent
+- Synthesize complementary information into coherent themes
+
+QUALITY STANDARDS:
+- Use actual agent names, never generic labels
+- Include specific details, data, and reasoning from agents
+- Keep summary concise but comprehensive
+- Focus on substance over process
+- Ensure balanced representation of all agent contributions"""
+
+            user_prompt_template = (
+                "Here are responses from multiple agents with potentially different opinions:\n\n{answers}\n\n"
+                "Summarize the key points from all agents in a structured format. "
+                "Use the actual agent names when referencing their opinions. "
+                "Keep the summary within {max_words} words."
+            )
+        else:
+            # Default: non_debate mode
+            system_prompt = """You are an expert synthesizer for multi-agent collaboration systems. Your task is to combine responses from multiple AI agents into a unified, coherent summary that presents the complete answer to the user's question.
+
+CORE OBJECTIVES:
+1. Synthesize all agent contributions into a unified response
+2. Combine complementary information without redundancy
+3. Present a clear, actionable final answer
+4. Highlight the most important insights and recommendations
+5. Create a seamless narrative that flows naturally
+
+Synthesis APPROACH:
+- Identify how each agent's contribution adds to the complete answer
+- Merge overlapping information, keeping the most detailed version
+- Organize information in a logical flow (context → analysis → recommendations)
+- Ensure all key points from each agent are represented
+- Remove redundancy while preserving unique insights
+
+QUALITY STANDARDS:
+- Create a unified voice (not a list of "Agent X said...")
+- Focus on delivering value to the user
+- Prioritize actionable insights and clear conclusions
+- Keep the summary concise but complete
+- Only attribute to specific agents when their unique expertise is relevant"""
+
+            user_prompt_template = (
+                "Here are responses from multiple agents working together on the user's request:\n\n{answers}\n\n"
+                "Synthesize these into a single, unified response that combines all their contributions. "
+                "Present it as a cohesive answer, not as a comparison of opinions. "
+                "Keep the summary within {max_words} words."
+            )
+
+        # Format agent responses
         answers_text = "\n\n".join(
-            [f"Agent {i + 1}: {msg}" for i, msg in enumerate(messages)]
+            [
+                f"--- {resp.get('agent_name', 'Unknown Agent')} ---\n{resp.get('message', '')}"
+                for resp in agent_responses
+            ]
         )
-        prompt = (
-            f"Here are the answers from different agents:\n{answers_text}\n\n"
-            "Please provide a summary that captures the main points and consensus (if any) from these answers."
+
+        user_prompt = user_prompt_template.format(
+            answers=answers_text,
+            max_words=max_words,
         )
+
         chat_messages = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
-            ChatCompletionUserMessageParam(role="user", content=prompt),
+            ChatCompletionUserMessageParam(role="user", content=user_prompt),
         ]
+
         try:
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
@@ -534,8 +620,21 @@ Your response should be an complete answer with all the specific details the use
                 else ""
             )
         except Exception as e:
-            print(f"Error in summarize_debate_answer: {str(e)}")
+            logger.error(f"Error in summarize_agent_responses (mode={mode}): {str(e)}")
             return f"Error: {str(e)}"
+
+    # Backwards-compatible aliases
+    async def summarize_debate_answer(
+        self, agent_responses: list[dict[str, str]]
+    ) -> str:
+        """Alias for summarize_agent_responses with mode='debate'."""
+        return await self.summarize_agent_responses(agent_responses, mode="debate")
+
+    async def summarize_non_debate_answer(
+        self, agent_responses: list[dict[str, str]]
+    ) -> str:
+        """Alias for summarize_agent_responses with mode='non_debate'."""
+        return await self.summarize_agent_responses(agent_responses, mode="non_debate")
 
     async def generate_chat_context(
         self, user_input: str, agent_response: str, context_data: ContextData

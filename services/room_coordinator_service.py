@@ -45,9 +45,10 @@ class RoomCoordinatorService:
         for a specific room user message.
 
         Current behavior:
-        - If the room is in debate mode and there are at least two non-empty agent
-          responses in the dependency chain for this user message, generate a
-          coordinator summary and publish it as a new agent message.
+        - If there are at least two non-empty agent responses in the dependency
+          chain for this user message, generate a coordinator summary.
+        - In debate mode: Uses debate-style summary (comparing viewpoints)
+        - In normal mode: Uses non_debate-style summary (combining contributions)
 
         Future extensions:
         - Track pending clarification questions that individual agents ask the user
@@ -72,37 +73,47 @@ class RoomCoordinatorService:
             if room.extend_info and isinstance(room.extend_info, dict):
                 is_debate_mode = bool(room.extend_info.get("debateMode", False))
 
-            if not is_debate_mode:
-                # Coordination is currently only enabled for debate mode
-                return
-
-            # Collect all debate agent messages related to this user message
-            debate_messages = await self._collect_agent_messages_for_user_message(
+            # Collect all agent messages related to this user message
+            agent_messages = await self._collect_agent_messages_for_user_message(
                 room_user_message_id
             )
-            if len(debate_messages) < 2:
+            if len(agent_messages) < 2:
                 # Not enough agent answers to justify a summary
                 return
 
-            # Extract visible text from each agent message
-            debate_texts: list[str] = []
-            for msg in debate_messages:
+            # Extract visible text and agent info from each agent message
+            agent_responses: list[dict[str, str]] = []
+            for msg in agent_messages:
                 text = self._extract_agent_text_from_message(msg)
-                if text:
-                    debate_texts.append(text)
+                if text and msg.agent_id:
+                    # Skip summary messages from previous summaries
+                    if msg.agent_id in ("debate_summary", "non_debate_summary"):
+                        continue
+                    # Get agent name from database
+                    agent_name = await self.database_service.get_agent_name_by_agent_id(
+                        msg.agent_id
+                    )
+                    agent_responses.append({
+                        "agent_name": agent_name or msg.agent_id,
+                        "message": text,
+                    })
 
             # Require at least two distinct non-empty answers
-            if len(debate_texts) < 2:
+            if len(agent_responses) < 2:
                 return
 
-            summary_text = await self.openai_service.summarize_debate_answer(
-                debate_texts
+            # Use different summary approach based on mode
+            summary_mode = "debate" if is_debate_mode else "non_debate"
+            summary_text = await self.openai_service.summarize_agent_responses(
+                agent_responses, mode=summary_mode
             )
+            coordinator_agent_id = "debate_summary" if is_debate_mode else "non_debate_summary"
+
             if not summary_text:
                 return
 
             await self._create_and_emit_summary_message(
-                room_id, room_user_message_id, summary_text
+                room_id, room_user_message_id, summary_text, coordinator_agent_id
             )
 
         except Exception as exc:  # noqa: BLE001
@@ -196,9 +207,17 @@ class RoomCoordinatorService:
         room_id: str,
         room_user_message_id: str,
         summary_text: str,
+        coordinator_agent_id: str = "non_debate_summary",
     ) -> None:
         """
         Create a coordinator summary RoomAgentMessage and emit it via SSE.
+
+        Args:
+            room_id: The room ID
+            room_user_message_id: The user message ID this summary relates to
+            summary_text: The summary text content
+            coordinator_agent_id: The agent ID to use for the summary message
+                                  (e.g., "debate_summary" or "non_debate_summary")
         """
         # Build an A2A-style message and task for storage, similar to
         # RoomServices._generate_agent_message_content.
@@ -225,11 +244,6 @@ class RoomCoordinatorService:
 
         summary_content = MessageContent(message_task=summary_task)
 
-        # Use a synthetic agent id for now so the frontend treats this as an
-        # agent response. This can later be replaced by a real coordinator
-        # agent id if desired.
-        coordinator_agent_id = "debate_summary"
-
         summary_agent_message = RoomAgentMessage(
             room_id=room_id,
             message_id=str(uuid4()),
@@ -240,6 +254,7 @@ class RoomCoordinatorService:
             extend_info={
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
+                "summary_type": "debate" if coordinator_agent_id == "debate_summary" else "non_debate",
             },
         )
 
