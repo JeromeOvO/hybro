@@ -60,6 +60,7 @@ export default function ChatPage() {
     
     // Group management modal state
     const [groupManagementOpen, setGroupManagementOpen] = useState(false)
+    const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
     const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
     const [loadingAgents, setLoadingAgents] = useState(false)
     
@@ -147,9 +148,22 @@ export default function ChatPage() {
         }
     }
 
-    // Open group management modal
-    const handleManageGroups = () => {
+    // Group management entry points
+    const handleCreateGroup = () => {
         loadAvailableAgents()
+        setGroupAction({ type: 'create' })
+        setGroupManagementOpen(true)
+    }
+
+    const handleEditGroup = (group: AgentGroup) => {
+        loadAvailableAgents()
+        setGroupAction({ type: 'edit', group })
+        setGroupManagementOpen(true)
+    }
+
+    const handleDeleteGroup = (group: AgentGroup) => {
+        loadAvailableAgents()
+        setGroupAction({ type: 'delete', group })
         setGroupManagementOpen(true)
     }
 
@@ -421,7 +435,9 @@ export default function ChatPage() {
                             selectedGroup={selectedGroup}
                             onGroupChange={handleGroupChange}
                             roomAgentCount={preConfiguredRoom?.selectedAgents.length || 0}
-                            onManageGroups={handleManageGroups}
+                            onCreateGroup={handleCreateGroup}
+                            onEditGroup={handleEditGroup}
+                            onDeleteGroup={handleDeleteGroup}
                             isOverride={isOverride}
                             onClearOverride={handleClearOverride}
                             externalValue={quickStartValue}
@@ -464,13 +480,19 @@ export default function ChatPage() {
             {/* Group Management Modal */}
             <GroupManagementModal
                 open={groupManagementOpen}
-                onOpenChange={setGroupManagementOpen}
+                onOpenChange={(open) => {
+                    setGroupManagementOpen(open)
+                    if (!open) {
+                        setGroupAction(null)
+                    }
+                }}
                 groups={groups}
                 onGroupsChange={handleGroupsChange}
                 availableAgents={availableAgents}
                 loadingAgents={loadingAgents}
                 userId={user?.id || ''}
                 getToken={getToken}
+                initialAction={groupAction || undefined}
             />
 
             {/* Room Settings Dialog */}

@@ -35,6 +35,10 @@ interface GroupManagementModalProps {
   getToken?: () => Promise<string | null>
   loadAgents?: () => Promise<void>
   agentsError?: string | null
+  initialAction?: {
+    type: 'create' | 'edit' | 'delete'
+    group?: AgentGroup
+  }
 }
 
 type Mode = 'list' | 'create' | 'edit' | 'delete-confirm'
@@ -50,6 +54,7 @@ export function GroupManagementModal({
   getToken,
   loadAgents,
   agentsError,
+  initialAction,
 }: GroupManagementModalProps) {
   const [mode, setMode] = useState<Mode>('list')
   const [editingGroup, setEditingGroup] = useState<AgentGroup | null>(null)
@@ -60,6 +65,7 @@ export function GroupManagementModal({
   const [groupToDelete, setGroupToDelete] = useState<AgentGroup | null>(null)
   const [deleting, setDeleting] = useState(false)
   const didRequestAgents = useRef(false)
+  const lastActionKeyRef = useRef<string | null>(null)
 
   // Filter out built-in groups for the list
   const userGroups = groups.filter(g => g.type === 'user')
@@ -71,6 +77,7 @@ export function GroupManagementModal({
       setEditingGroup(null)
       setGroupToDelete(null)
       resetForm()
+      lastActionKeyRef.current = null
       
       // Force cleanup of any stuck body styles from Radix UI
       // This fixes issues where nested portals (HoverCards) can prevent proper cleanup
@@ -95,6 +102,23 @@ export function GroupManagementModal({
     }
     onOpenChange(newOpen)
   }, [onOpenChange])
+
+  // Apply initial action when the modal is opened from external triggers
+  useEffect(() => {
+    if (!open || !initialAction) return
+
+    const key = `${initialAction.type}:${initialAction.group?.group_id || ''}`
+    if (lastActionKeyRef.current === key) return
+    lastActionKeyRef.current = key
+
+    if (initialAction.type === 'create') {
+      handleCreate()
+    } else if (initialAction.type === 'edit' && initialAction.group) {
+      handleEdit(initialAction.group)
+    } else if (initialAction.type === 'delete' && initialAction.group) {
+      handleDeleteClick(initialAction.group)
+    }
+  }, [open, initialAction])
 
   const resetForm = () => {
     setGroupName('')
@@ -159,10 +183,7 @@ export function GroupManagementModal({
   }, [mode, editingGroup, availableAgents])
 
   const handleBack = () => {
-    setMode('list')
-    setEditingGroup(null)
-    setGroupToDelete(null)
-    resetForm()
+    handleOpenChange(false)
   }
 
   const handleAgentAdd = (agent: Agent) => {
@@ -463,7 +484,7 @@ export function GroupManagementModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-background/95 backdrop-blur-md border border-border/50 shadow-lg">
+      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
         {renderContent()}
       </DialogContent>
     </Dialog>

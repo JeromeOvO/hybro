@@ -1,5 +1,5 @@
 'use client'
-import { ChevronDown, Globe, Users, UserCog, X, Loader2 } from 'lucide-react'
+import { ChevronDown, Globe, Users, X, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -25,7 +25,9 @@ interface GroupSelectorProps {
   roomAgentCount?: number
   mentionedAgents?: MentionedAgent[]
   onClearMentions?: () => void
-  onManageGroups?: () => void
+  onCreateGroup?: () => void
+  onEditGroup?: (group: AgentGroup) => void
+  onDeleteGroup?: (group: AgentGroup) => void
   className?: string
   disabled?: boolean
   isOverride?: boolean  // Is an override currently active?
@@ -40,7 +42,9 @@ export function GroupSelector({
   roomAgentCount = 0,
   mentionedAgents = [],
   onClearMentions,
-  onManageGroups,
+  onCreateGroup,
+  onEditGroup,
+  onDeleteGroup,
   className,
   disabled = false,
   isOverride = false,
@@ -157,65 +161,107 @@ export function GroupSelector({
         </DropdownMenuTrigger>
         <DropdownMenuContent 
           align="start" 
-          className="w-64 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-60 overflow-y-auto"
+          className="w-[min(90vw,18rem)] sm:w-72 sm:max-w-88 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-[70vh] sm:max-h-72 overflow-hidden overflow-x-hidden p-0 pb-1"
         >
-          {/* Override options header */}
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-            Override Target
-          </div>
-          
-          {/* All Agents option */}
-          <DropdownMenuItem
-            onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
-            className={cn(
-              "flex items-start gap-3 py-2.5",
-              isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
-            )}
-          >
-            <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
-            <div className="flex-1">
-              <div className="font-medium">All Agents</div>
-              <div className="text-xs text-muted-foreground">
-                Find the best agents for your question
-              </div>
+          <div className="max-h-[calc(70vh-3rem)] sm:max-h-60 overflow-y-auto overflow-x-hidden">
+            {/* Override options header */}
+            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+              Override Target
             </div>
-          </DropdownMenuItem>
-
-          {/* User groups */}
-          {userGroups.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                My Groups
+            
+            {/* All Agents option */}
+            <DropdownMenuItem
+              onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
+              className={cn(
+                "flex items-start gap-3 py-2.5",
+                isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
+              )}
+              title="Find the best agents for your question"
+            >
+              <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
+              <div className="flex-1">
+                <div className="font-medium">All Agents</div>
               </div>
-              {userGroups.map(group => (
-                <DropdownMenuItem
-                  key={group.group_id}
-                  onClick={() => onGroupChange(group.group_id)}
-                  className={cn(
-                    "flex items-start gap-3 py-2.5",
-                    isOverride && selectedGroup === group.group_id && "bg-accent"
-                  )}
-                >
-                  <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
-                  <div className="flex-1">
-                    <div className="font-medium">{group.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
-                    </div>
-                  </div>
-                </DropdownMenuItem>
-              ))}
-            </>
-          )}
+            </DropdownMenuItem>
 
-          {/* Manage groups */}
-          {onManageGroups && (
+            {/* User groups */}
+            {userGroups.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                  My Groups
+                </div>
+                {userGroups.map(group => (
+                  <DropdownMenuItem
+                    key={group.group_id}
+                    onClick={() => onGroupChange(group.group_id)}
+                    className={cn(
+                      "flex items-start gap-3 py-2.5",
+                      isOverride && selectedGroup === group.group_id && "bg-accent"
+                    )}
+                  >
+                    <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{group.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">
+                        {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                    {(onEditGroup || onDeleteGroup) && (
+                      <div className="flex items-center gap-1 mt-0.5">
+                        {onEditGroup && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            title={`Edit ${group.name}`}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onEditGroup(group)
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {onDeleteGroup && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-destructive hover:text-destructive"
+                            title={`Delete ${group.name}`}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onDeleteGroup(group)
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
+          </div>
+
+          {/* Create group (sticky footer) */}
+          {onCreateGroup && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onManageGroups} className="text-muted-foreground">
-                <UserCog className="h-4 w-4 mr-2" />
-                Manage groups...
+              <DropdownMenuItem 
+                onClick={(e) => {
+                  e.preventDefault()
+                  onCreateGroup()
+                }} 
+                className="text-foreground font-medium gap-2 py-2.5 px-3"
+              >
+                <Plus className="h-4 w-4" />
+                Create Group
               </DropdownMenuItem>
             </>
           )}

@@ -41,7 +41,9 @@ interface ChatInputProps {
   selectedGroup?: string
   onGroupChange?: (groupId: string) => void
   roomAgentCount?: number
-  onManageGroups?: () => void
+  onCreateGroup?: () => void
+  onEditGroup?: (group: AgentGroup) => void
+  onDeleteGroup?: (group: AgentGroup) => void
   isOverride?: boolean
   onClearOverride?: () => void
 }
@@ -66,7 +68,9 @@ export function ChatInput({
   selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
   onGroupChange,
   roomAgentCount = 0,
-  onManageGroups,
+  onCreateGroup,
+  onEditGroup,
+  onDeleteGroup,
   isOverride = false,
   onClearOverride,
 }: ChatInputProps) {
@@ -166,7 +170,9 @@ export function ChatInput({
               groups={groups}
               loadingGroups={loadingGroups}
               roomAgentCount={roomAgentCount}
-              onManageGroups={onManageGroups}
+              onCreateGroup={onCreateGroup}
+              onEditGroup={onEditGroup}
+              onDeleteGroup={onDeleteGroup}
               disabled={disabled}
               isOverride={isOverride}
               onClearOverride={onClearOverride}
