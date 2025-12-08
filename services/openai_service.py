@@ -630,7 +630,7 @@ QUALITY STANDARDS:
         """Alias for summarize_agent_responses with mode='debate'."""
         return await self.summarize_agent_responses(agent_responses, mode="debate")
 
-    async def summarize_multi_agent_responses(
+    async def summarize_non_debate_answer(
         self, agent_responses: list[dict[str, str]]
     ) -> str:
         """Alias for summarize_agent_responses with mode='synthesis'."""
