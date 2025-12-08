@@ -282,40 +282,47 @@ export default function RoomChatPage() {
 
     // Check sessionStorage for initial message
     const storageKey = `room-${roomId}-initial-message`
-    const initialMessage = sessionStorage.getItem(storageKey)
+    const targetGroupKey = `room-${roomId}-target-group`
+    const sentKey = `${storageKey}-sent`
 
-    if (initialMessage) {
-      console.log('📨 Found initial message, sending automatically:', initialMessage)
-      
-      // Mark as sent immediately to prevent duplicate sends
-      initialMessageSentRef.current = true
-      
-      // Get the target group from sessionStorage (set by chat page)
-      const targetGroupKey = `room-${roomId}-target-group`
-      const storedTargetGroup = sessionStorage.getItem(targetGroupKey)
-      
-      // Use the stored target group, or fall back to determining based on room agents
-      const targetGroup = storedTargetGroup || (
-        room.room_agent_set && Object.keys(room.room_agent_set).length > 0 
-          ? BUILTIN_GROUP_ROOM_TEAM 
-          : BUILTIN_GROUP_ALL_AGENTS
-      )
-      
-      console.log('📨 Sending with target group:', targetGroup, 'storedTargetGroup:', storedTargetGroup)
-      
-      sendUserMessage(initialMessage, targetGroup).then((success) => {
-        if (success) {
-          console.log('✅ Initial message sent successfully')
-          // Only clear sessionStorage AFTER successful send
-          sessionStorage.removeItem(storageKey)
-          sessionStorage.removeItem(targetGroupKey)
-        } else {
-          console.error('❌ Failed to send initial message')
-          // Reset the flag so user can retry (message still in sessionStorage)
-          initialMessageSentRef.current = false
-        }
-      })
+    const initialMessage = sessionStorage.getItem(storageKey)
+    // Guard against StrictMode double-mount triggering duplicate sends
+    if (!initialMessage || sessionStorage.getItem(sentKey)) {
+      return
     }
+
+    console.log('📨 Found initial message, sending automatically:', initialMessage)
+    
+    // Mark as sent immediately to prevent duplicate sends
+    initialMessageSentRef.current = true
+    sessionStorage.setItem(sentKey, '1')
+    
+    // Get the target group from sessionStorage (set by chat page)
+    const storedTargetGroup = sessionStorage.getItem(targetGroupKey)
+    
+    // Use the stored target group, or fall back to determining based on room agents
+    const targetGroup = storedTargetGroup || (
+      room.room_agent_set && Object.keys(room.room_agent_set).length > 0 
+        ? BUILTIN_GROUP_ROOM_TEAM 
+        : BUILTIN_GROUP_ALL_AGENTS
+    )
+    
+    console.log('📨 Sending with target group:', targetGroup, 'storedTargetGroup:', storedTargetGroup)
+    
+    sendUserMessage(initialMessage, targetGroup).then((success) => {
+      if (success) {
+        console.log('✅ Initial message sent successfully')
+        // Only clear sessionStorage AFTER successful send
+        sessionStorage.removeItem(storageKey)
+        sessionStorage.removeItem(targetGroupKey)
+        sessionStorage.removeItem(sentKey)
+      } else {
+        console.error('❌ Failed to send initial message')
+        // Reset the flag so user can retry (message still in sessionStorage)
+        sessionStorage.removeItem(sentKey)
+        initialMessageSentRef.current = false
+      }
+    })
   }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
