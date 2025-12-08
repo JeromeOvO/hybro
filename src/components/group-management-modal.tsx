@@ -29,12 +29,17 @@ interface GroupManagementModalProps {
   onOpenChange: (open: boolean) => void
   groups: AgentGroup[]
   onGroupsChange: () => void
+  onGroupCreated?: (group: AgentGroup) => void
   availableAgents: Agent[]
   loadingAgents: boolean
   userId: string
   getToken?: () => Promise<string | null>
   loadAgents?: () => Promise<void>
   agentsError?: string | null
+  initialAction?: {
+    type: 'create' | 'edit' | 'delete'
+    group?: AgentGroup
+  }
 }
 
 type Mode = 'list' | 'create' | 'edit' | 'delete-confirm'
@@ -44,12 +49,14 @@ export function GroupManagementModal({
   onOpenChange,
   groups,
   onGroupsChange,
+  onGroupCreated,
   availableAgents,
   loadingAgents,
   userId,
   getToken,
   loadAgents,
   agentsError,
+  initialAction,
 }: GroupManagementModalProps) {
   const [mode, setMode] = useState<Mode>('list')
   const [editingGroup, setEditingGroup] = useState<AgentGroup | null>(null)
@@ -60,54 +67,23 @@ export function GroupManagementModal({
   const [groupToDelete, setGroupToDelete] = useState<AgentGroup | null>(null)
   const [deleting, setDeleting] = useState(false)
   const didRequestAgents = useRef(false)
+  const lastActionKeyRef = useRef<string | null>(null)
 
   // Filter out built-in groups for the list
   const userGroups = groups.filter(g => g.type === 'user')
 
-  // Reset all state when modal closes and ensure body styles are cleaned up
-  useEffect(() => {
-    if (!open) {
-      setMode('list')
-      setEditingGroup(null)
-      setGroupToDelete(null)
-      resetForm()
-      
-      // Force cleanup of any stuck body styles from Radix UI
-      // This fixes issues where nested portals (HoverCards) can prevent proper cleanup
-      const cleanup = () => {
-        document.body.style.pointerEvents = ''
-        document.body.style.overflow = ''
-      }
-      // Run cleanup after animation completes (200ms is the dialog animation duration)
-      const timeoutId = setTimeout(cleanup, 250)
-      return () => clearTimeout(timeoutId)
-    }
-  }, [open])
-  
-  // Safe close handler that ensures proper state reset
-  const handleOpenChange = useCallback((newOpen: boolean) => {
-    if (!newOpen) {
-      // Reset state before closing to ensure clean unmount
-      setMode('list')
-      setEditingGroup(null)
-      setGroupToDelete(null)
-      resetForm()
-    }
-    onOpenChange(newOpen)
-  }, [onOpenChange])
-
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setGroupName('')
     setGroupDescription('')
     setSelectedAgents({})
-  }
+  }, [])
 
-  const handleCreate = () => {
+  const handleCreate = useCallback(() => {
     setMode('create')
     resetForm()
-  }
+  }, [resetForm])
 
-  const handleEdit = (group: AgentGroup) => {
+  const handleEdit = useCallback((group: AgentGroup) => {
     setMode('edit')
     setEditingGroup(group)
     setGroupName(group.name)
@@ -122,7 +98,62 @@ export function GroupManagementModal({
       }
     }
     setSelectedAgents(agentsMap)
-  }
+  }, [availableAgents])
+
+  const handleDeleteClick = useCallback((group: AgentGroup) => {
+    setGroupToDelete(group)
+    setMode('delete-confirm')
+  }, [])
+
+  // Reset all state when modal closes and ensure body styles are cleaned up
+  useEffect(() => {
+    if (!open) {
+      setMode('list')
+      setEditingGroup(null)
+      setGroupToDelete(null)
+      resetForm()
+      lastActionKeyRef.current = null
+      
+      // Force cleanup of any stuck body styles from Radix UI
+      // This fixes issues where nested portals (HoverCards) can prevent proper cleanup
+      const cleanup = () => {
+        document.body.style.pointerEvents = ''
+        document.body.style.overflow = ''
+      }
+      // Run cleanup after animation completes (200ms is the dialog animation duration)
+      const timeoutId = setTimeout(cleanup, 250)
+      return () => clearTimeout(timeoutId)
+    }
+  }, [open, resetForm])
+  
+  // Safe close handler that ensures proper state reset
+  const handleOpenChange = useCallback((newOpen: boolean) => {
+    if (!newOpen) {
+      // Reset state before closing to ensure clean unmount
+      setMode('list')
+      setEditingGroup(null)
+      setGroupToDelete(null)
+      resetForm()
+    }
+    onOpenChange(newOpen)
+  }, [onOpenChange, resetForm])
+
+  // Apply initial action when the modal is opened from external triggers
+  useEffect(() => {
+    if (!open || !initialAction) return
+
+    const key = `${initialAction.type}:${initialAction.group?.group_id || ''}`
+    if (lastActionKeyRef.current === key) return
+    lastActionKeyRef.current = key
+
+    if (initialAction.type === 'create') {
+      handleCreate()
+    } else if (initialAction.type === 'edit' && initialAction.group) {
+      handleEdit(initialAction.group)
+    } else if (initialAction.type === 'delete' && initialAction.group) {
+      handleDeleteClick(initialAction.group)
+    }
+  }, [open, initialAction, handleCreate, handleEdit, handleDeleteClick])
 
   // Ensure agents are loaded when modal opens
   useEffect(() => {
@@ -159,10 +190,7 @@ export function GroupManagementModal({
   }, [mode, editingGroup, availableAgents])
 
   const handleBack = () => {
-    setMode('list')
-    setEditingGroup(null)
-    setGroupToDelete(null)
-    resetForm()
+    handleOpenChange(false)
   }
 
   const handleAgentAdd = (agent: Agent) => {
@@ -205,6 +233,9 @@ export function GroupManagementModal({
 
         if (response.success) {
           banner.success('Group created successfully')
+          if (response.group) {
+            onGroupCreated?.(response.group)
+          }
           onGroupsChange()
           handleBack()
         } else {
@@ -232,11 +263,6 @@ export function GroupManagementModal({
     } finally {
       setSaving(false)
     }
-  }
-
-  const handleDeleteClick = (group: AgentGroup) => {
-    setGroupToDelete(group)
-    setMode('delete-confirm')
   }
 
   const handleDeleteConfirm = async () => {
@@ -313,7 +339,7 @@ export function GroupManagementModal({
                           variant="ghost"
                           size="icon"
                           onClick={() => handleDeleteClick(group)}
-                          className="text-destructive hover:text-destructive"
+                          className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -410,8 +436,8 @@ export function GroupManagementModal({
         return (
           <>
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
+              <DialogTitle className="flex items-center gap-2 text-amber-700">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
                 Delete Group
               </DialogTitle>
               <DialogDescription>
@@ -437,9 +463,10 @@ export function GroupManagementModal({
                 Cancel
               </Button>
               <Button
-                variant="destructive"
+                variant="default"
                 onClick={handleDeleteConfirm}
                 disabled={deleting}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
               >
                 {deleting ? (
                   <>
@@ -463,7 +490,7 @@ export function GroupManagementModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-background/95 backdrop-blur-md border border-border/50 shadow-lg">
+      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
         {renderContent()}
       </DialogContent>
     </Dialog>

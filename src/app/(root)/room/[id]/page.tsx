@@ -10,7 +10,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import {
   Tooltip,
@@ -52,6 +51,7 @@ export default function RoomChatPage() {
   const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ROOM_TEAM)
   const [isOverride, setIsOverride] = useState(false)  // Track if override is active
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
+  const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
   
   const {
     room,
@@ -168,12 +168,49 @@ export default function RoomChatPage() {
     }
   }
 
-  // Open group management modal
-  const handleManageGroups = () => {
+  // Group management entry points
+  const handleCreateGroup = () => {
     if (availableAgents.length === 0) {
       loadAvailableAgents()
     }
+    setGroupAction({ type: 'create' })
     setGroupManagementOpen(true)
+  }
+
+  const handleEditGroup = (group: AgentGroup) => {
+    if (availableAgents.length === 0) {
+      loadAvailableAgents()
+    }
+    setGroupAction({ type: 'edit', group })
+    setGroupManagementOpen(true)
+  }
+
+  const handleDeleteGroup = (group: AgentGroup) => {
+    if (availableAgents.length === 0) {
+      loadAvailableAgents()
+    }
+    setGroupAction({ type: 'delete', group })
+    setGroupManagementOpen(true)
+  }
+
+  const handleGroupCreated = (group: AgentGroup) => {
+    setGroups(prev => {
+      const exists = prev.some(g => g.group_id === group.group_id)
+      return exists
+        ? prev.map(g => g.group_id === group.group_id ? group : g)
+        : [...prev, group]
+    })
+    setSelectedGroup(group.group_id)
+    setIsOverride(true)
+    localStorage.setItem(`room-${roomId}-override-group`, group.group_id)
+  }
+
+  // Open room settings dialog (prefetch agents to avoid visible delay)
+  const handleOpenRoomSettings = async () => {
+    if (availableAgents.length === 0 && !loadingAgents) {
+      await loadAvailableAgents()
+    }
+    setDialogOpen(true)
   }
 
   // Handle group change (override) with localStorage persistence
@@ -415,12 +452,32 @@ export default function RoomChatPage() {
                 </Button>
               )}
               
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon">
-                    <Settings className="h-5 w-5 icon-neutral" />
-                  </Button>
-                </DialogTrigger>
+                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                  <div className="flex items-center gap-2">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={handleOpenRoomSettings}
+                            className="text-primary hover:text-primary hover:bg-primary/10 shadow-sm"
+                            aria-label="Room settings"
+                            onMouseEnter={() => {
+                              if (availableAgents.length === 0 && !loadingAgents) {
+                                loadAvailableAgents()
+                              }
+                            }}
+                          >
+                            <Settings className="h-5 w-5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Configure room settings</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
                   <DialogHeader>
                     <DialogTitle>Room Settings</DialogTitle>
@@ -465,7 +522,9 @@ export default function RoomChatPage() {
             selectedGroup={selectedGroup}
             onGroupChange={handleGroupChange}
             roomAgentCount={roomAgentCount}
-            onManageGroups={handleManageGroups}
+            onCreateGroup={handleCreateGroup}
+            onEditGroup={handleEditGroup}
+            onDeleteGroup={handleDeleteGroup}
             isOverride={isOverride}
             onClearOverride={handleClearOverride}
           />
@@ -475,15 +534,22 @@ export default function RoomChatPage() {
       {/* Group Management Modal */}
       <GroupManagementModal
         open={groupManagementOpen}
-        onOpenChange={setGroupManagementOpen}
+        onOpenChange={(open) => {
+          setGroupManagementOpen(open)
+          if (!open) {
+            setGroupAction(null)
+          }
+        }}
         groups={groups}
         onGroupsChange={handleGroupsChange}
+        onGroupCreated={handleGroupCreated}
         availableAgents={availableAgents}
         loadingAgents={loadingAgents}
         userId={user?.id || ''}
         getToken={getToken}
         loadAgents={loadAvailableAgents}
         agentsError={agentsError}
+        initialAction={groupAction || undefined}
       />
     </div>
   )

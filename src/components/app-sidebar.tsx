@@ -2,14 +2,7 @@
 
 import * as React from "react"
 import Image from "next/image"
-import {
-  BookOpen,
-  VectorSquare,
-  InspectionPanel,
-  MessageCirclePlus,
-  History,
-  PanelLeftIcon,
-} from "lucide-react"
+import { History, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavMain } from "@/components/nav-main"
@@ -17,6 +10,7 @@ import { NavAgent } from "@/components/nav-agent"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
+import { NAV_AGENTS } from "@/lib/nav-items"
 import {
   Sidebar,
   SidebarContent,
@@ -27,29 +21,6 @@ import {
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { Room } from "@/lib/types/room"
-
-const staticNavAgents = [
-  {
-    name: "New Chat",
-    url: "/chat",
-    icon: MessageCirclePlus,
-  },
-  {
-    name: "Agent Network",
-    url: "/agent",
-    icon: VectorSquare,
-  },
-  {
-    name: "A2A Agent Inspector",
-    url: "/inspector",
-    icon: InspectionPanel,
-  },
-  {
-    name: "About HYBRO",
-    url: "/about",
-    icon: BookOpen,
-  }
-]
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
@@ -150,7 +121,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <NavAgent navAgents={staticNavAgents} />
+          <NavAgent navAgents={NAV_AGENTS} />
           <NavMain items={navMainData} />
         </SidebarContent>
         <SidebarFooter>

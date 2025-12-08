@@ -1,5 +1,5 @@
 'use client'
-import { ChevronDown, Globe, Users, UserCog, X, Loader2 } from 'lucide-react'
+import { ChevronDown, Globe, Users, X, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -8,6 +8,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
@@ -25,7 +31,10 @@ interface GroupSelectorProps {
   roomAgentCount?: number
   mentionedAgents?: MentionedAgent[]
   onClearMentions?: () => void
-  onManageGroups?: () => void
+  onCreateGroup?: () => void
+  onEditGroup?: (group: AgentGroup) => void
+  onDeleteGroup?: (group: AgentGroup) => void
+  agentNameMap?: Record<string, string>
   className?: string
   disabled?: boolean
   isOverride?: boolean  // Is an override currently active?
@@ -40,7 +49,10 @@ export function GroupSelector({
   roomAgentCount = 0,
   mentionedAgents = [],
   onClearMentions,
-  onManageGroups,
+  onCreateGroup,
+  onEditGroup,
+  onDeleteGroup,
+  agentNameMap = {},
   className,
   disabled = false,
   isOverride = false,
@@ -140,87 +152,165 @@ export function GroupSelector({
 
   return (
     <div className={cn("flex items-center gap-1", className)}>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild disabled={disabled}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              "h-auto py-1.5 px-3 gap-1.5 font-normal hover:bg-muted/50",
-              isOverride && "bg-primary/10 border border-primary/20"
-            )}
+      <TooltipProvider delayDuration={100}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild disabled={disabled}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
+                isOverride && "bg-primary/10"
+              )}
+            >
+              <span className="text-muted-foreground">{displayInfo.icon}</span>
+              <span className="font-medium">{displayInfo.label}</span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent 
+            align="start" 
+            className="w-[min(90vw,18rem)] sm:w-72 sm:max-w-88 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-[70vh] sm:max-h-72 overflow-hidden overflow-x-hidden p-0 pb-1"
           >
-            <span className="text-muted-foreground">{displayInfo.icon}</span>
-            <span className="font-medium">{displayInfo.label}</span>
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent 
-          align="start" 
-          className="w-64 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-60 overflow-y-auto"
-        >
-          {/* Override options header */}
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-            Override Target
-          </div>
-          
-          {/* All Agents option */}
-          <DropdownMenuItem
-            onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
-            className={cn(
-              "flex items-start gap-3 py-2.5",
-              isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
-            )}
-          >
-            <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
-            <div className="flex-1">
-              <div className="font-medium">All Agents</div>
-              <div className="text-xs text-muted-foreground">
-                Find the best agents for your question
-              </div>
-            </div>
-          </DropdownMenuItem>
-
-          {/* User groups */}
-          {userGroups.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
+            <div className="max-h-[calc(70vh-3rem)] sm:max-h-60 overflow-y-auto overflow-x-hidden">
+              {/* Override options header */}
               <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                My Groups
+                Override Target
               </div>
-              {userGroups.map(group => (
+              
+            {/* All Agents option */}
+            <Tooltip delayDuration={150}>
+              <TooltipTrigger asChild>
                 <DropdownMenuItem
-                  key={group.group_id}
-                  onClick={() => onGroupChange(group.group_id)}
+                  onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
                   className={cn(
                     "flex items-start gap-3 py-2.5",
-                    isOverride && selectedGroup === group.group_id && "bg-accent"
+                    isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
                   )}
                 >
-                  <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                  <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
                   <div className="flex-1">
-                    <div className="font-medium">{group.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
-                    </div>
+                    <div className="font-medium">All Agents</div>
                   </div>
                 </DropdownMenuItem>
-              ))}
-            </>
-          )}
+              </TooltipTrigger>
+              <TooltipContent
+                side="left"
+                align="end"
+                sideOffset={0}
+                alignOffset={0}
+                className="max-w-xs w-fit whitespace-normal wrap-break-word"
+              >
+                <div className="text-xs text-muted-foreground">Auto select the best agents</div>
+              </TooltipContent>
+            </Tooltip>
 
-          {/* Manage groups */}
-          {onManageGroups && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onManageGroups} className="text-muted-foreground">
-                <UserCog className="h-4 w-4 mr-2" />
-                Manage groups...
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+              {/* User groups */}
+              {userGroups.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                    My Groups
+                  </div>
+                  {userGroups.map(group => (
+                    <Tooltip key={group.group_id} delayDuration={150}>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuItem
+                          onClick={() => onGroupChange(group.group_id)}
+                          className={cn(
+                            "flex items-start gap-3 py-2.5",
+                            isOverride && selectedGroup === group.group_id && "bg-accent"
+                          )}
+                        >
+                          <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">{group.name}</div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {group.agents.length} agent{group.agents.length !== 1 ? 's' : ''}
+                            </div>
+                          </div>
+                          {(onEditGroup || onDeleteGroup) && (
+                            <div className="flex items-center gap-1 mt-0.5">
+                              {onEditGroup && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  title={`Edit ${group.name}`}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    onEditGroup(group)
+                                  }}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {onDeleteGroup && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  title={`Delete ${group.name}`}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    onDeleteGroup(group)
+                                  }}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </DropdownMenuItem>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="left"
+                        align="end"
+                        sideOffset={0}
+                        alignOffset={0}
+                        className="max-w-xs w-fit whitespace-normal wrap-break-word"
+                      >
+                        {group.agents.length === 0 ? (
+                          <div className="text-xs text-muted-foreground">No agents in this group</div>
+                        ) : (
+                          <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                            {group.agents.map(agentId => (
+                              <div key={agentId} className="text-xs text-muted-foreground">
+                                {agentNameMap[agentId] || agentId}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </>
+              )}
+            </div>
+
+            {/* Create group (sticky footer) */}
+            {onCreateGroup && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem 
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onCreateGroup()
+                  }} 
+                  className="text-foreground font-medium gap-2 py-2.5 px-3"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create Group
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </TooltipProvider>
       
       {/* Clear button - only visible when override is active */}
       {isOverride && onClearOverride && (
@@ -228,7 +318,7 @@ export function GroupSelector({
           variant="ghost"
           size="sm"
           onClick={onClearOverride}
-          className="h-auto py-1 px-2 text-muted-foreground hover:text-foreground"
+          className="h-8 min-h-8 px-2 text-muted-foreground hover:text-foreground flex items-center"
           title="Clear override, use room default"
         >
           <X className="h-3.5 w-3.5" />

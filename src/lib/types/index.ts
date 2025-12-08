@@ -33,7 +33,6 @@ export type {
 
 export type {
   AgentCenterRequest,
-  ChatRequest,
   InspectionCenterRequest,
   TaskCenterRequest,
   UserInput,
@@ -42,7 +41,6 @@ export type {
 
 export type {
   AgentCenterResponse,
-  ChatResponse,
   InspectionCenterResponse,
   TaskCenterResponse,
   InsepectionCenterConnectionValidationResponse,

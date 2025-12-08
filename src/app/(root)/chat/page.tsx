@@ -60,6 +60,7 @@ export default function ChatPage() {
     
     // Group management modal state
     const [groupManagementOpen, setGroupManagementOpen] = useState(false)
+    const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
     const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
     const [loadingAgents, setLoadingAgents] = useState(false)
     
@@ -147,10 +148,34 @@ export default function ChatPage() {
         }
     }
 
-    // Open group management modal
-    const handleManageGroups = () => {
+    // Group management entry points
+    const handleCreateGroup = () => {
         loadAvailableAgents()
+        setGroupAction({ type: 'create' })
         setGroupManagementOpen(true)
+    }
+
+    const handleEditGroup = (group: AgentGroup) => {
+        loadAvailableAgents()
+        setGroupAction({ type: 'edit', group })
+        setGroupManagementOpen(true)
+    }
+
+    const handleDeleteGroup = (group: AgentGroup) => {
+        loadAvailableAgents()
+        setGroupAction({ type: 'delete', group })
+        setGroupManagementOpen(true)
+    }
+
+    const handleGroupCreated = (group: AgentGroup) => {
+        setGroups(prev => {
+            const exists = prev.some(g => g.group_id === group.group_id)
+            return exists
+                ? prev.map(g => g.group_id === group.group_id ? group : g)
+                : [...prev, group]
+        })
+        setSelectedGroup(group.group_id)
+        setIsOverride(true)
     }
 
     // Handle group change (override)
@@ -360,8 +385,10 @@ export default function ChatPage() {
                                         variant="ghost" 
                                         size="icon" 
                                         onClick={handleOpenRoomSettings}
+                                        className="text-primary hover:text-primary hover:bg-primary/10 shadow-sm"
+                                        aria-label="Room settings"
                                     >
-                                        <Settings className="h-5 w-5 icon-neutral" />
+                                        <Settings className="h-5 w-5" />
                                     </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
@@ -392,7 +419,7 @@ export default function ChatPage() {
                             >
                             BRO
                             </span>
-                            <span className="ml-2 text-foreground inline-block text-3xl skew-x-150 scale-125 rotate-6">!</span>
+                            <span className="ml-2 icon-exclaim inline-block text-3xl skew-x-150 scale-125 rotate-6">!</span>
                         </h1>
                         <p className="text-muted-foreground">
                             What would you like to work on today?
@@ -421,7 +448,9 @@ export default function ChatPage() {
                             selectedGroup={selectedGroup}
                             onGroupChange={handleGroupChange}
                             roomAgentCount={preConfiguredRoom?.selectedAgents.length || 0}
-                            onManageGroups={handleManageGroups}
+                            onCreateGroup={handleCreateGroup}
+                            onEditGroup={handleEditGroup}
+                            onDeleteGroup={handleDeleteGroup}
                             isOverride={isOverride}
                             onClearOverride={handleClearOverride}
                             externalValue={quickStartValue}
@@ -464,13 +493,20 @@ export default function ChatPage() {
             {/* Group Management Modal */}
             <GroupManagementModal
                 open={groupManagementOpen}
-                onOpenChange={setGroupManagementOpen}
+                onOpenChange={(open) => {
+                    setGroupManagementOpen(open)
+                    if (!open) {
+                        setGroupAction(null)
+                    }
+                }}
                 groups={groups}
                 onGroupsChange={handleGroupsChange}
+                onGroupCreated={handleGroupCreated}
                 availableAgents={availableAgents}
                 loadingAgents={loadingAgents}
                 userId={user?.id || ''}
                 getToken={getToken}
+                initialAction={groupAction || undefined}
             />
 
             {/* Room Settings Dialog */}

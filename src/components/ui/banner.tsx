@@ -1,7 +1,6 @@
 "use client"
 
 import type { JSX } from "react"
-import { useEffect, useLayoutEffect, useRef } from "react"
 import { create } from "zustand"
 import { X, CheckCircle2, Info, AlertTriangle, AlertCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -126,13 +125,13 @@ export const toast = banner
 
 const typeStyles: Record<BannerType, string> = {
   success:
-    "border-green-200 bg-green-50 text-green-900 shadow-green-100/60 dark:border-green-900/60 dark:bg-green-900/40 dark:text-green-50",
+    "border-green-200 bg-green-50 text-green-900 shadow-green-100/60 dark:border-green-900/60 dark:bg-green-900/70 dark:text-green-50",
   error:
-    "border-red-200 bg-red-50 text-red-900 shadow-red-100/60 dark:border-red-900/60 dark:bg-red-900/40 dark:text-red-50",
+    "border-red-200 bg-red-50 text-red-900 shadow-red-100/60 dark:border-red-900/60 dark:bg-red-900/70 dark:text-red-50",
   info:
-    "border-sky-200 bg-sky-50 text-sky-900 shadow-sky-100/60 dark:border-sky-900/60 dark:bg-sky-900/40 dark:text-sky-50",
+    "border-sky-200 bg-sky-50 text-sky-900 shadow-sky-100/60 dark:border-sky-900/60 dark:bg-sky-900/70 dark:text-sky-50",
   warning:
-    "border-amber-200 bg-amber-50 text-amber-900 shadow-amber-100/60 dark:border-amber-900/60 dark:bg-amber-900/40 dark:text-amber-50",
+    "border-amber-200 bg-amber-50 text-amber-900 shadow-amber-100/60 dark:border-amber-900/60 dark:bg-amber-900/70 dark:text-amber-50",
 }
 
 const typeIcon: Record<BannerType, JSX.Element> = {
@@ -147,25 +146,11 @@ export function BannerHost() {
   const removeBanner = useBannerStore((state) => state.removeBanner)
   const MAX_VISIBLE = 3
   const visibleBanners = banners.slice(-MAX_VISIBLE)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-
-  useLayoutEffect(() => {
-    const el = containerRef.current
-    const root = document.documentElement
-    const height = el?.offsetHeight ?? 0
-    root.style.setProperty("--banner-offset", `${height}px`)
-  }, [visibleBanners.length])
-
-  useEffect(() => {
-    return () => {
-      document.documentElement.style.removeProperty("--banner-offset")
-    }
-  }, [])
 
   if (visibleBanners.length === 0) return null
 
   return (
-    <div ref={containerRef} className="pointer-events-none sticky top-0 inset-x-0 z-50 w-full">
+    <div className="pointer-events-none fixed top-0 inset-x-0 z-50 w-full">
       <div className="flex w-full flex-col gap-0 px-0 py-0">
         {visibleBanners.map((banner) => (
           <div
