@@ -7,7 +7,6 @@ from clerk_backend_api import authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import HTTPException, Request, status
 from loguru import logger
-from starlette.datastructures import MutableHeaders
 
 from config.settings import settings
 
@@ -138,16 +137,23 @@ async def get_current_user_with_query_token(
     if token:
         # For query parameter tokens, we need to create a modified request
         # with the token in the Authorization header for the SDK to verify
-
-        # Create new headers with the Authorization header
-        new_headers = MutableHeaders(request.headers)
-        new_headers["authorization"] = f"Bearer {token}"
+        
+        # Build headers list from original request, replacing/adding authorization
+        # ASGI headers must be lowercase bytes tuples
+        original_headers = list(request.scope.get("headers", []))
+        
+        # Remove any existing authorization header (case-insensitive)
+        filtered_headers = [
+            (k, v) for k, v in original_headers 
+            if k.lower() != b"authorization"
+        ]
+        
+        # Add the new authorization header
+        filtered_headers.append((b"authorization", f"Bearer {token}".encode()))
 
         # Create a modified request scope
         modified_scope = dict(request.scope)
-        modified_scope["headers"] = [
-            (k.encode(), v.encode()) for k, v in new_headers.items()
-        ]
+        modified_scope["headers"] = filtered_headers
 
         # Create new request with modified headers
         modified_request = Request(scope=modified_scope)

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
     log_max_bytes: int = 10485760  # 10 MB
 
-    debate_rounds: int = 2 # todo: can be as parameter
+    debate_rounds: int = 1  # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
     # Clerk Authentication
@@ -46,14 +46,13 @@ class Settings(BaseSettings):
         env_file = ".env"
         extra = "ignore"
 
-    @field_validator('frontend_origins', mode='before')
+    @field_validator("frontend_origins", mode="before")
     @classmethod
     def parse_frontend_origins(cls, v):
         if isinstance(v, str):
             # Split comma-separated string into list
-            return [url.strip() for url in v.split(',') if url.strip()]
+            return [url.strip() for url in v.split(",") if url.strip()]
         return v
 
 
 settings = Settings()
-

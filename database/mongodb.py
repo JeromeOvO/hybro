@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from models.agent import Agent
+from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
@@ -135,6 +136,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.room_memories
+
+    @property
+    def agent_groups_collection(self):
+        """Get agent groups collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_groups
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -659,6 +669,56 @@ class MongoDB:
         Delete a room memory by room_id
         """
         result = await self.room_memories_collection.delete_one({"room_id": room_id})
+        return result.deleted_count > 0
+
+    # Agent Group management
+    async def add_agent_group(self, agent_group: AgentGroup) -> str:
+        """
+        Add an agent group to the database
+        """
+        result = await self.agent_groups_collection.insert_one(
+            agent_group.model_dump(mode="json")
+        )
+        return str(result.inserted_id)
+
+    async def get_agent_groups_by_owner(self, owner_id: str) -> list[AgentGroup]:
+        """
+        Get all agent groups owned by a user
+        """
+        cursor = self.agent_groups_collection.find({"owner_id": owner_id})
+        groups = []
+        async for doc in cursor:
+            groups.append(AgentGroup(**doc))
+        return groups
+
+    async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None:
+        """
+        Get an agent group by its ID
+        """
+        doc = await self.agent_groups_collection.find_one({"group_id": group_id})
+        if doc:
+            return AgentGroup(**doc)
+        return None
+
+    async def update_agent_group(self, group_id: str, updates: dict) -> bool:
+        """
+        Update an agent group by its ID
+        """
+        # Add updated_at timestamp
+        from datetime import datetime
+
+        updates["updated_at"] = datetime.now()
+
+        result = await self.agent_groups_collection.update_one(
+            {"group_id": group_id}, {"$set": updates}
+        )
+        return result.modified_count > 0
+
+    async def delete_agent_group(self, group_id: str) -> bool:
+        """
+        Delete an agent group by its ID
+        """
+        result = await self.agent_groups_collection.delete_one({"group_id": group_id})
         return result.deleted_count > 0
 
 

@@ -507,22 +507,108 @@ Your response should be an complete answer with all the specific details the use
             print(f"Error in debate_with_openai: {str(e)}")
             return f"Error: {str(e)}"
 
-    async def summarize_debate_answer(self, messages: list[str]) -> str:
+    async def summarize_agent_responses(
+        self,
+        agent_responses: list[dict[str, str]],
+        mode: str = "non_debate",
+    ) -> str:
         """
         Summarize the answers from multiple AI agents into a single summary using Lead_ai.
+
+        Args:
+            agent_responses: List of dicts with 'agent_name' and 'message' keys
+                Example: [{"agent_name": "Research Agent", "message": "..."}, ...]
+            mode: Summary mode - "debate" or "non_debate"
+                - "debate": Compares viewpoints, highlights agreements/disagreements
+                - "non_debate": Combines contributions into a unified response
+
+        Returns:
+            Summary text string
         """
-        system_prompt = "You are an expert AI agent tasked with summarizing the debate answers from multiple agents into a concise and comprehensive summary."
+        # Get max words from env variable, default to 200 words
+        max_words = int(os.getenv("SUMMARY_MAX_WORDS", "200"))
+
+        # Select system prompt based on mode
+        if mode == "debate":
+            system_prompt = """You are an expert debate summarizer for multi-agent systems. Your task is to analyze responses from multiple AI agents and create a structured summary that captures different perspectives, agreements, and disagreements.
+
+CORE OBJECTIVES:
+1. Extract and organize distinct viewpoints from each agent
+2. Identify areas of consensus and disagreement
+3. Highlight key insights and actionable recommendations
+4. Maintain agent attribution for all points
+5. Present information in a clear, structured format
+
+ANALYSIS APPROACH:
+- Compare agent responses to identify overlapping vs. unique points
+- Note where agents build upon each other's ideas
+- Identify contradictions or alternative approaches
+- Extract specific data, recommendations, or conclusions from each agent
+- Synthesize complementary information into coherent themes
+
+QUALITY STANDARDS:
+- Use actual agent names, never generic labels
+- Include specific details, data, and reasoning from agents
+- Keep summary concise but comprehensive
+- Focus on substance over process
+- Ensure balanced representation of all agent contributions"""
+
+            user_prompt_template = (
+                "Here are responses from multiple agents with potentially different opinions:\n\n{answers}\n\n"
+                "Summarize the key points from all agents in a structured format. "
+                "Use the actual agent names when referencing their opinions. "
+                "Keep the summary within {max_words} words."
+            )
+        else:
+            # Default: non_debate mode
+            system_prompt = """You are an expert synthesizer for multi-agent collaboration systems. Your task is to combine responses from multiple AI agents into a unified, coherent summary that presents the complete answer to the user's question.
+
+CORE OBJECTIVES:
+1. Synthesize all agent contributions into a unified response
+2. Combine complementary information without redundancy
+3. Present a clear, actionable final answer
+4. Highlight the most important insights and recommendations
+5. Create a seamless narrative that flows naturally
+
+Synthesis APPROACH:
+- Identify how each agent's contribution adds to the complete answer
+- Merge overlapping information, keeping the most detailed version
+- Organize information in a logical flow (context → analysis → recommendations)
+- Ensure all key points from each agent are represented
+- Remove redundancy while preserving unique insights
+
+QUALITY STANDARDS:
+- Create a unified voice (not a list of "Agent X said...")
+- Focus on delivering value to the user
+- Prioritize actionable insights and clear conclusions
+- Keep the summary concise but complete
+- Only attribute to specific agents when their unique expertise is relevant"""
+
+            user_prompt_template = (
+                "Here are responses from multiple agents working together on the user's request:\n\n{answers}\n\n"
+                "Synthesize these into a single, unified response that combines all their contributions. "
+                "Present it as a cohesive answer, not as a comparison of opinions. "
+                "Keep the summary within {max_words} words."
+            )
+
+        # Format agent responses
         answers_text = "\n\n".join(
-            [f"Agent {i + 1}: {msg}" for i, msg in enumerate(messages)]
+            [
+                f"--- {resp.get('agent_name', 'Unknown Agent')} ---\n{resp.get('message', '')}"
+                for resp in agent_responses
+            ]
         )
-        prompt = (
-            f"Here are the answers from different agents:\n{answers_text}\n\n"
-            "Please provide a summary that captures the main points and consensus (if any) from these answers."
+
+        user_prompt = user_prompt_template.format(
+            answers=answers_text,
+            max_words=max_words,
         )
+
         chat_messages = [
             ChatCompletionSystemMessageParam(role="system", content=system_prompt),
-            ChatCompletionUserMessageParam(role="user", content=prompt),
+            ChatCompletionUserMessageParam(role="user", content=user_prompt),
         ]
+
         try:
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
@@ -534,8 +620,21 @@ Your response should be an complete answer with all the specific details the use
                 else ""
             )
         except Exception as e:
-            print(f"Error in summarize_debate_answer: {str(e)}")
+            logger.error(f"Error in summarize_agent_responses (mode={mode}): {str(e)}")
             return f"Error: {str(e)}"
+
+    # Backwards-compatible aliases
+    async def summarize_debate_answer(
+        self, agent_responses: list[dict[str, str]]
+    ) -> str:
+        """Alias for summarize_agent_responses with mode='debate'."""
+        return await self.summarize_agent_responses(agent_responses, mode="debate")
+
+    async def summarize_non_debate_answer(
+        self, agent_responses: list[dict[str, str]]
+    ) -> str:
+        """Alias for summarize_agent_responses with mode='non_debate'."""
+        return await self.summarize_agent_responses(agent_responses, mode="non_debate")
 
     async def generate_chat_context(
         self, user_input: str, agent_response: str, context_data: ContextData
@@ -767,8 +866,9 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
     async def parse_user_message_by_llm(
         self,
         message_text: str,
-        room_agent_set: dict = None,
+        selected_agent_set: dict = None,
         is_debate_mode: bool = False,
+        auto_assign_agents: bool = False,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
@@ -778,11 +878,18 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         2. If complex, break into logical steps
         3. Assign agents based on mentions or task nature
 
+        Args:
+            message_text: The user's message
+            selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
+            is_debate_mode: Whether to use debate mode
+            auto_assign_agents: If True (Auto mode), LLM will assign agents from pool
+                               If False (Curated mode), only assign if @mentioned
+
         Debate mode: Skip decomposition, generate linear chain
         """
 
-        # Canonical shape for room_agent_set is {agent_id: agent_name}
-        room_agent_set = room_agent_set or {}
+        # Canonical shape for selected_agent_set is {agent_id: agent_name}
+        selected_agent_set = selected_agent_set or {}
 
         # === DEBATE MODE ===
         if is_debate_mode:
@@ -793,30 +900,32 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             # Determine agents for debate
             if mentions:
                 # Use mentioned agents. We trust the ID from the mention and
-                # prefer the name stored in room_agent_set when available.
+                # prefer the name stored in selected_agent_set when available.
                 debate_agents = []
                 for agent_id, agent_name in mentions:
                     agent_id = agent_id.strip()
                     agent_name = agent_name.strip()
 
                     # Only consider agents that are actually in the room
-                    if agent_id in room_agent_set:
+                    if agent_id in selected_agent_set:
                         debate_agents.append(
                             {
                                 "agent_id": agent_id,
-                                "agent_name": room_agent_set.get(agent_id, agent_name),
+                                "agent_name": selected_agent_set.get(
+                                    agent_id, agent_name
+                                ),
                             }
                         )
 
                 message_type = "DEBATE_WITH_MENTIONS"
             else:
-                # Use all room agents from the room_agent_set mapping
+                # Use all agents from the selected_agent_set mapping
                 debate_agents = [
                     {
                         "agent_id": agent_id,
                         "agent_name": agent_name,
                     }
-                    for agent_id, agent_name in room_agent_set.items()
+                    for agent_id, agent_name in selected_agent_set.items()
                 ]
                 message_type = "DEBATE_NO_MENTIONS"
 
@@ -868,15 +977,78 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
         # === NORMAL MODE: Enhanced with decomposition decision ===
         agent_list = ""
-        if room_agent_set:
+        if selected_agent_set:
             agent_list = "\n".join(
                 [
                     f"- Agent ID: {aid}, Name: {aname}"
-                    for aid, aname in room_agent_set.items()
+                    for aid, aname in selected_agent_set.items()
                 ]
             )
 
-        system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+        # Build different prompts based on auto_assign_agents mode
+        if auto_assign_agents and selected_agent_set:
+            # AUTO MODE: Automatically assign best agents from pool
+            system_prompt = f"""You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+                Your job is to analyze user messages, decide if decomposition is needed, then assign the most appropriate agents.
+
+                AVAILABLE AGENTS:
+                {agent_list}
+
+                PROCESS:
+                1. ANALYZE TASK COMPLEXITY
+                - Simple task: Single action, can be completed in one step
+                - Complex task: Multiple logical steps, dependencies between actions
+                
+                2. DECIDE DECOMPOSITION
+                - If simple: Keep as single step
+                - If complex: Break into logical sub-tasks with clear dependencies
+                
+                3. ASSIGN AGENTS (AUTO MODE)
+                - You MUST assign an agent from the available pool to EACH step
+                - Choose the most appropriate agent based on their name and the task content
+                - If only one agent is available, assign that agent to all steps
+                - Match agent capabilities to task requirements
+                - If task mentions a specific agent with <@...>, prioritize that agent for relevant steps
+
+                CRITICAL RULES:
+                - EVERY step MUST have an agent_id and agent_name assigned from the available agents
+                - Do NOT leave agent_id as null - always pick the best matching agent
+                - If unsure, assign the first available agent
+                - If "needs_decomposition" is false, there MUST be exactly one task step
+
+                OUTPUT STRUCTURE (strict JSON):
+                {{
+                "message_type": "AUTO_ASSIGNED" | "SINGLE_MENTION" | "MULTIPLE_MENTIONS",
+                "original_text": "original message",
+                "needs_decomposition": true | false,
+                "decomposition_reason": "why decomposed or not" | null,
+                "task_steps": [
+                    {{
+                    "step_id": "step_1",
+                    "agent_id": "uuid from available agents",
+                    "agent_name": "name from available agents",
+                    "task_content": "what to do (clean text, remove all <@...> mentions)",
+                    "dependencies": ["step_id", ...]
+                    }}
+                ]
+                }}
+
+                DECOMPOSITION GUIDELINES:
+                - Break by logical phases (prepare → execute → review)
+                - Break by functional areas (data → analysis → visualization)
+                - Break by sequential dependencies (A must complete before B)
+                - Keep steps granular but not too fine (3-7 steps optimal)
+                - Each step should be independently executable
+
+                DEPENDENCY RULES:
+                - Empty [] = no dependencies, can start immediately
+                - ["step_1"] = depends on step_1 completing
+                - ["step_1", "step_2"] = depends on both (usually use last one)
+
+                Output valid JSON only, no explanation."""
+        else:
+            # CURATED MODE: Only assign if explicitly mentioned
+            system_prompt = """You are an expert task analyzer and decomposer for multi-agent collaboration systems.
                 Your job is to analyze user messages, decide if decomposition is needed, then assign agents.
 
                 PROCESS:
@@ -1013,6 +1185,141 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         except Exception as e:
             logger.error(f"LLM parsing failed: {e}")
             raise
+
+    async def analyze_message_routing(
+        self, message_text: str, candidate_agents: list[Agent]
+    ) -> dict:
+        """
+        Analyze a user message and decide the optimal routing strategy.
+
+        Args:
+            message_text: The user's message to analyze
+            candidate_agents: List of candidate agents from vector search
+
+        Returns:
+            Dict with:
+            - strategy: "single" | "parallel" | "sequential"
+            - agent_ids: List of selected agent IDs
+            - agent_reasons: Dict mapping agent_id to reason for selection
+            - reasoning: Overall explanation of the routing decision
+            - needs_debate: Whether debate mode would benefit this conversation
+        """
+        # Build agent descriptions for the prompt
+        agent_descriptions = []
+        for agent in candidate_agents:
+            skills = (
+                ", ".join([s.name for s in agent.agent_card.skills])
+                if agent.agent_card.skills
+                else "General assistance"
+            )
+            agent_descriptions.append(
+                f"- Agent ID: {agent.agent_id}\n"
+                f"  Name: {agent.agent_card.name}\n"
+                f"  Description: {agent.agent_card.description}\n"
+                f"  Skills: {skills}"
+            )
+
+        agents_info = "\n".join(agent_descriptions)
+
+        system_prompt = """You are an intelligent message router for a multi-agent AI system.
+Your job is to analyze user messages and decide the optimal routing strategy.
+
+ROUTING STRATEGIES:
+1. "single" - Route to ONE best agent
+   Use when: Simple question, single domain, straightforward task
+   Example: "What's the weather?" -> Weather agent only
+
+2. "parallel" - Route to 2-3 agents simultaneously
+   Use when: Question benefits from multiple perspectives, comparison needed, or touches multiple domains
+   Example: "Compare Python and Rust for web development" -> Python expert AND Rust expert
+   Example: "Help me plan a healthy meal that's also budget-friendly" -> Nutrition agent AND Finance agent
+
+3. "sequential" - Route to agents in a specific order (dependency chain)
+   Use when: Task has clear steps where one agent's output feeds into another
+   Example: "Research this topic, then write a blog post about it" -> Researcher -> Writer
+
+DECISION FACTORS:
+- Task complexity (simple vs multi-faceted)
+- Domain coverage (single domain vs cross-domain)
+- Need for multiple perspectives
+- Dependency between subtasks
+
+OUTPUT FORMAT (strict JSON):
+{
+    "strategy": "single" | "parallel" | "sequential",
+    "agent_ids": ["agent-id-1", "agent-id-2"],
+    "agent_reasons": {
+        "agent-id-1": "Why this agent was selected",
+        "agent-id-2": "Why this agent was selected"
+    },
+    "reasoning": "Brief explanation of the routing decision",
+    "needs_debate": true | false
+}
+
+Set needs_debate=true if:
+- Question is subjective or opinion-based
+- Multiple valid approaches exist
+- User might benefit from seeing different perspectives discussed
+
+Output valid JSON only."""
+
+        user_prompt = f"""Analyze this message and decide the routing strategy:
+
+USER MESSAGE:
+{message_text}
+
+AVAILABLE AGENTS:
+{agents_info}
+
+Decide which agent(s) should handle this message and why."""
+
+        try:
+            messages = [
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=user_prompt),
+            ]
+
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from LLM")
+
+            result = json.loads(content)
+
+            logger.info(
+                f"Routing analysis: strategy={result.get('strategy')}, "
+                f"agents={len(result.get('agent_ids', []))}, "
+                f"debate={result.get('needs_debate')}"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Routing analysis failed: {e}")
+            # Return safe default
+            if candidate_agents:
+                first_agent = candidate_agents[0]
+                return {
+                    "strategy": "single",
+                    "agent_ids": [first_agent.agent_id],
+                    "agent_reasons": {
+                        first_agent.agent_id: "Fallback to best match due to analysis error"
+                    },
+                    "reasoning": f"Fallback selection due to error: {str(e)}",
+                    "needs_debate": False,
+                }
+            return {
+                "strategy": "single",
+                "agent_ids": [],
+                "agent_reasons": {},
+                "reasoning": "No agents available",
+                "needs_debate": False,
+            }
 
 
 openai_service = OpenAIService()

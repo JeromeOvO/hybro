@@ -13,6 +13,7 @@ class Room(BaseModel):
     room_owner_name: str
     room_agent_set: Dict[str, str] = Field(default_factory=dict) # key: agent_id, value: agent_name
     room_created_at: datetime = Field(default_factory=datetime.now)
+    applied_from_group: Optional[str] = None  # Group ID if agents were applied from a group
     extend_info: Optional[Any] = None
 
 

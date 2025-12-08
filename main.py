@@ -12,7 +12,7 @@ from uvicorn.config import LOGGING_CONFIG
 
 from api import (
     agent,
-    chat,
+    agent_group,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -110,12 +110,6 @@ app.include_router(
     # No global auth - handled per-route in agent.py
 )
 app.include_router(
-    chat.router,
-    prefix=api_prefix,
-    tags=["chat"],
-    dependencies=[Depends(get_current_user)],
-)
-app.include_router(
     inspection_center.router,
     prefix=api_prefix,
     tags=["inspection"],
@@ -150,6 +144,12 @@ app.include_router(
     prefix=api_prefix,
     tags=["sse"],
     # SSE endpoints handle auth via get_current_user_with_query_token (supports ?token= for EventSource)
+)
+app.include_router(
+    agent_group.router,
+    prefix=api_prefix,
+    tags=["agent_group"],
+    dependencies=[Depends(get_current_user)],
 )
 # For APIs that do not require authentication (user is optional)
 # app.include_router(
