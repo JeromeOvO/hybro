@@ -19,6 +19,12 @@ import type { SSEMessage } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { getAllAgents } from '@/lib/api/agent'
 
+// Special system agent display names (module scoped for stable reference)
+const SYSTEM_AGENT_NAMES: Record<string, string> = {
+  'debate_summary': 'Debate Coordinator',
+  'non_debate_summary': 'Summary Agent',
+}
+
 interface UseRoomWebhookProps {
   roomId: string
   userId?: string
@@ -82,12 +88,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       }
     },
   })
-
-  // Special system agent display names
-  const SYSTEM_AGENT_NAMES: Record<string, string> = {
-    'debate_summary': 'Debate Coordinator',
-    'non_debate_summary': 'Summary Agent',
-  }
 
   // Get agent name by agent ID with caching
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
