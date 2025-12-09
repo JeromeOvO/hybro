@@ -185,6 +185,7 @@ export function AgentMessageBubble({
   )
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
+  const toggleButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setIsExpanded(false)
@@ -260,10 +261,30 @@ export function AgentMessageBubble({
         {/* Expand/Collapse button */}
         {isLongMessage && (
           <button 
+            ref={toggleButtonRef}
             onClick={() => {
               const next = !isExpanded
+              const buttonEl = toggleButtonRef.current
+              const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+              const prevBottom = buttonEl?.getBoundingClientRect().bottom
+
               setIsExpanded(next)
               onUserToggle?.(message.id, next)
+
+              // Keep collapse from jumping; let expand naturally push content downward.
+              if (buttonEl && container && !next && typeof prevBottom === 'number') {
+                container.dataset.programmaticScroll = 'true'
+                requestAnimationFrame(() => {
+                  const newBottom = buttonEl.getBoundingClientRect().bottom
+                  const delta = newBottom - prevBottom
+                  if (delta !== 0) {
+                    container.scrollTop += delta
+                  }
+                  requestAnimationFrame(() => {
+                    container.dataset.programmaticScroll = 'false'
+                  })
+                })
+              }
             }}
             className={cn(
               "flex items-center gap-1 text-xs mt-2 hover:underline",

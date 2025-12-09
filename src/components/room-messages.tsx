@@ -322,7 +322,13 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }, [])
 
   // Handle scroll to detect if user manually scrolls
-  const handleScroll = useCallback(() => {
+  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    // Ignore scroll events we triggered ourselves (e.g., anchoring show less)
+    if (event.currentTarget.dataset.programmaticScroll === 'true') {
+      event.currentTarget.dataset.programmaticScroll = 'false'
+      return
+    }
+
     const isNearBottom = checkIfNearBottom()
     setShouldAutoScroll(isNearBottom)
     
@@ -386,6 +392,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
       {/* Main Content */}
     <div 
       ref={scrollContainerRef}
+      data-message-scroll-container="true"
       onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
     >
