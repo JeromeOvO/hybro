@@ -186,6 +186,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Extract message content - both user and agent messages use message_text field
     let content: string = ''
     let senderName: string = ''
+    let relatedMessageId: string | null = null
+    if (typeof apiMessage.related_message_id === 'string') {
+      relatedMessageId = apiMessage.related_message_id
+    } else if (typeof apiMessage.message_content?.message_task?.metadata?.related_message_id === 'string') {
+      relatedMessageId = apiMessage.message_content.message_task.metadata.related_message_id
+    }
     
     // Extract content from MessageContent object
     // For both user and agent messages, we use message_content.message_text as the display content
@@ -236,6 +242,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       timestamp: apiMessage.message_created_at || new Date().toISOString(),
       user_id: apiMessage.message_type === 'user' ? userId : undefined,
       agent_id: apiMessage.message_type === 'agent' ? (apiMessage.agent_id || 'agent_id') : undefined,
+      related_message_id: relatedMessageId,
     }
   }, [userId, userName, getAgentName])
 
@@ -331,6 +338,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             sender_name: agentName,
             timestamp: sseMessage.timestamp,
             agent_id: sseMessage.data.agent_id,
+            related_message_id: sseMessage.data.related_message_id ?? null,
           }
           addLiveMessage(roomId, newMessage)
         }
@@ -492,9 +500,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         return true
       }
 
-      // Step 2: Call processRoomUserMessage to trigger background processing
-      // The backend now returns immediately (202 Accepted) and processes agents in background
-      // Agent responses will arrive via SSE
+      // Step 2: Immediately swap temp ID to real ID so SSE agent replies can parent correctly
+      replaceLiveMessage(roomId, tempMessageId, { ...optimisticUserMessage, id: messageId })
+
+      // Step 3: Trigger background processing; agent responses will arrive via SSE
       setProcessing(true)
       
       const processResponse = await processRoomUserMessage({
@@ -506,9 +515,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       if (!processResponse.success) {
         throw new Error(`Failed to process user message: ${processResponse.error}`)
       }
-      
-      // Step 3: Replace optimistic message ID with real message ID
-      replaceLiveMessage(roomId, tempMessageId, { ...optimisticUserMessage, id: messageId })
       
       // Processing continues in background - SSE will send "completed" status when done
       // Keep processing=true until SSE delivers the completion status
