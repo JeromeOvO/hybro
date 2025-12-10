@@ -8,7 +8,7 @@ import {
   List, 
   ChevronsDownUp, 
   ChevronsUpDown,
-  Map
+  Map as MapIcon
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConversationRound, type ConversationRoundData } from './conversation-round'
@@ -23,6 +23,7 @@ export interface MessageData {
   timestamp: string
   user_id?: string
   agent_id?: string
+  related_message_id?: string | null
 }
 
 // Processing Status Component
@@ -62,7 +63,7 @@ function groupMessagesIntoRounds(
 ): { rounds: ConversationRoundData[]; orphanedAgentMessages: MessageData[] } {
   const rounds: ConversationRoundData[] = []
   const orphanedAgentMessages: MessageData[] = []
-  
+  const userRoundMap = new Map<string, ConversationRoundData>()
   let currentRound: ConversationRoundData | null = null
   let roundNumber = 0
 
@@ -84,10 +85,15 @@ function groupMessagesIntoRounds(
         timestamp: message.timestamp,
         isCollapsed: collapsedRounds.has(roundNumber)
       }
+      userRoundMap.set(message.id, currentRound)
       
     } else if (message.type === 'agent') {
-      if (currentRound) {
-        currentRound.agentResponses.push(message)
+      // Prefer grouping by explicit parent user message if provided
+      const parentId = message.related_message_id || null
+      const targetRound = parentId ? userRoundMap.get(parentId) : currentRound
+
+      if (targetRound) {
+        targetRound.agentResponses.push(message)
       } else {
         // Agent message before any user message
         orphanedAgentMessages.push(message)
@@ -322,7 +328,13 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }, [])
 
   // Handle scroll to detect if user manually scrolls
-  const handleScroll = useCallback(() => {
+  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    // Ignore scroll events we triggered ourselves (e.g., anchoring show less)
+    if (event.currentTarget.dataset.programmaticScroll === 'true') {
+      event.currentTarget.dataset.programmaticScroll = 'false'
+      return
+    }
+
     const isNearBottom = checkIfNearBottom()
     setShouldAutoScroll(isNearBottom)
     
@@ -386,6 +398,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
       {/* Main Content */}
     <div 
       ref={scrollContainerRef}
+      data-message-scroll-container="true"
       onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
     >
@@ -451,7 +464,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                           onClick={() => setShowNavigator(!showNavigator)}
                           className="h-8 text-xs ml-2"
                         >
-                          <Map className="h-3.5 w-3.5 mr-1" />
+                          <MapIcon className="h-3.5 w-3.5 mr-1" />
                           Map
                         </Button>
                       )}
