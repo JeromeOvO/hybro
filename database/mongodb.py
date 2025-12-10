@@ -705,9 +705,9 @@ class MongoDB:
         Update an agent group by its ID
         """
         # Add updated_at timestamp
-        from datetime import datetime
+        from datetime import UTC, datetime
 
-        updates["updated_at"] = datetime.now()
+        updates["updated_at"] = datetime.now(UTC)
 
         result = await self.agent_groups_collection.update_one(
             {"group_id": group_id}, {"$set": updates}

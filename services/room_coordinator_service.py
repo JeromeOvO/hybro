@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
@@ -93,10 +93,12 @@ class RoomCoordinatorService:
                     agent_name = await self.database_service.get_agent_name_by_agent_id(
                         msg.agent_id
                     )
-                    agent_responses.append({
-                        "agent_name": agent_name or msg.agent_id,
-                        "message": text,
-                    })
+                    agent_responses.append(
+                        {
+                            "agent_name": agent_name or msg.agent_id,
+                            "message": text,
+                        }
+                    )
 
             # Require at least two distinct non-empty answers
             if len(agent_responses) < 2:
@@ -107,7 +109,9 @@ class RoomCoordinatorService:
             summary_text = await self.openai_service.summarize_agent_responses(
                 agent_responses, mode=summary_mode
             )
-            coordinator_agent_id = "debate_summary" if is_debate_mode else "non_debate_summary"
+            coordinator_agent_id = (
+                "debate_summary" if is_debate_mode else "non_debate_summary"
+            )
 
             if not summary_text:
                 return
@@ -231,7 +235,7 @@ class RoomCoordinatorService:
 
         task_status = TaskStatus(
             state=TaskState.completed,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             message=summary_message,
         )
 
@@ -250,11 +254,13 @@ class RoomCoordinatorService:
             agent_id=coordinator_agent_id,
             related_message_id=room_user_message_id,
             message_content=summary_content,
-            message_created_at=datetime.now(),
+            message_created_at=datetime.now(UTC),
             extend_info={
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
-                "summary_type": "debate" if coordinator_agent_id == "debate_summary" else "non_debate",
+                "summary_type": "debate"
+                if coordinator_agent_id == "debate_summary"
+                else "non_debate",
             },
         )
 

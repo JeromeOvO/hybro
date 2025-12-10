@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -84,7 +84,7 @@ class GeminiService:
                         )
                     ],
                 ),
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
             )
             return task
 
@@ -127,7 +127,7 @@ class GeminiService:
         task.status = TaskStatus(
             state=TaskState.completed,
             message=agent_message,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
         )
 
         return task

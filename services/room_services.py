@@ -1,6 +1,6 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from a2a.types import (
@@ -144,7 +144,7 @@ class RoomServices:
                 room_owner_id=room_create_request.room_owner_id,
                 room_owner_name=room_create_request.room_owner_name,
                 room_agent_set=normalized_agent_set,
-                room_created_at=datetime.now(),
+                room_created_at=datetime.now(UTC),
                 applied_from_group=room_create_request.applied_from_group,
                 extend_info=room_create_request.extend_info or None,
             )
@@ -662,7 +662,7 @@ class RoomServices:
 
         # Create Task status
         task_status = TaskStatus(
-            state=TaskState.submitted, timestamp=datetime.now().isoformat()
+            state=TaskState.submitted, timestamp=datetime.now(UTC).isoformat()
         )
 
         # Create Task
@@ -706,7 +706,7 @@ class RoomServices:
 
             # Create Task status
             task_status = TaskStatus(
-                state=TaskState.submitted, timestamp=datetime.now().isoformat()
+                state=TaskState.submitted, timestamp=datetime.now(UTC).isoformat()
             )
 
             # Create Task
@@ -735,7 +735,7 @@ class RoomServices:
 
         # Create Task status
         task_status = TaskStatus(
-            state=TaskState.submitted, timestamp=datetime.now().isoformat()
+            state=TaskState.submitted, timestamp=datetime.now(UTC).isoformat()
         )
 
         # Create a2a Task
@@ -767,7 +767,7 @@ class RoomServices:
             agent_id=agent_id if agent_id else None,
             message_id=str(uuid4()),
             message_content=self._generate_agent_message_content(content),
-            message_created_at=datetime.now(),
+            message_created_at=datetime.now(UTC),
             extend_info=extend_info if extend_info else None,
         )
 
@@ -1336,7 +1336,7 @@ class RoomServices:
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
-                            message_created_at=datetime.now(),
+                            message_created_at=datetime.now(UTC),
                         )
 
                         agent_message_success = (
@@ -1358,7 +1358,7 @@ class RoomServices:
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
-                            message_created_at=datetime.now(),
+                            message_created_at=datetime.now(UTC),
                         )
 
                         agent_message_success = (
