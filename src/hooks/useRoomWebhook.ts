@@ -61,6 +61,22 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Ref to prevent duplicate calls
   const isProcessingRef = useRef(false)
 
+  const normalizeTimestamp = useCallback((value?: string | null): string => {
+    if (!value) return new Date().toISOString()
+
+    const trimmed = value.trim()
+    const hasZone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)
+    const withT = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T')
+    const candidate = hasZone ? withT : `${withT}Z`
+    const parsed = new Date(candidate)
+
+    if (Number.isNaN(parsed.getTime())) {
+      return new Date().toISOString()
+    }
+
+    return parsed.toISOString()
+  }, [])
+
   // Global agents catalog (React Query) to resolve names without per-message fetches.
   // Stale for 24h to effectively cache across rooms. Refetched on window refocus by default (disabled below).
   const allAgentsQuery = useQuery<Agent[], Error>({
@@ -239,12 +255,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       type: apiMessage.message_type as 'user' | 'agent',
       content,
       sender_name: senderName,
-      timestamp: apiMessage.message_created_at || new Date().toISOString(),
+      timestamp: normalizeTimestamp(apiMessage.message_created_at),
       user_id: apiMessage.message_type === 'user' ? userId : undefined,
       agent_id: apiMessage.message_type === 'agent' ? (apiMessage.agent_id || 'agent_id') : undefined,
       related_message_id: relatedMessageId,
     }
-  }, [userId, userName, getAgentName])
+  }, [userId, userName, getAgentName, normalizeTimestamp])
 
   // React Query: messages (converted)
   const messagesQuery = useQuery<MessageData[], Error>({
@@ -319,7 +335,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             type: 'user',
             content: sseMessage.data.content,
             sender_name: sseMessage.data.user_id || 'User',
-            timestamp: sseMessage.timestamp,
+            timestamp: normalizeTimestamp(sseMessage.timestamp),
             user_id: sseMessage.data.user_id,
           }
           addLiveMessage(roomId, newMessage)
@@ -336,7 +352,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             type: 'agent',
             content: sseMessage.data.content,
             sender_name: agentName,
-            timestamp: sseMessage.timestamp,
+            timestamp: normalizeTimestamp(sseMessage.timestamp),
             agent_id: sseMessage.data.agent_id,
             related_message_id: sseMessage.data.related_message_id ?? null,
           }
@@ -372,7 +388,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, addLiveMessage, roomId, setProcessing])
+  }, [getAgentName, addLiveMessage, roomId, setProcessing, normalizeTimestamp])
 
   // Initialize SSE connection
   const {
