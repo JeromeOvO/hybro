@@ -1,7 +1,9 @@
+import re
 import uuid
 from typing import Any
 
 from common.utils.logger import get_logger
+from database.mongodb import get_db
 from models.agent import Agent
 from models.error import (
     AgentCardRequiredError,
@@ -50,7 +52,11 @@ class AgentService:
         new_agent_id = str(uuid.uuid4())
         provider_id = request.provider_id
         # create agent
-        agent = Agent(agent_id=new_agent_id, agent_card=request.agent_card, provider_id=provider_id)
+        agent = Agent(
+            agent_id=new_agent_id,
+            agent_card=request.agent_card,
+            provider_id=provider_id,
+        )
 
         # add agent to database
         try:
@@ -303,6 +309,34 @@ class AgentService:
             error=None,
             status_code=200,
         )
+
+    def get_agent_root_url(self, agent_url: str) -> str:
+        """Extract the root URL from a full agent URL escluding well-known paths and trailing slashes."""
+
+        # remove well-known path (.well-known/agent.json) if present
+        if "/.well-known/agent.json" in agent_url:
+            return agent_url.split("/.well-known/agent.json")[0]
+        # remove trailing slash if present
+        if agent_url.endswith("/"):
+            return agent_url[:-1]
+        return agent_url
+
+    async def get_agent_by_url(self, agent_url: str) -> AgentCenterResponse:
+        """Get agent by URL."""
+
+        if agent_url is None:
+            raise IllgalParameterError("agent_url is required")
+
+        root_url = self.get_agent_root_url(agent_url)
+        escaped_root_url = re.escape(root_url)
+        mongo_db = await get_db()
+        agent_query_result = await mongo_db.agents.find_one(
+            {"agent_card.url": {"$regex": escaped_root_url}}
+        )
+        if agent_query_result is None:
+            return None
+
+        return agent_query_result
 
 
 agent_service = AgentService()
