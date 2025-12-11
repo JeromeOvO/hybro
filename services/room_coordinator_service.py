@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 from models.room import MessageContent, Room, RoomAgentMessage
 from services.database_service import db_service
 from services.openai_service import openai_service
@@ -235,7 +235,7 @@ class RoomCoordinatorService:
 
         task_status = TaskStatus(
             state=TaskState.completed,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=utcnow().isoformat(),
             message=summary_message,
         )
 
@@ -254,7 +254,7 @@ class RoomCoordinatorService:
             agent_id=coordinator_agent_id,
             related_message_id=room_user_message_id,
             message_content=summary_content,
-            message_created_at=datetime.now(UTC),
+            message_created_at=utcnow(),
             extend_info={
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,

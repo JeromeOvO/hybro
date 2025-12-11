@@ -1,7 +1,6 @@
 import json
 import os
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -11,6 +10,8 @@ from google.genai import types
 load_dotenv()
 
 from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
+
+from common.utils.time import utcnow
 
 
 class GeminiService:
@@ -84,7 +85,7 @@ class GeminiService:
                         )
                     ],
                 ),
-                timestamp=datetime.now(UTC).isoformat(),
+                timestamp=utcnow().isoformat(),
             )
             return task
 
@@ -127,7 +128,7 @@ class GeminiService:
         task.status = TaskStatus(
             state=TaskState.completed,
             message=agent_message,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=utcnow().isoformat(),
         )
 
         return task

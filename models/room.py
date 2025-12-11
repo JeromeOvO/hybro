@@ -1,9 +1,11 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 from a2a.types import Task
 from pydantic import BaseModel, Field
+
+from common.utils.time import utcnow
 
 
 class Room(BaseModel):
@@ -14,7 +16,7 @@ class Room(BaseModel):
     room_agent_set: dict[str, str] = Field(
         default_factory=dict
     )  # key: agent_id, value: agent_name
-    room_created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    room_created_at: datetime = Field(default_factory=utcnow)
     applied_from_group: str | None = (
         None  # Group ID if agents were applied from a group
     )
@@ -24,7 +26,7 @@ class Room(BaseModel):
 class Message(BaseModel):
     room_id: str
     message_id: str
-    message_created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    message_created_at: datetime = Field(default_factory=utcnow)
 
 
 class MessageContent(BaseModel):

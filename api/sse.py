@@ -1,12 +1,12 @@
 # api/sse.py
 import json
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Path
 from fastapi.responses import StreamingResponse
 
 from common.auth import ClerkUser, get_current_user_with_query_token
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
@@ -41,7 +41,7 @@ async def stream_room_messages(
                 "type": "connected",
                 "room_id": room_id,
                 "connection_id": connection.connection_id,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": utcnow().isoformat(),
             }
             yield f"data: {json.dumps(connected_message)}\n\n"
 

@@ -1,7 +1,7 @@
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 from models.error import SessionIdRequiredError
 from models.memory import ChatContext, ContextData, MemoryContent, RoomMemory
 from models.request import ChatMemoryRequest, RoomCenterMemoryRequest
@@ -36,8 +36,8 @@ class ChatMemoryService:
                     if request.user_input is not None
                     else ""
                 ),
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
+                created_at=utcnow(),
+                updated_at=utcnow(),
                 extend_info=[],
             )
             success = await self.database_service.add_chat_context(new_chat_context)
@@ -134,7 +134,7 @@ class ChatMemoryService:
                 session_id=request.session_id,
                 context_data=ContextData(context_content=new_context_data),
                 created_at=chat_context.created_at,
-                updated_at=datetime.now(UTC),
+                updated_at=utcnow(),
                 extend_info=chat_context.extend_info,
             )
             success = await self.database_service.update_chat_context_by_session_id(
@@ -470,9 +470,7 @@ class RoomMemoryService:
             if new_message:
                 user_text = new_message
             # Add clear labels and separation to avoid blending
-            addition = (
-                f"\n\n[User Message at {datetime.now(UTC).isoformat()}]\n{user_text}\n"
-            )
+            addition = f"\n\n[User Message at {utcnow().isoformat()}]\n{user_text}\n"
             new_room_memory_content_text = f"{prev_memory_content}{addition}".strip()
 
             room_memory_response = (
