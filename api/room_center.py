@@ -1,21 +1,45 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from common.auth import ClerkUser, get_current_user
 from models.request import (
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
 from modules.RoomCenter import RoomCenter
+from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
 
 
+async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
+    """
+    Verify that the current user owns the specified room.
+    Raises HTTPException if the room doesn't exist or user is not the owner.
+    """
+    if not room_id:
+        raise HTTPException(status_code=400, detail="room_id is required")
+
+    room = await db_service.get_room_by_room_id(room_id)
+
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if room.room_owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403, detail="You do not have permission to access this room"
+        )
+
+
 @router.post("/roomCenter/createNewRoom")
-async def create_new_room(request: Request):
+async def create_new_room(
+    request: Request, user: ClerkUser = Depends(get_current_user)
+):
     request_data = await request.json()
     room_name = request_data.get("room_name")
-    room_owner_id = request_data.get("room_owner_id")
+    # Take room_owner_id from authenticated user
+    room_owner_id = user.user_id
     room_owner_name = request_data.get("room_owner_name")
     room_agent_set = request_data.get("room_agent_set")
     applied_from_group = request_data.get(
@@ -35,18 +59,32 @@ async def create_new_room(request: Request):
 
 
 @router.post("/roomCenter/inquiryRoomSetting")
-async def inquiry_room_setting(request: Request):
+async def inquiry_room_setting(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Get room settings - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterRoomSettingRequest(room_id=room_id)
     room_center_response = await room_center.inquiry_room_setting(room_center_request)
     return room_center_response
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
-async def inquiry_rooms_by_room_owner_id(request: Request):
+async def inquiry_rooms_by_room_owner_id(request: Request, user: ClerkUser = Depends(get_current_user)):
     request_data = await request.json()
     room_owner_id = request_data.get("room_owner_id")
+
+    # Verify user is requesting their own rooms
+    if room_owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403, detail="You do not have permission to access these rooms"
+        )
     room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
     room_center_response = await room_center.inquiry_rooms_by_room_owner_id(
         room_center_request
@@ -55,10 +93,18 @@ async def inquiry_rooms_by_room_owner_id(request: Request):
 
 
 @router.post("/roomCenter/updateRoomAgentSet")
-async def update_room_agent_set(request: Request):
+async def update_room_agent_set(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Update room agent set - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_agent_set = request_data.get("room_agent_set")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, room_agent_set=room_agent_set
     )
@@ -67,10 +113,18 @@ async def update_room_agent_set(request: Request):
 
 
 @router.post("/roomCenter/updateRoomName")
-async def update_room_name(request: Request):
+async def update_room_name(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Update room name - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
     room_name = request_data.get("room_name")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, room_name=room_name
     )
@@ -79,10 +133,18 @@ async def update_room_name(request: Request):
 
 
 @router.post("/roomCenter/updateRoomExtendInfo")
-async def update_room_extend_info(request: Request):
+async def update_room_extend_info(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Update room extended info - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
     extend_info = request_data.get("extend_info")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id, extend_info=extend_info
     )
@@ -93,10 +155,18 @@ async def update_room_extend_info(request: Request):
 
 
 @router.post("/roomCenter/createAndParseUserMessage")
-async def create_and_parse_user_message(request: Request):
+async def create_and_parse_user_message(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Create and parse user message - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
     room_center_response = await room_center.create_and_parse_user_message(
         room_center_request
@@ -105,9 +175,17 @@ async def create_and_parse_user_message(request: Request):
 
 
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")
-async def inquiry_room_messages(request: Request):
+async def inquiry_room_messages(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Read room messages - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterRoomMessageRequest(room_id=room_id)
     room_center_response = await room_center.inquiry_room_messages_by_room_id(
         room_center_request
@@ -116,13 +194,21 @@ async def inquiry_room_messages(request: Request):
 
 
 @router.post("/roomCenter/sendMessage")
-async def send_message(request: Request):
+async def send_message(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Send message to room - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
     target_group = request_data.get(
         "target_group", "room_team"
     )  # Group ID: "all_agents", "room_team", or custom group ID
+
+    # Verify user owns the room
+    await verify_room_ownership(room_id, user)
+
     room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
     room_center_response = await room_center.send_message_to_room(
         room_center_request, target_group
