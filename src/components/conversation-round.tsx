@@ -154,7 +154,10 @@ export function ConversationRound({
   const uniqueAgentCount = groupedByAgent.length
 
   // Format time
-  const formattedTime = new Date(round.timestamp).toLocaleTimeString([], { 
+  const formattedTime = new Date(round.timestamp).toLocaleString([], { 
+    month: 'short', 
+    day: 'numeric', 
+    year: 'numeric', 
     hour: '2-digit', 
     minute: '2-digit' 
   })
