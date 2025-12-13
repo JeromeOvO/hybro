@@ -106,14 +106,13 @@ export default function AgentPage() {
       <div className="w-full max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Hybro Agent Network</h1>
+          <h1 className="text-3xl font-bold">Agent Network</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={loadAgents}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
-          <Button variant="outline" onClick={() => router.push('/agent/registry')}>
+          <Button
+            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            onClick={() => router.push('/agent/registry')}
+          >
             <Plus className="h-4 w-4 mr-2" />
             Register Agent
           </Button>

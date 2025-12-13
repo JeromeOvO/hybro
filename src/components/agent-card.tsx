@@ -68,19 +68,17 @@ export function AgentCard({
                  aspect-square w-full max-w-[260px]
                  backdrop-blur-sm
                  transition-all duration-300 ease-out
-                 border border-transparent ring-0
-                 hover:border hover:border-primary/70 dark:hover:border-primary/60
-                 hover:bg-secondary/50 dark:hover:bg-muted/40 hover:shadow-2xl hover:shadow-primary/30
-                 dark:hover:shadow-primary/20 dark:hover:shadow-2xl
-                 hover:scale-[1.02] hover:-translate-y-1
-                 before:absolute before:inset-0 before:bg-gradient-to-br 
+                 border border-primary/20 dark:border-primary/15 ring-0
+                 hover:border-primary/80 dark:hover:border-primary/70
+                 hover:bg-secondary/50 dark:hover:bg-muted/40 hover:scale-[1.02] hover:-translate-y-1
+                 before:absolute before:inset-0 before:bg-linear-to-br 
                  before:from-primary/5 before:via-transparent before:to-accent/5
                  before:opacity-0 before:transition-opacity before:duration-300
                  hover:before:opacity-100
                  after:absolute after:inset-[2px] after:rounded-xl 
                  after:shadow-inner after:shadow-primary/8
                  dark:after:shadow-white/10 after:pointer-events-none
-                 bg-secondary/40 dark:bg-muted/30 shadow-xl shadow-black/10 dark:shadow-black/50"
+                 bg-secondary/40 dark:bg-muted/30 shadow-xl hover:shadow-black/10 hover:dark:shadow-black/50"
       onClick={handleCardClick}
     >
       <CardHeader className="pb-3 pt-4 text-center relative z-10">

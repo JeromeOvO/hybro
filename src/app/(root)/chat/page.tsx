@@ -419,7 +419,7 @@ export default function ChatPage() {
                             >
                             BRO
                             </span>
-                            <span className="ml-2 icon-exclaim inline-block text-3xl skew-x-150 scale-125 rotate-6">!</span>
+                            <span className="ml-2 icon-exclaim inline-block text-3xl skew-x-150 scale-150 rotate-6">!</span>
                         </h1>
                         <p className="text-muted-foreground">
                             What would you like to work on today?
