@@ -622,7 +622,7 @@ export function RoomChatInput({
             onInput={handleInput}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
-            className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-base leading-7 text-foreground focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/3"
+            className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-base leading-7 text-foreground focus:outline-none placeholder-editor"
             data-placeholder="Type a message... Use @ to mention agents"
             suppressContentEditableWarning
             style={{
@@ -645,21 +645,6 @@ export function RoomChatInput({
           </div>
         </div>
       </div>
-
-      {/* Global styles for dark mode support */}
-      <style dangerouslySetInnerHTML={{
-        __html: `
-          .room-mention {
-            background-color: rgba(59, 130, 246, 0.2) !important;
-            color: rgb(37, 99, 235) !important;
-          }
-          
-          .dark .room-mention {
-            background-color: rgba(59, 130, 246, 0.3) !important;
-            color: rgb(96, 165, 250) !important;
-          }
-        `
-      }} />
     </div>
   )
 }

@@ -393,3 +393,24 @@
 ::-webkit-scrollbar-thumb:hover {
   box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
 }
+
+/* Room Chat Input Styles */
+.room-mention {
+  background-color: rgba(59, 130, 246, 0.2) !important;
+  color: rgb(37, 99, 235) !important;
+}
+
+.dark .room-mention {
+  background-color: rgba(59, 130, 246, 0.3) !important;
+  color: rgb(96, 165, 250) !important;
+}
+
+.placeholder-editor:empty:before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.dark .placeholder-editor:empty:before {
+  color: #6b7280;
+}
