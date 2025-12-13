@@ -157,7 +157,13 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
     <div className="flex justify-end w-full">
       <div className="max-w-[80%] rounded-lg p-3 shadow-sm bg-primary text-primary-foreground">
         <div className="text-xs opacity-70 mb-1">
-          {message.sender_name} • {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {message.sender_name} • {new Date(message.timestamp).toLocaleString([], { 
+            month: 'short', 
+            day: 'numeric', 
+            year: 'numeric', 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          })}
         </div>
         <div className="text-sm leading-relaxed">
           {renderWithMentions(displayContent)}
@@ -246,7 +252,13 @@ export function AgentMessageBubble({
             {message.sender_name}
           </span>
           <span className="text-xs text-muted-foreground">
-            {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {new Date(message.timestamp).toLocaleString([], { 
+              month: 'short', 
+              day: 'numeric', 
+              year: 'numeric', 
+              hour: '2-digit', 
+              minute: '2-digit' 
+            })}
           </span>
         </div>
         

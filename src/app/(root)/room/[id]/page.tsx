@@ -468,7 +468,7 @@ export default function RoomChatPage() {
                             variant="ghost" 
                             size="icon" 
                             onClick={handleOpenRoomSettings}
-                            className="text-primary hover:text-primary hover:bg-primary/10 shadow-sm"
+                            className="text-primary hover:text-primary hover:bg-primary/10"
                             aria-label="Room settings"
                             onMouseEnter={() => {
                               if (availableAgents.length === 0 && !loadingAgents) {
