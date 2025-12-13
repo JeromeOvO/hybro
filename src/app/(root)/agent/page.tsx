@@ -1,29 +1,86 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Plus, Search, RefreshCw } from "lucide-react"
+import { useState, useEffect, useRef, useMemo } from "react"
+import { Plus, Search, RefreshCw, ChevronDown } from "lucide-react"
 import { AgentCard, StatsCards } from "@/components/agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
+
+// Constants for better maintainability
+const STATUS_OPTIONS = [
+  { value: "all", label: "All Status" },
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" }
+] as const
+
+// Custom hook for dropdown functionality
+function useDropdown() {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isOpen])
+
+  return { isOpen, setIsOpen, ref }
+}
+
+// Helper function to get status label
+function getStatusLabel(status: string) {
+  return STATUS_OPTIONS.find(option => option.value === status)?.label || "All Status"
+}
+
+// Custom hook for agent filtering
+function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: string) {
+  return useMemo(() => {
+    const existingIds = new Set<string>()
+
+    return agents.filter(agent => {
+      if (existingIds.has(agent.agent_id)) {
+        return false
+      }
+      existingIds.add(agent.agent_id)
+
+      const matchesSearch =
+        agent.agent_card.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        agent.agent_card.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        agent.agent_card.skills.some(skill =>
+          skill.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          skill.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
+        )
+
+      const matchesStatus = statusFilter === "all" || agent.agent_status === statusFilter
+
+      return matchesSearch && matchesStatus
+    })
+  }, [agents, searchTerm, statusFilter])
+}
 
 export default function AgentPage() {
   const router = useRouter()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
-  const [error] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
+  const { isOpen: isDropdownOpen, setIsOpen: setIsDropdownOpen, ref: dropdownRef } = useDropdown()
+
+  const filteredAgents = useFilteredAgents(agents, searchTerm, statusFilter)
 
   const loadAgents = async () => {
     try {
@@ -41,37 +98,10 @@ export default function AgentPage() {
       setLoading(false)
     }
   }
-  
+
   useEffect(() => {
     loadAgents()
   }, [])
-
-    const providers = Array.from(new Set(
-      agents
-          .map(agent => agent.agent_card.provider?.organization)
-          .filter((org): org is string => org !== undefined && org !== null)
-    ))
-  
-  const existingIds = new Set<string>()
-  const filteredAgents = agents.filter(agent => {
-    if (existingIds.has(agent.agent_id)) {
-      return false
-    }
-    existingIds.add(agent.agent_id)
-    const matchesSearch = 
-      agent.agent_card.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      agent.agent_card.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      agent.agent_card.skills.some(skill => 
-        skill.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        skill.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
-      )
-    
-    const matchesStatus = statusFilter === "all" || agent.agent_status === statusFilter
-    const matchesProvider = providers.length === 0 || 
-      providers.includes(agent.agent_card.provider?.organization || "")
-    
-    return matchesSearch && matchesStatus && matchesProvider
-  })
 
   if (loading) {
     return (
@@ -84,22 +114,6 @@ export default function AgentPage() {
     )
   }
     
-  if (error) {
-    return (
-      <div className="flex items-center justify-center min-h-[85vh]">
-        <div className="flex flex-col items-center justify-center gap-4">
-          <div className="text-center">
-            <h2 className="text-lg font-semibold mb-2">Failed to load network</h2>
-            <p className="text-muted-foreground mb-4">{error}</p>
-          </div>
-          <Button onClick={loadAgents} variant="outline">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Retry
-          </Button>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="px-4 sm:px-6 py-8">
@@ -122,29 +136,41 @@ export default function AgentPage() {
       <StatsCards agents={agents} />
 
       <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-        <div className="flex flex-1 gap-4 max-w-md">
+        <div className="flex flex-1 gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search agents..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
+            <div className="relative" ref={dropdownRef}>
+              <Input
+                placeholder="Search agents..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-32 pr-10"
+              />
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="absolute left-2 top-1/2 transform -translate-y-1/2 w-[110px] h-7 px-2 justify-start border-0 bg-transparent shadow-none focus:ring-0 hover:bg-transparent flex items-center text-sm text-muted-foreground z-20"
+              >
+                <span>{getStatusLabel(statusFilter)}</span>
+                <ChevronDown className={`h-3 w-3 ml-auto transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
+              {isDropdownOpen && (
+                <div className="absolute top-full left-2 z-50 w-[120px] bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden">
+                  {STATUS_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => {
+                        setStatusFilter(option.value)
+                        setIsDropdownOpen(false)
+                      }}
+                      className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-        
-        <div className="flex gap-2">
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[120px]">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent className="bg-background/80 backdrop-blur-md border shadow-lg">
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
@@ -166,10 +192,16 @@ export default function AgentPage() {
         )}
       </div>
 
-      <div className="flex flex-row flex-wrap gap-5">
-        {filteredAgents.map((agent) => (
-          <AgentCard key={agent.agent_id} agent={agent} />
-        ))}
+      <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div className="flex flex-1 gap-4">
+          <div className="relative flex-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-5">
+              {filteredAgents.map((agent) => (
+                <AgentCard key={agent.agent_id} agent={agent} />
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
 
       {filteredAgents.length === 0 && !loading && (
