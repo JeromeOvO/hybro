@@ -10,14 +10,12 @@ import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
 
-// Constants for better maintainability
 const STATUS_OPTIONS = [
   { value: "all", label: "All Status" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" }
 ] as const
 
-// Custom hook for dropdown functionality
 function useDropdown() {
   const [isOpen, setIsOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -41,12 +39,10 @@ function useDropdown() {
   return { isOpen, setIsOpen, ref }
 }
 
-// Helper function to get status label
 function getStatusLabel(status: string) {
   return STATUS_OPTIONS.find(option => option.value === status)?.label || "All Status"
 }
 
-// Custom hook for agent filtering
 function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: string) {
   return useMemo(() => {
     const existingIds = new Set<string>()
