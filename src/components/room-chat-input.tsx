@@ -331,6 +331,32 @@ export function RoomChatInput({
     }
   }
 
+  // Force plain-text paste into the editor
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const text = e.clipboardData.getData('text/plain')
+    if (!editorRef.current) return
+
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) return
+
+    // Delete any selected content
+    selection.deleteFromDocument()
+
+    // Insert the plain text
+    const range = selection.getRangeAt(0)
+    const textNode = document.createTextNode(text)
+    range.insertNode(textNode)
+
+    // Move cursor to after the inserted text
+    range.setStartAfter(textNode)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    handleInput()
+  }
+
   // Insert mention at cursor
   const insertMention = (agent: Agent) => {
     if (!editorRef.current) return
@@ -594,6 +620,7 @@ export function RoomChatInput({
             ref={editorRef}
             contentEditable={!disabled}
             onInput={handleInput}
+            onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-base leading-7 text-foreground focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/3"
             data-placeholder="Type a message... Use @ to mention agents"
