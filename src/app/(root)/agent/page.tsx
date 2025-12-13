@@ -109,10 +109,6 @@ export default function AgentPage() {
           <h1 className="text-3xl font-bold">Hybro Agent Network</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={loadAgents}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
           <Button variant="outline" onClick={() => router.push('/agent/registry')}>
             <Plus className="h-4 w-4 mr-2" />
             Register Agent

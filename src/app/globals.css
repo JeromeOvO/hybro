@@ -407,10 +407,6 @@
 
 .placeholder-editor:empty:before {
   content: attr(data-placeholder);
-  color: #9ca3af;
+  color: hsl(var(--color-muted-foreground));
   pointer-events: none;
-}
-
-.dark .placeholder-editor:empty:before {
-  color: #6b7280;
 }
