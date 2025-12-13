@@ -1,7 +1,7 @@
 
 @import "tailwindcss";
 
-@theme {
+:root {
   /* Fonts */
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
@@ -58,9 +58,9 @@
   
   /* Brand colors for HYBRO */
   --color-hybro-hy: 195 100% 40%;
-  --color-hybro-hy-strong: 270 80% 70%;
+  --color-hybro-hy-strong: 195 90% 55%;
   --color-hybro-bro: 280 70% 45%;
-  --color-hybro-bro-strong: 270 80% 70%;
+  --color-hybro-bro-strong: 280 70% 60%;
 
   /* Semantic icon colors - Light mode (enhanced for better contrast) */
   --color-icon-success: 142 72% 30%;
@@ -98,7 +98,7 @@
   --animate-bounce: bounce 1s infinite;
 }
 
-@theme dark {
+.dark {
   /* Futuristic Dark Mode - Deep space theme with neon accents */
   --color-background: 230 25% 8%;
   --color-foreground: 210 30% 88%;
@@ -206,10 +206,11 @@
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: hsl(var(--color-border));
   }
   body {
-    @apply bg-background text-foreground;
+    background-color: hsl(var(--color-background));
+    color: hsl(var(--color-foreground));
     /* Futuristic grid pattern */
     background-image: 
       linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
@@ -233,21 +234,25 @@
 
   *[class^="text-"] {
     color: transparent;
-    @apply rounded-md bg-foreground/20 select-none animate-pulse;
+    border-radius: var(--radius-md);
+    background-color: hsl(var(--color-foreground) / 0.2);
+    user-select: none;
+    animation: var(--animate-pulse, pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite);
   }
 
   .skeleton-bg {
-    @apply bg-foreground/10;
+    background-color: hsl(var(--color-foreground) / 0.1);
   }
 
   .skeleton-div {
-    @apply bg-foreground/20 animate-pulse;
+    background-color: hsl(var(--color-foreground) / 0.2);
+    animation: var(--animate-pulse, pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite);
   }
 }
 
 /* Glowing message bubbles */
 .message-bubble {
-  @apply backdrop-blur-md;
+  backdrop-filter: blur(12px);
   box-shadow: 
     0 4px 6px -1px rgb(0 0 0 / 0.08), 
     0 2px 4px -2px rgb(0 0 0 / 0.08);
@@ -277,7 +282,8 @@
 
 /* Futuristic buttons */
 .btn-futuristic {
-  @apply relative overflow-hidden;
+  position: relative;
+  overflow: hidden;
   background: linear-gradient(135deg, hsl(var(--color-primary)) 0%, hsl(var(--color-accent)) 100%);
   transition: all 0.3s ease;
 }
