@@ -46,6 +46,11 @@ function getStatusLabel(status: string) {
 function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: string) {
   return useMemo(() => {
     const existingIds = new Set<string>()
+    const providers = Array.from(new Set(
+      agents
+          .map(agent => agent.agent_card.provider?.organization)
+          .filter((org): org is string => org !== undefined && org !== null)
+    ))
 
     return agents.filter(agent => {
       if (existingIds.has(agent.agent_id)) {
@@ -62,8 +67,10 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
         )
 
       const matchesStatus = statusFilter === "all" || agent.agent_status === statusFilter
+      const matchesProvider = providers.length === 0 ||
+        providers.includes(agent.agent_card.provider?.organization || "")
 
-      return matchesSearch && matchesStatus
+      return matchesSearch && matchesStatus && matchesProvider
     })
   }, [agents, searchTerm, statusFilter])
 }
