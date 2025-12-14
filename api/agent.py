@@ -4,6 +4,7 @@ from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user
 from models.request import AgentCenterRequest
 from modules.AgentCenter import AgentCenter
+from services.agent_service import agent_service
 
 router = APIRouter()
 agent_viewset = AgentViewSet()
@@ -22,12 +23,23 @@ async def register_agent(
     """Register a new agent - PROTECTED (requires authentication)"""
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
-    provider_id = request_data.get("provider_id")
+    # we should use current user's clerk id as provider_id
+    provider_id = user.user_id
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
 
-    agent_center_request = AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
+    # Check if current agent_url is already registered
+    existing_agent = await agent_service.get_agent_by_url(agent_url)
+
+    if existing_agent:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent with this URL is already registered",
+        )
+    agent_center_request = AgentCenterRequest(
+        agent_url=agent_url, provider_id=provider_id
+    )
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
     return agent_center_response
