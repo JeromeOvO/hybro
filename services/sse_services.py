@@ -1,10 +1,10 @@
 import asyncio
 import json
-from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from typing import Any
 from uuid import uuid4
 
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 
@@ -14,7 +14,7 @@ class SSEConnection:
         self.room_id = room_id
         self.connection_id = str(uuid4())
         self.queue: asyncio.Queue = asyncio.Queue()
-        self.connected_at = datetime.now()
+        self.connected_at = utcnow()
         self.is_active = True
 
     async def send_message(self, message_type: str, data: Any):
@@ -25,7 +25,7 @@ class SSEConnection:
         try:
             message = {
                 "type": message_type,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utcnow().isoformat(),
                 "room_id": self.room_id,
                 "data": data,
             }
@@ -38,16 +38,16 @@ class SSEConnection:
             self.is_active = False
             return False
 
-    async def get_message(self, timeout: float = 30.0) -> Optional[str]:
+    async def get_message(self, timeout: float = 30.0) -> str | None:
         """get message from queue"""
         try:
             message = await asyncio.wait_for(self.queue.get(), timeout=timeout)
             return message
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # send heartbeat
             heartbeat = {
                 "type": "heartbeat",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": utcnow().isoformat(),
                 "room_id": self.room_id,
             }
             await self.queue.put(json.dumps(heartbeat))
@@ -61,7 +61,7 @@ class SSEConnection:
 class SSEManager:
     def __init__(self):
         # room_id -> {connection_id: connection}
-        self.room_connections: Dict[str, Dict[str, SSEConnection]] = {}
+        self.room_connections: dict[str, dict[str, SSEConnection]] = {}
         self.lock = asyncio.Lock()
 
     async def add_connection(self, room_id: str) -> SSEConnection:
@@ -128,7 +128,7 @@ class SSEManager:
             "message_id": message_id,
             "user_id": user_id,
             "content": content,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "user_message", data)
 
@@ -146,7 +146,7 @@ class SSEManager:
             "agent_id": agent_id,
             "content": content,
             "related_message_id": related_message_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "agent_response", data)
 
@@ -170,7 +170,7 @@ class SSEManager:
             "message_id": message_id,
             "agent_id": agent_id,
             "token": token,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "agent_token", data)
 
@@ -186,7 +186,7 @@ class SSEManager:
         data = {
             "error": error,
             "message_id": message_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "error", data)
 
@@ -219,7 +219,7 @@ class SSEManager:
             "artifact": artifact,
             "append": append,
             "last_chunk": last_chunk,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "artifact_update", data)
 
@@ -231,7 +231,7 @@ class SSEManager:
             "status": status,  # "processing", "completed", "failed"
             "message_id": message_id,
             "details": details,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "processing_status", data)
 
