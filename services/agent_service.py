@@ -323,7 +323,7 @@ class AgentService:
 
             if isinstance(obj, dict):
                 if len(path_parts) == 1:
-                    obj[path_parts[0]] = " "
+                    obj[path_parts[0]] = ""
                 elif path_parts[0] in obj:
                     remove_nested_field(obj[path_parts[0]], path_parts[1:])
 

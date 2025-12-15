@@ -33,6 +33,7 @@ async def register_agent(
     agent_center_response_without_url = agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
     )
+    print(agent_center_response_without_url)
     return agent_center_response_without_url
 
 
@@ -106,6 +107,7 @@ async def get_agent_list():
     agent_center_response_without_url = agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
     )
+    print(agent_center_response_without_url)
 
     return agent_center_response_without_url
 
