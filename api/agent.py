@@ -50,12 +50,23 @@ async def delete_agent(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
 ):
-    """Delete an agent - PROTECTED (requires authentication)"""
+    """Delete an agent - PROTECTED (requires authentication and ownership)"""
     request_data = await request.json()
     agent_id = request_data.get("agent_id")
 
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
+
+    # Verify the agent exists and user owns it
+    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if existing_agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to delete this agent"
+        )
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)

@@ -338,5 +338,10 @@ class AgentService:
 
         return agent_query_result
 
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
+        """Get agent by ID - internal service method"""
+
+        return await self.database_service.get_agent_by_agent_id(agent_id)
+
 
 agent_service = AgentService()
