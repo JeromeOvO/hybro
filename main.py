@@ -24,6 +24,7 @@ from common.auth import get_current_user
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from services.agent_health_service import agent_health_service
 
 load_dotenv()
 
@@ -72,9 +73,15 @@ async def lifespan(app: FastAPI):
     # await init_db(app)        # gets "app" from FastAPI
     await mongodb.connect()
     pinecone_db.connect()
+
+    # Start the agent health check service
+    await agent_health_service.start()
+
     try:
         yield
     finally:
+        # Stop the agent health check service
+        await agent_health_service.stop()
         # await close_db(app)
         await mongodb.close_database_connection()
 

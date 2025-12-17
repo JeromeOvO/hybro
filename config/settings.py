@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Clerk Authentication
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
+    # Agent Health Check Settings
+    agent_health_check_enabled: bool = True # enable/disable agent health check
+    
     class Config:
         env_file = ".env"
         extra = "ignore"
