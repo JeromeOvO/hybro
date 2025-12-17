@@ -2,21 +2,24 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Bot, RefreshCw, ExternalLink } from "lucide-react"
+import { ArrowLeft, Bot, RefreshCw, ExternalLink, Trash2 } from "lucide-react"
+import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { banner } from "@/components/ui/banner"
-import { getAgent } from "@/lib/api"
+import { getAgent, deleteAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 
 export default function AgentProfilePage() {
   const params = useParams()
   const router = useRouter()
+  const { userId, getToken } = useAuth()
   const agentId = params.id as string
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState(false)
 
   const getStatusColor = (status: Agent['agent_status']) => {
     switch (status) {
@@ -63,6 +66,38 @@ export default function AgentProfilePage() {
       setLoading(false)
     }
   }, [agentId])
+
+  const handleDeleteAgent = async () => {
+    if (!agentData?.agent) return
+
+    if (!confirm(`Are you sure you want to delete "${agentData.agent.agent_card.name}"? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      setDeleting(true)
+      const response = await deleteAgent(
+        { agent_id: agentId },
+        getToken
+      )
+
+      if (response.success) {
+        banner.success("Agent deleted successfully")
+        router.push('/agent')
+      } else {
+        const errorMessage = response.error || "Failed to delete agent"
+        banner.error("Failed to delete agent", {
+          description: errorMessage
+        })
+      }
+    } catch (error) {
+      banner.error("Failed to delete agent", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred"
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   useEffect(() => {
     if (agentId) {
@@ -299,6 +334,19 @@ export default function AgentProfilePage() {
           </div>
         </CardContent>
       </Card>
+
+      {userId && agentData?.agent?.provider_id === userId && (
+        <div className="flex justify-center">
+          <Button 
+            className={getStatusColor('deleted')} 
+            onClick={handleDeleteAgent}
+            disabled={deleting}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            {deleting ? "Deleting..." : "Delete Agent"}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
