@@ -335,7 +335,7 @@ export default function AgentProfilePage() {
         </CardContent>
       </Card>
 
-      {userId && agentData?.provider_id === userId && (
+      {userId && agentData?.agent?.provider_id === userId && (
         <div className="flex justify-center">
           <Button 
             className={getStatusColor('deleted')} 
