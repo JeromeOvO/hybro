@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Coroutine
+from typing import Any
 
 from a2a.types import AgentCard
 from dotenv import load_dotenv
