@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Coroutine
 
 from a2a.types import AgentCard
 from dotenv import load_dotenv
@@ -186,6 +186,20 @@ class MongoDB:
         agent = await self.agents_collection.find_one({"agent_id": agent_id})
 
         return Agent(**agent) if agent else None
+
+    async def get_agents_by_provider_id(self, provider_id: str) -> list[Agent]:
+        """
+        Get all agents belong to a ProviderID
+
+        Args:
+            provider_id: ProviderID of the agent to retrieve
+
+        Returns:
+            Agent: Agents document or None if not found
+        """
+        cursor = self.agents_collection.find({"provider_id": provider_id})
+        agents = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in agents]
 
     async def get_all_agents(self) -> list[Agent]:
         """

@@ -187,3 +187,18 @@ class AgentCenter:
             AgentCenterResponse with list of similar agents ranked by relevance
         """
         return await self.agent_service.query_similar_agents(request)
+
+    async def get_agents_by_provider_id(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse:
+        """
+        Get all agents from a given provider ID.
+        Returns a comprehensive list of all available agents by the provider
+
+        Args:
+            request: AgentCenterRequest containing provider_id
+
+        Returns:
+            AgentCenterResponse with list of all agents
+        """
+        return await self.agent_service.get_agents_by_provider_id(request)

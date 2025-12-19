@@ -44,6 +44,19 @@ async def register_agent(
 
     return agent_center_response
 
+@router.get("/agent/getAgent/me")
+async def get_agent_by_provider(
+        user: ClerkUser = Depends(get_current_user),
+):
+    """Get agents by provider id - PROTECTED (requires authentication)"""
+    provider_id = user.user_id
+    if not provider_id:
+        raise HTTPException(status_code=400, detail="provider_id is required")
+
+    agent_center_request = AgentCenterRequest(provider_id=provider_id)
+    agent_center_response = await agent_center.get_agents_by_provider_id(agent_center_request)
+
+    return agent_center_response
 
 @router.post("/agent/deleteAgent")
 async def delete_agent(

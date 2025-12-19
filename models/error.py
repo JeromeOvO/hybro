@@ -41,6 +41,11 @@ class AgentIdRequiredError(Exception):
         self.message = message
         super().__init__(self.message)
 
+class ProviderIdRequiredError(Exception):
+    def __init__(self, message: str = "Provider ID is required"):
+        self.message = message
+        super().__init__(self.message)
+
 
 class QueryTextRequiredError(Exception):
     def __init__(self, message: str = "Query text is required"):

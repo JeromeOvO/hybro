@@ -10,7 +10,7 @@ from models.error import (
     AgentIdRequiredError,
     AgentNotFoundError,
     IllgalParameterError,
-    QueryTextRequiredError,
+    QueryTextRequiredError, ProviderIdRequiredError,
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
@@ -172,6 +172,32 @@ class AgentService:
         return AgentCenterResponse(
             agent_id=agent.agent_id,
             agent=agent,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
+    async def get_agents_by_provider_id(
+            self, request: AgentCenterRequest
+    ) -> AgentCenterResponse:
+        provider_id = request.provider_id
+        if not provider_id:
+            return AgentCenterResponse(
+                success=False,
+                error="provider_id is required",
+                status_code=400,
+            )
+
+        try:
+            agents = await self.database_service.get_agents_by_provider_id(provider_id)
+        except Exception as e:
+            logger.error(
+                f"AgentCenter: Failed to get agents by provider_id {provider_id}: {str(e)}"
+            )
+            return AgentCenterResponse(success=False, error=str(e), status_code=500)
+
+        return AgentCenterResponse(
+            agents=agents,
             success=True,
             error=None,
             status_code=200,
@@ -342,6 +368,7 @@ class AgentService:
         """Get agent by ID - internal service method"""
 
         return await self.database_service.get_agent_by_agent_id(agent_id)
+
 
 
 agent_service = AgentService()
