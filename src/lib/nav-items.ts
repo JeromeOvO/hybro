@@ -3,6 +3,7 @@ import {
   Globe,
   InspectionPanel,
   MessageCirclePlus,
+  MonitorCog,
 } from "lucide-react"
 
 export type NavAgentItem = {
@@ -36,6 +37,12 @@ export const NAV_AGENTS: NavAgentItem[] = [
     url: "/about",
     icon: BookOpen,
     colorClass: "icon-learn",
+  },
+  {
+    name: "Agent Workspace",
+    url: "/workspace",
+    icon: MonitorCog,
+    colorClass: "icon-create",
   },
 ]
 
