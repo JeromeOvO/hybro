@@ -123,7 +123,7 @@ class DatabaseService:
 
     async def get_agents_by_provider_id(self, provider_id: str) -> Agent | None:
         """
-        Get an agent by provider_id from both MongoDB and Pinecone databases.
+        Get agents by provider_id from MongoDB.
         """
         return await self.mongo.get_agents_by_provider_id(provider_id)
 
