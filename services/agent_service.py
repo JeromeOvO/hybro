@@ -16,6 +16,7 @@ from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
 from services.a2a_service import a2a_service
 from services.database_service import db_service
+from services.domain_alias_service import domain_alias_service
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
@@ -51,11 +52,25 @@ class AgentService:
 
         new_agent_id = str(uuid.uuid4())
         provider_id = request.provider_id
-        # create agent
+
+        # Generate public (masked) URL for the agent
+        public_url = None
+        try:
+            public_url = await domain_alias_service.generate_public_url(
+                agent_name=request.agent_card.name,
+                agent_id=new_agent_id,
+                preferred_subdomain=getattr(request, "preferred_subdomain", None),
+            )
+            logger.info(f"AgentCenter: Generated public URL {public_url} for agent {new_agent_id}")
+        except Exception as e:
+            logger.warning(f"AgentCenter: Failed to generate public URL for agent {new_agent_id}: {str(e)}")
+
+        # create agent with public_url
         agent = Agent(
             agent_id=new_agent_id,
             agent_card=request.agent_card,
             provider_id=provider_id,
+            public_url=public_url,
         )
 
         # add agent to database
@@ -74,6 +89,7 @@ class AgentService:
             success=agent_add_result,
             error=None,
             status_code=200,
+            public_url=public_url,
         )
 
     async def update_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
