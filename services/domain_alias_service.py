@@ -1,13 +1,3 @@
-"""
-Domain Alias Service
-
-Provides URL masking for A2A agents by generating unique subdomains.
-
-Example:
-    Real URL:   http://13.57.247.41:20004
-    Public URL: https://storyagent.hybro.ai
-"""
-
 import hashlib
 import re
 from uuid import uuid4
@@ -19,7 +9,16 @@ logger = get_logger(__name__)
 
 
 class DomainAliasService:
-    """Service for generating unique subdomains for agent URLs."""
+
+    """
+    Domain Alias Service
+
+    Provides URL masking for A2A agents by generating unique subdomains.
+
+    Example:
+        Real URL:   http://13.57.247.41:20004
+        Public URL: https://storyagent.hybro.ai
+    """
 
     # Hardcoded domain masking configuration
     BASE_DOMAIN = "hybro.ai"
