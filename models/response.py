@@ -103,6 +103,7 @@ class AgentCenterResponse(BaseModel):
     agent_card: AgentCard | None = None
     agent: Agent | None = None
     agents: list[Agent] | None = None
+    public_url: str | None = None  
     success: bool
     error: str | None = None
     status_code: int = 200
