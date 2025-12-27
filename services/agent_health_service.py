@@ -22,7 +22,7 @@ class AgentHealthService:
 
     Uses exponential backoff for faster detection of offline agents:
     - Normal interval: default 1 hour between full cycles
-    - On failure: retry at 30s, 60s, 120s (total ~3.5 min to mark inactive)
+    - On failure: retry at 30s, 60s (total ~90s to mark inactive after 3 failures)
     """
 
     def __init__(
