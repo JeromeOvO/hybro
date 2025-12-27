@@ -187,8 +187,12 @@ class AgentHealthService:
         )
 
         while self._running:
-            await self.run_health_check_cycle()
-            await asyncio.sleep(self.check_interval)
+            try:
+                await self.run_health_check_cycle()
+                await asyncio.sleep(self.check_interval)
+            except Exception as e:
+                logger.error(f"Health check loop failed: {e}", exc_info=True)
+                raise
 
     async def start(self):
         """Start the health check background task."""
