@@ -1,11 +1,17 @@
 import asyncio
+import os
+
 import httpx
+from a2a.utils.constants import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    PREV_AGENT_CARD_WELL_KNOWN_PATH,
+)
 from loguru import logger
+
 from config.settings import settings
 from database.mongodb import mongodb
 from models.agent import Agent, AgentStatus
-from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
-import os
+
 
 class AgentHealthService:
     """
@@ -17,7 +23,9 @@ class AgentHealthService:
 
     def __init__(
         self,
-        check_interval_seconds: int = (os.getenv("AGENT_HEALTH_CHECK_INTERVAL", "3600")), 
+        check_interval_seconds: int = int(
+            os.getenv("AGENT_HEALTH_CHECK_INTERVAL", "3600")
+        ),
         timeout_seconds: float = 10.0,
         max_consecutive_failures: int = 3,
     ):
@@ -55,15 +63,16 @@ class AgentHealthService:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                
                 # Try current A2A well-known path first
                 agent_card_url = agent_url.rstrip("/") + AGENT_CARD_WELL_KNOWN_PATH
                 response = await client.get(agent_card_url)
 
                 # Fall back to previous well-known path if not found
                 if response.status_code == 404:
-                    agent_card_url = agent_url.rstrip("/") + PREV_AGENT_CARD_WELL_KNOWN_PATH
-                    response = await client.get(agent_card_url)  
+                    agent_card_url = (
+                        agent_url.rstrip("/") + PREV_AGENT_CARD_WELL_KNOWN_PATH
+                    )
+                    response = await client.get(agent_card_url)
 
                 # Consider 2xx and 3xx as healthy
                 is_healthy = response.status_code < 400
@@ -94,9 +103,7 @@ class AgentHealthService:
             logger.error(f"Unexpected error checking agent {agent.agent_id}: {e}")
             return False
 
-    async def update_agent_status(
-        self, agent_id: str, new_status: AgentStatus
-    ) -> bool:
+    async def update_agent_status(self, agent_id: str, new_status: AgentStatus) -> bool:
         """
         Update agent status in the database.
 
@@ -180,8 +187,12 @@ class AgentHealthService:
         )
 
         while self._running:
-            await self.run_health_check_cycle()
-            await asyncio.sleep(self.check_interval)
+            try:
+                await self.run_health_check_cycle()
+                await asyncio.sleep(self.check_interval)
+            except Exception as e:
+                logger.error(f"Health check loop failed: {e}", exc_info=True)
+                raise
 
     async def start(self):
         """Start the health check background task."""
@@ -214,5 +225,3 @@ class AgentHealthService:
 
 # Singleton instance
 agent_health_service = AgentHealthService()
-
-
