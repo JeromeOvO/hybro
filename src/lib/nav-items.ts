@@ -33,16 +33,16 @@ export const NAV_AGENTS: NavAgentItem[] = [
     colorClass: "icon-inspection",
   },
   {
+    name: "Agent Workspace",
+    url: "/workspace",
+    icon: MonitorCog,
+    colorClass: "icon-workflow",
+  },
+  {
     name: "About HYBRO",
     url: "/about",
     icon: BookOpen,
     colorClass: "icon-learn",
-  },
-  {
-    name: "Agent Workspace",
-    url: "/workspace",
-    icon: MonitorCog,
-    colorClass: "icon-create",
   },
 ]
 
