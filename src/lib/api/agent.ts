@@ -25,6 +25,17 @@ export async function registerAgent(
   )
 }
 
+// Get agents from provider_id
+export async function getAgentsByProviderId(
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAgent/me`,
+    getToken
+  )
+}
+
+
 // Delete agent
 export async function deleteAgent(
   request: AgentCenterRequest,
