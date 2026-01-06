@@ -728,6 +728,23 @@ class OrchestrationCenter:
 
         # Execute each meta task sequentially
         for i, meta_task in enumerate(meta_tasks):
+            # Check for cancellation before processing each task
+            if self.sse_manager.is_cancelled(base_task.extend_info.get("message_id")):
+                logger.info(
+                    "OrchestrationCenter: Workflow cancelled for base task %s, stopping all processing",
+                    base_task_id,
+                )
+                self.sse_manager.clear_cancellation(
+                    base_task.extend_info.get("message_id")
+                )
+                return OrchestrationCenterResponse(
+                    task_id=base_task_id,
+                    meta_task_ids=processed_meta_task_ids,
+                    success=False,
+                    error="Workflow cancelled by user",
+                    status_code=200,
+                )
+
             try:
                 logger.info(
                     "OrchestrationCenter: Processing meta task %s/%s: %s (execution_order: %s)",
@@ -1423,8 +1440,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         agent_card: AgentCard,
         prepared_message: Message,
         room_id: str,
+        user_message_id: str,
         send_sse: bool = False,
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, bool]:
         """
         Handle streaming responses from an agent for a room message.
 
@@ -1439,10 +1457,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             agent_card: The agent's card information
             prepared_message: The A2A message to send to the agent
             room_id: The room ID for SSE events
+            user_message_id: The user message ID for cancellation checks
             send_sse: Whether to send SSE notifications to frontend (default: False)
 
         Returns:
-            Tuple of (success: bool, full_response_text: str)
+            Tuple of (success: bool, full_response_text: str, was_cancelled: bool)
         """
 
         # Use a state object to track streaming state immutably
@@ -1460,13 +1479,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         async for a2a_response in self.a2a_service.send_message_streaming(
             agent_card, prepared_message
         ):
+            # Check for cancellation during streaming
+            if self.sse_manager.is_cancelled(user_message_id):
+                logger.info(
+                    "OrchestrationCenter: Streaming cancelled for message %s, stopping all processing",
+                    user_message_id,
+                )
+                # Clear cancellation flag and stop immediately without sending any response
+                self.sse_manager.clear_cancellation(user_message_id)
+                # Return with cancellation flag - do not send any more content
+                return True, message_streaming_state.full_response_text, True
+
             # Handle JSON-RPC errors
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
                 error_message = a2a_response.root.error.model_dump_json()
                 logger.error(f"OrchestrationCenter: Agent error: {error_message}")
                 if send_sse:
                     await self.sse_manager.send_error(room_id, error_message)
-                return False, message_streaming_state.full_response_text
+                return False, message_streaming_state.full_response_text, False
             # Below this, there is no error - process the response
             # Extract result from response
             result = a2a_response.root.result
@@ -1745,7 +1775,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
         )
 
-        return True, message_streaming_state.full_response_text
+        return True, message_streaming_state.full_response_text, False
 
     async def _handle_a2a_response_for_room(
         self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
@@ -1881,8 +1911,21 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_user_message_id,
         )
 
+        # Check for cancellation before processing agent messages
+        if self.sse_manager.is_cancelled(room_user_message_id):
+            logger.info(
+                "OrchestrationCenter: Processing cancelled for message %s, stopping all processing",
+                room_user_message_id,
+            )
+            self.sse_manager.clear_cancellation(room_user_message_id)
+            return OrchestrationCenterResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
+
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content_text
+            message_queue, room_id, room_memory_content_text, room_user_message_id
         )
 
         if not success:
@@ -1962,11 +2005,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return room_memory, room_memory_content_text
 
     async def _process_agent_message_queue(
-        self, message_queue: deque, room_id: str, room_memory_content_text: str
+        self,
+        message_queue: deque,
+        room_id: str,
+        room_memory_content_text: str,
+        user_message_id: str,
     ) -> bool:
         """Process all messages in the queue sequentially."""
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
+
+            # Check for cancellation before processing each agent message
+            if self.sse_manager.is_cancelled(user_message_id):
+                logger.info(
+                    "OrchestrationCenter: Message processing cancelled for %s, stopping all processing",
+                    user_message_id,
+                )
+                self.sse_manager.clear_cancellation(user_message_id)
+                return True  # Return success to avoid error status
 
             # Assign agent if not already assigned
             if current_message.agent_id is None:
@@ -1992,7 +2048,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
             # Process the agent message
             success = await self._process_single_agent_message(
-                current_message, room_id, room_memory_content_text, agent
+                current_message,
+                room_id,
+                room_memory_content_text,
+                agent,
+                user_message_id,
             )
 
             if not success:
@@ -2110,6 +2170,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id: str,
         room_memory_content_text: str,
         agent: Agent,  # Agent is now passed in
+        user_message_id: str,
     ) -> bool:
         """Process a single agent message with streaming support."""
         # Prepare the agent message with context
@@ -2132,12 +2193,18 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             agent_card=agent.agent_card
         )
 
+        was_cancelled = False
         if support_streaming:
             (
                 success,
                 full_response_text,
+                was_cancelled,
             ) = await self._handle_streaming_response_for_room(
-                current_message, agent.agent_card, prepared_message, room_id
+                current_message,
+                agent.agent_card,
+                prepared_message,
+                room_id,
+                user_message_id,
             )
         else:
             success, full_response_text = await self._handle_sync_response_for_room(
@@ -2146,6 +2213,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         if not success:
             return False
+
+        # If cancelled, stop processing and don't send any response
+        if was_cancelled:
+            logger.info(
+                "OrchestrationCenter: Skipping agent response for cancelled message %s",
+                user_message_id,
+            )
+            return False  # Return False to stop further processing
 
         # Get updated message from database
         current_message = (
