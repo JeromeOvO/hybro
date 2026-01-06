@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 // import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
@@ -24,6 +24,18 @@ interface RoomChatInputProps {
    * When true, the Send button is disabled, but typing is still allowed.
    */
   disableSend?: boolean
+  /**
+   * When true, shows spinner (message is being created/parsed, cancellation won't work)
+   */
+  sending?: boolean
+  /**
+   * When true, shows Stop button instead of Send button and allows cancelling
+   */
+  processing?: boolean
+  /**
+   * Callback when user clicks Stop button to cancel ongoing processing
+   */
+  onCancel?: () => void
   agents: Agent[]
   // Group selector props
   groups?: AgentGroup[]
@@ -52,7 +64,10 @@ interface RoomChatInputProps {
 export function RoomChatInput({ 
   onSubmit, 
   disabled = false, 
-  disableSend = false, 
+  disableSend = false,
+  sending = false,
+  processing = false,
+  onCancel,
   agents,
   groups = [],
   loadingGroups = false,
@@ -634,14 +649,36 @@ export function RoomChatInput({
         {/* Controls */}
         <div className="flex items-center justify-between px-6 pb-4 pt-2">
           <div className="flex items-center gap-2 ml-auto">
-            <Button
-              onClick={handleSubmit}
-              disabled={disableSend || disabled || !message.trim()}
-              size="lg"
-              className="h-12 w-12 rounded-full p-0"
-            >
-              <Send className="h-5 w-5" />
-            </Button>
+            {sending ? (
+              <Button
+                disabled
+                size="lg"
+                className="h-12 w-12 rounded-full p-0"
+                title="Sending message..."
+              >
+                <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              </Button>
+            ) : processing ? (
+              <Button
+                onClick={onCancel}
+                variant="destructive"
+                size="lg"
+                className="h-12 w-12 rounded-full p-0"
+                title="Stop processing"
+              >
+                <Square className="h-5 w-5" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleSubmit}
+                disabled={disableSend || disabled || !message.trim()}
+                size="lg"
+                className="h-12 w-12 rounded-full p-0"
+                title="Send message"
+              >
+                <Send className="h-5 w-5" />
+              </Button>
+            )}
           </div>
         </div>
       </div>

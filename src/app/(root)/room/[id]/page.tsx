@@ -61,6 +61,7 @@ export default function RoomChatPage() {
     processing,
     updatingRoom,
     sendUserMessage,
+    cancelProcessing,
     updateRoomSettings,
     getRoomFormData,
     // SSE state
@@ -522,6 +523,9 @@ export default function RoomChatPage() {
           <RoomChatInput
             onSubmit={handleSendMessage}
             disableSend={sending || processing}
+            sending={sending}
+            processing={processing}
+            onCancel={cancelProcessing}
             agents={agentList}
             showGroupSelector={true}
             groups={groups}
