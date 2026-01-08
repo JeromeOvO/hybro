@@ -68,6 +68,7 @@ class SSEManager:
         self.cancelled_messages: set[str] = set()
         self._db_collection = None
         self._change_stream_task = None
+        self._shutdown_flag = False
 
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
@@ -233,7 +234,7 @@ class SSEManager:
     ):
         """send processing status"""
         data = {
-            "status": status,  # "processing", "completed", "failed"
+            "status": status,  # "processing", "completed", "cancelled", "failed"
             "message_id": message_id,
             "details": details,
             "timestamp": utcnow().isoformat(),
@@ -271,7 +272,7 @@ class SSEManager:
 
     async def _watch_cancellations(self):
         """Background task that watches MongoDB for cancellation changes"""
-        while True:
+        while not self._shutdown_flag:
             try:
                 pipeline = [{"$match": {"operationType": "insert"}}]
 
@@ -279,6 +280,8 @@ class SSEManager:
                     logger.info("Connected to cancellation change stream")
 
                     async for change in change_stream:
+                        if self._shutdown_flag:
+                            break
                         try:
                             message_id = change["fullDocument"]["message_id"]
                             self.cancelled_messages.add(message_id)
@@ -288,12 +291,17 @@ class SSEManager:
                         except KeyError as e:
                             logger.error(f"Invalid change stream document: {e}")
 
+            except asyncio.CancelledError:
+                logger.info("Change stream watcher cancelled")
+                break
             except Exception as e:
-                logger.error(f"Change stream error: {e}. Reconnecting in 5s...")
-                await asyncio.sleep(5)
+                if not self._shutdown_flag:
+                    logger.error(f"Change stream error: {e}. Reconnecting in 5s...")
+                    await asyncio.sleep(5)
 
     async def stop_change_stream_watcher(self):
         """Stop the change stream watcher. Should be called on application shutdown."""
+        self._shutdown_flag = True
         if self._change_stream_task:
             self._change_stream_task.cancel()
             try:

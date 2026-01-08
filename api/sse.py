@@ -121,6 +121,7 @@ async def cancel_message(
         success = await mongodb.cancel_message(message_id, user.user_id)
 
         if not success:
+            sse_manager.clear_cancellation(message_id)
             raise HTTPException(
                 status_code=500, detail="Failed to persist cancellation to database"
             )
@@ -139,4 +140,4 @@ async def cancel_message(
         logger.error(f"Error cancelling message {message_id}: {e}")
         raise HTTPException(
             status_code=500, detail=f"Failed to cancel message: {str(e)}"
-        )
+        ) from e

@@ -901,6 +901,9 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
             )
+            await self.sse_manager.send_processing_status(
+                room_id, "cancelled", user_message_id
+            )
             self.sse_manager.clear_cancellation(user_message_id)
             return False
 
