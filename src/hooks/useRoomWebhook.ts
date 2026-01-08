@@ -367,20 +367,23 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       case 'processing_status':
         console.log('⚙️ Processing status update:', sseMessage.data?.status)
         if (sseMessage.data?.status) {
-          if (sseMessage.data.status === 'processing') {
+          const status = sseMessage.data.status
+          
+          if (status === 'processing') {
             setProcessing(true)
-          } else if (sseMessage.data.status === 'completed') {
+          } else if (status === 'completed' || status === 'cancelled' || status === 'failed') {
             setProcessing(false)
-            currentProcessingMessageId.current = null
-            // Don't reload messages, they should come via SSE
-          } else if (sseMessage.data.status === 'cancelled') {
-            setProcessing(false)
-            currentProcessingMessageId.current = null
-            banner.info('Processing stopped by user')
-          } else if (sseMessage.data.status === 'failed') {
-            setProcessing(false)
-            currentProcessingMessageId.current = null
-            banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+            // Only clear ref if this event is for the message we're tracking
+            if (sseMessage.data.message_id === currentProcessingMessageId.current) {
+              currentProcessingMessageId.current = null
+            }
+            // Show appropriate notification
+            if (status === 'cancelled') {
+              banner.info('Processing stopped by user')
+            } else if (status === 'failed') {
+              banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+            }
+            // 'completed' has no banner - messages come via SSE
           }
         }
         break
@@ -598,18 +601,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
       
-      // Clear tracking
-      currentProcessingMessageId.current = null
-      setProcessing(false)
-      
-      banner.info('Processing stopped')
+      // Note: Don't clear currentProcessingMessageId or setProcessing here
+      // The SSE 'cancelled' status event will handle state cleanup
       return true
     } catch (error) {
       console.error('Error cancelling message:', error)
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken, setProcessing])
+  }, [getToken])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
