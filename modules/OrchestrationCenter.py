@@ -748,7 +748,7 @@ class OrchestrationCenter:
                 return OrchestrationCenterResponse(
                     task_id=base_task_id,
                     meta_task_ids=processed_meta_task_ids,
-                    success=False,
+                    success=True,
                     error="Workflow cancelled by user",
                     status_code=200,
                 )
