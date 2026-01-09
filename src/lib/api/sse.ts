@@ -175,3 +175,23 @@ export async function getSSEStatus(
   }
   return await response.json() as SSEConnectionStatus
 }
+
+// Cancel message processing
+export async function cancelMessage(
+  messageId: string,
+  getToken?: () => Promise<string | null>
+): Promise<{ success: boolean; message_id: string; message: string }> {
+  const url = `${API_BASE_URL}/message/${messageId}/cancel`
+  
+  const headers = await getClientAuthHeaders(getToken)
+  const response = await fetch(url, {
+    method: 'POST',
+    headers
+  })
+  
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  
+  return await response.json()
+}

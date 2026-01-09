@@ -9,7 +9,7 @@ export interface SSEMessage {
     agent_id?: string
     content?: string
     related_message_id?: string
-    status?: string // "processing", "completed", "failed"
+    status?: string // "processing", "completed", "cancelled", "failed"
     details?: string
   }
 }
