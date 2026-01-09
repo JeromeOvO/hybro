@@ -766,7 +766,12 @@ class MongoDB:
         }
 
         try:
-            await self.cancelled_messages_collection.insert_one(doc)
+            # Only insert if not exist (upsert with $setOnInsert)
+            await self.cancelled_messages_collection.update_one(
+                {"message_id": message_id},
+                {"$setOnInsert": doc},
+                upsert=True
+            )
             return True
         except Exception as e:
             print(f"Error cancelling message: {e}")
