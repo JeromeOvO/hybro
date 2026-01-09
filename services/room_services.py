@@ -895,6 +895,18 @@ class RoomServices:
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
         """
+        # Check for cancellation before parsing
+        if self.sse_manager.is_cancelled(user_message_id):
+            logger.info(
+                "RoomServices: Message parsing cancelled for %s, stopping all processing",
+                user_message_id,
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, "cancelled", user_message_id
+            )
+            self.sse_manager.clear_cancellation(user_message_id)
+            return False
+
         # Parse user message
         parsed_result = await self.openai_service.parse_user_message_by_llm(
             message_text, selected_agent_set, is_debate_mode, auto_assign_agents

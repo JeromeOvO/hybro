@@ -25,6 +25,7 @@ from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from services.agent_health_service import agent_health_service
+from services.sse_services import sse_manager
 
 load_dotenv()
 
@@ -77,11 +78,26 @@ async def lifespan(app: FastAPI):
     # Start the agent health check service
     await agent_health_service.start()
 
+    # Start change stream watcher for message cancellations
+    try:
+        await sse_manager.start_change_stream_watcher(
+            mongodb.cancelled_messages_collection
+        )
+        logger.info("Message cancellation change stream watcher started")
+    except Exception as e:
+        logger.warning(
+            f"Could not start change stream watcher (may not have replica set): {e}"
+        )
+
     try:
         yield
     finally:
         # Stop the agent health check service
         await agent_health_service.stop()
+
+        # Stop change stream watcher
+        await sse_manager.stop_change_stream_watcher()
+
         # await close_db(app)
         await mongodb.close_database_connection()
 
