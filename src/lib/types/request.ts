@@ -1,3 +1,5 @@
+/* tslint:disable */
+/* eslint-disable */
 /**
 /* This file was automatically generated from pydantic models by running pydantic2ts.
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
@@ -7,7 +9,8 @@ export type SecurityScheme =
   | APIKeySecurityScheme
   | HTTPAuthSecurityScheme
   | OAuth2SecurityScheme
-  | OpenIdConnectSecurityScheme;
+  | OpenIdConnectSecurityScheme
+  | MutualTLSSecurityScheme;
 /**
  * The location of the API key.
  */
@@ -34,8 +37,10 @@ export type TaskState =
 
 export interface Agent {
   agent_id: string;
+  provider_id?: string | null;
   agent_card: AgentCard;
-  agent_status?: AgentStatus;
+  public_url?: string | null;
+  agent_status?: AgentStatus | null;
   call_count?: number;
   call_success_count?: number;
   like_count?: number;
@@ -66,6 +71,7 @@ export interface AgentCard {
   securitySchemes?: {
     [k: string]: SecurityScheme;
   } | null;
+  signatures?: AgentCardSignature[] | null;
   skills: AgentSkill[];
   supportsAuthenticatedExtendedCard?: boolean | null;
   url: string;
@@ -73,6 +79,7 @@ export interface AgentCard {
 }
 /**
  * Declares a combination of a target URL and a transport protocol for interacting with the agent.
+ * This allows agents to expose the same functionality over multiple transport mechanisms.
  */
 export interface AgentInterface {
   transport: string;
@@ -135,6 +142,7 @@ export interface HTTPAuthSecurityScheme {
 export interface OAuth2SecurityScheme {
   description?: string | null;
   flows: OAuthFlows;
+  oauth2MetadataUrl?: string | null;
   type?: "oauth2";
   [k: string]: unknown;
 }
@@ -203,6 +211,26 @@ export interface OpenIdConnectSecurityScheme {
   [k: string]: unknown;
 }
 /**
+ * Defines a security scheme using mTLS authentication.
+ */
+export interface MutualTLSSecurityScheme {
+  description?: string | null;
+  type?: "mutualTLS";
+  [k: string]: unknown;
+}
+/**
+ * AgentCardSignature represents a JWS signature of an AgentCard.
+ * This follows the JSON format of an RFC 7515 JSON Web Signature (JWS).
+ */
+export interface AgentCardSignature {
+  header?: {
+    [k: string]: unknown;
+  } | null;
+  protected: string;
+  signature: string;
+  [k: string]: unknown;
+}
+/**
  * Represents a distinct capability or function that an agent can perform.
  */
 export interface AgentSkill {
@@ -212,12 +240,17 @@ export interface AgentSkill {
   inputModes?: string[] | null;
   name: string;
   outputModes?: string[] | null;
+  security?:
+    | {
+        [k: string]: string[];
+      }[]
+    | null;
   tags: string[];
   [k: string]: unknown;
 }
 export interface AgentCenterRequest {
-  agent_url?: string | null;
   agent_id?: string | null;
+  agent_url?: string | null;
   provider_id?: string | null;
   agent_card?: AgentCard | null;
   call_increment?: number | null;
@@ -227,6 +260,47 @@ export interface AgentCenterRequest {
   query_text?: string | null;
   agent?: Agent | null;
   agent_count?: number | null;
+}
+export interface AgentCreate {
+  agent_url: string;
+  agent_card: AgentCard;
+  call_count?: number | null;
+  call_success_count?: number | null;
+  like_count?: number | null;
+  dislike_count?: number | null;
+  agent_status?: AgentStatus | null;
+  /**
+   * Must be a valid UUID string
+   */
+  agent_id?: string | null;
+}
+export interface AgentGroupCreateRequest {
+  name: string;
+  description?: string | null;
+  owner_id: string;
+  agents?: string[];
+}
+export interface AgentGroupRequest {
+  group_id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  owner_id?: string | null;
+  agents?: string[] | null;
+}
+export interface AgentGroupUpdateRequest {
+  group_id: string;
+  name?: string | null;
+  description?: string | null;
+  agents?: string[] | null;
+}
+export interface AgentPatch {
+  agent_url?: string | null;
+  agent_card?: AgentCard | null;
+  call_count?: number | null;
+  call_success_count?: number | null;
+  like_count?: number | null;
+  dislike_count?: number | null;
+  agent_status?: AgentStatus | null;
 }
 export interface AgentTaskRequest {
   task_id: string;
@@ -306,6 +380,25 @@ export interface DataPart {
     [k: string]: unknown;
   } | null;
   [k: string]: unknown;
+}
+export interface AgentUpdate {
+  agent_url?: string | null;
+  agent_card: AgentCard | null;
+  call_count: number | null;
+  call_success_count: number | null;
+  like_count: number | null;
+  dislike_count: number | null;
+  agent_status: AgentStatus | null;
+  agent_id: string | null;
+}
+export interface BaseAgent {
+  agent_url?: string | null;
+  agent_card?: AgentCard | null;
+  call_count?: number | null;
+  call_success_count?: number | null;
+  like_count?: number | null;
+  dislike_count?: number | null;
+  agent_status?: AgentStatus | null;
 }
 /**
  * A BaseTask represents a complete user request and serves as the top-level container.
@@ -389,6 +482,22 @@ export interface ChatRequest {
 export interface DebatationCenterRequest {
   task_id: string;
 }
+export interface FilterParams {
+  /**
+   * MongoDB filter conditions
+   */
+  filters?: {
+    [k: string]: unknown;
+  } | null;
+  /**
+   * Field to sort by
+   */
+  sort_by?: string | null;
+  /**
+   * Sort order: 1 for ascending, -1 for descending
+   */
+  sort_order?: number | null;
+}
 export interface InspectionCenterRequest {
   agent_id?: string | null;
   agent_url: string;
@@ -417,6 +526,16 @@ export interface OrchestrationCenterRequest {
   room_user_message_id?: string | null;
   room_agent_message_id?: string | null;
   room_related_message_id?: string | null;
+}
+export interface PaginationParams {
+  /**
+   * Page number (1-indexed)
+   */
+  page?: number | null;
+  /**
+   * Number of items per page
+   */
+  limit?: number | null;
 }
 export interface Room {
   room_id?: string;
@@ -468,16 +587,39 @@ export interface RoomCenterMemoryRequest {
     [k: string]: unknown;
   } | null;
   memory?: RoomMemory | null;
+  room_agent_set?: {
+    [k: string]: string;
+  } | null;
+  user_id?: string | null;
 }
 export interface RoomMemory {
   room_id: string;
   memory_id: string;
-  memory_content: MemoryContent;
+  memory_content?: MemoryContent;
   memory_created_at?: string;
   extend_info?: unknown;
 }
+/**
+ * Room conversation memory with structured history.
+ * Similar to ChatGPT/Claude conversation context management.
+ */
 export interface MemoryContent {
-  memory_text: string;
+  summary?: string | null;
+  conversation_history?: ConversationTurn[];
+  memory_text?: string | null;
+  [k: string]: unknown;
+}
+/**
+ * A single turn in the conversation (ChatGPT/Claude style).
+ * Represents either a user message or an agent response.
+ */
+export interface ConversationTurn {
+  role: "user" | "agent";
+  content: string;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  user_id?: string | null;
+  timestamp?: string;
   [k: string]: unknown;
 }
 export interface RoomCenterRoomMessageRequest {
