@@ -40,7 +40,7 @@ export interface Agent {
   provider_id?: string | null;
   agent_card: AgentCard;
   public_url?: string | null;
-  agent_status?: string;
+  agent_status?: AgentStatus | null;
   call_count?: number;
   call_success_count?: number;
   like_count?: number;
