@@ -13,8 +13,10 @@ from a2a.types import (
     TextPart,
 )
 
+from common.utils.context_utils import build_context_for_agent, clean_mention_format
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from models.memory import MemoryContent
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -41,6 +43,8 @@ from services.agent_service import agent_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
+from services.agent_selection_service import agent_selection_service
+from services.memory_service import room_memory_service
 
 logger = get_logger(__name__)
 
@@ -52,7 +56,6 @@ class RoomServices:
         self.openai_service = openai_service  # Use singleton
         self.a2a_service = a2a_service  # Use singleton
         # Note: room_memory_service will be set after it's defined below
-        from services.memory_service import room_memory_service
 
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
@@ -1049,12 +1052,18 @@ class RoomServices:
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
     ) -> RoomCenterUserMessageResponse | None:
-        """Initialize or update room memory; return error response if failed."""
+        """Initialize or update room memory with conversation history."""
+        # Get room to access room_agent_set for cleaning @mentions
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        room_agent_set = room.room_agent_set if room else {}
+
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
                     room_id=request.room_id,
                     memory_content=user_message.message_content.message_text,
+                    room_agent_set=room_agent_set,  # Pass for cleaning @mentions
+                    user_id=user_message.user_id,
                 )
             )
         )
@@ -1094,7 +1103,7 @@ class RoomServices:
         """Resolve selected agents and auto-assign flag based on target_group."""
 
         async def select_agents_all_agents_mode() -> tuple[dict, bool]:
-            from services.agent_selection_service import agent_selection_service
+
 
             try:
                 selection_result = (
@@ -1395,8 +1404,20 @@ class RoomServices:
         )
 
     async def process_agent_message(
-        self, request: RoomCenterAgentMessageRequest, room_memory_content_text: str
+        self,
+        request: RoomCenterAgentMessageRequest,
+        room_memory_content: MemoryContent | str | None,
     ) -> RoomCenterAgentMessageResponse:
+        """
+        Process an agent message by building ChatGPT/Claude-style context.
+
+        Args:
+            request: The agent message request
+            room_memory_content: Either MemoryContent (new style) or str (legacy)
+
+        Returns:
+            Response with the prepared A2A message including context
+        """
         message = request.message
         if message is None:
             return RoomCenterAgentMessageResponse(
@@ -1420,8 +1441,6 @@ class RoomServices:
                 status_code=400,
             )
 
-        agent_url = query_agent_url_response.agent_url
-
         agent_msg = request.message
         if (
             agent_msg.message_content
@@ -1438,58 +1457,48 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Temporary: Get all messages for context
-        # TODO: Create a more robust context and memory solution.
-        latest_messages_text = ""
-        try:
-            room_messages_response = await self.inquiry_room_messages_by_room_id(
-                RoomCenterRoomMessageRequest(room_id=message.room_id)
-            )
+        # Get agent info for context personalization
+        agent = await self.database_service.get_agent_by_agent_id(agent_id)
+        agent_name = agent.agent_card.name if agent else None
 
-            if room_messages_response.success and room_messages_response.message_list:
-                recent_messages = room_messages_response.message_list
-
-                latest_messages_parts = []
-                for msg in recent_messages:
-                    if msg.message_type == "user":
-                        user_id = msg.user_id or "Unknown User"
-                        text = msg.message_content.message_text or ""
-                        latest_messages_parts.append(f"User ({user_id}): {text}")
-                    elif msg.message_type == "agent":
-                        agent_id = msg.agent_id or "Unknown Agent"
-                        text = msg.message_content.message_text or ""
-                        latest_messages_parts.append(f"Agent ({agent_id}): {text}")
-
-                if latest_messages_parts:
-                    latest_messages_text = "\n".join(latest_messages_parts)
-        except Exception:
-            # If we can't get recent messages, continue without them
-            latest_messages_text = ""
-
-        # Inject context with clear delimiter and guard structure access
+        # Build context using ChatGPT/Claude-style conversation history
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
                 original_text = agent_message.parts[0].root.text or ""
 
-                # Build enhanced context with room memory and latest messages
-                context_parts = []
-                if room_memory_content_text.strip():
-                    context_parts.append(f"Context:\n{room_memory_content_text}")
-
-                if latest_messages_text:
-                    context_parts.append(f"Latest messages:\n{latest_messages_text}")
-
-                if context_parts:
-                    injected = (
-                        f"{chr(10).join(context_parts)}\n\nUser:\n{original_text}"
+                # Handle both new MemoryContent and legacy string formats
+                if isinstance(room_memory_content, MemoryContent):
+                    # New style: Use structured conversation history
+                    context = build_context_for_agent(
+                        memory_content=room_memory_content,
+                        current_task=original_text,
+                        agent_name=agent_name,
+                        include_system_instruction=True,
                     )
+                elif isinstance(room_memory_content, str) and room_memory_content.strip():
+                    # Legacy style: Use raw text as context
+                    context = (
+                        f"[Context]\n{room_memory_content}\n\n"
+                        f"[Current request]\nUser: {original_text}"
+                    )
+                    if agent_name:
+                        context += (
+                            f"\n\nYou are {agent_name}. "
+                            "Please respond to the current request above."
+                        )
                 else:
-                    injected = f"User:\n{original_text}"
+                    # No context available
+                    context = f"[Current request]\nUser: {original_text}"
+                    if agent_name:
+                        context += (
+                            f"\n\nYou are {agent_name}. "
+                            "Please respond to the request above."
+                        )
 
-                agent_message.parts[0].root.text = injected
-        except Exception:
-            # Leave message as-is if structure is unexpected
-            pass
+                agent_message.parts[0].root.text = context
+        except Exception as e:
+            # Log but continue with original message if context building fails
+            logger.warning(f"Failed to build context for agent message: {e}")
 
         # Return the prepared message without sending
         # OrchestrationCenter will handle the actual sending with streaming support

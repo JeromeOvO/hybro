@@ -16,6 +16,8 @@ from a2a.types import (
     TextPart,
 )
 
+
+from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.agent import Agent
 from models.error import (
@@ -1881,19 +1883,16 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         if validation_response:
             return validation_response
 
+
+
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
-        # Get room memory context
-        room_memory, room_memory_content_text = await self._get_room_memory_context(
-            room_id
-        )
-        if room_memory_content_text is None:
-            return OrchestrationCenterResponse(
-                success=False,
-                error="Failed to get room memory",
-                status_code=500,
-            )
+        # Get room memory context (ChatGPT/Claude style conversation history)
+        room_memory, room_memory_content = await self._get_room_memory_context(room_id)
+        if room_memory_content is None:
+            # Initialize empty memory content if not available
+            room_memory_content = MemoryContent()
 
         # Query agent messages to process
         query_response = (
@@ -1940,7 +1939,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             )
 
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content_text, room_user_message_id
+            message_queue, room_id, room_memory_content, room_user_message_id
         )
 
         if not success:
@@ -1993,8 +1992,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
     async def _get_room_memory_context(
         self, room_id: str
-    ) -> tuple[RoomMemory | None, str | None]:
-        """Get room memory and format it as context text."""
+    ) -> tuple[RoomMemory | None, "MemoryContent | None"]:
+        """
+        Get room memory with structured conversation history.
+
+        Returns:
+            Tuple of (RoomMemory, MemoryContent) for ChatGPT/Claude-style context
+        """
+
         room_memory_response = (
             await self.room_memory_service.get_room_memory_by_room_id(
                 RoomCenterMemoryRequest(room_id=room_id)
@@ -2006,27 +2011,31 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         room_memory = room_memory_response.memory
         if room_memory is None:
-            room_memory_content_text = ""
-        else:
-            room_memory_content = room_memory.memory_content
-            if room_memory_content is None:
-                room_memory_content_text = ""
-            else:
-                room_memory_content_text = room_memory_content.memory_text or ""
+            return None, MemoryContent()
 
-        # Always add a delimiter even if empty
-        room_memory_content_text = (room_memory_content_text or "") + "\n\n"
+        memory_content = room_memory.memory_content
+        if memory_content is None:
+            memory_content = MemoryContent()
 
-        return room_memory, room_memory_content_text
+        return room_memory, memory_content
 
     async def _process_agent_message_queue(
         self,
         message_queue: deque,
         room_id: str,
-        room_memory_content_text: str,
+        room_memory_content: "MemoryContent",
         user_message_id: str,
     ) -> bool:
-        """Process all messages in the queue sequentially."""
+        """
+        Process all messages in the queue sequentially.
+
+        Args:
+            message_queue: Queue of agent messages to process
+            room_id: The room ID
+            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
+            user_message_id: The user message ID for cancellation checks
+        """
+
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
 
@@ -2065,10 +2074,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     return False
 
             # Process the agent message
-            status = await self._process_single_agent_message(
+            status, response_text = await self._process_single_agent_message(
                 current_message,
                 room_id,
-                room_memory_content_text,
+                room_memory_content,
                 agent,
                 user_message_id,
             )
@@ -2078,7 +2087,15 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             elif status == ProcessingStatus.CANCELLED:
                 # Graceful cancellation - don't treat as error
                 return True
-            # status == ProcessingStatus.SUCCESS - continue processing
+
+            # Store agent response in conversation history (ChatGPT/Claude style)
+            if response_text:
+                await self.room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=current_message.agent_id,
+                    agent_name=agent.agent_card.name if agent else "Agent",
+                    response_text=response_text,
+                )
 
             # Queue up next messages in the chain
             await self._queue_next_messages(current_message, message_queue)
@@ -2190,37 +2207,44 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         self,
         current_message: RoomAgentMessage,
         room_id: str,
-        room_memory_content_text: str,
-        agent: Agent,  # Agent is now passed in
+        room_memory_content: "MemoryContent",
+        agent: Agent,
         user_message_id: str,
-    ) -> ProcessingStatus:
-        """Process a single agent message with streaming support.
-        
-        Returns:
-            ProcessingStatus: SUCCESS if processed successfully,
-                            FAILED if an error occurred,
-                            CANCELLED if the message was cancelled
+    ) -> tuple[ProcessingStatus, str]:
         """
-        # Prepare the agent message with context
+        Process a single agent message with streaming support.
+
+        Args:
+            current_message: The agent message to process
+            room_id: The room ID
+            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
+            agent: The agent to process the message
+            user_message_id: User message ID for cancellation checks
+
+        Returns:
+            Tuple of (ProcessingStatus, response_text):
+                - ProcessingStatus: SUCCESS, FAILED, or CANCELLED
+                - response_text: The agent's response text (for storing in history)
+        """
+        # Prepare the agent message with context (ChatGPT/Claude style)
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content_text,
+            room_memory_content,  # Pass MemoryContent instead of string
         )
 
         if not process_response.success:
-            return ProcessingStatus.FAILED
+            return ProcessingStatus.FAILED, ""
 
         prepared_message = process_response.a2a_message
         if prepared_message is None:
-            return ProcessingStatus.FAILED
-
-        # Agent is now passed in as parameter - no need to fetch again
+            return ProcessingStatus.FAILED, ""
 
         # Stream or sync send based on agent capabilities
         support_streaming = self.a2a_service.has_streaming_capability(
             agent_card=agent.agent_card
         )
 
+        full_response_text = ""
         if support_streaming:
             status, full_response_text = await self._handle_streaming_response_for_room(
                 current_message,
@@ -2230,13 +2254,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 user_message_id,
             )
             if status != ProcessingStatus.SUCCESS:
-                return status  # Return FAILED or CANCELLED
+                return status, full_response_text
         else:
             success, full_response_text = await self._handle_sync_response_for_room(
                 current_message, agent.agent_card, prepared_message, room_id
             )
             if not success:
-                return ProcessingStatus.FAILED
+                return ProcessingStatus.FAILED, ""
 
         # Get updated message from database
         current_message = (
@@ -2246,7 +2270,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
 
         if current_message is None:
-            return ProcessingStatus.FAILED
+            return ProcessingStatus.FAILED, full_response_text
 
         # Send agent response to room
         logger.debug(
@@ -2261,7 +2285,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             full_response_text,
         )
 
-        return ProcessingStatus.SUCCESS
+        return ProcessingStatus.SUCCESS, full_response_text
 
     async def _handle_sync_response_for_room(
         self,
@@ -2322,30 +2346,30 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_memory: RoomMemory,
         message_list: list[RoomAgentMessage],
     ) -> None:
-        """Update room memory with new content after processing all messages."""
-        new_room_memory_content_text = (
-            await self.openai_service.generate_room_memory_content(
-                message_list, room_memory.memory_content if room_memory else None
-            )
-        )
+        """
+        Post-processing hook after all agent messages are processed.
 
-        room_memory_response = (
-            await self.room_memory_service.update_room_memory_by_room_id(
-                RoomCenterMemoryRequest(
-                    room_id=room_id,
-                    memory=RoomMemory(
-                        room_id=room_id,
-                        memory_id=room_memory.memory_id if room_memory else None,
-                        memory_content=MemoryContent(
-                            memory_text=new_room_memory_content_text
-                        ),
-                    ),
-                )
-            )
-        )
+        Note: With the new ChatGPT/Claude-style context management, agent responses
+        are stored incrementally in conversation history via add_agent_response_to_memory()
+        during _process_agent_message_queue(). This method is kept for:
+        1. Logging/debugging
+        2. Future enhancements (e.g., periodic LLM summarization of long conversations)
+        """
 
-        if not room_memory_response.success:
-            logger.error(
-                "OrchestrationCenter: Failed to update room memory: %s",
-                room_memory_response.error,
+
+        # Get current context stats for logging
+        if room_memory and room_memory.memory_content:
+            stats = get_context_stats(room_memory.memory_content)
+            logger.info(
+                "OrchestrationCenter: Room %s memory updated - %d turns in history, "
+                "summary=%s, total_chars=%d",
+                room_id,
+                stats.get("history_turns", 0),
+                "yes" if stats.get("has_summary") else "no",
+                stats.get("total_chars", 0),
+            )
+        else:
+            logger.info(
+                "OrchestrationCenter: Room %s - no memory content to update",
+                room_id,
             )
