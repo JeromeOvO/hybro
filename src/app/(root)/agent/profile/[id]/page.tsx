@@ -2,12 +2,27 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Bot, RefreshCw, ExternalLink, Trash2 } from "lucide-react"
+import {
+  ArrowLeft,
+  Bot,
+  RefreshCw,
+  ExternalLink,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Cpu,
+  Zap,
+  MessageSquare,
+  Terminal,
+  ArrowRightLeft
+} from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
+import { Badge } from "@/components/ui/badge"
 import { banner } from "@/components/ui/banner"
 import { getAgent, deleteAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
@@ -21,37 +36,11 @@ export default function AgentProfilePage() {
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
 
-  const getStatusColor = (status: Agent['agent_status']) => {
-    switch (status) {
-      case 'active':
-        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
-      case 'inactive':
-        return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300'
-      case 'deleted':
-        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300'
-      default:
-        return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300'
-    }
-  }
-
-  const getStatusText = (status: Agent['agent_status']) => {
-    switch (status) {
-      case 'active':
-        return 'Active'
-      case 'inactive':
-        return 'Inactive'
-      case 'deleted':
-        return 'Deleted'
-      default:
-        return 'Unknown'
-    }
-  }
-
   const loadAgentDetail = useCallback(async () => {
     try {
       setLoading(true)
       const response = await getAgent(agentId)
-      
+
       if (response.success && response.agent) {
         setAgentData(response)
       } else {
@@ -60,7 +49,7 @@ export default function AgentProfilePage() {
           description: errorMessage
         })
       }
-    } catch { 
+    } catch {
       banner.error("Failed to load agent details")
     } finally {
       setLoading(false)
@@ -109,8 +98,11 @@ export default function AgentProfilePage() {
     return (
       <div className="flex items-center justify-center min-h-[85vh]">
         <div className="flex flex-col items-center justify-center gap-4">
-          <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-          <span className="text-base font-medium text-muted-foreground">Loading Agent...</span>
+          <div className="relative">
+            <div className="h-12 w-12 rounded-full border-4 border-primary/20 animate-spin border-t-primary" />
+            <Bot className="h-6 w-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-primary/60" />
+          </div>
+          <span className="text-base font-medium text-muted-foreground animate-pulse">Loading Agent Profile...</span>
         </div>
       </div>
     )
@@ -119,234 +111,325 @@ export default function AgentProfilePage() {
   if (!agentData?.success || !agentData.agent) {
     return (
       <div className="flex items-center justify-center min-h-[85vh]">
-        <div className="flex flex-col items-center justify-center gap-4">
-          <div className="text-center">
-            <h2 className="text-lg font-semibold mb-2">Agent not found</h2>
-            <p className="text-muted-foreground mb-4">
-              The agent you&nbsp;are looking for does&nbsp;not&nbsp;exist or has been removed.
-            </p>
-          </div>
-          <Button onClick={() => router.push('/agent')} variant="outline">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Agents
-          </Button>
-        </div>
+        <Card className="w-full max-w-md border-dashed">
+          <CardHeader className="text-center">
+            <div className="mx-auto bg-muted rounded-full p-3 w-fit mb-4">
+              <Bot className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <CardTitle className="text-xl">Agent Not Found</CardTitle>
+            <CardDescription>
+              The agent you are looking for does not exist or has been removed.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="flex justify-center">
+            <Button onClick={() => router.push('/agent')} variant="default">
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Registry
+            </Button>
+          </CardFooter>
+        </Card>
       </div>
     )
   }
 
   const agent = agentData.agent
+  const isOwner = userId && agent.provider_id === userId
+
+  const getStatusBadge = (status: Agent['agent_status']) => {
+    switch (status) {
+      case 'active':
+        return (
+          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+            <CheckCircle2 className="w-3.5 h-3.5 fill-current opacity-80" />
+            Active
+          </Badge>
+        )
+      case 'inactive':
+        return (
+          <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+            <AlertCircle className="w-3.5 h-3.5 fill-current opacity-80" />
+            Inactive
+          </Badge>
+        )
+      case 'deleted':
+        return (
+          <Badge variant="destructive" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
+            <XCircle className="w-3.5 h-3.5 fill-current opacity-80" />
+            Deleted
+          </Badge>
+        )
+      default:
+        return <Badge variant="secondary">{status}</Badge>
+    }
+  }
 
   return (
-    <div className="p-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={() => router.push('/agent')}
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </Button>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={loadAgentDetail}>
+    <div className="container max-w-7xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in duration-500">
+      {/* Navigation & Actions */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <Button
+          variant="ghost"
+          onClick={() => router.push('/agent')}
+          className="group pl-0 hover:pl-2 transition-all"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
+          Back to Registry
+        </Button>
+        <div className="flex gap-2 w-full sm:w-auto">
+          <Button variant="outline" size="sm" onClick={loadAgentDetail} className="ml-auto">
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
+          {isOwner && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteAgent}
+              disabled={deleting}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {deleting ? "Deleting..." : "Delete Agent"}
+            </Button>
+          )}
         </div>
       </div>
 
-      <Card className="border-none shadow-none">
-        <CardHeader>
-          <div className="flex items-start gap-4">
-            <Avatar className="h-16 w-16">
-              <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
-              <AvatarFallback>
-                <Bot className="h-8 w-8" />
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <CardTitle className="text-2xl">{agent.agent_card.name}</CardTitle>
-                <Button variant="outline" className={getStatusColor(agent.agent_status)}>
-                  {getStatusText(agent.agent_status)}
-                </Button>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Left Column: Identity & Meta */}
+        <div className="lg:col-span-4 space-y-6">
+          <Card className="overflow-hidden border-primary/10 shadow-lg bg-gradient-to-b from-card to-secondary/20">
+            <div className="h-32 bg-linear-to-br from-primary/10 via-primary/5 to-transparent relative">
+              <div className="absolute top-4 right-4">
+                {getStatusBadge(agent.agent_status)}
               </div>
-              <CardDescription className="text-base mb-3">
+            </div>
+            <CardHeader className="relative pb-2 -mt-16 text-center space-y-4">
+              <div className="mx-auto relative group">
+                <Avatar className="h-32 w-32 border-4 border-background shadow-xl mx-auto group-hover:scale-105 transition-transform duration-300">
+                  <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
+                  <AvatarFallback className="bg-primary/5 text-primary">
+                    <Bot className="h-12 w-12" />
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+              <div className="space-y-1">
+                <CardTitle className="text-2xl font-bold">{agent.agent_card.name}</CardTitle>
+                <div className="text-sm text-muted-foreground font-medium flex items-center justify-center gap-2">
+                  <span>v{agent.agent_card.version}</span>
+                  <span className="text-border">•</span>
+                  <span>{agent.agent_card.provider?.organization || "Unknown Provider"}</span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6 pt-4">
+              <p className="text-muted-foreground text-center leading-relaxed">
                 {agent.agent_card.description}
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
+              </p>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent Details</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div>
-            <h3 className="text-lg font-semibold mb-3">Basic Information</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium">Provider</label>
-                <p className="text-sm text-muted-foreground">{agent.agent_card.provider?.organization || "Unknown"}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Version</label>
-                <p className="text-sm text-muted-foreground">{agent.agent_card.version}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Documentation</label>
-                <p className="text-sm text-muted-foreground">
-                  {agent.agent_card.documentationUrl ? (
-                    <a href={agent.agent_card.documentationUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
-                      View Documentation <ExternalLink className="h-3 w-3" />
+              <Separator />
+
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-muted-foreground">Updated</span>
+                  <span className="font-medium">
+                    {new Date().toLocaleDateString()} {/* Using current date as placeholder */}
+                  </span>
+                </div>
+                {agent.agent_card.documentationUrl && (
+                  <Button variant="outline" className="w-full mt-4" asChild>
+                    <a href={agent.agent_card.documentationUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      View Documentation
                     </a>
-                  ) : (
-                    "Not available"
-                  )}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
-          <div>
-            <h3 className="text-lg font-semibold mb-3">Capabilities</h3>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { label: "Streaming", value: agent.agent_card.capabilities.streaming },
-                { label: "Extensions", value: agent.agent_card.capabilities.extensions },
-                { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
-                { label: "State Transition History", value: agent.agent_card.capabilities.stateTransitionHistory },
-              ]
-                .filter((cap) => cap.value)
-                .map((cap) => (
-                  <Button
-                    key={cap.label}
-                    variant="outline"
-                    size="sm"
-                    className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100
-                               dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
-                  >
-                    {cap.label}
                   </Button>
-                ))}
-            </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column: Details & Capabilities */}
+        <div className="lg:col-span-8 space-y-6">
+          {/* Capabilities Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card className="h-full border-l-4 border-l-blue-500/50">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Zap className="h-5 w-5 text-blue-500" />
+                  Core Capabilities
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: "Streaming", value: agent.agent_card.capabilities.streaming },
+                    { label: "Extensions", value: agent.agent_card.capabilities.extensions },
+                    { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
+                    { label: "State History", value: agent.agent_card.capabilities.stateTransitionHistory },
+                  ]
+                    .filter((cap) => cap.value)
+                    .map((cap) => (
+                      <Badge key={cap.label} variant="secondary" className="px-3 py-1 font-normal bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100">
+                        {cap.label}
+                      </Badge>
+                    ))}
+                  {[
+                    { label: "Streaming", value: agent.agent_card.capabilities.streaming },
+                    { label: "Extensions", value: agent.agent_card.capabilities.extensions },
+                    { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
+                    { label: "State History", value: agent.agent_card.capabilities.stateTransitionHistory },
+                  ].every(c => !c.value) && (
+                      <span className="text-sm text-muted-foreground italic">No specific capabilities listed</span>
+                    )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="h-full border-l-4 border-l-purple-500/50">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 text-purple-500" />
+                  Interaction Modes
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Input</span>
+                  <div className="flex flex-wrap gap-2">
+                    {agent.agent_card.defaultInputModes.map((mode, i) => (
+                      <Badge key={i} variant="outline" className="border-purple-200 text-purple-700 dark:border-purple-800 dark:text-purple-300">
+                        {mode}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Output</span>
+                  <div className="flex flex-wrap gap-2">
+                    {agent.agent_card.defaultOutputModes.map((mode, i) => (
+                      <Badge key={i} variant="outline" className="border-purple-200 text-purple-700 dark:border-purple-800 dark:text-purple-300">
+                        {mode}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
-          <Separator />
-
-          <div>
-            <h3 className="text-lg font-semibold mb-3">Input/Output Modes</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium">Input Modes</label>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {agent.agent_card.defaultInputModes.map((mode, index) => (
-                    <Button 
-                      key={index} 
-                      variant="outline" 
-                      size="sm"
-                      className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100
-                               dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
-                    >
-                      {mode}
-                    </Button>
-                  ))}
+          {/* Skills Section */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Cpu className="h-5 w-5 text-primary" />
+                Skills & Functions
+              </CardTitle>
+              <CardDescription>
+                Detailed breakdown of what {agent.agent_card.name} can perform.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {agent.agent_card.skills.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground bg-muted/30 rounded-lg border border-dashed">
+                  <p>No specific skills defined for this agent.</p>
                 </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium">Output Modes</label>
-                <div className="flex flex-wrap gap-2 mt-1">
-                  {agent.agent_card.defaultOutputModes.map((mode, index) => (
-                    <Button 
-                      key={index} 
-                      variant="outline" 
-                      size="sm"
-                      className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100
-                               dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
+              ) : (
+                <div className="grid grid-cols-1 gap-6">
+                  {agent.agent_card.skills.map((skill, index) => (
+                    <div
+                      key={index}
+                      className="group rounded-xl border bg-card text-card-foreground shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
                     >
-                      {mode}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <Separator />
-
-          <div>
-            <h3 className="text-lg font-semibold mb-3">Skills</h3>
-            <div className="space-y-4">
-              {agent.agent_card.skills.map((skill, index) => (
-                <Card key={index} className="border-l-4 border-l-green-500">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{skill.name}</CardTitle>
-                    </div>
-                    <CardDescription>{skill.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {skill.examples && skill.examples.length > 0 && (
-                        <div>
-                          <label className="text-sm font-medium">Examples</label>
-                          <div className="flex flex-wrap gap-2 mt-1">
-                            {skill.examples.map((example, exampleIndex) => (
-                              <Button 
-                                key={exampleIndex} 
-                                variant="secondary" 
-                                size="sm"
-                                className="text-xs h-6 px-2"
-                              >
-                                {example}
-                              </Button>
-                            ))}
+                      <div className="border-b bg-muted/40 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-primary/10 p-2 rounded-lg">
+                            <Terminal className="h-5 w-5 text-primary" />
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-lg leading-none">{skill.name}</h4>
+                            <p className="text-xs text-muted-foreground font-mono mt-1 opacity-70">
+                              ID: {skill.id}
+                            </p>
                           </div>
                         </div>
-                      )}
-                      <div>
-                        <label className="text-sm font-medium">Tags</label>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {skill.tags.map((tag, tagIndex) => (
-                            <Button 
-                              key={tagIndex} 
-                              variant="secondary" 
-                              size="sm"
-                              className="text-xs h-6 px-2"
-                            >
-                              {tag}
-                            </Button>
-                          ))}
+                        {skill.tags && skill.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {skill.tags.map((tag, i) => (
+                              <Badge key={i} variant="outline" className="text-xs font-normal bg-background/50">
+                                {tag}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="p-4 space-y-4">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                            Description
+                          </label>
+                          <p className="text-sm leading-relaxed text-foreground/90 pl-1">
+                            {skill.description}
+                          </p>
                         </div>
+
+                        {(skill.inputModes?.length ?? 0) > 0 || (skill.outputModes?.length ?? 0) > 0 ? (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                            {(skill.inputModes?.length ?? 0) > 0 && (
+                              <div className="space-y-1.5">
+                                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                                  <ArrowRightLeft className="h-3 w-3 rotate-45" /> Input Modes
+                                </label>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {skill.inputModes!.map((mode, i) => (
+                                    <code key={i} className="px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground text-xs font-mono border">
+                                      {mode}
+                                    </code>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {(skill.outputModes?.length ?? 0) > 0 && (
+                              <div className="space-y-1.5">
+                                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                                  <ArrowRightLeft className="h-3 w-3 -rotate-45" /> Output Modes
+                                </label>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {skill.outputModes!.map((mode, i) => (
+                                    <code key={i} className="px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground text-xs font-mono border">
+                                      {mode}
+                                    </code>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+
+                        {skill.examples && skill.examples.length > 0 && (
+                          <div className="pt-2">
+                            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block flex items-center gap-1.5">
+                              <Terminal className="h-3 w-3" /> Usage Examples
+                            </label>
+                            <div className="space-y-2 bg-muted/30 rounded-lg p-3 border border-border/50">
+                              {skill.examples.map((example, i) => (
+                                <div key={i} className="font-mono text-xs text-foreground/80 break-words flex gap-2 items-start">
+                                  <span className="text-muted-foreground select-none">$</span>
+                                  <span>{example}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {userId && agentData?.agent?.provider_id === userId && (
-        <div className="flex justify-center">
-          <Button 
-            className={getStatusColor('deleted')} 
-            onClick={handleDeleteAgent}
-            disabled={deleting}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            {deleting ? "Deleting..." : "Delete Agent"}
-          </Button>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
-      )}
+      </div>
     </div>
   )
 }

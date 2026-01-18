@@ -15,14 +15,14 @@ interface AgentCardProps {
   agent: Agent
 }
 
-export function AgentCard({ 
-  agent, 
+export function AgentCard({
+  agent,
 }: AgentCardProps) {
   const router = useRouter()
 
   const getStatusIcon = (status: Agent["agent_status"]) => {
     const base = "inline-flex w-5 h-5 items-center justify-center";
-  
+
     switch (status) {
       case "active":
         return {
@@ -32,7 +32,7 @@ export function AgentCard({
             "icon-success"
           ].join(" "),
         };
-  
+
       case "inactive":
         return {
           icon: CircleMinus,
@@ -41,7 +41,7 @@ export function AgentCard({
             "icon-error"
           ].join(" "),
         };
-  
+
       default:
         return {
           icon: XCircle,
@@ -63,7 +63,7 @@ export function AgentCard({
   }
 
   return (
-    <Card 
+    <Card
       className="group relative overflow-hidden cursor-pointer
                  aspect-square w-full max-w-[260px]
                  backdrop-blur-sm
@@ -99,20 +99,15 @@ export function AgentCard({
           </div>
         </div>
       </CardHeader>
-      
+
       <CardContent className="px-6 pb-6 relative z-10">
         <div className="space-y-1">
-            <CardTitle className="text-xl font-semibold text-center
+          <CardTitle className="text-xl font-semibold text-center
                                 transition-all duration-300 ease-out
                                 group-hover:text-primary group-hover:scale-105">
-              {agent.agent_card.name}
-            </CardTitle>
-          </div>
-        <CardDescription className="text-center leading-relaxed line-clamp-3
-                                   transition-all duration-300 ease-out
-                                   group-hover:text-foreground/90">
-          {agent.agent_card.description}
-        </CardDescription>
+            {agent.agent_card.name}
+          </CardTitle>
+        </div>
       </CardContent>
     </Card>
   )

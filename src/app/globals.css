@@ -1,88 +1,90 @@
-
 @import "tailwindcss";
 
 :root {
   /* Fonts */
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
-  
-  /* Futuristic Light Mode - Cool tones with depth */
-  --color-background: 210 20% 96%;
-  --color-foreground: 215 25% 15%;
-  --color-card: 210 30% 98%;
-  --color-card-foreground: 215 25% 15%;
-  --color-popover: 210 30% 98%;
-  --color-popover-foreground: 215 25% 15%;
-  
-  /* Vibrant cyan-blue primary */
-  --color-primary: 195 100% 40%;
-  --color-primary-foreground: 210 30% 98%;
-  
-  /* Cool secondary with purple hints */
-  --color-secondary: 240 20% 92%;
-  --color-secondary-foreground: 240 25% 20%;
-  
-  /* Sophisticated muted tones */
-  --color-muted: 220 15% 90%;
-  --color-muted-foreground: 215 20% 45%;
-  
-  /* Electric accent */
-  --color-accent: 280 70% 45%;
-  --color-accent-foreground: 280 40% 25%;
-  
-  /* Modern destructive - coral red */
-  --color-destructive: 0 75% 60%;
-  --color-destructive-foreground: 210 30% 98%;
-  
-  /* Refined borders with cool tones */
-  --color-border: 220 15% 75%;
-  --color-input: 220 20% 88%;
-  --color-ring: 195 100% 50%;
-  
-  /* Futuristic chart colors */
-  --color-chart-1: 195 100% 50%;
-  --color-chart-2: 160 80% 40%;
-  --color-chart-3: 280 70% 60%;
-  --color-chart-4: 45 90% 55%;
-  --color-chart-5: 320 80% 65%;
-  
-  /* Modern sidebar with blur effect */
-  --color-sidebar-background: 210 30% 98%;
-  --color-sidebar-foreground: 215 25% 25%;
-  --color-sidebar-primary: 195 100% 50%;
-  --color-sidebar-primary-foreground: 210 30% 98%;
-  --color-sidebar-accent: 240 20% 92%;
-  --color-sidebar-accent-foreground: 240 25% 20%;
-  --color-sidebar-border: 220 20% 85%;
-  --color-sidebar-ring: 195 100% 50%;
-  
-  /* Brand colors for HYBRO */
-  --color-hybro-hy: 195 100% 40%;
-  --color-hybro-hy-strong: 195 90% 55%;
-  --color-hybro-bro: 280 70% 45%;
-  --color-hybro-bro-strong: 280 70% 60%;
 
-  /* Semantic icon colors - Light mode (enhanced for better contrast) */
-  --color-icon-success: 142 72% 30%;
-  --color-icon-warning: 40 95% 40%;
-  --color-icon-error: 0 85% 46%;
-  --color-icon-info: 217 90% 38%;
-  --color-icon-neutral: 215 35% 32%;
-  --color-icon-action: 195 100% 40%;
-  --color-icon-navigation: 215 45% 32%;
-  --color-icon-sun: 42 95% 42%;
-  --color-icon-moon: 217 90% 40%;
-  --color-icon-exclaim: 200 32% 60%;
-  --color-icon-exclaim-foreground: 210 30% 98%;
-  
-  /* Professional category colors - Light mode (enhanced for better contrast) */
-  --color-icon-create: 142 75% 32%;
-  --color-icon-network: 195 95% 40%;
-  --color-icon-learn: 280 75% 40%;
-  --color-icon-workflow: 160 80% 32%;
-  --color-icon-collaboration: 320 75% 42%;
-  --color-icon-architecture: 240 65% 38%;
-  --color-icon-contact: 215 45% 32%;
+  /* Comfortable Light Mode - Warm, eye-friendly tones */
+  --color-background: 220 14% 92%;
+  --color-foreground: 220 20% 18%;
+  --color-card: 220 16% 95%;
+  --color-card-foreground: 220 20% 18%;
+  --color-popover: 220 16% 95%;
+  --color-popover-foreground: 220 20% 18%;
+
+  /* Refined teal primary - easier on eyes */
+  --color-primary: 192 85% 38%;
+  --color-primary-foreground: 220 16% 96%;
+
+  /* Soft secondary with subtle warmth */
+  --color-secondary: 225 14% 86%;
+  --color-secondary-foreground: 220 20% 22%;
+
+  /* Comfortable muted tones */
+  --color-muted: 220 12% 84%;
+  --color-muted-foreground: 220 14% 42%;
+
+  /* Softer accent */
+  --color-accent: 270 55% 50%;
+  --color-accent-foreground: 270 30% 22%;
+
+  /* Gentle destructive - muted coral */
+  --color-destructive: 4 65% 55%;
+  --color-destructive-foreground: 220 16% 96%;
+
+  /* Softer borders */
+  --color-border: 220 14% 78%;
+  --color-input: 220 14% 86%;
+  --color-ring: 192 85% 45%;
+
+  /* Balanced chart colors */
+  --color-chart-1: 192 75% 45%;
+  --color-chart-2: 158 65% 42%;
+  --color-chart-3: 270 55% 55%;
+  --color-chart-4: 42 80% 52%;
+  --color-chart-5: 320 60% 58%;
+
+  /* Comfortable sidebar */
+  --color-sidebar-background: 220 16% 96%;
+  /* Slightly lighter for better contrast */
+  --color-sidebar-foreground: 220 18% 28%;
+  --color-sidebar-primary: 192 85% 42%;
+  --color-sidebar-primary-foreground: 220 16% 96%;
+  --color-sidebar-accent: 220 14% 88%;
+  /* Darkened from 87% to 88% and adjusted saturation for visibility */
+  /* Darker to support 50% opacity hover (~4%) and solid active (~8%) */
+  --color-sidebar-accent-foreground: 220 20% 18%;
+  --color-sidebar-border: 220 14% 90%;
+  --color-sidebar-ring: 192 85% 45%;
+
+  /* Brand colors for HYBRO */
+  --color-hybro-hy: 192 85% 38%;
+  --color-hybro-hy-strong: 192 80% 48%;
+  --color-hybro-bro: 270 55% 50%;
+  --color-hybro-bro-strong: 270 55% 58%;
+
+  /* Semantic icon colors - Light mode (comfortable contrast) */
+  --color-icon-success: 152 60% 32%;
+  --color-icon-warning: 38 85% 42%;
+  --color-icon-error: 4 70% 48%;
+  --color-icon-info: 212 75% 42%;
+  --color-icon-neutral: 220 25% 38%;
+  --color-icon-action: 192 85% 38%;
+  --color-icon-navigation: 220 35% 38%;
+  --color-icon-sun: 40 80% 45%;
+  --color-icon-moon: 212 75% 45%;
+  --color-icon-exclaim: 200 28% 55%;
+  --color-icon-exclaim-foreground: 220 16% 96%;
+
+  /* Professional category colors - Light mode */
+  --color-icon-create: 152 60% 35%;
+  --color-icon-network: 192 80% 40%;
+  --color-icon-learn: 270 55% 45%;
+  --color-icon-workflow: 158 65% 35%;
+  --color-icon-collaboration: 320 55% 48%;
+  --color-icon-architecture: 235 50% 45%;
+  --color-icon-contact: 220 35% 38%;
 
   /* Modern border radius */
   --radius: 0.875rem;
@@ -90,7 +92,7 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 6px);
-  
+
   /* Smooth animations */
   --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-spin: spin 1s linear infinite;
@@ -106,32 +108,32 @@
   --color-card-foreground: 210 30% 88%;
   --color-popover: 230 20% 10%;
   --color-popover-foreground: 210 30% 88%;
-  
+
   /* Bright neon cyan primary */
   --color-primary: 180 100% 60%;
   --color-primary-foreground: 230 25% 8%;
-  
+
   /* Deep purple secondary */
   --color-secondary: 240 15% 18%;
   --color-secondary-foreground: 210 30% 88%;
-  
+
   /* Dark muted with blue tints */
   --color-muted: 235 20% 15%;
   --color-muted-foreground: 215 25% 65%;
-  
+
   /* Electric purple accent */
   --color-accent: 270 80% 70%;
   --color-accent-foreground: 230 25% 8%;
-  
+
   /* Neon red destructive */
   --color-destructive: 0 80% 65%;
   --color-destructive-foreground: 230 25% 8%;
-  
+
   /* Glowing borders */
   --color-border: 240 25% 20%;
   --color-input: 240 25% 18%;
   --color-ring: 180 100% 60%;
-  
+
   /* Brand colors for HYBRO - Dark mode */
   --color-hybro-hy: 180 100% 60%;
   --color-hybro-bro: 270 80% 70%;
@@ -148,7 +150,7 @@
   --color-icon-moon: 217 91% 75%;
   --color-icon-exclaim: 200 36% 72%;
   --color-icon-exclaim-foreground: 230 25% 8%;
-  
+
   /* Professional category colors - Dark mode */
   --color-icon-create: 142 70% 65%;
   --color-icon-network: 180 100% 70%;
@@ -164,40 +166,57 @@
   --color-chart-3: 300 100% 70%;
   --color-chart-4: 60 100% 60%;
   --color-chart-5: 330 100% 65%;
-  
+
   /* Dark sidebar with blur effect and neon accents */
-  --color-sidebar-background: 235 25% 8%;
+  --color-sidebar-background: 235 25% 10%;
+  /* Slightly clearer dark bg */
   --color-sidebar-foreground: 210 30% 85%;
   --color-sidebar-primary: 180 100% 60%;
   --color-sidebar-primary-foreground: 230 25% 8%;
-  --color-sidebar-accent: 240 15% 15%;
-  --color-sidebar-accent-foreground: 210 30% 88%;
-  --color-sidebar-border: 240 25% 18%;
+  --color-sidebar-accent: 235 20% 25%;
+  /* Significantly lightened for dark mode hover visibility */
+  /* Subtle hover for dark mode */
+  --color-sidebar-accent-foreground: 210 30% 90%;
+  --color-sidebar-border: 240 20% 16%;
   --color-sidebar-ring: 180 100% 60%;
 }
 
 /* Keyframes remain the same */
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes ping {
-  75%, 100% {
+
+  75%,
+  100% {
     transform: scale(2);
     opacity: 0;
   }
 }
 
 @keyframes bounce {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(-25%);
     animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
   }
+
   50% {
     transform: none;
     animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
@@ -208,21 +227,19 @@
   * {
     border-color: hsl(var(--color-border));
   }
+
   body {
     background-color: hsl(var(--color-background));
     color: hsl(var(--color-foreground));
-    /* Futuristic grid pattern */
-    background-image: 
-      linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 255, 255, 0.03) 1px, transparent 1px);
-    background-size: 50px 50px;
-    transition: all 0.3s ease;
+    transition: background-color 0.3s ease, color 0.3s ease;
   }
-  
-  /* Dark mode with neon grid */
+
+  /* Subtle grid pattern only in dark mode */
   .dark body {
-    background-image: none;
-    background-size: auto;
+    background-image:
+      linear-gradient(rgba(0, 255, 255, 0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 255, 0.02) 1px, transparent 1px);
+    background-size: 60px 60px;
   }
 }
 
@@ -253,28 +270,28 @@
 /* Glowing message bubbles */
 .message-bubble {
   backdrop-filter: blur(12px);
-  box-shadow: 
-    0 4px 6px -1px rgb(0 0 0 / 0.08), 
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.08),
     0 2px 4px -2px rgb(0 0 0 / 0.08);
   transition: all 0.3s ease;
 }
 
 .message-bubble:hover {
-  box-shadow: 
-    0 8px 25px -5px rgb(0 255 255 / 0.1), 
+  box-shadow:
+    0 8px 25px -5px rgb(0 255 255 / 0.1),
     0 4px 6px -2px rgb(0 0 0 / 0.05),
     inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
 }
 
 .dark .message-bubble {
-  box-shadow: 
-    0 4px 6px -1px rgb(0 0 0 / 0.25), 
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.25),
     0 2px 4px -2px rgb(0 0 0 / 0.2);
 }
 
 .dark .message-bubble:hover {
-  box-shadow: 
-    0 8px 25px -5px rgb(0 255 255 / 0.3), 
+  box-shadow:
+    0 8px 25px -5px rgb(0 255 255 / 0.3),
     0 4px 6px -2px rgb(0 0 0 / 0.1),
     inset 0 1px 0 0 rgba(0, 255, 255, 0.2),
     0 0 0 1px rgba(0, 255, 255, 0.2);
@@ -342,31 +359,80 @@
   background: hsl(235 20% 12%) !important;
   color: hsl(var(--color-muted-foreground)) !important;
   border-color: hsl(var(--color-border));
-  box-shadow: 
+  box-shadow:
     inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
     0 0 15px rgba(0, 255, 255, 0.05);
 }
 
 /* Semantic icon color utilities */
-.icon-success { color: hsl(var(--color-icon-success)); }
-.icon-warning { color: hsl(var(--color-icon-warning)); }
-.icon-error { color: hsl(var(--color-icon-error)); }
-.icon-info { color: hsl(var(--color-icon-info)); }
-.icon-neutral { color: hsl(var(--color-icon-neutral)); }
-.icon-action { color: hsl(var(--color-icon-action)); }
-.icon-navigation { color: hsl(var(--color-icon-navigation)); }
-.icon-sun { color: hsl(var(--color-icon-sun)); }
-.icon-moon { color: hsl(var(--color-icon-moon)); }
-.icon-exclaim { color: hsl(var(--color-icon-exclaim)); }
+.icon-success {
+  color: hsl(var(--color-icon-success));
+}
+
+.icon-warning {
+  color: hsl(var(--color-icon-warning));
+}
+
+.icon-error {
+  color: hsl(var(--color-icon-error));
+}
+
+.icon-info {
+  color: hsl(var(--color-icon-info));
+}
+
+.icon-neutral {
+  color: hsl(var(--color-icon-neutral));
+}
+
+.icon-action {
+  color: hsl(var(--color-icon-action));
+}
+
+.icon-navigation {
+  color: hsl(var(--color-icon-navigation));
+}
+
+.icon-sun {
+  color: hsl(var(--color-icon-sun));
+}
+
+.icon-moon {
+  color: hsl(var(--color-icon-moon));
+}
+
+.icon-exclaim {
+  color: hsl(var(--color-icon-exclaim));
+}
 
 /* Professional category color utilities */
-.icon-create { color: hsl(var(--color-icon-create)); }
-.icon-network { color: hsl(var(--color-icon-network)); }
-.icon-learn { color: hsl(var(--color-icon-learn)); }
-.icon-workflow { color: hsl(var(--color-icon-workflow)); }
-.icon-collaboration { color: hsl(var(--color-icon-collaboration)); }
-.icon-architecture { color: hsl(var(--color-icon-architecture)); }
-.icon-contact { color: hsl(var(--color-icon-contact)); }
+.icon-create {
+  color: hsl(var(--color-icon-create));
+}
+
+.icon-network {
+  color: hsl(var(--color-icon-network));
+}
+
+.icon-learn {
+  color: hsl(var(--color-icon-learn));
+}
+
+.icon-workflow {
+  color: hsl(var(--color-icon-workflow));
+}
+
+.icon-collaboration {
+  color: hsl(var(--color-icon-collaboration));
+}
+
+.icon-architecture {
+  color: hsl(var(--color-icon-architecture));
+}
+
+.icon-contact {
+  color: hsl(var(--color-icon-contact));
+}
 
 /* Glowing scrollbars */
 ::-webkit-scrollbar {

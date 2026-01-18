@@ -142,7 +142,7 @@ export default function Workspace() {
 
         {/* Stats Section */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          
+
           {/* My Agents Count */}
           <div className="rounded-lg border border-border/50 bg-background/80 p-5">
             <div className="flex items-center gap-3">
@@ -242,9 +242,8 @@ export default function Workspace() {
           {STATUS_OPTIONS.map((opt) => (
             <button
               key={opt.value}
-              className={`px-2 py-1 text-sm ${
-                statusFilter === opt.value ? "font-semibold underline" : "text-gray-500"
-              }`}
+              className={`px-2 py-1 text-sm ${statusFilter === opt.value ? "font-semibold underline" : "text-gray-500"
+                }`}
               onClick={() => setStatusFilter(opt.value)}
             >
               {opt.label}
@@ -255,22 +254,22 @@ export default function Workspace() {
 
         {/* Agent Cards Grid */}
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-        <div className="flex flex-1 gap-4">
-          <div className="relative flex-1">
-            <div className="grid grid-cols-15 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
-              {filteredAgents.map((agent) => (
-                <AgentCard key={agent.agent_id} agent={agent} />
-              ))}
+          <div className="flex flex-1 gap-4">
+            <div className="relative flex-1">
+              <div className="grid grid-cols-15 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+                {filteredAgents.map((agent) => (
+                  <AgentCard key={agent.agent_id} agent={agent} />
+                ))}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
         {/* Empty State */}
         {filteredAgents.length === 0 && !loading && (
           <div className="text-center py-12">
             <div className="text-muted-foreground mb-4">
-              {agents.length === 0 
+              {agents.length === 0
                 ? "No agents found. Register your first agent to get started."
                 : "No agents found matching your criteria."
               }

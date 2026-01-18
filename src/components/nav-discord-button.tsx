@@ -26,7 +26,7 @@ export function DiscordButton() {
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
-          size="lg"
+          size="default"
           onClick={handleDiscordClick}
           tooltip="Join Community"
           className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
