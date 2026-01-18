@@ -1,19 +1,19 @@
- "use client"
- 
- import { UserPlus } from "lucide-react"
- import { useUser, UserButton, useClerk } from "@clerk/nextjs"
- import { ThemeToggle } from "@/components/theme-toggle"
- import { isWaitlistEnabled } from "@/lib/utils"
- 
- import {
-   SidebarMenu,
-   SidebarMenuButton,
-   SidebarMenuItem,
- } from "@/components/ui/sidebar"
- 
- export function NavUser() {
-   const { user, isLoaded } = useUser()
-   const { openWaitlist } = useClerk()
+"use client"
+
+import { UserPlus } from "lucide-react"
+import { useUser, UserButton, useClerk } from "@clerk/nextjs"
+import { ThemeToggle } from "@/components/theme-toggle"
+import { isWaitlistEnabled } from "@/lib/utils"
+
+import {
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar"
+
+export function NavUser() {
+  const { user, isLoaded } = useUser()
+  const { openWaitlist } = useClerk()
 
   // Show loading state while user data is being fetched
   if (!isLoaded) {
@@ -42,7 +42,7 @@
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+            className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
@@ -89,10 +89,10 @@
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-      <div
-        className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-colors group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
-        title={userEmail ? `${userName} (${userEmail})` : userName}
-      >
+        <div
+          className="flex items-center gap-2 px-2 py-1.5 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
+          title={userEmail ? `${userName} (${userEmail})` : userName}
+        >
           <UserButton
             appearance={{
               elements: {

@@ -16,7 +16,7 @@ export function UpgradeButton() {
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
-          size="lg"
+          size="default"
           onClick={() => router.push("/price")}
           tooltip="Upgrade"
           className="

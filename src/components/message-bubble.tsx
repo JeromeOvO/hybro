@@ -26,22 +26,22 @@ interface MessageBubbleProps {
 function renderWithMentions(content: string): (string | React.JSX.Element)[] {
   const parts: (string | React.JSX.Element)[] = []
   let lastIndex = 0
-  
+
   // Regex to match <@agent_id|agent_name> format
   const mentionRegex = /<@([^|]+)\|([^>]+)>/g
   let match
   let mentionIndex = 0
-  
+
   while ((match = mentionRegex.exec(content)) !== null) {
     // Add text before the mention
     if (match.index > lastIndex) {
       parts.push(content.slice(lastIndex, match.index))
     }
-    
+
     // Extract agent_id and agent_name
     const agentId = match[1]
     const agentName = match[2]
-    
+
     // Add the mention as a styled span
     parts.push(
       <span
@@ -52,15 +52,15 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
         @{agentName}
       </span>
     )
-    
+
     lastIndex = match.index + match[0].length
   }
-  
+
   // Add remaining text
   if (lastIndex < content.length) {
     parts.push(content.slice(lastIndex))
   }
-  
+
   return parts.length > 0 ? parts : [content]
 }
 
@@ -131,9 +131,9 @@ function MarkdownContent({ content }: { content: string }) {
 function AgentAvatar({ agentName, agentId }: { agentName: string; agentId: string }) {
   const colors = getAgentColorClasses(agentId)
   const initials = getAgentInitials(agentName)
-  
+
   return (
-    <div 
+    <div
       className={cn(
         "w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0",
         colors.bg,
@@ -157,12 +157,12 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
     <div className="flex justify-end w-full">
       <div className="max-w-[80%] rounded-lg p-3 shadow-sm bg-primary text-primary-foreground">
         <div className="text-xs opacity-70 mb-1">
-          {message.sender_name} • {new Date(message.timestamp).toLocaleString([], { 
-            month: 'short', 
-            day: 'numeric', 
-            year: 'numeric', 
-            hour: '2-digit', 
-            minute: '2-digit' 
+          {message.sender_name} • {new Date(message.timestamp).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
           })}
         </div>
         <div className="text-sm leading-relaxed">
@@ -234,13 +234,13 @@ export function AgentMessageBubble({
   return (
     <div className="flex gap-3 w-full">
       {/* Agent Avatar */}
-      <AgentAvatar 
-        agentName={message.sender_name} 
-        agentId={message.agent_id || 'unknown'} 
+      <AgentAvatar
+        agentName={message.sender_name}
+        agentId={message.agent_id || 'unknown'}
       />
-      
+
       {/* Message Content */}
-      <div 
+      <div
         className={cn(
           "flex-1 max-w-[calc(100%-3rem)] rounded-lg p-3 shadow-sm border",
           colors.border
@@ -252,16 +252,16 @@ export function AgentMessageBubble({
             {message.sender_name}
           </span>
           <span className="text-xs text-muted-foreground">
-            {new Date(message.timestamp).toLocaleString([], { 
-              month: 'short', 
-              day: 'numeric', 
-              year: 'numeric', 
-              hour: '2-digit', 
-              minute: '2-digit' 
+            {new Date(message.timestamp).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
             })}
           </span>
         </div>
-        
+
         {/* Content - Collapsible for long messages */}
         <div className={cn(
           "text-sm leading-relaxed",
@@ -269,10 +269,10 @@ export function AgentMessageBubble({
         )}>
           <MarkdownContent content={displayContent} />
         </div>
-        
+
         {/* Expand/Collapse button */}
         {isLongMessage && (
-          <button 
+          <button
             ref={toggleButtonRef}
             onClick={() => {
               const next = !isExpanded

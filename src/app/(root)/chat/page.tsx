@@ -5,33 +5,25 @@ import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
 import { banner } from "@/components/ui/banner"
-import { 
-    Loader2, 
-    AlertCircle, 
-    RefreshCw, 
+import {
+    Loader2,
+    AlertCircle,
+    RefreshCw,
     FlaskConical,
     Code,
     PenLine,
     BarChart3,
     Sparkles,
-    Settings,
     Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
 import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { RoomSettingForm } from "@/components/room-setting-form"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { listAgentGroups } from "@/lib/api/agent-group"
@@ -57,23 +49,21 @@ export default function ChatPage() {
     const [groups, setGroups] = useState<AgentGroup[]>([])
     const [loadingGroups, setLoadingGroups] = useState(false)
     const { openWaitlist } = useClerk()
-    
+
     // Group management modal state
     const [groupManagementOpen, setGroupManagementOpen] = useState(false)
     const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
     const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
     const [loadingAgents, setLoadingAgents] = useState(false)
-    
-    // Room settings dialog state
-    const [roomSettingsOpen, setRoomSettingsOpen] = useState(false)
+
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
         roomName: string
         selectedAgents: Agent[]
         debateMode: boolean
     } | null>(null)
-    
-    const { 
-        creating, 
+
+    const {
+        creating,
         createAndNavigate,
     } = useChatRoomCreation({
         userId: user?.id,
@@ -85,7 +75,7 @@ export default function ChatPage() {
     useEffect(() => {
         const loadGroups = async () => {
             if (!user?.id) return
-            
+
             setLoadingGroups(true)
             try {
                 const response = await listAgentGroups(user.id, getToken)
@@ -119,14 +109,14 @@ export default function ChatPage() {
             setLoadingAgents(false)
         }
     }, [availableAgents.length])
-    
+
     // Load agents on mount for mention suggestions
     useEffect(() => {
         if (isLoaded && user?.id && availableAgents.length === 0) {
             loadAvailableAgents()
         }
     }, [isLoaded, user?.id, loadAvailableAgents, availableAgents.length])
-    
+
     // Agent list for mentions - always show all available agents regardless of selected scope
     const agentListForMentions = useMemo(() => {
         return availableAgents.map(agent => ({
@@ -188,36 +178,12 @@ export default function ChatPage() {
     const handleClearOverride = () => {
         setIsOverride(false)
         // Default: Room Team if pre-configured agents exist, otherwise All Agents
-        const defaultGroup = (preConfiguredRoom?.selectedAgents.length || 0) > 0 
-            ? BUILTIN_GROUP_ROOM_TEAM 
+        const defaultGroup = (preConfiguredRoom?.selectedAgents.length || 0) > 0
+            ? BUILTIN_GROUP_ROOM_TEAM
             : BUILTIN_GROUP_ALL_AGENTS
         setSelectedGroup(defaultGroup)
     }
 
-    // Handle room pre-configuration
-    const handleRoomPreConfig = (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => {
-        const agentsList = Object.values(selectedAgents)
-        setPreConfiguredRoom({
-            roomName,
-            selectedAgents: agentsList,
-            debateMode
-        })
-        // Reset to default (not override) - Room Team if agents, otherwise All Agents
-        setIsOverride(false)
-        if (agentsList.length > 0) {
-            setSelectedGroup(BUILTIN_GROUP_ROOM_TEAM)
-        } else {
-            setSelectedGroup(BUILTIN_GROUP_ALL_AGENTS)
-        }
-        setRoomSettingsOpen(false)
-        banner.success('Room settings saved')
-    }
-
-    // Open room settings dialog
-    const handleOpenRoomSettings = () => {
-        loadAvailableAgents()
-        setRoomSettingsOpen(true)
-    }
 
     const handleSubmit = async (value: string) => {
         if (!value.trim()) {
@@ -235,7 +201,7 @@ export default function ChatPage() {
 
         try {
             setHasError(false)
-            
+
             // Create room with pre-configured settings if available
             const options = {
                 ...(preConfiguredRoom ? {
@@ -245,9 +211,9 @@ export default function ChatPage() {
                 } : {}),
                 targetGroup: selectedGroup  // Always pass the selected group for the first message
             }
-            
+
             const success = await createAndNavigate(value, options)
-            
+
             if (success) {
                 // RoomChatInput clears its own state after submission
                 setPreConfiguredRoom(null) // Clear pre-configured settings after successful creation
@@ -296,8 +262,8 @@ export default function ChatPage() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        <Button 
-                            onClick={handleRetry} 
+                        <Button
+                            onClick={handleRetry}
                             className="w-full"
                             disabled={creating}
                         >
@@ -313,8 +279,8 @@ export default function ChatPage() {
                                 </>
                             )}
                         </Button>
-                        <Button 
-                            variant="outline" 
+                        <Button
+                            variant="outline"
                             onClick={() => setHasError(false)}
                             className="w-full"
                         >
@@ -337,7 +303,7 @@ export default function ChatPage() {
                             {preConfiguredRoom?.roomName && (
                                 <h1 className="text-xl font-semibold">{preConfiguredRoom.roomName}</h1>
                             )}
-                            
+
                             {/* Room team / Debate mode info */}
                             {preConfiguredRoom && (preConfiguredRoom.selectedAgents.length > 0 || preConfiguredRoom.debateMode) && (
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -362,7 +328,7 @@ export default function ChatPage() {
                                             </Tooltip>
                                         </TooltipProvider>
                                     )}
-                                    
+
                                     {preConfiguredRoom.debateMode && (
                                         <div className="flex items-center gap-1">
                                             <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
@@ -375,28 +341,6 @@ export default function ChatPage() {
                             )}
                         </div>
                     </div>
-                    
-                    {/* Settings Button - Same position as room page */}
-                    <div className="flex items-center gap-2">
-                        <TooltipProvider>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button 
-                                        variant="ghost" 
-                                        size="icon" 
-                                        onClick={handleOpenRoomSettings}
-                                        className="text-primary hover:text-primary hover:bg-primary/10"
-                                        aria-label="Room settings"
-                                    >
-                                        <Settings className="h-5 w-5" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                    <p>Configure room settings</p>
-                                </TooltipContent>
-                            </Tooltip>
-                        </TooltipProvider>
-                    </div>
                 </div>
             </header>
 
@@ -405,19 +349,19 @@ export default function ChatPage() {
                     {/* Header */}
                     <div className="text-center mb-8">
                         <h1 className="text-4xl font-bold mb-2">
-                        <span
-                            className={cn(
-                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mr-2",
-                            )}
+                            <span
+                                className={cn(
+                                    "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mr-2",
+                                )}
                             >
-                            HY
+                                HY
                             </span>
                             <span
-                            className={cn(
-                                "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro-strong))] dark:text-[hsl(var(--color-hybro-bro))]",
-                            )}
+                                className={cn(
+                                    "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-bro-strong))] dark:text-[hsl(var(--color-hybro-bro))]",
+                                )}
                             >
-                            BRO
+                                BRO
                             </span>
                             <span className="ml-2 icon-exclaim inline-block text-3xl skew-x-150 scale-150 rotate-6">!</span>
                         </h1>
@@ -425,7 +369,7 @@ export default function ChatPage() {
                             What would you like to work on today?
                         </p>
                     </div>
-                    
+
                     {/* Creating state */}
                     {creating && (
                         <div className="flex items-center justify-center mb-6">
@@ -435,7 +379,7 @@ export default function ChatPage() {
                             </div>
                         </div>
                     )}
-                    
+
                     {/* Chat Input with Group Selector */}
                     <div className="mb-6">
                         <RoomChatInput
@@ -460,9 +404,6 @@ export default function ChatPage() {
 
                     {/* Quick start templates */}
                     <div className="space-y-3">
-                        <p className="text-center text-sm text-muted-foreground">
-                            Or start with a template
-                        </p>
                         <div className="flex flex-wrap justify-center gap-2">
                             {quickStartTemplates.map((template) => (
                                 <Button
@@ -508,32 +449,6 @@ export default function ChatPage() {
                 getToken={getToken}
                 initialAction={groupAction || undefined}
             />
-
-            {/* Room Settings Dialog */}
-            <Dialog open={roomSettingsOpen} onOpenChange={setRoomSettingsOpen}>
-                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
-                    <DialogHeader>
-                        <DialogTitle>Room Settings</DialogTitle>
-                    </DialogHeader>
-                    <div className="mt-4">
-                        <RoomSettingForm
-                            onSubmit={handleRoomPreConfig}
-                            availableAgents={availableAgents}
-                            loadingAgents={loadingAgents}
-                            isEditing={false}
-                            requireRoomName={false}
-                            submitButtonText="Save Settings"
-                            initialData={preConfiguredRoom ? {
-                                roomName: preConfiguredRoom.roomName,
-                                selectedAgents: Object.fromEntries(
-                                    preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
-                                ),
-                                debateMode: preConfiguredRoom.debateMode
-                            } : null}
-                        />
-                    </div>
-                </DialogContent>
-            </Dialog>
         </div>
     )
 }

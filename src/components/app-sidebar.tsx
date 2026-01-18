@@ -16,7 +16,6 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
-  SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
@@ -28,7 +27,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { state, toggleSidebar } = useSidebar()
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
-  
+
   // Get user's room list
   const loadRooms = React.useCallback(async () => {
     if (!isLoaded || !isSignedIn || !user?.id) return
@@ -36,7 +35,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     try {
       setIsLoadingRooms(true)
       const response = await inquiryRoomsByRoomOwnerId(user.id)
-      
+
       if (response.success && response.room_list) {
         setRooms(response.room_list)
       } else {
@@ -94,43 +93,43 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const isCollapsed = state === "collapsed"
 
   return (
-      <Sidebar collapsible="icon" {...props}>
-        <SidebarHeader>
-          <div className="flex h-12 items-center gap-2 px-2">
-            <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              className="hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors leading-none group"
-              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            >
-              {isCollapsed ? (
-                <div className="relative h-5 w-5">
-                  <Image
-                    src="/favicon.svg"
-                    alt="Hybro"
-                    width={20}
-                    height={20}
-                    className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 group-hover:opacity-0"
-                  />
-                  <PanelLeftIcon className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 opacity-0 group-hover:opacity-100" />
-                </div>
-              ) : (
-                <PanelLeftIcon className="h-5 w-5" />
-              )}
-            </button>
-          </div>
-        </SidebarHeader>
-        <SidebarContent>
-          <NavAgent navAgents={NAV_AGENTS} />
-          <NavMain items={navMainData} />
-        </SidebarContent>
-        <SidebarFooter>
-          <DiscordButton />
-          <UpgradeButton />
-            <NavUser />
-        </SidebarFooter>
-        <SidebarRail />
-      </Sidebar>
+    <Sidebar collapsible="icon" {...props}>
+      <SidebarHeader>
+        <div className="flex h-12 items-center gap-2 px-2">
+          <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className={`hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent transition-all duration-150 ease-out leading-none group ${isCollapsed ? "hover:cursor-e-resize" : "hover:cursor-w-resize"
+              }`}
+            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {isCollapsed ? (
+              <div className="relative h-5 w-5">
+                <Image
+                  src="/favicon.svg"
+                  alt="Hybro"
+                  width={20}
+                  height={20}
+                  className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 group-hover:opacity-0"
+                />
+                <PanelLeftIcon className="absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 opacity-0 group-hover:opacity-100" />
+              </div>
+            ) : (
+              <PanelLeftIcon className="h-5 w-5" />
+            )}
+          </button>
+        </div>
+      </SidebarHeader>
+      <SidebarContent>
+        <NavAgent navAgents={NAV_AGENTS} />
+        <NavMain items={navMainData} />
+      </SidebarContent>
+      <SidebarFooter>
+        <DiscordButton />
+        <UpgradeButton />
+        <NavUser />
+      </SidebarFooter>
+    </Sidebar>
   )
 }
