@@ -75,7 +75,7 @@ function MarkdownContent({ content }: { content: string }) {
   )
 
   return (
-    <div className="prose prose-sm max-w-none dark:prose-invert leading-relaxed">
+    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
@@ -97,11 +97,11 @@ function MarkdownContent({ content }: { content: string }) {
             const match = /language-(\w+)/.exec(className || '')
             const isInline = !match
             return isInline ? (
-              <code className="bg-muted px-1 py-0.5 rounded text-sm" {...props}>
+              <code className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
                 {children}
               </code>
             ) : (
-              <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <pre className="bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
                 <code className={className} {...props}>
                   {children}
                 </code>
@@ -109,8 +109,9 @@ function MarkdownContent({ content }: { content: string }) {
             )
           },
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="mb-2 ml-4">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-2 ml-4">{children}</ol>,
+          ul: ({ children }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
+          ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
+          li: ({ children }) => <li className="mb-1">{children}</li>,
           h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
           h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
           h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
@@ -234,6 +235,7 @@ export function AgentMessageBubble({
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
   const textColorClass = colors.text
+  const contentColorClass = colors.content
 
   return (
     <div className="flex gap-3 w-full">
@@ -256,7 +258,7 @@ export function AgentMessageBubble({
           <span className={cn("text-xs font-semibold", textColorClass)}>
             {message.sender_name}
           </span>
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
             {new Date(message.timestamp).toLocaleString('en-US', {
               month: 'short',
               day: 'numeric',
@@ -269,6 +271,7 @@ export function AgentMessageBubble({
         {/* Content - Collapsible for long messages */}
         <div className={cn(
           "text-sm leading-relaxed",
+          contentColorClass,
           !isExpanded && isLongMessage && "line-clamp-4"
         )}>
           <MarkdownContent content={displayContent} />
