@@ -5,25 +5,25 @@
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-family-mono: ui-monospace, SFMono-Regular, monospace;
 
-  /* Comfortable Light Mode - Warm, eye-friendly tones */
-  --color-background: 220 14% 92%;
-  --color-foreground: 220 20% 18%;
-  --color-card: 220 16% 95%;
-  --color-card-foreground: 220 20% 18%;
-  --color-popover: 220 16% 95%;
-  --color-popover-foreground: 220 20% 18%;
+  /* Comfortable Light Mode - Softer, eye-friendly tones */
+  --color-background: 220 15% 96%;
+  --color-foreground: 220 20% 15%;
+  --color-card: 220 16% 98%;
+  --color-card-foreground: 220 20% 15%;
+  --color-popover: 220 16% 98%;
+  --color-popover-foreground: 220 20% 15%;
 
   /* Refined teal primary - easier on eyes */
-  --color-primary: 192 85% 38%;
-  --color-primary-foreground: 220 16% 96%;
+  --color-primary: 192 85% 35%;
+  --color-primary-foreground: 0 0% 100%;
 
-  /* Soft secondary with subtle warmth */
-  --color-secondary: 225 14% 86%;
-  --color-secondary-foreground: 220 20% 22%;
+  /* Soft secondary */
+  --color-secondary: 220 14% 92%;
+  --color-secondary-foreground: 220 20% 20%;
 
   /* Comfortable muted tones */
-  --color-muted: 220 12% 84%;
-  --color-muted-foreground: 220 14% 42%;
+  --color-muted: 220 12% 92%;
+  --color-muted-foreground: 220 14% 40%;
 
   /* Softer accent */
   --color-accent: 270 55% 50%;
@@ -31,11 +31,11 @@
 
   /* Gentle destructive - muted coral */
   --color-destructive: 4 65% 55%;
-  --color-destructive-foreground: 220 16% 96%;
+  --color-destructive-foreground: 0 0% 100%;
 
   /* Softer borders */
-  --color-border: 220 14% 78%;
-  --color-input: 220 14% 86%;
+  --color-border: 220 14% 85%;
+  --color-input: 220 14% 90%;
   --color-ring: 192 85% 45%;
 
   /* Balanced chart colors */
@@ -46,16 +46,13 @@
   --color-chart-5: 320 60% 58%;
 
   /* Comfortable sidebar */
-  --color-sidebar-background: 220 16% 96%;
-  /* Slightly lighter for better contrast */
-  --color-sidebar-foreground: 220 18% 28%;
-  --color-sidebar-primary: 192 85% 42%;
-  --color-sidebar-primary-foreground: 220 16% 96%;
-  --color-sidebar-accent: 220 14% 88%;
-  /* Darkened from 87% to 88% and adjusted saturation for visibility */
-  /* Darker to support 50% opacity hover (~4%) and solid active (~8%) */
-  --color-sidebar-accent-foreground: 220 20% 18%;
-  --color-sidebar-border: 220 14% 90%;
+  --color-sidebar-background: 220 16% 98%;
+  --color-sidebar-foreground: 220 18% 25%;
+  --color-sidebar-primary: 192 85% 38%;
+  --color-sidebar-primary-foreground: 0 0% 100%;
+  --color-sidebar-accent: 220 14% 94%;
+  --color-sidebar-accent-foreground: 220 20% 15%;
+  --color-sidebar-border: 220 14% 92%;
   --color-sidebar-ring: 192 85% 45%;
 
   /* Brand colors for HYBRO */
@@ -327,7 +324,7 @@
 /* Enhanced CodeMirror with futuristic theme */
 .cm-editor,
 .cm-gutters {
-  background-color: hsl(var(--color-muted)) !important;
+  background-color: hsl(220 14% 96%) !important;
   outline: none !important;
   border: 1px solid hsl(var(--color-border));
   border-radius: calc(var(--radius) - 2px);
@@ -348,11 +345,10 @@
 }
 
 .hljs {
-  background: hsl(var(--color-muted)) !important;
-  color: hsl(var(--color-foreground)) !important;
+  background: hsl(220 14% 96%) !important;
+  color: hsl(220 20% 20%) !important;
   border-radius: calc(var(--radius) - 2px);
-  border: 1px solid hsl(var(--color-border));
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  border: 1px solid hsl(220 14% 88%);
 }
 
 .dark .hljs {
@@ -462,17 +458,64 @@
 
 /* Room Chat Input Styles */
 .room-mention {
-  background-color: rgba(59, 130, 246, 0.2) !important;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2)) !important;
   color: rgb(37, 99, 235) !important;
+  padding: 2px 6px !important;
+  border-radius: 6px !important;
+  font-weight: 600 !important;
+  font-size: 0.9em !important;
+  border: 1px solid rgba(59, 130, 246, 0.3) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+  transition: all 0.2s ease !important;
+}
+
+.room-mention:hover {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(139, 92, 246, 0.3)) !important;
+  border-color: rgba(59, 130, 246, 0.5) !important;
 }
 
 .dark .room-mention {
-  background-color: rgba(59, 130, 246, 0.3) !important;
-  color: rgb(96, 165, 250) !important;
+  background: linear-gradient(135deg, rgba(0, 255, 255, 0.2), rgba(139, 92, 246, 0.15)) !important;
+  color: rgb(0, 255, 255) !important;
+  border-color: rgba(0, 255, 255, 0.3) !important;
+  box-shadow: 0 1px 3px rgba(0, 255, 255, 0.1), 0 0 6px rgba(0, 255, 255, 0.1) !important;
+}
+
+.dark .room-mention:hover {
+  background: linear-gradient(135deg, rgba(0, 255, 255, 0.3), rgba(139, 92, 246, 0.25)) !important;
+  border-color: rgba(0, 255, 255, 0.5) !important;
+  box-shadow: 0 1px 4px rgba(0, 255, 255, 0.2), 0 0 10px rgba(0, 255, 255, 0.15) !important;
 }
 
 .placeholder-editor:empty:before {
   content: attr(data-placeholder);
-  color: hsl(var(--color-muted-foreground));
+  color: hsl(var(--color-muted-foreground) / 0.5);
   pointer-events: none;
+}
+
+/* Custom scrollbar for dropdowns */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-border));
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-primary) / 0.5);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-border));
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-primary) / 0.7);
+  box-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
 }

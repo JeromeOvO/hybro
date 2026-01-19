@@ -17,11 +17,11 @@ interface ConversationNavigatorProps {
 /**
  * Mini-map navigation sidebar for quick jumping between conversation rounds
  */
-export function ConversationNavigator({ 
-  rounds, 
-  currentRound, 
+export function ConversationNavigator({
+  rounds,
+  currentRound,
   onNavigate,
-  onClose 
+  onClose
 }: ConversationNavigatorProps) {
   if (rounds.length === 0) return null
 
@@ -34,7 +34,7 @@ export function ConversationNavigator({
           <span>Navigation</span>
         </div>
         {onClose && (
-          <button 
+          <button
             onClick={onClose}
             className="p-1 hover:bg-muted rounded-md transition-colors"
           >
@@ -59,8 +59,8 @@ export function ConversationNavigator({
               onClick={() => onNavigate(idx)}
               className={cn(
                 "w-full text-left px-2.5 py-2 rounded-md text-sm transition-all",
-                currentRound === idx 
-                  ? "bg-primary text-primary-foreground shadow-sm" 
+                currentRound === idx
+                  ? "bg-primary text-primary-foreground shadow-sm"
                   : "hover:bg-muted"
               )}
             >
@@ -70,18 +70,18 @@ export function ConversationNavigator({
                   <span className="text-[10px] opacity-60">collapsed</span>
                 )}
               </div>
-              
+
               {/* User message preview */}
               <p className={cn(
                 "text-xs truncate mb-1.5",
-                currentRound === idx 
-                  ? "text-primary-foreground/80" 
+                currentRound === idx
+                  ? "text-primary-foreground/80"
                   : "text-muted-foreground"
               )}>
                 {round.userMessage.content.slice(0, 50)}
                 {round.userMessage.content.length > 50 ? '...' : ''}
               </p>
-              
+
               {/* Agent avatars */}
               {uniqueAgents.length > 0 && (
                 <div className="flex items-center gap-1">
@@ -102,8 +102,8 @@ export function ConversationNavigator({
                   </div>
                   <span className={cn(
                     "text-[10px]",
-                    currentRound === idx 
-                      ? "text-primary-foreground/70" 
+                    currentRound === idx
+                      ? "text-primary-foreground/70"
                       : "text-muted-foreground"
                   )}>
                     {round.agentResponses.length} msg{round.agentResponses.length !== 1 ? 's' : ''}
@@ -129,13 +129,13 @@ export function ConversationNavigator({
 /**
  * Floating navigation button that toggles the navigator
  */
-export function NavigatorToggle({ 
-  isOpen, 
-  onToggle, 
-  roundCount 
-}: { 
+export function NavigatorToggle({
+  isOpen,
+  onToggle,
+  roundCount
+}: {
   isOpen: boolean
-  onToggle: () => void 
+  onToggle: () => void
   roundCount: number
 }) {
   return (
@@ -143,8 +143,8 @@ export function NavigatorToggle({
       onClick={onToggle}
       className={cn(
         "flex items-center gap-2 px-3 py-2 rounded-full shadow-lg border transition-all",
-        isOpen 
-          ? "bg-primary text-primary-foreground" 
+        isOpen
+          ? "bg-primary text-primary-foreground"
           : "bg-background hover:bg-muted"
       )}
     >

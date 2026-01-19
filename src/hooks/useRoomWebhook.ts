@@ -18,7 +18,7 @@ import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
 import type { SSEMessage } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { getAllAgents } from '@/lib/api/agent'
+import { getAllActiveAgents } from '@/lib/api/agent'
 
 // Special system agent display names (module scoped for stable reference)
 const SYSTEM_AGENT_NAMES: Record<string, string> = {
@@ -84,15 +84,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Global agents catalog (React Query) to resolve names without per-message fetches.
   // Stale for 24h to effectively cache across rooms. Refetched on window refocus by default (disabled below).
   const allAgentsQuery = useQuery<Agent[], Error>({
-    queryKey: ['agents', 'all'] as const,
+    queryKey: ['agents', 'active'] as const,
     staleTime: 1000 * 60 * 60 * 24, // 24 hours
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: 0,  // Avoid retry loops on abort/cancel
     queryFn: async ({ signal }): Promise<Agent[]> => {
-      console.log('🤖 Loading global agents catalog')
+      console.log('🤖 Loading global active agents catalog')
       try {
-        const res = await getAllAgents(signal, 15000) // 15s safety timeout
+        const res = await getAllActiveAgents(signal, 15000) // 15s safety timeout
         if (!res.success || !res.agents) {
           throw new Error(res.error || 'Failed to load agents')
         }
