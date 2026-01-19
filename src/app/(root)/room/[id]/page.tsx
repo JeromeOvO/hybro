@@ -22,7 +22,7 @@ import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
 import { GroupManagementModal } from '@/components/group-management-modal'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
-import { getAllAgents } from '@/lib/api/agent'
+import { getAllActiveAgents } from '@/lib/api/agent'
 import { listAgentGroups } from '@/lib/api/agent-group'
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup } from '@/lib/types/agent-group'
@@ -44,7 +44,7 @@ export default function RoomChatPage() {
   const initialMessageSentRef = useRef(false)
   const loadAgentsControllerRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
-  
+
   // Group selector state
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
@@ -52,7 +52,7 @@ export default function RoomChatPage() {
   const [isOverride, setIsOverride] = useState(false)  // Track if override is active
   const [groupManagementOpen, setGroupManagementOpen] = useState(false)
   const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
-  
+
   const {
     room,
     messages,
@@ -101,8 +101,8 @@ export default function RoomChatPage() {
 
       setLoadingAgents(true)
       setAgentsError(null)
-      const response = await getAllAgents(controller.signal, 15000) // 15s safety timeout
-      
+      const response = await getAllActiveAgents(controller.signal, 15000) // 15s safety timeout
+
       if (response.success && response.agents) {
         if (mountedRef.current) {
           setAvailableAgents(response.agents)
@@ -137,7 +137,7 @@ export default function RoomChatPage() {
   useEffect(() => {
     const loadGroups = async () => {
       if (!user?.id) return
-      
+
       setLoadingGroups(true)
       try {
         const response = await listAgentGroups(user.id, getToken)
@@ -238,14 +238,14 @@ export default function RoomChatPage() {
   useEffect(() => {
     if (room && !initialGroupSetRef.current) {
       initialGroupSetRef.current = true
-      
+
       // Priority: localStorage (persistent override) > sessionStorage (from chat page) > default
       const localStorageKey = `room-${roomId}-override-group`
       const sessionStorageKey = `room-${roomId}-target-group`
-      
+
       const localStorageOverride = localStorage.getItem(localStorageKey)
       const sessionStorageGroup = sessionStorage.getItem(sessionStorageKey)
-      
+
       if (localStorageOverride) {
         // Use persisted override from localStorage
         setSelectedGroup(localStorageOverride)
@@ -293,23 +293,23 @@ export default function RoomChatPage() {
     }
 
     console.log('📨 Found initial message, sending automatically:', initialMessage)
-    
+
     // Mark as sent immediately to prevent duplicate sends
     initialMessageSentRef.current = true
     sessionStorage.setItem(sentKey, '1')
-    
+
     // Get the target group from sessionStorage (set by chat page)
     const storedTargetGroup = sessionStorage.getItem(targetGroupKey)
-    
+
     // Use the stored target group, or fall back to determining based on room agents
     const targetGroup = storedTargetGroup || (
-      room.room_agent_set && Object.keys(room.room_agent_set).length > 0 
-        ? BUILTIN_GROUP_ROOM_TEAM 
+      room.room_agent_set && Object.keys(room.room_agent_set).length > 0
+        ? BUILTIN_GROUP_ROOM_TEAM
         : BUILTIN_GROUP_ALL_AGENTS
     )
-    
+
     console.log('📨 Sending with target group:', targetGroup, 'storedTargetGroup:', storedTargetGroup)
-    
+
     sendUserMessage(initialMessage, targetGroup).then((success) => {
       if (success) {
         console.log('✅ Initial message sent successfully')
@@ -335,8 +335,8 @@ export default function RoomChatPage() {
 
   // Handle room settings update - now includes debate mode
   const handleRoomSettingsUpdate = async (
-    roomName: string, 
-    selectedAgents: { [agentId: string]: Agent }, 
+    roomName: string,
+    selectedAgents: { [agentId: string]: Agent },
     debateMode: boolean
   ) => {
     const success = await updateRoomSettings(roomName, selectedAgents, debateMode)
@@ -395,7 +395,7 @@ export default function RoomChatPage() {
             <div className="flex items-center gap-3">
               <div className="space-y-1">
                 <h1 className="text-xl font-semibold">{room.room_name}</h1>
-                
+
                 {/* Room team / Debate mode info */}
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* Show agent count if room has agents */}
@@ -419,7 +419,7 @@ export default function RoomChatPage() {
                       </Tooltip>
                     </TooltipProvider>
                   )}
-                  
+
                   {debateMode && (
                     <div className="flex items-center gap-1">
                       <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
@@ -430,22 +430,21 @@ export default function RoomChatPage() {
                   )}
                 </div>
               </div>
-              
+
               {/* Simple SSE Connection Status - Just a dot */}
-              <div 
-                className={`w-2 h-2 rounded-full transition-colors duration-200 ${
-                  sseConnected ? 'bg-green-500' : 
-                  sseConnecting ? 'bg-yellow-500 animate-pulse' : 
-                  'bg-red-500'
-                }`}
+              <div
+                className={`w-2 h-2 rounded-full transition-colors duration-200 ${sseConnected ? 'bg-green-500' :
+                  sseConnecting ? 'bg-yellow-500 animate-pulse' :
+                    'bg-red-500'
+                  }`}
                 title={
-                  sseConnected ? 'Live updates connected' : 
-                  sseConnecting ? 'Connecting to live updates...' : 
-                  'Live updates disconnected'
+                  sseConnected ? 'Live updates connected' :
+                    sseConnecting ? 'Connecting to live updates...' :
+                      'Live updates disconnected'
                 }
               />
             </div>
-            
+
             {/* Settings Button */}
             <div className="flex items-center gap-2">
               {/* Optional: Toggle SSE button (can be hidden if not needed) */}
@@ -459,33 +458,33 @@ export default function RoomChatPage() {
                   Enable Live Updates
                 </Button>
               )}
-              
-                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                  <div className="flex items-center gap-2">
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            onClick={handleOpenRoomSettings}
-                            className="text-primary hover:text-primary hover:bg-primary/10"
-                            aria-label="Room settings"
-                            onMouseEnter={() => {
-                              if (availableAgents.length === 0 && !loadingAgents) {
-                                loadAvailableAgents()
-                              }
-                            }}
-                          >
-                            <Settings className="h-5 w-5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Configure room settings</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
+
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <div className="flex items-center gap-2">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={handleOpenRoomSettings}
+                          className="text-primary hover:text-primary hover:bg-primary/10"
+                          aria-label="Room settings"
+                          onMouseEnter={() => {
+                            if (availableAgents.length === 0 && !loadingAgents) {
+                              loadAvailableAgents()
+                            }
+                          }}
+                        >
+                          <Settings className="h-5 w-5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Configure room settings</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
                 <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
                   <DialogHeader>
                     <DialogTitle>Room Settings</DialogTitle>
@@ -509,15 +508,15 @@ export default function RoomChatPage() {
 
           {/* Scrollable Messages Area - Only this area scrolls */}
           <main className="flex-1 overflow-hidden">
-            <RoomMessages 
-              messages={messages} 
-              loading={false} 
+            <RoomMessages
+              messages={messages}
+              loading={false}
               processing={processing}
             />
           </main>
         </div>
       </div>
-      
+
       <div className="bg-background p-4">
         <div className="max-w-4xl mx-auto px-4 sm:px-6">
           <RoomChatInput

@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send, Square } from 'lucide-react'
-// import { toast } from 'sonner'
+import { Send, Square, AtSign } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import { cn } from '@/lib/utils'
 
 interface Agent {
   id: string
@@ -61,9 +61,9 @@ interface RoomChatInputProps {
   onExternalValueConsumed?: () => void
 }
 
-export function RoomChatInput({ 
-  onSubmit, 
-  disabled = false, 
+export function RoomChatInput({
+  onSubmit,
+  disabled = false,
   disableSend = false,
   sending = false,
   processing = false,
@@ -89,6 +89,7 @@ export function RoomChatInput({
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0)
   const editorRef = useRef<HTMLDivElement>(null)
   const suggestionsRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const filteredAgents = agents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
@@ -106,8 +107,8 @@ export function RoomChatInput({
 
   // Scroll selected item into view
   useEffect(() => {
-    if (showAgentSuggestions && suggestionsRef.current) {
-      const selectedElement = suggestionsRef.current.children[selectedAgentIndex] as HTMLElement
+    if (showAgentSuggestions && listRef.current) {
+      const selectedElement = listRef.current.children[selectedAgentIndex] as HTMLElement
       if (selectedElement) {
         selectedElement.scrollIntoView({
           block: 'nearest',
@@ -138,11 +139,11 @@ export function RoomChatInput({
         parts.push(escapeHtml(content.slice(lastIndex, match.index)))
       }
 
-      // Add mention span
+      // Add mention span with enhanced styling
       const id = match[1]
       const name = match[2]
       parts.push(
-        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="background-color: rgba(59, 130, 246, 0.2); color: rgb(37, 99, 235); padding: 0 2px; border-radius: 3px; cursor: default; user-select: none;">@${escapeHtml(name)}</span>`
+        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2)); color: rgb(37, 99, 235); padding: 2px 6px; border-radius: 6px; cursor: default; user-select: none; font-weight: 600; font-size: 0.9em; border: 1px solid rgba(59, 130, 246, 0.3); box-shadow: 0 1px 2px rgba(0,0,0,0.05);">@${escapeHtml(name)}</span>`
       )
 
       lastIndex = match.index + match[0].length
@@ -178,7 +179,7 @@ export function RoomChatInput({
   // Get plain text from editor (display format)
   const getEditorText = (): string => {
     if (!editorRef.current) return ''
-    
+
     let text = ''
     const traverse = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -194,7 +195,7 @@ export function RoomChatInput({
         }
       }
     }
-    
+
     editorRef.current.childNodes.forEach(traverse)
     return text
   }
@@ -202,7 +203,7 @@ export function RoomChatInput({
   // Convert editor content to storage format
   const convertToStorageFormat = (): string => {
     if (!editorRef.current) return ''
-    
+
     let storage = ''
     const traverse = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -220,7 +221,7 @@ export function RoomChatInput({
         }
       }
     }
-    
+
     editorRef.current.childNodes.forEach(traverse)
     return storage
   }
@@ -234,7 +235,7 @@ export function RoomChatInput({
     const preCaretRange = range.cloneRange()
     preCaretRange.selectNodeContents(editorRef.current)
     preCaretRange.setEnd(range.endContainer, range.endOffset)
-    
+
     let position = 0
     const traverse = (node: Node): boolean => {
       if (node === range.endContainer) {
@@ -270,7 +271,7 @@ export function RoomChatInput({
 
     const selection = window.getSelection()
     const range = document.createRange()
-    
+
     let charCount = 0
     let found = false
 
@@ -309,7 +310,7 @@ export function RoomChatInput({
     for (const child of Array.from(editorRef.current.childNodes)) {
       if (traverse(child)) break
     }
-    
+
     if (!found) {
       range.selectNodeContents(editorRef.current)
       range.collapse(false)
@@ -325,17 +326,17 @@ export function RoomChatInput({
 
     const cursorPos = getCursorPosition()
     const storageFormat = convertToStorageFormat()
-    
+
     // Update storage format
     setMessage(storageFormat)
 
     // Get text for mention detection
     const text = getEditorText()
-    
+
     // Check for @ mentions
     const beforeCursor = text.slice(0, cursorPos)
     const mentionMatch = beforeCursor.match(/@(\w*)$/)
-    
+
     if (mentionMatch) {
       setMentionQuery(mentionMatch[1])
       setShowAgentSuggestions(true)
@@ -380,7 +381,7 @@ export function RoomChatInput({
     const currentStorage = convertToStorageFormat()
     const text = getEditorText()
     const cursorPos = getCursorPosition()
-    
+
     // Find @ position in text
     const beforeCursor = text.slice(0, cursorPos)
     const atIndex = beforeCursor.lastIndexOf('@')
@@ -388,29 +389,29 @@ export function RoomChatInput({
 
     // Build new text
     const beforeMention = text.slice(0, atIndex)
-    
+
     // Find corresponding position in storage format
     let textPos = 0
     let storageBeforeMention = ''
-    
+
     const storageRegex = /<@([^|]+)\|([^>]+)>/g
     let lastStorageIndex = 0
     let match
-    
+
     while ((match = storageRegex.exec(currentStorage)) !== null) {
       // Text before this mention
       const textBeforeMention = currentStorage.slice(lastStorageIndex, match.index)
       const displayLength = textBeforeMention.length
-      
+
       if (textPos + displayLength >= atIndex) {
         // The @ is in plain text before this mention
-        storageBeforeMention = currentStorage.slice(0, lastStorageIndex) + 
+        storageBeforeMention = currentStorage.slice(0, lastStorageIndex) +
           textBeforeMention.slice(0, atIndex - textPos)
         break
       }
-      
+
       textPos += displayLength
-      
+
       // This mention
       const mentionDisplayLength = `@${match[2]}`.length
       if (textPos + mentionDisplayLength >= atIndex) {
@@ -418,67 +419,67 @@ export function RoomChatInput({
         storageBeforeMention = currentStorage.slice(0, match.index + match[0].length)
         break
       }
-      
+
       textPos += mentionDisplayLength
       lastStorageIndex = match.index + match[0].length
     }
-    
+
     if (!storageBeforeMention) {
       // The @ is in the remaining text
       const remainingText = currentStorage.slice(lastStorageIndex)
       const offsetInRemaining = atIndex - textPos
-      storageBeforeMention = currentStorage.slice(0, lastStorageIndex) + 
+      storageBeforeMention = currentStorage.slice(0, lastStorageIndex) +
         remainingText.slice(0, offsetInRemaining)
     }
-    
+
     // Get storage format of after cursor
     let storageAfterCursor = ''
     textPos = 0
     lastStorageIndex = 0
     storageRegex.lastIndex = 0
-    
+
     while ((match = storageRegex.exec(currentStorage)) !== null) {
       const textBeforeMention = currentStorage.slice(lastStorageIndex, match.index)
       const displayLength = textBeforeMention.length
-      
+
       if (textPos + displayLength >= cursorPos) {
         const offsetInText = cursorPos - textPos
         storageAfterCursor = currentStorage.slice(lastStorageIndex + offsetInText)
         break
       }
-      
+
       textPos += displayLength
       const mentionDisplayLength = `@${match[2]}`.length
-      
+
       if (textPos + mentionDisplayLength >= cursorPos) {
         storageAfterCursor = currentStorage.slice(match.index + match[0].length)
         break
       }
-      
+
       textPos += mentionDisplayLength
       lastStorageIndex = match.index + match[0].length
     }
-    
+
     if (!storageAfterCursor && cursorPos < text.length) {
       const offsetInRemaining = cursorPos - textPos
       storageAfterCursor = currentStorage.slice(lastStorageIndex + offsetInRemaining)
     }
-    
+
     // Build new storage format
     const newStorage = storageBeforeMention + `<@${agent.id}|${agent.name}> ` + storageAfterCursor
-    
+
     setMessage(newStorage)
-    
+
     // Update editor HTML
     editorRef.current.innerHTML = convertToDisplayHTML(newStorage)
-    
+
     // Set cursor after the mention
     const newCursorPos = beforeMention.length + `@${agent.name} `.length
     setTimeout(() => {
       setCursorPosition(newCursorPos)
       editorRef.current?.focus()
     }, 0)
-    
+
     setShowAgentSuggestions(false)
     setMentionQuery('')
     setSelectedAgentIndex(0)
@@ -496,13 +497,13 @@ export function RoomChatInput({
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault()
-          setSelectedAgentIndex(prev => 
+          setSelectedAgentIndex(prev =>
             prev < filteredAgents.length - 1 ? prev + 1 : 0
           )
           break
         case 'ArrowUp':
           e.preventDefault()
-          setSelectedAgentIndex(prev => 
+          setSelectedAgentIndex(prev =>
             prev > 0 ? prev - 1 : filteredAgents.length - 1
           )
           break
@@ -558,7 +559,7 @@ export function RoomChatInput({
     if (trimmedMessage) {
       // Determine target group: if mentions, use them; otherwise use selected group
       const targetGroup = mentionedAgents.length > 0 ? undefined : selectedGroup
-      
+
       console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup)
       onSubmit(trimmedMessage, targetGroup)
       setMessage('')
@@ -570,113 +571,192 @@ export function RoomChatInput({
     }
   }
 
+  // Determine if message is ready to send
+  const isReadyToSend = message.trim() && !disableSend && !disabled
+
   return (
     <div className="relative">
       {/* Agent suggestions dropdown */}
       {showAgentSuggestions && filteredAgents.length > 0 && (
-        <div 
+        <div
           ref={suggestionsRef}
-          className="absolute bottom-full left-0 right-0 mb-2 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-lg max-h-40 overflow-y-auto z-50"
+          className={cn(
+            "absolute bottom-full left-4 right-4 mb-3 z-50",
+            "bg-background/95 backdrop-blur-2xl",
+            "border border-border/40 shadow-2xl rounded-2xl",
+            "animate-in fade-in slide-in-from-bottom-3 duration-300",
+            "ring-1 ring-white/5"
+          )}
         >
-          {filteredAgents.map((agent, index) => (
-            <button
-              key={agent.id}
-              onClick={() => insertMention(agent)}
-              className={`w-full text-left px-3 py-2 text-sm transition-all duration-200 border-l-2 ${
-                index === selectedAgentIndex
-                  ? 'bg-primary text-primary-foreground font-semibold shadow-md border-l-primary-foreground'
-                  : 'text-foreground hover:bg-muted/60 border-l-transparent'
-              }`}
-              onMouseEnter={() => setSelectedAgentIndex(index)}
-            >
-              <span className={`${
-                index === selectedAgentIndex 
-                  ? 'text-primary-foreground' 
-                  : 'text-muted-foreground'
-              }`}>
-                @
+          {/* Header */}
+          <div className="relative px-4 py-2.5 border-b border-border/30">
+            <div className="flex items-center gap-2">
+              <AtSign className="h-3.5 w-3.5 text-primary" />
+              <span className="text-sm font-medium text-foreground">Mention an agent</span>
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                {filteredAgents.length} available
               </span>
-              <span className="font-medium">
-                {agent.name}
-              </span>
-            </button>
-          ))}
+            </div>
+          </div>
+
+          {/* Agent list with scroll */}
+          <div ref={listRef} className="py-1 max-h-52 overflow-y-auto">
+            {filteredAgents.map((agent, index) => (
+              <button
+                key={agent.id}
+                onClick={() => insertMention(agent)}
+                className={cn(
+                  "w-full text-left px-3 py-2.5 transition-all duration-100 flex items-center gap-3 mx-1 rounded-lg",
+                  index === selectedAgentIndex
+                    ? 'bg-primary text-primary-foreground shadow-md'
+                    : 'text-foreground hover:bg-muted'
+                )}
+                onMouseEnter={() => setSelectedAgentIndex(index)}
+                style={{ width: 'calc(100% - 8px)' }}
+              >
+                {/* Agent avatar */}
+                <div className={cn(
+                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 transition-all",
+                  index === selectedAgentIndex
+                    ? 'bg-primary-foreground text-primary scale-105'
+                    : 'bg-primary/15 text-primary'
+                )}>
+                  {agent.name.charAt(0).toUpperCase()}
+                </div>
+
+                <span className="font-medium truncate text-sm flex-1">
+                  {agent.name}
+                </span>
+
+                {/* Keyboard hint for selected item */}
+                {index === selectedAgentIndex && (
+                  <kbd className="text-[10px] px-2 py-1 bg-primary-foreground/30 rounded font-mono font-semibold">
+                    ↵
+                  </kbd>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      <div className="group relative flex flex-col rounded-3xl bg-background border border-border shadow-lg transition-all duration-300 hover:shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:border-blue-500/50 focus-within:shadow-[0_0_25px_rgba(59,130,246,0.4)] focus-within:border-blue-500/70">
-        {/* Group Selector - Top section */}
-        {showGroupSelector && (
-          <div className="px-4 pt-3 pb-1 border-b border-border/20">
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <span>To:</span>
-              <GroupSelector
-                selectedGroup={selectedGroup}
-                onGroupChange={onGroupChange || (() => {})}
-                groups={groups}
-                loadingGroups={loadingGroups}
-                roomAgentCount={roomAgentCount}
-                mentionedAgents={mentionedAgents}
-                onCreateGroup={onCreateGroup}
-                onEditGroup={onEditGroup}
-                onDeleteGroup={onDeleteGroup}
+      {/* Main input container with animated gradient border */}
+      <div className={cn(
+        "group/input relative flex flex-col rounded-3xl transition-all duration-500",
+        "bg-gradient-to-b from-background via-background to-background/95",
+        "shadow-lg hover:shadow-xl",
+        // Outer glow effects
+        "before:absolute before:-inset-[1px] before:rounded-3xl before:p-[1px]",
+        "before:bg-gradient-to-b before:from-border/60 before:via-border/40 before:to-border/60",
+        "before:transition-all before:duration-500 before:-z-10",
+        // Focus/hover gradient border
+        "focus-within:before:from-primary/60 focus-within:before:via-primary/40 focus-within:before:to-primary/60",
+        "hover:before:from-primary/40 hover:before:via-primary/20 hover:before:to-primary/40",
+        // Shadow glow
+        "hover:shadow-[0_8px_40px_-12px_rgba(var(--color-primary)/0.25)]",
+        "focus-within:shadow-[0_8px_50px_-10px_rgba(var(--color-primary)/0.35)]",
+        // Dark mode enhancements
+        "dark:hover:shadow-[0_8px_50px_-10px_rgba(0,255,255,0.2)]",
+        "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
+      )}>
+        {/* Inner container with actual border */}
+        <div className="relative flex flex-col rounded-3xl bg-background/80 backdrop-blur-sm border border-transparent overflow-hidden">
+          {/* Group Selector - Top section */}
+          {showGroupSelector && (
+            <div className="px-5 pt-3 pb-2">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <GroupSelector
+                  selectedGroup={selectedGroup}
+                  onGroupChange={onGroupChange || (() => { })}
+                  groups={groups}
+                  loadingGroups={loadingGroups}
+                  roomAgentCount={roomAgentCount}
+                  mentionedAgents={mentionedAgents}
+                  onCreateGroup={onCreateGroup}
+                  onEditGroup={onEditGroup}
+                  onDeleteGroup={onDeleteGroup}
                   agentNameMap={agentNameMap}
-                disabled={disabled}
-                isOverride={isOverride}
-                onClearOverride={onClearOverride}
-              />
+                  disabled={disabled}
+                  isOverride={isOverride}
+                  onClearOverride={onClearOverride}
+                />
+              </div>
             </div>
+          )}
+
+          {/* Contenteditable div */}
+          <div className="flex-1 px-5 py-3">
+            <div
+              ref={editorRef}
+              contentEditable={!disabled}
+              onInput={handleInput}
+              onPaste={handlePaste}
+              onKeyDown={handleKeyDown}
+              className={cn(
+                "w-full min-h-[52px] max-h-[200px] overflow-y-auto resize-none",
+                "border-0 bg-transparent text-[15px] leading-7 text-foreground",
+                "focus:outline-none placeholder-editor",
+                disabled && "opacity-40 cursor-not-allowed"
+              )}
+              data-placeholder="Type a message... Use @ to mention agents"
+              suppressContentEditableWarning
+              style={{
+                caretColor: 'hsl(var(--color-primary))',
+                wordBreak: 'break-word',
+              }}
+            />
           </div>
-        )}
 
-        {/* Contenteditable div */}
-        <div className="flex-1 p-4 pb-3">
-          <div
-            ref={editorRef}
-            contentEditable={!disabled}
-            onInput={handleInput}
-            onPaste={handlePaste}
-            onKeyDown={handleKeyDown}
-            className="w-full min-h-[50px] max-h-[200px] overflow-y-auto resize-none border-0 bg-transparent text-base leading-7 text-foreground focus:outline-none placeholder-editor"
-            data-placeholder="Type a message... Use @ to mention agents"
-            suppressContentEditableWarning
-            style={{
-              caretColor: 'var(--foreground)',
-            }}
-          />
-        </div>
-
-        {/* Controls */}
-        <div className="flex items-center justify-between px-6 pb-4 pt-2">
-          <div className="flex items-center gap-2 ml-auto">
+          {/* Controls */}
+          <div className="flex items-center justify-end px-5 pb-4 pt-2">
             {sending ? (
-              <Button
-                disabled
-                size="lg"
-                className="h-12 w-12 rounded-full p-0"
-                title="Sending message..."
-              >
-                <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-              </Button>
+              <div className="relative">
+                <Button
+                  disabled
+                  size="lg"
+                  className={cn(
+                    "h-11 w-11 rounded-full p-0",
+                    "bg-gradient-to-br from-primary to-primary/80"
+                  )}
+                  title="Sending message..."
+                >
+                  <div className="h-5 w-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                </Button>
+                <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
+              </div>
             ) : processing ? (
               <Button
                 onClick={onCancel}
                 variant="destructive"
                 size="lg"
-                className="h-12 w-12 rounded-full p-0"
+                className={cn(
+                  "h-11 w-11 rounded-full p-0",
+                  "hover:scale-105 active:scale-95 transition-all duration-200",
+                  "shadow-md shadow-destructive/25 hover:shadow-lg hover:shadow-destructive/30"
+                )}
                 title="Stop processing"
               >
-                <Square className="h-5 w-5" />
+                <Square className="h-4 w-4" />
               </Button>
             ) : (
               <Button
                 onClick={handleSubmit}
-                disabled={disableSend || disabled || !message.trim()}
+                disabled={!isReadyToSend}
                 size="lg"
-                className="h-12 w-12 rounded-full p-0"
-                title="Send message"
+                className={cn(
+                  "h-11 w-11 rounded-full p-0 relative overflow-hidden",
+                  "transition-all duration-300",
+                  "hover:scale-105 active:scale-95",
+                  "disabled:opacity-30 disabled:hover:scale-100 disabled:shadow-none",
+                  isReadyToSend && [
+                    "bg-gradient-to-br from-primary via-primary to-primary/90",
+                    "shadow-md shadow-primary/30",
+                    "hover:shadow-lg hover:shadow-primary/40"
+                  ]
+                )}
+                title="Send message (Enter)"
               >
-                <Send className="h-5 w-5" />
+                <Send className="h-4 w-4 relative z-10" />
               </Button>
             )}
           </div>

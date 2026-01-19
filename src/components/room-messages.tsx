@@ -2,8 +2,8 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { 
-  Bot, 
-  Zap, 
+  Sparkles,
+  MessageSquareText,
   Layers, 
   List, 
   ChevronsDownUp, 
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { ConversationRound, type ConversationRoundData } from './conversation-round'
 import { ConversationNavigator } from './conversation-navigator'
 import { MessageBubble } from './message-bubble'
+import { cn } from '@/lib/utils'
 
 export interface MessageData {
   id: string
@@ -26,27 +27,84 @@ export interface MessageData {
   related_message_id?: string | null
 }
 
-// Processing Status Component
+// Processing Status Component - Styled to match agent message bubbles
 function ProcessingStatus({ processing }: { processing: boolean }) {
   if (!processing) return null
 
   return (
-    <div className="flex justify-start w-full mb-4">
-      <div className="max-w-[80%] rounded-lg p-3 shadow-sm bg-muted border border-purple-200 dark:border-purple-800">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+      {/* Avatar matching agent bubble style */}
+      <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-violet-100 to-fuchsia-100 dark:from-violet-900 dark:to-fuchsia-900 border-violet-300 dark:border-violet-700">
+        <Sparkles className="h-4 w-4 text-violet-600 dark:text-violet-300 animate-pulse" />
+      </div>
+
+      {/* Message content matching agent bubble style */}
+      <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50/50 to-fuchsia-50/30 dark:from-violet-950/50 dark:to-fuchsia-950/30 message-bubble">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-violet-700 dark:text-violet-300">
+            AI Agents
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Processing...
+          </span>
+        </div>
+
+        {/* Animated content */}
+        <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <Bot className="h-4 w-4 text-purple-600" />
-            <span className="text-purple-600 font-medium">Agents are discussing...</span>
+            <span className="text-sm text-violet-600 dark:text-violet-300 font-medium">
+              Analyzing your request
+            </span>
+          </div>
+          
+          {/* Animated typing indicator */}
+          <div className="flex items-center gap-3">
+            <div className="flex gap-1.5">
+              <div className="w-2 h-2 bg-violet-400 dark:bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '0ms', animationDuration: '0.6s' }} />
+              <div className="w-2 h-2 bg-fuchsia-400 dark:bg-fuchsia-500 rounded-full animate-bounce" style={{ animationDelay: '150ms', animationDuration: '0.6s' }} />
+              <div className="w-2 h-2 bg-violet-400 dark:bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '300ms', animationDuration: '0.6s' }} />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Finding the best agents for your task
+            </span>
           </div>
         </div>
-        <div className="mt-2 flex items-center gap-1">
-          <div className="flex gap-1">
-            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-          </div>
-          <Zap className="h-3 w-3 text-yellow-500 animate-pulse ml-2" />
+      </div>
+    </div>
+  )
+}
+
+// Empty state component
+function EmptyState() {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="text-center space-y-4 max-w-sm px-4">
+        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 dark:from-primary/10 dark:to-accent/10 flex items-center justify-center mx-auto">
+          <MessageSquareText className="h-8 w-8 text-primary/60" />
         </div>
+        <div className="space-y-2">
+          <p className="text-lg font-medium text-foreground">Start the conversation</p>
+          <p className="text-sm text-muted-foreground">
+            Send a message and our AI agents will collaborate to help you.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Loading state component
+function LoadingState() {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="text-center space-y-4">
+        <div className="flex justify-center gap-1.5">
+          <div className="w-3 h-3 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+          <div className="w-3 h-3 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+          <div className="w-3 h-3 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+        <p className="text-sm text-muted-foreground">Loading messages...</p>
       </div>
     </div>
   )
@@ -386,52 +444,46 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }, [rounds.length, collapsedRounds.size, collapseOldRounds, skipAutoCollapseUntilNewRound])
 
   if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-muted-foreground">Loading messages...</div>
-      </div>
-    )
+    return <LoadingState />
   }
 
   return (
     <div className="h-full flex relative">
       {/* Main Content */}
-    <div 
-      ref={scrollContainerRef}
-      data-message-scroll-container="true"
-      onScroll={handleScroll}
+      <div 
+        ref={scrollContainerRef}
+        data-message-scroll-container="true"
+        onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
-    >
+      >
         <div className="py-4 min-h-full px-4 sm:px-6 max-w-4xl mx-auto">
-        {messages.length === 0 && !processing ? (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center text-muted-foreground">
-              <p className="text-lg font-medium">No messages yet</p>
-              <p className="text-sm">Start the conversation by sending a message</p>
-            </div>
-          </div>
-        ) : (
+          {messages.length === 0 && !processing ? (
+            <EmptyState />
+          ) : (
             <>
               {/* View Controls - Sticky header */}
               {rounds.length > 0 && (
-                <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-2 z-10 mb-4 flex items-center justify-between border-b">
-                  <div className="flex gap-1">
+                <div className="sticky top-0 bg-background/95 backdrop-blur-md py-3 z-10 mb-4 flex items-center justify-between border-b border-border/50">
+                  <div className="flex gap-2">
                     <Button 
-                      variant="default"
+                      variant="outline"
                       size="sm"
                       onClick={() => setViewMode(prev => prev === 'rounds' ? 'timeline' : 'rounds')}
-                      className="h-8"
+                      className={cn(
+                        "h-9 px-4 font-medium transition-all",
+                        "hover:bg-primary/10 hover:text-primary hover:border-primary/50"
+                      )}
                       aria-label="Toggle view mode"
-                      title={viewMode === 'rounds' ? 'Show Timeline' : 'Show Rounds'}
+                      title={viewMode === 'rounds' ? 'Switch to Timeline view' : 'Switch to Rounds view'}
                     >
                       {viewMode === 'rounds' ? (
                         <>
-                          <Layers className="h-4 w-4 mr-1.5" /> 
+                          <Layers className="h-4 w-4 mr-2" /> 
                           Rounds
                         </>
                       ) : (
                         <>
-                          <List className="h-4 w-4 mr-1.5" /> 
+                          <List className="h-4 w-4 mr-2" /> 
                           Timeline
                         </>
                       )}
@@ -439,19 +491,19 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                   </div>
                   
                   {viewMode === 'rounds' && rounds.length > 1 && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-2">
                       <Button 
                         variant="ghost" 
                         size="sm" 
                         onClick={collapsedRounds.size === rounds.length ? expandAll : collapseAll}
-                        className="h-8 w-8 p-0"
-                        title={collapsedRounds.size === rounds.length ? 'Expand all' : 'Collapse all'}
+                        className="h-9 w-9 p-0 hover:bg-muted"
+                        title={collapsedRounds.size === rounds.length ? 'Expand all rounds' : 'Collapse all rounds'}
                         aria-label={collapsedRounds.size === rounds.length ? 'Expand all rounds' : 'Collapse all rounds'}
                       >
                         {collapsedRounds.size === rounds.length ? (
-                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                          <ChevronsUpDown className="h-4 w-4" />
                         ) : (
-                          <ChevronsDownUp className="h-3.5 w-3.5" /> 
+                          <ChevronsDownUp className="h-4 w-4" /> 
                         )}
                       </Button>
                       
@@ -459,12 +511,15 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                       {rounds.length > 3 && (
                         <Button
                           ref={mapButtonRef}
-                          variant={showNavigator ? 'default' : 'ghost'}
+                          variant={showNavigator ? 'default' : 'outline'}
                           size="sm"
                           onClick={() => setShowNavigator(!showNavigator)}
-                          className="h-8 text-xs ml-2"
+                          className={cn(
+                            "h-9 text-xs font-medium",
+                            showNavigator && "bg-primary text-primary-foreground"
+                          )}
                         >
-                          <MapIcon className="h-3.5 w-3.5 mr-1" />
+                          <MapIcon className="h-3.5 w-3.5 mr-1.5" />
                           Map
                         </Button>
                       )}
@@ -472,19 +527,19 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                   )}
 
                   {viewMode === 'timeline' && allAgentIds.length > 0 && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-2">
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={allTimelineExpanded ? collapseAllTimeline : expandAllTimeline}
-                        className="h-8 w-8 p-0"
-                        title={allTimelineExpanded ? 'Collapse all' : 'Expand all'}
+                        className="h-9 w-9 p-0 hover:bg-muted"
+                        title={allTimelineExpanded ? 'Collapse all messages' : 'Expand all messages'}
                         aria-label={allTimelineExpanded ? 'Collapse all timeline messages' : 'Expand all timeline messages'}
                       >
                         {allTimelineExpanded ? (
-                          <ChevronsDownUp className="h-3.5 w-3.5" />
+                          <ChevronsDownUp className="h-4 w-4" />
                         ) : (
-                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                          <ChevronsUpDown className="h-4 w-4" />
                         )}
                       </Button>
                     </div>

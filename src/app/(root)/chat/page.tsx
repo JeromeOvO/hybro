@@ -27,7 +27,7 @@ import {
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { listAgentGroups } from "@/lib/api/agent-group"
-import { getAllAgents } from "@/lib/api/agent"
+import { getAllActiveAgents } from "@/lib/api/agent"
 import type { AgentGroup } from "@/lib/types/agent-group"
 import type { Agent } from "@/lib/types/agent"
 import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from "@/lib/types/agent-group"
@@ -99,7 +99,7 @@ export default function ChatPage() {
         if (availableAgents.length > 0) return
         setLoadingAgents(true)
         try {
-            const response = await getAllAgents()
+            const response = await getAllActiveAgents()
             if (response.success && response.agents) {
                 setAvailableAgents(response.agents)
             }

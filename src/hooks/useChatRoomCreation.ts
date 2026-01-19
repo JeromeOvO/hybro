@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
-import { getAllAgents } from '@/lib/api/agent'
+import { getAllActiveAgents } from '@/lib/api/agent'
 import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 
@@ -26,11 +26,11 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
   const [suggestingAgents, setSuggestingAgents] = useState(false)
   const [defaultAgents, setDefaultAgents] = useState<Agent[]>([])
 
-  // Load all available agents
+  // Load all available active agents
   const loadDefaultAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
-      const response = await getAllAgents()
+      const response = await getAllActiveAgents()
       
       if (response.success && response.agents && response.agents.length > 0) {
         setDefaultAgents(response.agents)

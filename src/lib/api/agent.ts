@@ -82,6 +82,17 @@ export async function getAllAgents(signal?: AbortSignal, timeoutMs?: number): Pr
   )
 }
 
+// Get all active agents - PUBLIC, with optional timeout override
+// Returns only agents with active status, filtering out inactive and deleted agents
+export async function getAllActiveAgents(signal?: AbortSignal, timeoutMs?: number): Promise<AgentCenterResponse> {
+  return apiGet<AgentCenterResponse>(
+    `${API_BASE_URL}/getAllActiveAgents`,
+    undefined,
+    signal,
+    timeoutMs
+  )
+}
+
 // Get agent list with conditions - PUBLIC
 export async function getAgentListWithConditions(
   request: AgentCenterRequest

@@ -155,15 +155,19 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <div className="flex justify-end w-full">
-      <div className="max-w-[80%] rounded-lg p-3 shadow-sm bg-primary text-primary-foreground">
-        <div className="text-xs opacity-70 mb-1">
-          {message.sender_name} • {new Date(message.timestamp).toLocaleString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })}
+      <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-primary text-primary-foreground message-bubble">
+        <div className="flex items-center justify-between gap-4 mb-2">
+          <span className="text-xs font-medium opacity-90">
+            {message.sender_name}
+          </span>
+          <span className="text-xs opacity-70">
+            {new Date(message.timestamp).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })}
+          </span>
         </div>
         <div className="text-sm leading-relaxed">
           {renderWithMentions(displayContent)}
@@ -229,7 +233,7 @@ export function AgentMessageBubble({
   const displayContent = message.content || "No message content"
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
-  const nameColor = colors.border.replace(/border-/g, 'text-')
+  const textColorClass = colors.text
 
   return (
     <div className="flex gap-3 w-full">
@@ -242,20 +246,20 @@ export function AgentMessageBubble({
       {/* Message Content */}
       <div
         className={cn(
-          "flex-1 max-w-[calc(100%-3rem)] rounded-lg p-3 shadow-sm border",
-          colors.border
+          "flex-1 max-w-[calc(100%-3rem)] rounded-xl p-4 shadow-sm border message-bubble",
+          colors.border,
+          colors.bg
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between mb-1">
-          <span className={cn("text-xs font-medium", nameColor)}>
+        <div className="flex items-center justify-between mb-2">
+          <span className={cn("text-xs font-semibold", textColorClass)}>
             {message.sender_name}
           </span>
           <span className="text-xs text-muted-foreground">
             {new Date(message.timestamp).toLocaleString('en-US', {
               month: 'short',
               day: 'numeric',
-              year: 'numeric',
               hour: '2-digit',
               minute: '2-digit'
             })}
@@ -299,18 +303,19 @@ export function AgentMessageBubble({
               }
             }}
             className={cn(
-              "flex items-center gap-1 text-xs mt-2 hover:underline",
-              colors.border
+              "flex items-center gap-1 text-xs mt-3 font-medium transition-colors",
+              textColorClass,
+              "hover:opacity-80"
             )}
           >
             {isExpanded ? (
               <>
-                <ChevronUp className="h-3 w-3" />
+                <ChevronUp className="h-3.5 w-3.5" />
                 Show less
               </>
             ) : (
               <>
-                <ChevronDown className="h-3 w-3" />
+                <ChevronDown className="h-3.5 w-3.5" />
                 Show more
               </>
             )}

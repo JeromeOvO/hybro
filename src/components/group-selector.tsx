@@ -70,7 +70,7 @@ export function GroupSelector({
       }
     }
     return {
-      icon: <Globe className="h-3.5 w-3.5" />,
+      icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
       label: 'All Agents',
       description: 'Find best agents',
     }
@@ -81,7 +81,7 @@ export function GroupSelector({
     if (hasMentions) {
       return {
         icon: <Users className="h-3.5 w-3.5" />,
-        label: mentionedAgents.length === 1 
+        label: mentionedAgents.length === 1
           ? `@${mentionedAgents[0].name}`
           : `${mentionedAgents.length} agents mentioned`,
         description: 'Mentioned agents',
@@ -96,7 +96,7 @@ export function GroupSelector({
     // Override mode - show the selected override group
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
       return {
-        icon: <Globe className="h-3.5 w-3.5" />,
+        icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
         label: 'All Agents',
         description: 'Find best agents',
       }
@@ -163,47 +163,44 @@ export function GroupSelector({
                 isOverride && "bg-primary/10"
               )}
             >
-              <span className="text-muted-foreground">{displayInfo.icon}</span>
+              {displayInfo.icon}
               <span className="font-medium">{displayInfo.label}</span>
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent 
-            align="start" 
+          <DropdownMenuContent
+            align="start"
             className="w-[min(90vw,18rem)] sm:w-72 sm:max-w-88 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-[70vh] sm:max-h-72 overflow-hidden overflow-x-hidden p-0 pb-1"
           >
             <div className="max-h-[calc(70vh-3rem)] sm:max-h-60 overflow-y-auto overflow-x-hidden">
-              {/* Override options header */}
-              <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                Override Target
-              </div>
-              
-            {/* All Agents option */}
-            <Tooltip delayDuration={150}>
-              <TooltipTrigger asChild>
-                <DropdownMenuItem
-                  onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
-                  className={cn(
-                    "flex items-start gap-3 py-2.5",
-                    isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
-                  )}
+
+
+              {/* All Agents option */}
+              <Tooltip delayDuration={150}>
+                <TooltipTrigger asChild>
+                  <DropdownMenuItem
+                    onClick={() => onGroupChange(BUILTIN_GROUP_ALL_AGENTS)}
+                    className={cn(
+                      "flex items-start gap-3 py-2.5",
+                      isOverride && selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
+                    )}
+                  >
+                    <Globe className="h-4 w-4 mt-0.5 text-blue-500" />
+                    <div className="flex-1">
+                      <div className="font-medium">All Agents</div>
+                    </div>
+                  </DropdownMenuItem>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="left"
+                  align="end"
+                  sideOffset={0}
+                  alignOffset={0}
+                  className="max-w-xs w-fit whitespace-normal wrap-break-word"
                 >
-                  <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
-                  <div className="flex-1">
-                    <div className="font-medium">All Agents</div>
-                  </div>
-                </DropdownMenuItem>
-              </TooltipTrigger>
-              <TooltipContent
-                side="left"
-                align="end"
-                sideOffset={0}
-                alignOffset={0}
-                className="max-w-xs w-fit whitespace-normal wrap-break-word"
-              >
-                <div className="text-xs text-muted-foreground">Auto select the best agents</div>
-              </TooltipContent>
-            </Tooltip>
+                  <div className="text-xs text-muted-foreground">Auto select the best agents</div>
+                </TooltipContent>
+              </Tooltip>
 
               {/* User groups */}
               {userGroups.length > 0 && (
@@ -296,11 +293,11 @@ export function GroupSelector({
             {onCreateGroup && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   onClick={(e) => {
                     e.preventDefault()
                     onCreateGroup()
-                  }} 
+                  }}
                   className="text-foreground font-medium gap-2 py-2.5 px-3"
                 >
                   <Plus className="h-4 w-4" />
@@ -311,7 +308,7 @@ export function GroupSelector({
           </DropdownMenuContent>
         </DropdownMenu>
       </TooltipProvider>
-      
+
       {/* Clear button - only visible when override is active */}
       {isOverride && onClearOverride && (
         <Button

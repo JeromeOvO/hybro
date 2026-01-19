@@ -30,16 +30,16 @@ interface ConversationRoundProps {
 /**
  * Agent Avatar with consistent color based on agent ID
  */
-function AgentAvatar({ agentName, agentId, size = 'md' }: { 
+function AgentAvatar({ agentName, agentId, size = 'md' }: {
   agentName: string
   agentId: string
   size?: 'sm' | 'md'
 }) {
   const colors = getAgentColorClasses(agentId)
   const initials = getAgentInitials(agentName)
-  
+
   return (
-    <div 
+    <div
       className={cn(
         "rounded-full flex items-center justify-center font-semibold border-2",
         colors.bg,
@@ -70,28 +70,33 @@ function CollapsedPreview({ responses }: { responses: MessageData[] }) {
   }, [responses])
 
   // Get preview of first response
-  const previewText = responses[0]?.content.slice(0, 100) || ''
+  const previewText = responses[0]?.content.slice(0, 120) || ''
 
   return (
-    <div className="ml-4 mt-2 p-3 rounded-lg bg-muted/30 border border-dashed">
-      <div className="flex items-center gap-2 mb-2">
+    <div className="ml-4 mt-2 p-4 rounded-xl bg-muted/40 dark:bg-muted/20 border border-dashed border-border/60 hover:bg-muted/60 dark:hover:bg-muted/30 transition-colors cursor-pointer">
+      <div className="flex items-center gap-3 mb-2">
         <div className="flex -space-x-2">
           {uniqueAgents.slice(0, 5).map((r, i) => (
-            <AgentAvatar 
+            <AgentAvatar
               key={r.agent_id || i}
               agentName={r.sender_name}
               agentId={r.agent_id || 'unknown'}
               size="sm"
             />
           ))}
+          {uniqueAgents.length > 5 && (
+            <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-medium border-2 border-background">
+              +{uniqueAgents.length - 5}
+            </div>
+          )}
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs font-medium text-muted-foreground">
           {responses.length} response{responses.length !== 1 ? 's' : ''} from {uniqueAgents.length} agent{uniqueAgents.length !== 1 ? 's' : ''}
         </span>
       </div>
       {previewText && (
-        <p className="text-xs text-muted-foreground line-clamp-2 italic">
-          &ldquo;{previewText}{previewText.length >= 100 ? '...' : ''}&rdquo;
+        <p className="text-xs text-muted-foreground/80 line-clamp-2 italic pl-1">
+          &ldquo;{previewText}{previewText.length >= 120 ? '...' : ''}&rdquo;
         </p>
       )}
     </div>
@@ -109,10 +114,10 @@ interface AgentResponseGroup {
 
 function groupResponsesByAgent(responses: MessageData[]): AgentResponseGroup[] {
   const agentMap = new Map<string, AgentResponseGroup>()
-  
+
   for (const msg of responses) {
     const agentId = msg.agent_id || 'unknown'
-    
+
     if (!agentMap.has(agentId)) {
       agentMap.set(agentId, {
         agentId,
@@ -120,13 +125,13 @@ function groupResponsesByAgent(responses: MessageData[]): AgentResponseGroup[] {
         messages: []
       })
     }
-    
+
     agentMap.get(agentId)!.messages.push(msg)
   }
-  
+
   // Return as array, sorted by first response time
-  return Array.from(agentMap.values()).sort((a, b) => 
-    new Date(a.messages[0].timestamp).getTime() - 
+  return Array.from(agentMap.values()).sort((a, b) =>
+    new Date(a.messages[0].timestamp).getTime() -
     new Date(b.messages[0].timestamp).getTime()
   )
 }
@@ -145,7 +150,7 @@ export function ConversationRound({
   onUserToggle,
 }: ConversationRoundProps) {
   const [viewByAgent, setViewByAgent] = useState(false)
-  
+
   const groupedByAgent = useMemo(
     () => groupResponsesByAgent(round.agentResponses),
     [round.agentResponses]
@@ -154,16 +159,16 @@ export function ConversationRound({
   const uniqueAgentCount = groupedByAgent.length
 
   // Format time
-  const formattedTime = new Date(round.timestamp).toLocaleString('en-US', { 
-    month: 'short', 
-    day: 'numeric', 
-    year: 'numeric', 
-    hour: '2-digit', 
-    minute: '2-digit' 
+  const formattedTime = new Date(round.timestamp).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   })
 
   return (
-    <div 
+    <div
       id={`round-${round.roundNumber}`}
       className={cn(
         "relative",
@@ -171,37 +176,38 @@ export function ConversationRound({
       )}
     >
       {/* Round indicator line */}
-      <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-linear-to-b from-primary/40 to-primary/10 rounded-full" />
-      
+      <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-gradient-to-b from-primary/50 via-primary/30 to-primary/10 rounded-full" />
+
       <div className="pl-4">
         {/* Round Header - Clickable */}
-        <button 
+        <button
           onClick={onToggle}
-          className="flex items-center gap-2 w-full text-left mb-3 group"
+          className="flex items-center gap-3 w-full text-left mb-3 group"
         >
           <div className={cn(
-            "flex items-center gap-2 px-3 py-1.5 rounded-full transition-colors",
-            "bg-muted/50 hover:bg-muted group-hover:shadow-sm"
+            "flex items-center gap-2 px-3 py-2 rounded-xl transition-all duration-200",
+            "bg-muted/40 hover:bg-muted/70 dark:bg-muted/20 dark:hover:bg-muted/40",
+            "group-hover:shadow-sm border border-transparent hover:border-border/50"
           )}>
             {round.isCollapsed ? (
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
             ) : (
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             )}
-            <span className="text-sm font-medium">Round {round.roundNumber}</span>
+            <span className="text-sm font-semibold">Round {round.roundNumber}</span>
             {round.agentResponses.length > 0 && (
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5 bg-background/50 px-2 py-0.5 rounded-full">
                 <MessageSquare className="h-3 w-3" />
                 {round.agentResponses.length}
               </span>
             )}
           </div>
-          
+
           {/* Agent avatars preview in header */}
           {round.agentResponses.length > 0 && (
-            <div className="flex -space-x-1 opacity-60 group-hover:opacity-100 transition-opacity">
+            <div className="flex -space-x-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
               {groupedByAgent.slice(0, 4).map((group) => (
-                <AgentAvatar 
+                <AgentAvatar
                   key={group.agentId}
                   agentName={group.agentName}
                   agentId={group.agentId}
@@ -209,14 +215,14 @@ export function ConversationRound({
                 />
               ))}
               {uniqueAgentCount > 4 && (
-                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-medium border-2 border-background">
+                <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-semibold border-2 border-background">
                   +{uniqueAgentCount - 4}
                 </div>
               )}
             </div>
           )}
-          
-          <span className="text-xs text-muted-foreground ml-auto">
+
+          <span className="text-xs text-muted-foreground ml-auto font-medium">
             {formattedTime}
           </span>
         </button>
@@ -231,20 +237,21 @@ export function ConversationRound({
           <div className="space-y-3">
             {/* View toggle for multiple agents */}
             {uniqueAgentCount > 1 && (
-              <div className="flex gap-1 mb-2">
+              <div className="flex gap-1 mb-3">
                 <button
-                  onClick={(e) => { 
-                    e.stopPropagation(); 
-                    setViewByAgent(prev => !prev) 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setViewByAgent(prev => !prev)
                   }}
                   className={cn(
-                    "px-2 py-1 text-xs rounded-md transition-colors",
-                    "bg-primary text-primary-foreground"
+                    "px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200",
+                    "bg-primary/10 text-primary hover:bg-primary/20 dark:bg-primary/20 dark:hover:bg-primary/30",
+                    "border border-primary/20 hover:border-primary/40"
                   )}
                   title={viewByAgent ? "Show timeline" : "Group by agent"}
                   aria-label={viewByAgent ? "Show timeline" : "Group by agent"}
                 >
-                  {viewByAgent ? "By Agent" : "Timeline"}
+                  {viewByAgent ? "↓ Show Timeline" : "◫ Group by Agent"}
                 </button>
               </div>
             )}
@@ -256,14 +263,14 @@ export function ConversationRound({
                 {groupedByAgent.map(group => {
                   const colors = getAgentColorClasses(group.agentId)
                   return (
-                    <div 
-                      key={group.agentId} 
+                    <div
+                      key={group.agentId}
                       className={cn("border-l-2 pl-3 py-1", colors.border)}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <AgentAvatar 
-                          agentName={group.agentName} 
-                          agentId={group.agentId} 
+                        <AgentAvatar
+                          agentName={group.agentName}
+                          agentId={group.agentId}
                         />
                         <span className={cn("font-medium text-sm", colors.text)}>
                           {group.agentName}
