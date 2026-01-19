@@ -162,6 +162,21 @@ class AgentCenter:
         """
         return await self.agent_service.get_all_agents(request)
 
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Retrieve all active agents in the system.
+
+        Returns a list of agents that have active status only,
+        filtering out inactive and deleted agents.
+
+        Args:
+            request: AgentCenterRequest (may contain filtering parameters)
+
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        return await self.agent_service.get_all_active_agents(request)
+
     async def get_agents_with_conditions(
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:

@@ -128,6 +128,17 @@ async def get_agent_list():
     return agent_center_response
 
 
+@router.get("/agent/getAllActiveAgents")
+async def get_all_active_agents():
+    """Get all active agents - PUBLIC (no authentication required)
+    
+    Returns only agents with active status, filtering out inactive and deleted agents.
+    """
+    agent_center_request = AgentCenterRequest()
+    agent_center_response = await agent_center.get_all_active_agents(agent_center_request)
+    return agent_center_response
+
+
 @router.post("/agent/getAgentListWithConditions")
 async def get_agent_list_with_conditions():
     """Get agents with conditions - PUBLIC (no authentication required)"""

@@ -886,6 +886,7 @@ class RoomServices:
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
         target_group: str | None = None,
+        agents: list | None = None,
     ) -> bool:
         """
         Parse user message
@@ -897,6 +898,7 @@ class RoomServices:
             selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
+            agents: Full Agent objects for detailed LLM context (optional)
         """
         # Check for cancellation before parsing
         if self.sse_manager.is_cancelled(user_message_id):
@@ -910,9 +912,9 @@ class RoomServices:
             self.sse_manager.clear_cancellation(user_message_id)
             return False
 
-        # Parse user message
+        # Parse user message with full agent details for better LLM assignment
         parsed_result = await self.openai_service.parse_user_message_by_llm(
-            message_text, selected_agent_set, is_debate_mode, auto_assign_agents
+            message_text, selected_agent_set, is_debate_mode, auto_assign_agents, agents
         )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -977,7 +979,7 @@ class RoomServices:
         if mentions:
             return await self._handle_mentions_flow(request, user_message, mentions)
 
-        selected_agent_set, auto_assign = await self._resolve_agent_selection(
+        selected_agent_set, auto_assign, agents = await self._resolve_agent_selection(
             room, message_text, target_group, is_debate_mode
         )
 
@@ -994,6 +996,7 @@ class RoomServices:
             is_debate_mode,
             auto_assign_agents=auto_assign,
             target_group=target_group,
+            agents=agents,
         )
         if not parse_user_message_success:
             return RoomCenterUserMessageResponse(
@@ -1099,12 +1102,15 @@ class RoomServices:
         message_text: str,
         target_group: str,
         is_debate_mode: bool,
-    ) -> tuple[dict, bool]:
-        """Resolve selected agents and auto-assign flag based on target_group."""
+    ) -> tuple[dict, bool, list]:
+        """Resolve selected agents and auto-assign flag based on target_group.
+        
+        Returns:
+            tuple: (selected_agent_set: dict, auto_assign: bool, agents: list[Agent])
+        """
+        from models.agent import Agent
 
-        async def select_agents_all_agents_mode() -> tuple[dict, bool]:
-
-
+        async def select_agents_all_agents_mode() -> tuple[dict, bool, list]:
             try:
                 selection_result = (
                     await agent_selection_service.select_agents_for_message(
@@ -1117,6 +1123,15 @@ class RoomServices:
                         agent.agent_id: agent.agent_name
                         for agent in selection_result.agents
                     }
+                    # Fetch full Agent objects for LLM context
+                    full_agents = []
+                    for agent_info in selection_result.agents:
+                        full_agent = await self.database_service.get_agent_by_agent_id(
+                            agent_info.agent_id
+                        )
+                        if full_agent:
+                            full_agents.append(full_agent)
+                    
                     logger.info(
                         "All Agents mode: Selected %s agents with strategy=%s",
                         len(selection_result.agents),
@@ -1126,17 +1141,20 @@ class RoomServices:
                     if selection_result.needs_debate and not is_debate_mode:
                         logger.info("All Agents mode: Debate mode suggested")
 
-                    return selected, True
+                    return selected, True, full_agents
 
                 logger.warning(
                     "All Agents mode: No agents found, falling back to room agents"
                 )
-                return room.room_agent_set, True
+                # Fetch full agents for room_agent_set fallback
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
             except Exception as e:
                 logger.error(
                     "All Agents mode selection failed: %s, using room agents", e
                 )
-                return room.room_agent_set, True
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
 
         if target_group == "all_agents":
             return await select_agents_all_agents_mode()
@@ -1146,7 +1164,9 @@ class RoomServices:
                 logger.info(
                     "Room Team mode: Using %s room agents", len(room.room_agent_set)
                 )
-                return room.room_agent_set, True
+                # Fetch full Agent objects for the room agents
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
 
             logger.warning(
                 "Room Team mode: room has no agents, falling back to all_agents selection"
@@ -1170,12 +1190,25 @@ class RoomServices:
                 group.name,
                 len(selected_agent_set),
             )
-            return selected_agent_set, True
+            return selected_agent_set, True, agents
 
         logger.warning(
             "Custom group %s not found, falling back to room agents", target_group
         )
-        return room.room_agent_set, True
+        room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+        return room.room_agent_set, True, room_agents
+
+    async def _fetch_agents_from_set(self, agent_set: dict | None) -> list:
+        """Fetch full Agent objects from an agent_set dict {agent_id: agent_name}."""
+        if not agent_set:
+            return []
+        
+        agents = []
+        for agent_id in agent_set.keys():
+            agent = await self.database_service.get_agent_by_agent_id(agent_id)
+            if agent:
+                agents.append(agent)
+        return agents
 
     async def _handle_no_agents_fallback(
         self,

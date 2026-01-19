@@ -230,6 +230,26 @@ class AgentService:
             agents=agents, success=True, error=None, status_code=200
         )
 
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Get all agents with active status from the database.
+        
+        Args:
+            request: AgentCenterRequest (unused but kept for consistency)
+            
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        try:
+            agents = await self.database_service.get_all_active_agents()
+        except Exception as e:
+            logger.error(f"AgentCenter: Failed to get all active agents in database: {str(e)}")
+            return AgentCenterResponse(success=False, error=str(e), status_code=500)
+
+        return AgentCenterResponse(
+            agents=agents, success=True, error=None, status_code=200
+        )
+
     async def get_agents_with_conditions(
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
