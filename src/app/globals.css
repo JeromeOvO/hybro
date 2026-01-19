@@ -50,8 +50,9 @@
   --color-sidebar-foreground: 220 18% 25%;
   --color-sidebar-primary: 192 85% 38%;
   --color-sidebar-primary-foreground: 0 0% 100%;
-  --color-sidebar-accent: 220 14% 94%;
-  --color-sidebar-accent-foreground: 220 20% 15%;
+  /* Distinct cyan-tinted accent for visible hover/active states */
+  --color-sidebar-accent: 192 50% 92%;
+  --color-sidebar-accent-foreground: 192 85% 30%;
   --color-sidebar-border: 220 14% 92%;
   --color-sidebar-ring: 192 85% 45%;
 
@@ -166,14 +167,12 @@
 
   /* Dark sidebar with blur effect and neon accents */
   --color-sidebar-background: 235 25% 10%;
-  /* Slightly clearer dark bg */
   --color-sidebar-foreground: 210 30% 85%;
   --color-sidebar-primary: 180 100% 60%;
   --color-sidebar-primary-foreground: 230 25% 8%;
-  --color-sidebar-accent: 235 20% 25%;
-  /* Significantly lightened for dark mode hover visibility */
-  /* Subtle hover for dark mode */
-  --color-sidebar-accent-foreground: 210 30% 90%;
+  /* High contrast accent - 30% lightness vs 10% background = 3x brighter */
+  --color-sidebar-accent: 215 25% 30%;
+  --color-sidebar-accent-foreground: 0 0% 98%;
   --color-sidebar-border: 240 20% 16%;
   --color-sidebar-ring: 180 100% 60%;
 }
@@ -456,35 +455,45 @@
   box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
 }
 
-/* Room Chat Input Styles */
+/* Room Chat Input & Message Mention Styles */
 .room-mention {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2)) !important;
-  color: rgb(37, 99, 235) !important;
-  padding: 2px 6px !important;
-  border-radius: 6px !important;
-  font-weight: 600 !important;
-  font-size: 0.9em !important;
-  border: 1px solid rgba(59, 130, 246, 0.3) !important;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
-  transition: all 0.2s ease !important;
+  display: inline-block;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2));
+  color: rgb(37, 99, 235);
+  padding: 2px 8px;
+  margin: 0 3px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.9em;
+  line-height: 1.4;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+  vertical-align: baseline;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
 
 .room-mention:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(139, 92, 246, 0.3)) !important;
-  border-color: rgba(59, 130, 246, 0.5) !important;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(139, 92, 246, 0.3));
+  border-color: rgba(59, 130, 246, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
 }
 
 .dark .room-mention {
-  background: linear-gradient(135deg, rgba(0, 255, 255, 0.2), rgba(139, 92, 246, 0.15)) !important;
-  color: rgb(0, 255, 255) !important;
-  border-color: rgba(0, 255, 255, 0.3) !important;
-  box-shadow: 0 1px 3px rgba(0, 255, 255, 0.1), 0 0 6px rgba(0, 255, 255, 0.1) !important;
+  background: linear-gradient(135deg, rgba(0, 255, 255, 0.2), rgba(139, 92, 246, 0.15));
+  color: rgb(0, 255, 255);
+  border-color: rgba(0, 255, 255, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 255, 255, 0.1), 0 0 6px rgba(0, 255, 255, 0.1);
 }
 
 .dark .room-mention:hover {
-  background: linear-gradient(135deg, rgba(0, 255, 255, 0.3), rgba(139, 92, 246, 0.25)) !important;
-  border-color: rgba(0, 255, 255, 0.5) !important;
-  box-shadow: 0 1px 4px rgba(0, 255, 255, 0.2), 0 0 10px rgba(0, 255, 255, 0.15) !important;
+  background: linear-gradient(135deg, rgba(0, 255, 255, 0.3), rgba(139, 92, 246, 0.25));
+  border-color: rgba(0, 255, 255, 0.5);
+  box-shadow: 0 2px 6px rgba(0, 255, 255, 0.25), 0 0 12px rgba(0, 255, 255, 0.2);
+  transform: translateY(-1px);
 }
 
 .placeholder-editor:empty:before {
