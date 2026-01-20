@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   Bot,
-  RefreshCw,
   ExternalLink,
   Trash2,
   CheckCircle2,
@@ -183,10 +182,6 @@ export default function AgentProfilePage() {
           Back to Registry
         </Button>
         <div className="flex gap-2 w-full sm:w-auto">
-          <Button variant="outline" size="sm" onClick={loadAgentDetail} className="ml-auto bg-white/10 dark:bg-white/5 backdrop-blur-md border-white/20 hover:bg-white/20 dark:hover:bg-white/10">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
           {isOwner && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
