@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   Bot,
-  RefreshCw,
   ExternalLink,
   Trash2,
   CheckCircle2,
@@ -23,6 +22,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from "@/components/ui/alert-dialog"
 import { banner } from "@/components/ui/banner"
 import { getAgent, deleteAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
@@ -58,10 +68,6 @@ export default function AgentProfilePage() {
 
   const handleDeleteAgent = async () => {
     if (!agentData?.agent) return
-
-    if (!confirm(`Are you sure you want to delete "${agentData.agent.agent_card.name}"? This action cannot be undone.`)) {
-      return
-    }
 
     try {
       setDeleting(true)
@@ -176,20 +182,38 @@ export default function AgentProfilePage() {
           Back to Registry
         </Button>
         <div className="flex gap-2 w-full sm:w-auto">
-          <Button variant="outline" size="sm" onClick={loadAgentDetail} className="ml-auto">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
           {isOwner && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleDeleteAgent}
-              disabled={deleting}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              {deleting ? "Deleting..." : "Delete Agent"}
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={deleting}
+                  className="bg-red-600 text-white hover:bg-red-700"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {deleting ? "Deleting..." : "Delete Agent"}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete this agent?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete &quot;{agent.agent_card.name}&quot;. This
+                    action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteAgent}
+                    className="bg-red-600 text-white hover:bg-red-700"
+                  >
+                    Delete Agent
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
         </div>
       </div>
@@ -324,9 +348,7 @@ export default function AgentProfilePage() {
                 <Cpu className="h-5 w-5 text-primary" />
                 Skills & Functions
               </CardTitle>
-              <CardDescription>
-                Detailed breakdown of what {agent.agent_card.name} can perform.
-              </CardDescription>
+
             </CardHeader>
             <CardContent>
               {agent.agent_card.skills.length === 0 ? (
@@ -338,11 +360,11 @@ export default function AgentProfilePage() {
                   {agent.agent_card.skills.map((skill, index) => (
                     <div
                       key={index}
-                      className="group rounded-xl border bg-card text-card-foreground shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden"
+                      className="group rounded-xl border border-white/20 bg-white/10 dark:bg-white/5 backdrop-blur-md text-card-foreground shadow-sm hover:shadow-lg hover:bg-white/15 dark:hover:bg-white/10 transition-all duration-200 overflow-hidden"
                     >
-                      <div className="border-b bg-muted/40 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="border-b border-white/10 bg-white/5 dark:bg-white/5 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
-                          <div className="bg-primary/10 p-2 rounded-lg">
+                          <div className="bg-primary/10 backdrop-blur-sm p-2 rounded-lg border border-primary/20">
                             <Terminal className="h-5 w-5 text-primary" />
                           </div>
                           <div>

@@ -139,11 +139,11 @@ export function RoomChatInput({
         parts.push(escapeHtml(content.slice(lastIndex, match.index)))
       }
 
-      // Add mention span with enhanced styling
+      // Add mention span using room-mention class (styles defined in globals.css)
       const id = match[1]
       const name = match[2]
       parts.push(
-        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(139, 92, 246, 0.2)); color: rgb(37, 99, 235); padding: 2px 6px; border-radius: 6px; cursor: default; user-select: none; font-weight: 600; font-size: 0.9em; border: 1px solid rgba(59, 130, 246, 0.3); box-shadow: 0 1px 2px rgba(0,0,0,0.05);">@${escapeHtml(name)}</span>`
+        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false">@${escapeHtml(name)}</span>`
       )
 
       lastIndex = match.index + match[0].length

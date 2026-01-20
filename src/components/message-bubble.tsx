@@ -42,12 +42,14 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
     const agentId = match[1]
     const agentName = match[2]
 
-    // Add the mention as a styled span
+    // Add the mention as a styled span using room-mention class
     parts.push(
       <span
         key={`mention-${mentionIndex++}`}
-        className="bg-blue-100 text-blue-800 px-1 rounded font-medium dark:bg-blue-900 dark:text-blue-200"
-        title={`Agent ID: ${agentId}`}
+        className="room-mention mx-1"
+        data-id={agentId}
+        data-name={agentName}
+        title={`Agent: ${agentName}`}
       >
         @{agentName}
       </span>
@@ -68,23 +70,23 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
  * Render content with full markdown support
  */
 function MarkdownContent({ content }: { content: string }) {
-  // Process mentions before markdown
+  // Process mentions before markdown - use room-mention class with spacing
   const processedContent = content.replace(
     /<@([^|]+)\|([^>]+)>/g,
-    '<span class="mention" data-agent-id="$1" title="Agent ID: $1">@$2</span>'
+    '<span class="room-mention" data-id="$1" data-name="$2" title="Agent: $2">@$2</span>'
   )
 
   return (
-    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit">
+    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit [&_.room-mention]:mx-1">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
           span: ({ className, children, ...props }) => {
-            if (className === 'mention') {
+            if (className === 'room-mention') {
               return (
                 <span
-                  className="bg-blue-100 text-blue-800 px-1 rounded font-medium dark:bg-blue-900 dark:text-blue-200"
+                  className="room-mention mx-1"
                   {...props}
                 >
                   {children}
