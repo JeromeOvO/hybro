@@ -5,12 +5,13 @@ This service manages rate limiting for agent requests using MongoDB storage
 with sliding window counters. It supports both per-user and system-wide limits.
 
 Records are automatically cleaned up via MongoDB TTL index.
+
+Note: Indexes should be created via migration script:
+    python -m database.migration.add_agent_requests_indexes
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-
-from motor.motor_asyncio import AsyncIOMotorCollection
 
 from common.utils.logger import get_logger
 
@@ -40,46 +41,11 @@ class RateLimitService:
     Uses MongoDB for persistent storage with TTL index for automatic cleanup.
     """
     
-    def __init__(self):
-        self._collection: AsyncIOMotorCollection | None = None
-        self._initialized = False
-    
-    async def initialize(self, collection: AsyncIOMotorCollection) -> None:
-        """
-        Initialize the service with a MongoDB collection.
-        
-        Args:
-            collection: The MongoDB collection to use for storing request records
-        """
-        self._collection = collection
-        
-        # Create indexes for efficient queries
-        # TTL index: automatically delete records older than 2 hours
-        await collection.create_index(
-            "timestamp",
-            expireAfterSeconds=7200  # 2 hours
-        )
-        # Compound index for efficient lookups
-        await collection.create_index([
-            ("agent_id", 1),
-            ("user_id", 1),
-            ("timestamp", -1)
-        ])
-        # Index for system-wide queries
-        await collection.create_index([
-            ("agent_id", 1),
-            ("timestamp", -1)
-        ])
-        
-        self._initialized = True
-        logger.info("RateLimitService: Initialized with MongoDB collection")
-    
-    def _ensure_initialized(self) -> None:
-        """Ensure the service has been initialized."""
-        if not self._initialized or self._collection is None:
-            raise RuntimeError(
-                "RateLimitService not initialized. Call initialize() first."
-            )
+    @property
+    def _collection(self):
+        """Lazily get the MongoDB collection."""
+        from database.mongodb import mongodb
+        return mongodb.agent_requests_collection
     
     async def check_rate_limit(
         self,
@@ -107,8 +73,6 @@ class RateLimitService:
         Raises:
             ValueError: If user_id is not provided
         """
-        self._ensure_initialized()
-        
         if not user_id:
             raise ValueError("user_id is required to check rate limit")
         
@@ -238,8 +202,6 @@ class RateLimitService:
         Raises:
             ValueError: If user_id is not provided
         """
-        self._ensure_initialized()
-        
         if not user_id:
             raise ValueError("user_id is required to record a request")
         
@@ -268,8 +230,6 @@ class RateLimitService:
         Returns:
             Dictionary with usage statistics
         """
-        self._ensure_initialized()
-        
         cutoff = datetime.utcnow() - timedelta(hours=1)
         
         system_count = await self._collection.count_documents({

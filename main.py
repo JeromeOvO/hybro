@@ -25,7 +25,6 @@ from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from services.agent_health_service import agent_health_service
-from services.rate_limit_service import rate_limit_service
 from services.sse_services import sse_manager
 
 load_dotenv()
@@ -78,9 +77,6 @@ async def lifespan(app: FastAPI):
 
     # Start the agent health check service
     await agent_health_service.start()
-
-    # Initialize rate limit service with MongoDB collection
-    await rate_limit_service.initialize(mongodb.agent_requests_collection)
 
     # Start change stream watcher for message cancellations
     try:
