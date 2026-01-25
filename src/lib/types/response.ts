@@ -38,11 +38,16 @@ export interface Agent {
   agent_id: string;
   provider_id: string;
   agent_card: AgentCard;
+  // public_url?: string | null;
   agent_status?: AgentStatus;
   call_count?: number;
   call_success_count?: number;
   like_count?: number;
   dislike_count?: number;
+  /** Maximum requests per user per hour (null = unlimited) */
+  rate_limit_per_user_per_hour?: number | null;
+  /** Maximum requests for entire system per hour (null = unlimited) */
+  rate_limit_system_per_hour?: number | null;
 }
 /**
  * The AgentCard is a self-describing manifest for an agent. It provides essential

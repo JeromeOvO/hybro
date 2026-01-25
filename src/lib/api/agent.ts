@@ -7,7 +7,7 @@ import type {
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
-import { apiGet, apiPost } from '../api-client'
+import { apiGet, apiPost, apiPut } from '../api-client'
 
 const API_BASE_URL = getApiUrl('agent')
 
@@ -35,6 +35,24 @@ export async function getAgentsByProviderId(
   )
 }
 
+// Update agent settings (rate limits, status, etc.)
+export interface UpdateAgentRequest {
+  rate_limit_per_user_per_hour?: number | null
+  rate_limit_system_per_hour?: number | null
+  agent_status?: 'active' | 'inactive'
+}
+
+export async function updateAgent(
+  agentId: string,
+  request: UpdateAgentRequest,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
+  return apiPut<AgentCenterResponse>(
+    `${API_BASE_URL}/updateAgent/${agentId}`,
+    request,
+    getToken
+  )
+}
 
 // Delete agent
 export async function deleteAgent(
