@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user
-from models.request import AgentCenterRequest
+from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
 from modules.AgentCenter import AgentCenter
 from services.agent_service import agent_service
 
@@ -83,6 +83,72 @@ async def delete_agent(
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)
+
+    return agent_center_response
+
+
+@router.put("/agent/updateAgent/{agent_id}")
+async def update_agent(
+    agent_id: str,
+    request_body: AgentSettingsUpdateRequest,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """
+    Update an agent's settings - PROTECTED (requires authentication and ownership)
+    
+    Allows updating agent settings including rate limits:
+    - rate_limit_per_user_per_hour: Max requests per user per hour (null = unlimited)
+    - rate_limit_system_per_hour: Max total requests per hour (null = unlimited)
+    - agent_status: Agent status (active/inactive)
+    """
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+
+    # Verify the agent exists and user owns it
+    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if existing_agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to update this agent"
+        )
+
+    # Build update data from request, only including explicitly set fields
+    update_data = {}
+    request_dict = request_body.model_dump(exclude_unset=True)
+    
+    # Validate rate limits: must be None or positive integer (>= 1)
+    if "rate_limit_per_user_per_hour" in request_dict:
+        rate_limit_user = request_dict["rate_limit_per_user_per_hour"]
+        if rate_limit_user is not None and rate_limit_user < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="rate_limit_per_user_per_hour must be null or >= 1"
+            )
+        update_data["rate_limit_per_user_per_hour"] = rate_limit_user
+    
+    if "rate_limit_system_per_hour" in request_dict:
+        rate_limit_system = request_dict["rate_limit_system_per_hour"]
+        if rate_limit_system is not None and rate_limit_system < 1:
+            raise HTTPException(
+                status_code=400,
+                detail="rate_limit_system_per_hour must be null or >= 1"
+            )
+        update_data["rate_limit_system_per_hour"] = rate_limit_system
+    
+    if "agent_status" in request_dict:
+        update_data["agent_status"] = request_dict["agent_status"]
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # Create updated agent model
+    updated_agent = existing_agent.model_copy(update=update_data)
+    
+    agent_center_request = AgentCenterRequest(agent_id=agent_id, agent=updated_agent)
+    agent_center_response = await agent_center.update_agent(agent_center_request)
 
     return agent_center_response
 

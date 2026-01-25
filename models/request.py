@@ -132,6 +132,9 @@ class BaseAgent(BaseModel):
     like_count: int | None = 0
     dislike_count: int | None = 0
     agent_status: AgentStatus | None = None
+    # Rate limiting configuration
+    rate_limit_per_user_per_hour: int | None = None
+    rate_limit_system_per_hour: int | None = None
     model_config = ConfigDict(use_enum_values=True)
 
 
@@ -154,10 +157,20 @@ class AgentUpdate(BaseAgent):
     like_count: int | None
     dislike_count: int | None
     agent_status: AgentStatus | None
+    rate_limit_per_user_per_hour: int | None = None
+    rate_limit_system_per_hour: int | None = None
 
 
 class AgentPatch(BaseAgent):
     pass
+
+
+class AgentSettingsUpdateRequest(BaseModel):
+    """Request model for updating agent settings (rate limits, status)."""
+    rate_limit_per_user_per_hour: int | None = None
+    rate_limit_system_per_hour: int | None = None
+    agent_status: AgentStatus | None = None
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class TaskCenterRequest(BaseModel):
