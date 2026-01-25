@@ -13,7 +13,10 @@ Note: Indexes should be created via migration script:
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from motor.motor_asyncio import AsyncIOMotorCollection
+
 from common.utils.logger import get_logger
+from database.mongodb import mongodb
 
 logger = get_logger(__name__)
 
@@ -42,9 +45,8 @@ class RateLimitService:
     """
     
     @property
-    def _collection(self):
-        """Lazily get the MongoDB collection."""
-        from database.mongodb import mongodb
+    def _collection(self) -> AsyncIOMotorCollection:
+        """Get the MongoDB collection for rate limiting."""
         return mongodb.agent_requests_collection
     
     async def check_rate_limit(
