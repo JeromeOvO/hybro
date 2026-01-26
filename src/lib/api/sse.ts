@@ -1,23 +1,11 @@
-import type { SSEConnectionStatus } from '@/lib/types/sse'
+import type { SSEConnectionStatus, SSEMessage } from '@/lib/types/sse'
 import { getApiUrl } from '../utils'
 import { getClientAuthHeaders } from '../auth'
 
 const API_BASE_URL = getApiUrl('sse')
 
-export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error'
-  room_id: string
-  timestamp: string
-  data?: {
-    message_id?: string
-    user_id?: string
-    agent_id?: string
-    content?: string
-    related_message_id?: string
-    status?: string // "processing", "completed", "failed"
-    details?: string
-  }
-}
+// Re-export SSEMessage for convenience
+export type { SSEMessage }
 
 export interface SSEConnectionOptions {
   roomId: string

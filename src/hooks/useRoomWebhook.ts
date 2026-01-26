@@ -371,7 +371,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           
           if (status === 'processing') {
             setProcessing(true)
-          } else if (status === 'completed' || status === 'cancelled' || status === 'failed') {
+          } else if (status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'rate_limited') {
             setProcessing(false)
             // Only clear ref if this event is for the message we're tracking
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
@@ -382,6 +382,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               banner.info('Processing stopped by user')
             } else if (status === 'failed') {
               banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+            } else if (status === 'rate_limited') {
+              // Rate limit error is handled separately via 'error' event with more details
+              console.log('Rate limit reached, processing stopped')
             }
             // 'completed' has no banner - messages come via SSE
           }
@@ -390,7 +393,20 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         
       case 'error':
         console.error('❌ SSE error message:', sseMessage.data)
-        banner.error(`Real-time update error: ${sseMessage.data?.details || 'Unknown error'}`)
+        // Handle rate limit errors with a specific message
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const errorData = sseMessage.data as any
+        if (errorData?.error_type === 'rate_limit_exceeded') {
+          const retryAfter = errorData.retry_after_seconds
+          const retryMinutes = retryAfter ? Math.ceil(retryAfter / 60) : 60
+          // Show rate limit error for longer (15 seconds) so user has time to read it
+          banner.error(
+            errorData.error || `Rate limit exceeded. Please try again in ${retryMinutes} minutes.`,
+            { duration: 15000 }
+          )
+        } else {
+          banner.error(errorData?.error || errorData?.details || 'Unknown error')
+        }
         break
         
       case 'heartbeat':

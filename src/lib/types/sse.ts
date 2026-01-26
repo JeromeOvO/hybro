@@ -9,8 +9,17 @@ export interface SSEMessage {
     agent_id?: string
     content?: string
     related_message_id?: string
-    status?: string // "processing", "completed", "cancelled", "failed"
+    status?: string // "processing", "completed", "cancelled", "failed", "rate_limited"
     details?: string
+    // Error-specific fields
+    error?: string
+    error_type?: string // "rate_limit_exceeded"
+    // Rate limit specific fields
+    retry_after_seconds?: number
+    user_requests_used?: number
+    user_requests_limit?: number
+    system_requests_used?: number
+    system_requests_limit?: number
   }
 }
 

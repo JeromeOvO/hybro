@@ -14,7 +14,9 @@ import {
   Zap,
   MessageSquare,
   Terminal,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Settings,
+  Save
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
@@ -33,8 +35,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from "@/components/ui/alert-dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { banner } from "@/components/ui/banner"
-import { getAgent, deleteAgent } from "@/lib/api"
+import { getAgent, deleteAgent, updateAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 
 export default function AgentProfilePage() {
@@ -45,6 +50,26 @@ export default function AgentProfilePage() {
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
+  const [saving, setSaving] = useState(false)
+  
+  // Rate limit settings state
+  const [enableUserLimit, setEnableUserLimit] = useState(false)
+  const [userLimitValue, setUserLimitValue] = useState<string>("")
+  const [enableSystemLimit, setEnableSystemLimit] = useState(false)
+  const [systemLimitValue, setSystemLimitValue] = useState<string>("")
+
+  const getStatusColor = (status: Agent['agent_status']) => {
+    switch (status) {
+      case 'active':
+        return 'bg-green-500/10 text-green-600 hover:bg-green-500/20 border-green-500/20'
+      case 'inactive':
+        return 'bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 border-yellow-500/20'
+      case 'deleted':
+        return 'bg-red-500/10 text-red-600 hover:bg-red-500/20 border-red-500/20'
+      default:
+        return 'bg-gray-500/10 text-gray-600 hover:bg-gray-500/20 border-gray-500/20'
+    }
+  }
 
   const loadAgentDetail = useCallback(async () => {
     try {
@@ -53,6 +78,22 @@ export default function AgentProfilePage() {
 
       if (response.success && response.agent) {
         setAgentData(response)
+        // Initialize rate limit state from agent data
+        const agent = response.agent
+        if (agent.rate_limit_per_user_per_hour != null) {
+          setEnableUserLimit(true)
+          setUserLimitValue(agent.rate_limit_per_user_per_hour.toString())
+        } else {
+          setEnableUserLimit(false)
+          setUserLimitValue("")
+        }
+        if (agent.rate_limit_system_per_hour != null) {
+          setEnableSystemLimit(true)
+          setSystemLimitValue(agent.rate_limit_system_per_hour.toString())
+        } else {
+          setEnableSystemLimit(false)
+          setSystemLimitValue("")
+        }
       } else {
         const errorMessage = response.error || "Failed to load agent details"
         banner.error("Failed to load agent details", {
@@ -65,6 +106,79 @@ export default function AgentProfilePage() {
       setLoading(false)
     }
   }, [agentId])
+
+  const handleSaveRateLimits = async () => {
+    if (!agentData?.agent) return
+
+    try {
+      setSaving(true)
+      
+      // Validate that if toggle is enabled, a valid value is provided
+      if (enableUserLimit && !userLimitValue) {
+        banner.error("User rate limit required", {
+          description: "Please enter a value or disable the limit"
+        })
+        setSaving(false)
+        return
+      }
+      if (enableSystemLimit && !systemLimitValue) {
+        banner.error("System rate limit required", {
+          description: "Please enter a value or disable the limit"
+        })
+        setSaving(false)
+        return
+      }
+
+      // Parse values - null means unlimited
+      const userLimit = enableUserLimit && userLimitValue 
+        ? parseInt(userLimitValue, 10) 
+        : null
+      const systemLimit = enableSystemLimit && systemLimitValue 
+        ? parseInt(systemLimitValue, 10) 
+        : null
+
+      // Validate values must be >= 1
+      if (enableUserLimit && (isNaN(userLimit as number) || (userLimit as number) < 1)) {
+        banner.error("Invalid user rate limit", {
+          description: "Please enter a number greater than or equal to 1"
+        })
+        setSaving(false)
+        return
+      }
+      if (enableSystemLimit && (isNaN(systemLimit as number) || (systemLimit as number) < 1)) {
+        banner.error("Invalid system rate limit", {
+          description: "Please enter a number greater than or equal to 1"
+        })
+        setSaving(false)
+        return
+      }
+
+      const response = await updateAgent(
+        agentId,
+        {
+          rate_limit_per_user_per_hour: userLimit,
+          rate_limit_system_per_hour: systemLimit,
+        },
+        getToken
+      )
+
+      if (response.success) {
+        banner.success("Rate limits saved successfully")
+        // Reload agent data to reflect changes
+        await loadAgentDetail()
+      } else {
+        banner.error("Failed to save rate limits", {
+          description: response.error || "An unexpected error occurred"
+        })
+      }
+    } catch (error) {
+      banner.error("Failed to save rate limits", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred"
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const handleDeleteAgent = async () => {
     if (!agentData?.agent) return
@@ -450,6 +564,116 @@ export default function AgentProfilePage() {
               )}
             </CardContent>
           </Card>
+
+      {/* Rate Limits Settings - Only visible to agent owner */}
+      {userId && agentData?.agent?.provider_id === userId && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              <CardTitle>Rate Limits</CardTitle>
+            </div>
+            <CardDescription>
+              Control how often users can request this agent. Set limits to prevent abuse and manage load.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Per-User Rate Limit */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="user-limit-toggle" className="text-base font-medium">
+                    Per-User Limit
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Maximum requests each user can make per hour
+                  </p>
+                </div>
+                <Switch
+                  id="user-limit-toggle"
+                  checked={enableUserLimit}
+                  onCheckedChange={(checked) => {
+                    setEnableUserLimit(checked)
+                    if (!checked) setUserLimitValue("")
+                  }}
+                />
+              </div>
+              {enableUserLimit && (
+                <div className="flex items-center gap-3 pl-4">
+                  <Input
+                    type="number"
+                    min="1"
+                    value={userLimitValue}
+                    onChange={(e) => setUserLimitValue(e.target.value)}
+                    placeholder="e.g., 10"
+                    className="w-32"
+                  />
+                  <span className="text-sm text-muted-foreground">requests per hour</span>
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* System-Wide Rate Limit */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="system-limit-toggle" className="text-base font-medium">
+                    System-Wide Limit
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Maximum total requests from all users per hour
+                  </p>
+                </div>
+                <Switch
+                  id="system-limit-toggle"
+                  checked={enableSystemLimit}
+                  onCheckedChange={(checked) => {
+                    setEnableSystemLimit(checked)
+                    if (!checked) setSystemLimitValue("")
+                  }}
+                />
+              </div>
+              {enableSystemLimit && (
+                <div className="flex items-center gap-3 pl-4">
+                  <Input
+                    type="number"
+                    min="1"
+                    value={systemLimitValue}
+                    onChange={(e) => setSystemLimitValue(e.target.value)}
+                    placeholder="e.g., 100"
+                    className="w-32"
+                  />
+                  <span className="text-sm text-muted-foreground">requests per hour</span>
+                </div>
+              )}
+            </div>
+
+          </CardContent>
+        </Card>
+      )}
+
+      {userId && agentData?.agent?.provider_id === userId && (
+        <div className="flex justify-center gap-20">
+          <Button 
+            className={getStatusColor('active')}
+            onClick={handleSaveRateLimits} 
+            disabled={saving}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+          <Button 
+            className={getStatusColor('deleted')}
+            onClick={handleDeleteAgent}
+            disabled={deleting}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            {deleting ? "Deleting..." : "Delete"}
+          </Button>
+        </div>
+      )}
         </div>
       </div>
     </div>
