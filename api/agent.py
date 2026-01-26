@@ -4,6 +4,7 @@ from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user
 from models.request import AgentCenterRequest
 from modules.AgentCenter import AgentCenter
+from services.agent_service import agent_service
 
 router = APIRouter()
 agent_viewset = AgentViewSet()
@@ -22,12 +23,23 @@ async def register_agent(
     """Register a new agent - PROTECTED (requires authentication)"""
     request_data = await request.json()
     agent_url = request_data.get("agent_url")
-    provider_id = request_data.get("provider_id")
+    # we should use current user's clerk id as provider_id
+    provider_id = user.user_id
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
 
-    agent_center_request = AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
+    # Check if current agent_url is already registered
+    existing_agent = await agent_service.get_agent_by_url(agent_url)
+
+    if existing_agent:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent with this URL is already registered",
+        )
+    agent_center_request = AgentCenterRequest(
+        agent_url=agent_url, provider_id=provider_id
+    )
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
     agent_center_response_without_url = agent_center._mask_sensitive_information(
@@ -36,18 +48,42 @@ async def register_agent(
     print(agent_center_response_without_url)
     return agent_center_response_without_url
 
+@router.get("/agent/getAgent/me")
+async def get_agent_by_provider(
+        user: ClerkUser = Depends(get_current_user),
+):
+    """Get agents by provider id - PROTECTED (requires authentication)"""
+    provider_id = user.user_id
+    if not provider_id:
+        raise HTTPException(status_code=400, detail="provider_id is required")
+
+    agent_center_request = AgentCenterRequest(provider_id=provider_id)
+    agent_center_response = await agent_center.get_agents_by_provider_id(agent_center_request)
+
+    return agent_center_response
 
 @router.post("/agent/deleteAgent")
 async def delete_agent(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
 ):
-    """Delete an agent - PROTECTED (requires authentication)"""
+    """Delete an agent - PROTECTED (requires authentication and ownership)"""
     request_data = await request.json()
     agent_id = request_data.get("agent_id")
 
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
+
+    # Verify the agent exists and user owns it
+    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if existing_agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to delete this agent"
+        )
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)
@@ -110,6 +146,17 @@ async def get_agent_list():
     print(agent_center_response_without_url)
 
     return agent_center_response_without_url
+
+
+@router.get("/agent/getAllActiveAgents")
+async def get_all_active_agents():
+    """Get all active agents - PUBLIC (no authentication required)
+    
+    Returns only agents with active status, filtering out inactive and deleted agents.
+    """
+    agent_center_request = AgentCenterRequest()
+    agent_center_response = await agent_center.get_all_active_agents(agent_center_request)
+    return agent_center_response
 
 
 @router.post("/agent/getAgentListWithConditions")

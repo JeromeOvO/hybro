@@ -20,6 +20,9 @@ class Agent(BaseModel):
     # Agent card
     agent_card: AgentCard
 
+    # Public (masked) URL for the agent
+    public_url: str | None = None
+
     # Agent status
     agent_status: AgentStatus = AgentStatus.active
 

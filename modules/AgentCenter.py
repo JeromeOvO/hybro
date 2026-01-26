@@ -162,6 +162,21 @@ class AgentCenter:
         """
         return await self.agent_service.get_all_agents(request)
 
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Retrieve all active agents in the system.
+
+        Returns a list of agents that have active status only,
+        filtering out inactive and deleted agents.
+
+        Args:
+            request: AgentCenterRequest (may contain filtering parameters)
+
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        return await self.agent_service.get_all_active_agents(request)
+
     async def get_agents_with_conditions(
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
@@ -187,6 +202,21 @@ class AgentCenter:
             AgentCenterResponse with list of similar agents ranked by relevance
         """
         return await self.agent_service.query_similar_agents(request)
+
+    async def get_agents_by_provider_id(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse:
+        """
+        Get all agents from a given provider ID.
+        Returns a comprehensive list of all available agents by the provider
+
+        Args:
+            request: AgentCenterRequest containing provider_id
+
+        Returns:
+            AgentCenterResponse with list of all agents
+        """
+        return await self.agent_service.get_agents_by_provider_id(request)
 
     def _mask_sensitive_information(
             self, response: AgentCenterResponse, fields: list[str]

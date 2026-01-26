@@ -1,19 +1,22 @@
+import re
 import uuid
 from typing import Any
 
 from common.utils.logger import get_logger
+from database.mongodb import get_db
 from models.agent import Agent
 from models.error import (
     AgentCardRequiredError,
     AgentIdRequiredError,
     AgentNotFoundError,
     IllgalParameterError,
-    QueryTextRequiredError,
+    QueryTextRequiredError, ProviderIdRequiredError,
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
 from services.a2a_service import a2a_service
 from services.database_service import db_service
+from services.domain_alias_service import domain_alias_service
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
@@ -49,8 +52,26 @@ class AgentService:
 
         new_agent_id = str(uuid.uuid4())
         provider_id = request.provider_id
-        # create agent
-        agent = Agent(agent_id=new_agent_id, agent_card=request.agent_card, provider_id=provider_id)
+
+        # Generate public (masked) URL for the agent
+        public_url = None
+        try:
+            public_url = await domain_alias_service.generate_public_url(
+                agent_name=request.agent_card.name,
+                agent_id=new_agent_id,
+                preferred_subdomain=getattr(request, "preferred_subdomain", None),
+            )
+            logger.info(f"AgentCenter: Generated public URL {public_url} for agent {new_agent_id}")
+        except Exception as e:
+            logger.warning(f"AgentCenter: Failed to generate public URL for agent {new_agent_id}: {str(e)}")
+
+        # create agent with public_url
+        agent = Agent(
+            agent_id=new_agent_id,
+            agent_card=request.agent_card,
+            provider_id=provider_id,
+            public_url=public_url,
+        )
 
         # add agent to database
         try:
@@ -68,6 +89,7 @@ class AgentService:
             success=agent_add_result,
             error=None,
             status_code=200,
+            public_url=public_url,
         )
 
     async def update_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
@@ -171,11 +193,57 @@ class AgentService:
             status_code=200,
         )
 
+    async def get_agents_by_provider_id(
+            self, request: AgentCenterRequest
+    ) -> AgentCenterResponse:
+        provider_id = request.provider_id
+        if not provider_id:
+            return AgentCenterResponse(
+                success=False,
+                error="provider_id is required",
+                status_code=400,
+            )
+
+        try:
+            agents = await self.database_service.get_agents_by_provider_id(provider_id)
+        except Exception as e:
+            logger.error(
+                f"AgentCenter: Failed to get agents by provider_id {provider_id}: {str(e)}"
+            )
+            return AgentCenterResponse(success=False, error=str(e), status_code=500)
+
+        return AgentCenterResponse(
+            agents=agents,
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
     async def get_all_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
         try:
             agents = await self.database_service.get_all_agents()
         except Exception as e:
             logger.error(f"AgentCenter: Failed to get all agents in database: {str(e)}")
+            return AgentCenterResponse(success=False, error=str(e), status_code=500)
+
+        return AgentCenterResponse(
+            agents=agents, success=True, error=None, status_code=200
+        )
+
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Get all agents with active status from the database.
+        
+        Args:
+            request: AgentCenterRequest (unused but kept for consistency)
+            
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        try:
+            agents = await self.database_service.get_all_active_agents()
+        except Exception as e:
+            logger.error(f"AgentCenter: Failed to get all active agents in database: {str(e)}")
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
 
         return AgentCenterResponse(
@@ -304,6 +372,39 @@ class AgentService:
             status_code=200,
         )
 
+    def get_agent_root_url(self, agent_url: str) -> str:
+        """Extract the root URL from a full agent URL escluding well-known paths and trailing slashes."""
+
+        # remove well-known path (.well-known/agent.json) if present
+        if "/.well-known/agent.json" in agent_url:
+            return agent_url.split("/.well-known/agent.json")[0]
+        # remove trailing slash if present
+        if agent_url.endswith("/"):
+            return agent_url[:-1]
+        return agent_url
+
+    async def get_agent_by_url(self, agent_url: str) -> AgentCenterResponse:
+        """Get agent by URL."""
+
+        if agent_url is None:
+            raise IllgalParameterError("agent_url is required")
+
+        root_url = self.get_agent_root_url(agent_url)
+        escaped_root_url = re.escape(root_url)
+        mongo_db = await get_db()
+        agent_query_result = await mongo_db.agents.find_one(
+            {"agent_card.url": {"$regex": escaped_root_url}}
+        )
+        if agent_query_result is None:
+            return None
+
+        return agent_query_result
+
+    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
+        """Get agent by ID - internal service method"""
+
+        return await self.database_service.get_agent_by_agent_id(agent_id)
+
     def _mask_sensitive_information(
             self, response: AgentCenterResponse, fields: list[str]
     ) -> AgentCenterResponse:
@@ -343,5 +444,7 @@ class AgentService:
                     remove_nested_field(data["agent"], parts)
 
         return AgentCenterResponse(**data)
+
+
 
 agent_service = AgentService()

@@ -13,8 +13,10 @@ from a2a.types import (
     TextPart,
 )
 
+from common.utils.context_utils import build_context_for_agent, clean_mention_format
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from models.memory import MemoryContent
 from models.request import (
     AgentCenterRequest,
     RoomCenterAgentMessageRequest,
@@ -41,6 +43,8 @@ from services.agent_service import agent_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
+from services.agent_selection_service import agent_selection_service
+from services.memory_service import room_memory_service
 
 logger = get_logger(__name__)
 
@@ -52,7 +56,6 @@ class RoomServices:
         self.openai_service = openai_service  # Use singleton
         self.a2a_service = a2a_service  # Use singleton
         # Note: room_memory_service will be set after it's defined below
-        from services.memory_service import room_memory_service
 
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
@@ -883,6 +886,7 @@ class RoomServices:
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
         target_group: str | None = None,
+        agents: list | None = None,
     ) -> bool:
         """
         Parse user message
@@ -894,10 +898,23 @@ class RoomServices:
             selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
+            agents: Full Agent objects for detailed LLM context (optional)
         """
-        # Parse user message
+        # Check for cancellation before parsing
+        if self.sse_manager.is_cancelled(user_message_id):
+            logger.info(
+                "RoomServices: Message parsing cancelled for %s, stopping all processing",
+                user_message_id,
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, "cancelled", user_message_id
+            )
+            self.sse_manager.clear_cancellation(user_message_id)
+            return False
+
+        # Parse user message with full agent details for better LLM assignment
         parsed_result = await self.openai_service.parse_user_message_by_llm(
-            message_text, selected_agent_set, is_debate_mode, auto_assign_agents
+            message_text, selected_agent_set, is_debate_mode, auto_assign_agents, agents
         )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -962,7 +979,7 @@ class RoomServices:
         if mentions:
             return await self._handle_mentions_flow(request, user_message, mentions)
 
-        selected_agent_set, auto_assign = await self._resolve_agent_selection(
+        selected_agent_set, auto_assign, agents = await self._resolve_agent_selection(
             room, message_text, target_group, is_debate_mode
         )
 
@@ -979,6 +996,7 @@ class RoomServices:
             is_debate_mode,
             auto_assign_agents=auto_assign,
             target_group=target_group,
+            agents=agents,
         )
         if not parse_user_message_success:
             return RoomCenterUserMessageResponse(
@@ -1037,12 +1055,18 @@ class RoomServices:
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
     ) -> RoomCenterUserMessageResponse | None:
-        """Initialize or update room memory; return error response if failed."""
+        """Initialize or update room memory with conversation history."""
+        # Get room to access room_agent_set for cleaning @mentions
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        room_agent_set = room.room_agent_set if room else {}
+
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
                     room_id=request.room_id,
                     memory_content=user_message.message_content.message_text,
+                    room_agent_set=room_agent_set,  # Pass for cleaning @mentions
+                    user_id=user_message.user_id,
                 )
             )
         )
@@ -1078,12 +1102,15 @@ class RoomServices:
         message_text: str,
         target_group: str,
         is_debate_mode: bool,
-    ) -> tuple[dict, bool]:
-        """Resolve selected agents and auto-assign flag based on target_group."""
+    ) -> tuple[dict, bool, list]:
+        """Resolve selected agents and auto-assign flag based on target_group.
+        
+        Returns:
+            tuple: (selected_agent_set: dict, auto_assign: bool, agents: list[Agent])
+        """
+        from models.agent import Agent
 
-        async def select_agents_all_agents_mode() -> tuple[dict, bool]:
-            from services.agent_selection_service import agent_selection_service
-
+        async def select_agents_all_agents_mode() -> tuple[dict, bool, list]:
             try:
                 selection_result = (
                     await agent_selection_service.select_agents_for_message(
@@ -1096,6 +1123,15 @@ class RoomServices:
                         agent.agent_id: agent.agent_name
                         for agent in selection_result.agents
                     }
+                    # Fetch full Agent objects for LLM context
+                    full_agents = []
+                    for agent_info in selection_result.agents:
+                        full_agent = await self.database_service.get_agent_by_agent_id(
+                            agent_info.agent_id
+                        )
+                        if full_agent:
+                            full_agents.append(full_agent)
+                    
                     logger.info(
                         "All Agents mode: Selected %s agents with strategy=%s",
                         len(selection_result.agents),
@@ -1105,17 +1141,20 @@ class RoomServices:
                     if selection_result.needs_debate and not is_debate_mode:
                         logger.info("All Agents mode: Debate mode suggested")
 
-                    return selected, True
+                    return selected, True, full_agents
 
                 logger.warning(
                     "All Agents mode: No agents found, falling back to room agents"
                 )
-                return room.room_agent_set, True
+                # Fetch full agents for room_agent_set fallback
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
             except Exception as e:
                 logger.error(
                     "All Agents mode selection failed: %s, using room agents", e
                 )
-                return room.room_agent_set, True
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
 
         if target_group == "all_agents":
             return await select_agents_all_agents_mode()
@@ -1125,7 +1164,9 @@ class RoomServices:
                 logger.info(
                     "Room Team mode: Using %s room agents", len(room.room_agent_set)
                 )
-                return room.room_agent_set, True
+                # Fetch full Agent objects for the room agents
+                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+                return room.room_agent_set, True, room_agents
 
             logger.warning(
                 "Room Team mode: room has no agents, falling back to all_agents selection"
@@ -1149,12 +1190,25 @@ class RoomServices:
                 group.name,
                 len(selected_agent_set),
             )
-            return selected_agent_set, True
+            return selected_agent_set, True, agents
 
         logger.warning(
             "Custom group %s not found, falling back to room agents", target_group
         )
-        return room.room_agent_set, True
+        room_agents = await self._fetch_agents_from_set(room.room_agent_set)
+        return room.room_agent_set, True, room_agents
+
+    async def _fetch_agents_from_set(self, agent_set: dict | None) -> list:
+        """Fetch full Agent objects from an agent_set dict {agent_id: agent_name}."""
+        if not agent_set:
+            return []
+        
+        agents = []
+        for agent_id in agent_set.keys():
+            agent = await self.database_service.get_agent_by_agent_id(agent_id)
+            if agent:
+                agents.append(agent)
+        return agents
 
     async def _handle_no_agents_fallback(
         self,
@@ -1383,8 +1437,20 @@ class RoomServices:
         )
 
     async def process_agent_message(
-        self, request: RoomCenterAgentMessageRequest, room_memory_content_text: str
+        self,
+        request: RoomCenterAgentMessageRequest,
+        room_memory_content: MemoryContent | str | None,
     ) -> RoomCenterAgentMessageResponse:
+        """
+        Process an agent message by building ChatGPT/Claude-style context.
+
+        Args:
+            request: The agent message request
+            room_memory_content: Either MemoryContent (new style) or str (legacy)
+
+        Returns:
+            Response with the prepared A2A message including context
+        """
         message = request.message
         if message is None:
             return RoomCenterAgentMessageResponse(
@@ -1408,8 +1474,6 @@ class RoomServices:
                 status_code=400,
             )
 
-        agent_url = query_agent_url_response.agent_url
-
         agent_msg = request.message
         if (
             agent_msg.message_content
@@ -1426,58 +1490,48 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Temporary: Get all messages for context
-        # TODO: Create a more robust context and memory solution.
-        latest_messages_text = ""
-        try:
-            room_messages_response = await self.inquiry_room_messages_by_room_id(
-                RoomCenterRoomMessageRequest(room_id=message.room_id)
-            )
+        # Get agent info for context personalization
+        agent = await self.database_service.get_agent_by_agent_id(agent_id)
+        agent_name = agent.agent_card.name if agent else None
 
-            if room_messages_response.success and room_messages_response.message_list:
-                recent_messages = room_messages_response.message_list
-
-                latest_messages_parts = []
-                for msg in recent_messages:
-                    if msg.message_type == "user":
-                        user_id = msg.user_id or "Unknown User"
-                        text = msg.message_content.message_text or ""
-                        latest_messages_parts.append(f"User ({user_id}): {text}")
-                    elif msg.message_type == "agent":
-                        agent_id = msg.agent_id or "Unknown Agent"
-                        text = msg.message_content.message_text or ""
-                        latest_messages_parts.append(f"Agent ({agent_id}): {text}")
-
-                if latest_messages_parts:
-                    latest_messages_text = "\n".join(latest_messages_parts)
-        except Exception:
-            # If we can't get recent messages, continue without them
-            latest_messages_text = ""
-
-        # Inject context with clear delimiter and guard structure access
+        # Build context using ChatGPT/Claude-style conversation history
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
                 original_text = agent_message.parts[0].root.text or ""
 
-                # Build enhanced context with room memory and latest messages
-                context_parts = []
-                if room_memory_content_text.strip():
-                    context_parts.append(f"Context:\n{room_memory_content_text}")
-
-                if latest_messages_text:
-                    context_parts.append(f"Latest messages:\n{latest_messages_text}")
-
-                if context_parts:
-                    injected = (
-                        f"{chr(10).join(context_parts)}\n\nUser:\n{original_text}"
+                # Handle both new MemoryContent and legacy string formats
+                if isinstance(room_memory_content, MemoryContent):
+                    # New style: Use structured conversation history
+                    context = build_context_for_agent(
+                        memory_content=room_memory_content,
+                        current_task=original_text,
+                        agent_name=agent_name,
+                        include_system_instruction=True,
                     )
+                elif isinstance(room_memory_content, str) and room_memory_content.strip():
+                    # Legacy style: Use raw text as context
+                    context = (
+                        f"[Context]\n{room_memory_content}\n\n"
+                        f"[Current request]\nUser: {original_text}"
+                    )
+                    if agent_name:
+                        context += (
+                            f"\n\nYou are {agent_name}. "
+                            "Please respond to the current request above."
+                        )
                 else:
-                    injected = f"User:\n{original_text}"
+                    # No context available
+                    context = f"[Current request]\nUser: {original_text}"
+                    if agent_name:
+                        context += (
+                            f"\n\nYou are {agent_name}. "
+                            "Please respond to the request above."
+                        )
 
-                agent_message.parts[0].root.text = injected
-        except Exception:
-            # Leave message as-is if structure is unexpected
-            pass
+                agent_message.parts[0].root.text = context
+        except Exception as e:
+            # Log but continue with original message if context building fails
+            logger.warning(f"Failed to build context for agent message: {e}")
 
         # Return the prepared message without sending
         # OrchestrationCenter will handle the actual sending with streaming support

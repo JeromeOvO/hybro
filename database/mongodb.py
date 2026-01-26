@@ -146,6 +146,15 @@ class MongoDB:
             )
         return self.db.agent_groups
 
+    @property
+    def cancelled_messages_collection(self):
+        """Get cancelled messages collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.cancelled_messages
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -186,6 +195,20 @@ class MongoDB:
         agent = await self.agents_collection.find_one({"agent_id": agent_id})
 
         return Agent(**agent) if agent else None
+
+    async def get_agents_by_provider_id(self, provider_id: str) -> list[Agent]:
+        """
+        Get all agents belong to a ProviderID
+
+        Args:
+            provider_id: ProviderID of the agent to retrieve
+
+        Returns:
+            Agent: Agents document or None if not found
+        """
+        cursor = self.agents_collection.find({"provider_id": provider_id})
+        agents = await cursor.to_list(length=None)
+        return [Agent(**agent) for agent in agents]
 
     async def get_all_agents(self) -> list[Agent]:
         """
@@ -719,6 +742,70 @@ class MongoDB:
         Delete an agent group by its ID
         """
         result = await self.agent_groups_collection.delete_one({"group_id": group_id})
+        return result.deleted_count > 0
+
+    # ============== Message Cancellation Methods ==============
+
+    async def cancel_message(self, message_id: str, user_id: str) -> bool:
+        """
+        Mark a message as cancelled in the database.
+
+        Args:
+            message_id: The message ID to cancel
+            user_id: The user who cancelled the message
+
+        Returns:
+            bool: True if cancellation was recorded successfully
+        """
+        from common.utils.time import utcnow
+
+        doc = {
+            "message_id": message_id,
+            "user_id": user_id,
+            "cancelled_at": utcnow(),
+        }
+
+        try:
+            # Only insert if not exist (upsert with $setOnInsert)
+            await self.cancelled_messages_collection.update_one(
+                {"message_id": message_id},
+                {"$setOnInsert": doc},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error cancelling message: {e}")
+            return False
+
+    async def is_message_cancelled(self, message_id: str) -> bool:
+        """
+        Check if a message has been cancelled.
+
+        Args:
+            message_id: The message ID to check
+
+        Returns:
+            bool: True if message is cancelled
+        """
+        doc = await self.cancelled_messages_collection.find_one(
+            {"message_id": message_id}
+        )
+        return doc is not None
+
+    async def clear_message_cancellation(self, message_id: str) -> bool:
+        """
+        Remove cancellation record for a message.
+        Should be called after workflow completes to clean up.
+
+        Args:
+            message_id: The message ID to clear
+
+        Returns:
+            bool: True if deletion was successful
+        """
+        result = await self.cancelled_messages_collection.delete_one(
+            {"message_id": message_id}
+        )
         return result.deleted_count > 0
 
 

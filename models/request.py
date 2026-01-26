@@ -231,6 +231,8 @@ class RoomCenterMemoryRequest(BaseModel):
     memory_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     memory: RoomMemory | None = None
+    room_agent_set: Dict[str, str] | None = None  # {agent_id: agent_name} for cleaning mentions
+    user_id: str | None = None  # User ID for attribution in conversation history
 
 class RoomCenterRoomMessageRequest(BaseModel):
     room_id: str | None = None

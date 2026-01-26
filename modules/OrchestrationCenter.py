@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections import deque
+from enum import Enum
 from typing import Any
 
 from a2a.types import (
@@ -15,8 +16,10 @@ from a2a.types import (
     TextPart,
 )
 
+
+from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
-from models.agent import Agent
+from models.agent import Agent, AgentStatus
 from models.error import (
     AgentNotAssignedError,
     AgentNotFoundError,
@@ -47,6 +50,13 @@ from services.sse_services import sse_manager
 from services.task_service import task_service
 
 logger = get_logger(__name__)
+
+
+class ProcessingStatus(Enum):
+    """Status of message processing operations."""
+    SUCCESS = "success"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class OrchestrationCenter:
@@ -279,14 +289,33 @@ class OrchestrationCenter:
             task_description = "No task description available"
 
         similar_agents = await self.database_service.query_similar_agents(
-            task_description, count=5
+            task_description, count=5, active_only=True
         )
+
+        if not similar_agents:
+            logger.error(
+                "OrchestrationCenter: No active agents found for task decomposition"
+            )
+            return OrchestrationCenterResponse(
+                task_id=root_task_id,
+                success=False,
+                error="No active agents available for task decomposition",
+                status_code=500,
+            )
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(
             task_description, similar_agents
         )
 
         best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
+        
+        # Verify the selected agent is active, fallback to first similar agent if not
+        if best_agent is None or best_agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "OrchestrationCenter: Selected agent %s is not active, falling back to first active agent",
+                best_agent_id
+            )
+            best_agent = similar_agents[0]  # Already filtered for active agents
 
         # Proceed with task decomposition
         decompose_task_response = await self.openai_service.decompose_task(
@@ -609,13 +638,43 @@ class OrchestrationCenter:
             return OrchestrationCenterResponse(
                 task_id=meta_task_id,
                 success=False,
-                error="No agent matched",
+                error="No active agent matched",
+                status_code=200,
+            )
+
+        # Filter for active agents only (safety check - db_service should already filter)
+        active_agents = [
+            agent for agent in agents_matched_response.agents
+            if agent.agent_status == AgentStatus.active
+        ]
+
+        if not active_agents:
+            logger.warning(
+                "OrchestrationCenter: No active agents available for meta task %s",
+                meta_task_id
+            )
+            return OrchestrationCenterResponse(
+                task_id=meta_task_id,
+                success=False,
+                error="No active agent available",
                 status_code=200,
             )
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(
-            meta_task.task_description, agents_matched_response.agents
+            meta_task.task_description, active_agents
         )
+
+        # Verify the selected agent is in our active list, fallback if not
+        best_agent = next(
+            (a for a in active_agents if a.agent_id == best_agent_id), 
+            None
+        )
+        if best_agent is None or best_agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "OrchestrationCenter: Selected agent %s is not active, using first active agent",
+                best_agent_id
+            )
+            best_agent_id = active_agents[0].agent_id
 
         meta_task.agent_id = best_agent_id
         update_response = await self.task_service.update_meta_task_by_task_id(
@@ -728,6 +787,23 @@ class OrchestrationCenter:
 
         # Execute each meta task sequentially
         for i, meta_task in enumerate(meta_tasks):
+            # Check for cancellation before processing each task
+            if self.sse_manager.is_cancelled(base_task.extend_info.get("message_id")):
+                logger.info(
+                    "OrchestrationCenter: Workflow cancelled for base task %s, stopping all processing",
+                    base_task_id,
+                )
+                self.sse_manager.clear_cancellation(
+                    base_task.extend_info.get("message_id")
+                )
+                return OrchestrationCenterResponse(
+                    task_id=base_task_id,
+                    meta_task_ids=processed_meta_task_ids,
+                    success=True,
+                    error="Workflow cancelled by user",
+                    status_code=200,
+                )
+
             try:
                 logger.info(
                     "OrchestrationCenter: Processing meta task %s/%s: %s (execution_order: %s)",
@@ -1423,8 +1499,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         agent_card: AgentCard,
         prepared_message: Message,
         room_id: str,
+        user_message_id: str,
         send_sse: bool = False,
-    ) -> tuple[bool, str]:
+    ) -> tuple[ProcessingStatus, str]:
         """
         Handle streaming responses from an agent for a room message.
 
@@ -1439,10 +1516,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             agent_card: The agent's card information
             prepared_message: The A2A message to send to the agent
             room_id: The room ID for SSE events
+            user_message_id: The user message ID for cancellation checks
             send_sse: Whether to send SSE notifications to frontend (default: False)
 
         Returns:
-            Tuple of (success: bool, full_response_text: str)
+            Tuple of (status: ProcessingStatus, full_response_text: str)
         """
 
         # Use a state object to track streaming state immutably
@@ -1460,13 +1538,28 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         async for a2a_response in self.a2a_service.send_message_streaming(
             agent_card, prepared_message
         ):
+            # Check for cancellation during streaming
+            if self.sse_manager.is_cancelled(user_message_id):
+                logger.info(
+                    "OrchestrationCenter: Streaming cancelled for message %s, stopping all processing",
+                    user_message_id,
+                )
+                # Send cancelled status via SSE
+                await self.sse_manager.send_processing_status(
+                    room_id, "cancelled", user_message_id
+                )
+                # Clear cancellation flag and stop immediately without sending any response
+                self.sse_manager.clear_cancellation(user_message_id)
+                # Return with cancellation status
+                return ProcessingStatus.CANCELLED, message_streaming_state.full_response_text
+
             # Handle JSON-RPC errors
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
                 error_message = a2a_response.root.error.model_dump_json()
                 logger.error(f"OrchestrationCenter: Agent error: {error_message}")
                 if send_sse:
                     await self.sse_manager.send_error(room_id, error_message)
-                return False, message_streaming_state.full_response_text
+                return ProcessingStatus.FAILED, message_streaming_state.full_response_text
             # Below this, there is no error - process the response
             # Extract result from response
             result = a2a_response.root.result
@@ -1745,7 +1838,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
         )
 
-        return True, message_streaming_state.full_response_text
+        return ProcessingStatus.SUCCESS, message_streaming_state.full_response_text
 
     async def _handle_a2a_response_for_room(
         self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
@@ -1839,19 +1932,16 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         if validation_response:
             return validation_response
 
+
+
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
-        # Get room memory context
-        room_memory, room_memory_content_text = await self._get_room_memory_context(
-            room_id
-        )
-        if room_memory_content_text is None:
-            return OrchestrationCenterResponse(
-                success=False,
-                error="Failed to get room memory",
-                status_code=500,
-            )
+        # Get room memory context (ChatGPT/Claude style conversation history)
+        room_memory, room_memory_content = await self._get_room_memory_context(room_id)
+        if room_memory_content is None:
+            # Initialize empty memory content if not available
+            room_memory_content = MemoryContent()
 
         # Query agent messages to process
         query_response = (
@@ -1881,8 +1971,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_user_message_id,
         )
 
+        # Check for cancellation before processing agent messages
+        if self.sse_manager.is_cancelled(room_user_message_id):
+            logger.info(
+                "OrchestrationCenter: Processing cancelled for message %s, stopping all processing",
+                room_user_message_id,
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, "cancelled", room_user_message_id
+            )
+            self.sse_manager.clear_cancellation(room_user_message_id)
+            return OrchestrationCenterResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
+
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content_text
+            message_queue, room_id, room_memory_content, room_user_message_id
         )
 
         if not success:
@@ -1935,8 +2041,14 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
     async def _get_room_memory_context(
         self, room_id: str
-    ) -> tuple[RoomMemory | None, str | None]:
-        """Get room memory and format it as context text."""
+    ) -> tuple[RoomMemory | None, "MemoryContent | None"]:
+        """
+        Get room memory with structured conversation history.
+
+        Returns:
+            Tuple of (RoomMemory, MemoryContent) for ChatGPT/Claude-style context
+        """
+
         room_memory_response = (
             await self.room_memory_service.get_room_memory_by_room_id(
                 RoomCenterMemoryRequest(room_id=room_id)
@@ -1948,25 +2060,45 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         room_memory = room_memory_response.memory
         if room_memory is None:
-            room_memory_content_text = ""
-        else:
-            room_memory_content = room_memory.memory_content
-            if room_memory_content is None:
-                room_memory_content_text = ""
-            else:
-                room_memory_content_text = room_memory_content.memory_text or ""
+            return None, MemoryContent()
 
-        # Always add a delimiter even if empty
-        room_memory_content_text = (room_memory_content_text or "") + "\n\n"
+        memory_content = room_memory.memory_content
+        if memory_content is None:
+            memory_content = MemoryContent()
 
-        return room_memory, room_memory_content_text
+        return room_memory, memory_content
 
     async def _process_agent_message_queue(
-        self, message_queue: deque, room_id: str, room_memory_content_text: str
+        self,
+        message_queue: deque,
+        room_id: str,
+        room_memory_content: "MemoryContent",
+        user_message_id: str,
     ) -> bool:
-        """Process all messages in the queue sequentially."""
+        """
+        Process all messages in the queue sequentially.
+
+        Args:
+            message_queue: Queue of agent messages to process
+            room_id: The room ID
+            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
+            user_message_id: The user message ID for cancellation checks
+        """
+
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
+
+            # Check for cancellation before processing each agent message
+            if self.sse_manager.is_cancelled(user_message_id):
+                logger.info(
+                    "OrchestrationCenter: Message processing cancelled for %s, stopping all processing",
+                    user_message_id,
+                )
+                await self.sse_manager.send_processing_status(
+                    room_id, "cancelled", user_message_id
+                )
+                self.sse_manager.clear_cancellation(user_message_id)
+                return True  # Return success to avoid error status
 
             # Assign agent if not already assigned
             if current_message.agent_id is None:
@@ -1978,7 +2110,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     )
                     return False
             else:
-                # Agent already assigned, fetch it
+                # Agent already assigned, fetch it and verify it's active
                 agent = await self.database_service.get_agent_by_agent_id(
                     current_message.agent_id
                 )
@@ -1989,14 +2121,48 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         current_message.message_id,
                     )
                     return False
+                
+                # Check if the assigned agent is still active
+                if agent.agent_status != AgentStatus.active:
+                    logger.warning(
+                        "OrchestrationCenter: Assigned agent %s is not active (status=%s), re-assigning for message %s",
+                        current_message.agent_id,
+                        agent.agent_status,
+                        current_message.message_id,
+                    )
+                    # Clear the agent_id and re-assign
+                    current_message.agent_id = None
+                    agent = await self._assign_agent(current_message)
+                    if agent is None:
+                        logger.error(
+                            "OrchestrationCenter: Failed to re-assign agent for message %s after inactive agent",
+                            current_message.message_id,
+                        )
+                        return False
 
             # Process the agent message
-            success = await self._process_single_agent_message(
-                current_message, room_id, room_memory_content_text, agent
+            status, response_text = await self._process_single_agent_message(
+                current_message,
+                room_id,
+                room_memory_content,
+                agent,
+                user_message_id,
             )
 
-            if not success:
+            if status == ProcessingStatus.FAILED:
                 return False
+            elif status == ProcessingStatus.CANCELLED:
+                # Graceful cancellation - don't treat as error
+                return True
+
+            # Store agent response in conversation history (ChatGPT/Claude style)
+            if response_text:
+                await self.room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=current_message.agent_id,
+                    agent_name=agent.agent_card.name if agent else "Agent",
+                    response_text=response_text,
+                )
 
             # Queue up next messages in the chain
             await self._queue_next_messages(current_message, message_queue)
@@ -2004,7 +2170,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return True
 
     async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
-        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided."""
+        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided.
+        
+        Only active agents will be assigned. If no active agents are found, returns None.
+        """
         # Gather any scoped agent list from extend_info (mentions/room) and merge with group agents for future group mentions
         allowed_agent_ids: list[str] = []
         target_group = None
@@ -2066,21 +2235,42 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             current_message.message_content.message_task.history[0].parts[0].root.text
         )
 
+        # Query similar agents - this already filters for active agents by default
         matched_agents = await self.database_service.query_similar_agents(
             user_input,
             allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
+            active_only=True,  # Only get active agents
         )
 
         if len(matched_agents) == 0:
             logger.error(
-                "OrchestrationCenter: No similar agent found for message %s (allowed_ids=%d)",
+                "OrchestrationCenter: No active agent found for message %s (allowed_ids=%d)",
                 current_message.message_id,
                 len(allowed_agent_ids),
             )
             return None
 
-        # Assign the best matching agent
-        agent = matched_agents[0]
+        # Find the first active agent (double-check status as safety)
+        agent = None
+        for candidate in matched_agents:
+            if candidate.agent_status == AgentStatus.active:
+                agent = candidate
+                break
+            else:
+                logger.warning(
+                    "OrchestrationCenter: Skipping inactive agent %s (status=%s) for message %s",
+                    candidate.agent_id,
+                    candidate.agent_status,
+                    current_message.message_id,
+                )
+
+        if agent is None:
+            logger.error(
+                "OrchestrationCenter: No active agent available for message %s after filtering",
+                current_message.message_id,
+            )
+            return None
+
         current_message.agent_id = agent.agent_id
 
         update_success = (
@@ -2098,7 +2288,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             return None
 
         logger.info(
-            "OrchestrationCenter: Successfully assigned agent %s to message %s",
+            "OrchestrationCenter: Successfully assigned active agent %s to message %s",
             agent.agent_id,
             current_message.message_id,
         )
@@ -2108,44 +2298,60 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         self,
         current_message: RoomAgentMessage,
         room_id: str,
-        room_memory_content_text: str,
-        agent: Agent,  # Agent is now passed in
-    ) -> bool:
-        """Process a single agent message with streaming support."""
-        # Prepare the agent message with context
+        room_memory_content: "MemoryContent",
+        agent: Agent,
+        user_message_id: str,
+    ) -> tuple[ProcessingStatus, str]:
+        """
+        Process a single agent message with streaming support.
+
+        Args:
+            current_message: The agent message to process
+            room_id: The room ID
+            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
+            agent: The agent to process the message
+            user_message_id: User message ID for cancellation checks
+
+        Returns:
+            Tuple of (ProcessingStatus, response_text):
+                - ProcessingStatus: SUCCESS, FAILED, or CANCELLED
+                - response_text: The agent's response text (for storing in history)
+        """
+        # Prepare the agent message with context (ChatGPT/Claude style)
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content_text,
+            room_memory_content,  # Pass MemoryContent instead of string
         )
 
         if not process_response.success:
-            return False
+            return ProcessingStatus.FAILED, ""
 
         prepared_message = process_response.a2a_message
         if prepared_message is None:
-            return False
-
-        # Agent is now passed in as parameter - no need to fetch again
+            return ProcessingStatus.FAILED, ""
 
         # Stream or sync send based on agent capabilities
         support_streaming = self.a2a_service.has_streaming_capability(
             agent_card=agent.agent_card
         )
 
+        full_response_text = ""
         if support_streaming:
-            (
-                success,
-                full_response_text,
-            ) = await self._handle_streaming_response_for_room(
-                current_message, agent.agent_card, prepared_message, room_id
+            status, full_response_text = await self._handle_streaming_response_for_room(
+                current_message,
+                agent.agent_card,
+                prepared_message,
+                room_id,
+                user_message_id,
             )
+            if status != ProcessingStatus.SUCCESS:
+                return status, full_response_text
         else:
             success, full_response_text = await self._handle_sync_response_for_room(
                 current_message, agent.agent_card, prepared_message, room_id
             )
-
-        if not success:
-            return False
+            if not success:
+                return ProcessingStatus.FAILED, ""
 
         # Get updated message from database
         current_message = (
@@ -2155,7 +2361,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
 
         if current_message is None:
-            return False
+            return ProcessingStatus.FAILED, full_response_text
 
         # Send agent response to room
         logger.debug(
@@ -2170,7 +2376,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             full_response_text,
         )
 
-        return True
+        return ProcessingStatus.SUCCESS, full_response_text
 
     async def _handle_sync_response_for_room(
         self,
@@ -2231,30 +2437,30 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_memory: RoomMemory,
         message_list: list[RoomAgentMessage],
     ) -> None:
-        """Update room memory with new content after processing all messages."""
-        new_room_memory_content_text = (
-            await self.openai_service.generate_room_memory_content(
-                message_list, room_memory.memory_content if room_memory else None
-            )
-        )
+        """
+        Post-processing hook after all agent messages are processed.
 
-        room_memory_response = (
-            await self.room_memory_service.update_room_memory_by_room_id(
-                RoomCenterMemoryRequest(
-                    room_id=room_id,
-                    memory=RoomMemory(
-                        room_id=room_id,
-                        memory_id=room_memory.memory_id if room_memory else None,
-                        memory_content=MemoryContent(
-                            memory_text=new_room_memory_content_text
-                        ),
-                    ),
-                )
-            )
-        )
+        Note: With the new ChatGPT/Claude-style context management, agent responses
+        are stored incrementally in conversation history via add_agent_response_to_memory()
+        during _process_agent_message_queue(). This method is kept for:
+        1. Logging/debugging
+        2. Future enhancements (e.g., periodic LLM summarization of long conversations)
+        """
 
-        if not room_memory_response.success:
-            logger.error(
-                "OrchestrationCenter: Failed to update room memory: %s",
-                room_memory_response.error,
+
+        # Get current context stats for logging
+        if room_memory and room_memory.memory_content:
+            stats = get_context_stats(room_memory.memory_content)
+            logger.info(
+                "OrchestrationCenter: Room %s memory updated - %d turns in history, "
+                "summary=%s, total_chars=%d",
+                room_id,
+                stats.get("history_turns", 0),
+                "yes" if stats.get("has_summary") else "no",
+                stats.get("total_chars", 0),
+            )
+        else:
+            logger.info(
+                "OrchestrationCenter: Room %s - no memory content to update",
+                room_id,
             )

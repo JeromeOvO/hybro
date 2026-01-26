@@ -64,6 +64,12 @@ class SSEManager:
         self.room_connections: dict[str, dict[str, SSEConnection]] = {}
         self.lock = asyncio.Lock()
 
+        # Message cancellation tracking
+        self.cancelled_messages: set[str] = set()
+        self._db_collection = None
+        self._change_stream_task = None
+        self._shutdown_flag = False
+
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
         async with self.lock:
@@ -228,7 +234,7 @@ class SSEManager:
     ):
         """send processing status"""
         data = {
-            "status": status,  # "processing", "completed", "failed"
+            "status": status,  # "processing", "completed", "cancelled", "failed"
             "message_id": message_id,
             "details": details,
             "timestamp": utcnow().isoformat(),
@@ -249,6 +255,94 @@ class SSEManager:
             "active_connections": len(self.room_connections[room_id]),
             "status": "active",
         }
+
+    # ============== Message Cancellation Methods ==============
+
+    async def start_change_stream_watcher(self, db_collection):
+        """
+        Start watching MongoDB change stream for cancellation events.
+        Should be called on application startup.
+
+        Args:
+            db_collection: MongoDB collection for cancelled_messages
+        """
+        self._db_collection = db_collection
+        self._change_stream_task = asyncio.create_task(self._watch_cancellations())
+        logger.info("Change stream watcher started for message cancellations")
+
+    async def _watch_cancellations(self):
+        """Background task that watches MongoDB for cancellation changes"""
+        while not self._shutdown_flag:
+            try:
+                pipeline = [{"$match": {"operationType": "insert"}}]
+
+                async with self._db_collection.watch(pipeline) as change_stream:
+                    logger.info("Connected to cancellation change stream")
+
+                    async for change in change_stream:
+                        if self._shutdown_flag:
+                            break
+                        try:
+                            message_id = change["fullDocument"]["message_id"]
+                            self.cancelled_messages.add(message_id)
+                            logger.info(
+                                f"Received cancellation via change stream: {message_id}"
+                            )
+                        except KeyError as e:
+                            logger.error(f"Invalid change stream document: {e}")
+
+            except asyncio.CancelledError:
+                logger.info("Change stream watcher cancelled")
+                break
+            except Exception as e:
+                if not self._shutdown_flag:
+                    logger.error(f"Change stream error: {e}. Reconnecting in 5s...")
+                    await asyncio.sleep(5)
+
+    async def stop_change_stream_watcher(self):
+        """Stop the change stream watcher. Should be called on application shutdown."""
+        self._shutdown_flag = True
+        if self._change_stream_task:
+            self._change_stream_task.cancel()
+            try:
+                await self._change_stream_task
+            except asyncio.CancelledError:
+                logger.info("Change stream watcher stopped")
+
+    def cancel_message(self, message_id: str) -> None:
+        """
+        Mark a message as cancelled (local cache only).
+        Actual persistence to MongoDB should be done separately.
+
+        Args:
+            message_id: The message ID to cancel
+        """
+        self.cancelled_messages.add(message_id)
+        logger.info(f"Message {message_id} marked as cancelled in local cache")
+
+    def is_cancelled(self, message_id: str) -> bool:
+        """
+        Check if a message has been cancelled.
+        Uses local cache updated by change stream.
+
+        Args:
+            message_id: The message ID to check
+
+        Returns:
+            True if message is cancelled, False otherwise
+        """
+        return message_id in self.cancelled_messages
+
+    def clear_cancellation(self, message_id: str) -> None:
+        """
+        Clear cancellation flag for a message.
+        Should be called after workflow completes to clean up memory.
+
+        Args:
+            message_id: The message ID to clear
+        """
+        self.cancelled_messages.discard(message_id)
+        logger.debug(f"Cleared cancellation flag for message {message_id}")
 
 
 # global SSE manager instance

@@ -6,7 +6,7 @@ from a2a.types import AgentCard
 from common.utils.logger import get_logger
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
-from models.agent import Agent
+from models.agent import Agent, AgentStatus
 from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
@@ -121,6 +121,12 @@ class DatabaseService:
         """
         return await self.mongo.get_agent_by_agent_id(agent_id)
 
+    async def get_agents_by_provider_id(self, provider_id: str) -> Agent | None:
+        """
+        Get agents by provider_id from MongoDB.
+        """
+        return await self.mongo.get_agents_by_provider_id(provider_id)
+
     async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None:
         """
         Get an agent's name by agent_id from both MongoDB and Pinecone databases.
@@ -133,6 +139,25 @@ class DatabaseService:
         Get all agents from both MongoDB and Pinecone databases.
         """
         return await self.mongo.get_all_agents()
+
+    async def get_all_active_agents(self) -> list[Agent]:
+        """
+        Get all active agents from MongoDB.
+        
+        Returns:
+            List[Agent]: List of agents with active status only
+        """
+        all_agents = await self.mongo.get_all_agents()
+        active_agents = [
+            agent for agent in all_agents
+            if agent.agent_status == AgentStatus.active
+        ]
+        logger.debug(
+            "DatabaseService: Filtered to %d active agents out of %d total",
+            len(active_agents),
+            len(all_agents)
+        )
+        return active_agents
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -147,6 +172,7 @@ class DatabaseService:
         query_text: str,
         count: int = 5,
         allowed_agent_ids: list[str] | None = None,
+        active_only: bool = True,
     ) -> list[Agent]:
         """
         Find similar agents based on task description embedding and return their full information
@@ -154,6 +180,8 @@ class DatabaseService:
         Args:
             query_text: Text to find similar agents for
             count: Number of results to return
+            allowed_agent_ids: Optional list of agent IDs to restrict the search to
+            active_only: If True, only return agents with active status (default: True)
 
         Returns:
             List[Agent]: List of similar agents with complete information from MongoDB
@@ -161,11 +189,13 @@ class DatabaseService:
         # Make sure to await the embedding generation
         embedding = await self.ai_service.get_embedding(query_text)
 
-        top_k = count
+        # Request more candidates from Pinecone to account for filtering
+        # We may need to filter out inactive agents, so get extra candidates
+        top_k = count * 3 if active_only else count
         pinecone_filter = None
         if allowed_agent_ids:
             # Limit search to the allowed IDs; bump top_k to avoid truncation.
-            top_k = max(len(allowed_agent_ids), count)
+            top_k = max(len(allowed_agent_ids), top_k)
             pinecone_filter = {
                 "agent_id": {"$in": [str(aid) for aid in allowed_agent_ids]}
             }
@@ -194,13 +224,25 @@ class DatabaseService:
         query = {"agent_id": {"$in": agent_ids}}
         agents = await self.mongo.get_agents_with_conditions(query)
 
+        # Filter for active agents only if requested
+        if active_only:
+            agents = [
+                agent for agent in agents
+                if agent.agent_status == AgentStatus.active
+            ]
+            logger.debug(
+                "DatabaseService: Filtered to %d active agents from query results",
+                len(agents)
+            )
+
         # Sort agents in the same order as the Pinecone results
         id_to_position = {id: i for i, id in enumerate(agent_ids)}
         sorted_agents = sorted(
             agents, key=lambda agent: id_to_position.get(agent.agent_id, float("inf"))
         )
 
-        return sorted_agents
+        # Return only the requested count
+        return sorted_agents[:count]
 
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
