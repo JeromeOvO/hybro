@@ -114,8 +114,11 @@ async def get_agent(agent_id: str):
         raise HTTPException(status_code=400, detail="agent_id is required")
 
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
+    agent_center_response = await agent_center.query_agent_by_agent_id(
+        agent_center_request
+    )
 
-    return agent_center._mask_sensitive_information(agent_center_request, ["agent_url", "agent_card.url"])
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.get("/agent/getAllAgents")
