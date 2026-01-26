@@ -155,6 +155,15 @@ class MongoDB:
             )
         return self.db.cancelled_messages
 
+    @property
+    def agent_requests_collection(self):
+        """Get agent requests collection for rate limiting"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_requests
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """

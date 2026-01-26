@@ -44,6 +44,7 @@ from services.database_service import db_service
 from services.debate_service import debate_service
 from services.memory_service import chat_memory_service, room_memory_service
 from services.openai_service import openai_service
+from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.room_services import room_services
 from services.sse_services import sse_manager
@@ -135,6 +136,7 @@ class OrchestrationCenter:
         self.debate_service = debate_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
         self.room_coordinator_service = room_coordinator_service  # Use singleton
+        self.rate_limit_service = rate_limit_service  # Use singleton
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -1937,6 +1939,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
+        # Get user_id from the user message for rate limiting
+        user_message = await self.database_service.get_room_user_message_by_message_id(
+            room_user_message_id
+        )
+        user_id = user_message.user_id if user_message else None
+
         # Get room memory context (ChatGPT/Claude style conversation history)
         room_memory, room_memory_content = await self._get_room_memory_context(room_id)
         if room_memory_content is None:
@@ -1988,7 +1996,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             )
 
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content, room_user_message_id
+            message_queue, room_id, room_memory_content, room_user_message_id, user_id
         )
 
         if not success:
@@ -2074,6 +2082,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id: str,
         room_memory_content: "MemoryContent",
         user_message_id: str,
+        user_id: str | None = None,
     ) -> bool:
         """
         Process all messages in the queue sequentially.
@@ -2083,6 +2092,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_id: The room ID
             room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             user_message_id: The user message ID for cancellation checks
+            user_id: The ID of the user making the request (for rate limiting)
         """
 
         while len(message_queue) > 0:
@@ -2140,6 +2150,40 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         )
                         return False
 
+            # Check rate limits before processing (only if user_id is available)
+            if user_id:
+                rate_limit_result = await self.rate_limit_service.check_rate_limit(
+                    agent_id=agent.agent_id,
+                    user_id=user_id,
+                    rate_limit_per_user=agent.rate_limit_per_user_per_hour,
+                    rate_limit_system=agent.rate_limit_system_per_hour,
+                )
+
+                if not rate_limit_result.allowed:
+                    logger.warning(
+                        "OrchestrationCenter: Rate limit exceeded for agent %s, user %s: %s",
+                        agent.agent_id,
+                        user_id,
+                        rate_limit_result.reason,
+                    )
+                    # Send rate limit error via SSE with full details
+                    await self.sse_manager.send_rate_limit_error(
+                        room_id=room_id,
+                        message_id=user_message_id,
+                        agent_id=agent.agent_id,
+                        reason=rate_limit_result.reason or "Rate limit exceeded",
+                        retry_after_seconds=rate_limit_result.retry_after_seconds,
+                        user_requests_used=rate_limit_result.user_requests_used,
+                        user_requests_limit=rate_limit_result.user_requests_limit,
+                        system_requests_used=rate_limit_result.system_requests_used,
+                        system_requests_limit=rate_limit_result.system_requests_limit,
+                    )
+                    await self.sse_manager.send_processing_status(
+                        room_id, "rate_limited", user_message_id
+                    )
+                    # Return True: rate limiting is expected behavior, not a server error
+                    return True
+
             # Process the agent message
             status, response_text = await self._process_single_agent_message(
                 current_message,
@@ -2154,6 +2198,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             elif status == ProcessingStatus.CANCELLED:
                 # Graceful cancellation - don't treat as error
                 return True
+
+            # Record the request for rate limiting (only if user_id is available)
+            if user_id:
+                await self.rate_limit_service.record_request(
+                    agent_id=agent.agent_id,
+                    user_id=user_id,
+                )
 
             # Store agent response in conversation history (ChatGPT/Claude style)
             if response_text:
