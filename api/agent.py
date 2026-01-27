@@ -42,7 +42,7 @@ async def register_agent(
     )
     agent_center_response = await agent_center.register_agent(agent_center_request)
 
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 @router.get("/agent/getAgent/me")
 async def get_agent_by_provider(
@@ -56,7 +56,7 @@ async def get_agent_by_provider(
     agent_center_request = AgentCenterRequest(provider_id=provider_id)
     agent_center_response = await agent_center.get_agents_by_provider_id(agent_center_request)
 
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 @router.post("/agent/deleteAgent")
 async def delete_agent(
@@ -84,7 +84,7 @@ async def delete_agent(
     agent_center_request = AgentCenterRequest(agent_id=agent_id)
     agent_center_response = await agent_center.remove_agent(agent_center_request)
 
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.put("/agent/updateAgent/{agent_id}")
@@ -169,7 +169,8 @@ async def get_agent_card_from_url(request: Request):
     agent_center_response = await agent_center.get_agent_card_from_url(
         agent_center_request
     )
-    return agent_center_response
+
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.get("/agent/getAgent/{agent_id}")
@@ -183,7 +184,7 @@ async def get_agent(agent_id: str):
         agent_center_request
     )
 
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.get("/agent/getAllAgents")
@@ -191,7 +192,8 @@ async def get_agent_list():
     """Get all agents - PUBLIC (no authentication required)"""
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_all_agents(agent_center_request)
-    return agent_center_response
+
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.get("/agent/getAllActiveAgents")
@@ -202,7 +204,7 @@ async def get_all_active_agents():
     """
     agent_center_request = AgentCenterRequest()
     agent_center_response = await agent_center.get_all_active_agents(agent_center_request)
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.post("/agent/getAgentListWithConditions")
@@ -213,4 +215,4 @@ async def get_agent_list_with_conditions():
         agent_center_request
     )
 
-    return agent_center_response
+    return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])

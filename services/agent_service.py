@@ -405,6 +405,46 @@ class AgentService:
 
         return await self.database_service.get_agent_by_agent_id(agent_id)
 
+    def _mask_sensitive_information(
+            self, response: AgentCenterResponse, fields: list[str]
+    ) -> AgentCenterResponse:
+        """
+        Sanitize sensitive fields in AgentCenterResponse.
+        Supports:
+          - top-level fields (e.g. 'agent_url')
+          - nested fields (e.g. 'agent_card.url','agent_card.skills.id')
+          - nested agent fields for resp.agent and resp.agents list
+        Returns a NEW AgentCenterResponse
+        """
+        data = response.model_dump()
+
+        def remove_nested_field(obj, path_parts):
+            if not path_parts:
+                return
+
+            if isinstance(obj, dict):
+                if len(path_parts) == 1:
+                    obj[path_parts[0]] = ""
+                elif path_parts[0] in obj:
+                    remove_nested_field(obj[path_parts[0]], path_parts[1:])
+
+            elif isinstance(obj, list):
+                for item in obj:
+                    remove_nested_field(item, path_parts)
+
+        for field_path in fields:
+            parts = field_path.split(".")
+
+            if len(parts) == 1:
+                data.pop(parts[0], None)
+            else:
+                if "agents" in data:
+                    remove_nested_field(data["agents"], parts)
+                if "agent" in data:
+                    remove_nested_field(data["agent"], parts)
+
+        return AgentCenterResponse(**data)
+
 
 
 agent_service = AgentService()
