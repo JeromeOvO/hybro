@@ -13,6 +13,7 @@ from uvicorn.config import LOGGING_CONFIG
 from api import (
     agent,
     agent_group,
+    discovery,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -105,12 +106,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
 # Add CORS middleware
+# Allow all origins for the Discovery API (external access)
+# Also allow X-API-Key header for API key authentication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins for external API access
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],  # Includes X-API-Key, Content-Type, etc.
 )
 
 
@@ -174,6 +177,16 @@ app.include_router(
     tags=["agent_group"],
     dependencies=[Depends(get_current_user)],
 )
+
+# Discovery API - External public API with API key auth 
+# Uses open CORS to allow external access from any origin
+app.include_router(
+    discovery.router,
+    prefix=api_prefix,
+    tags=["discovery"],
+    # Auth handled per-route via X-API-Key header in discovery.py
+)
+
 # For APIs that do not require authentication (user is optional)
 # app.include_router(
 #     router,

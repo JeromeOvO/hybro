@@ -103,7 +103,6 @@ class AgentCenterResponse(BaseModel):
     agent_card: AgentCard | None = None
     agent: Agent | None = None
     agents: list[Agent] | None = None
-    public_url: str | None = None  
     success: bool
     error: str | None = None
     status_code: int = 200
@@ -215,3 +214,25 @@ class RoomCenterRoomMessageResponse(BaseModel):
     success: bool
     error: str | None = None
     status_code: int = 200
+
+
+# ============== Discovery API Response Models ==============
+
+
+class DiscoveryErrorResponse(BaseModel):
+    """Standardized error response for Discovery API."""
+    error: str  # Error code: "invalid_key", "no_agent_found", "missing_key", etc.
+    message: str  # Human-readable error message
+
+
+class DiscoveryAgentResult(BaseModel):
+    """A single agent result from the Discovery API."""
+    agent_card: dict  # A2A Protocol AgentCard as dictionary
+    match_score: float  # Similarity score (0.0 to 1.0)
+
+
+class DiscoveryResponse(BaseModel):
+    """Successful response from the Discovery API."""
+    query: str  # The original search query
+    agents: list[DiscoveryAgentResult]  # List of matching agents
+    count: int  # Number of agents returned

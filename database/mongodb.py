@@ -8,6 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from models.agent import Agent
 from models.agent_group import AgentGroup
+from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
@@ -154,6 +155,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.cancelled_messages
+
+    @property
+    def api_keys_collection(self):
+        """Get API keys collection"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.api_keys
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -808,6 +818,114 @@ class MongoDB:
         )
         return result.deleted_count > 0
 
+    # ============== API Key Management ==============
+
+    async def add_api_key(self, api_key: APIKey) -> str:
+        """
+        Add an API key to the database.
+
+        Args:
+            api_key: APIKey model instance
+
+        Returns:
+            str: inserted_id
+        """
+        result = await self.api_keys_collection.insert_one(
+            api_key.model_dump(mode="json")
+        )
+        return str(result.inserted_id)
+
+    async def get_api_key_by_hash(self, key_hash: str) -> APIKey | None:
+        """
+        Get an API key by its hash.
+
+        Args:
+            key_hash: SHA-256 hash of the API key
+
+        Returns:
+            APIKey or None if not found
+        """
+        result = await self.api_keys_collection.find_one({"key_hash": key_hash})
+        return APIKey(**result) if result else None
+
+    async def get_api_key_by_id(self, key_id: str) -> APIKey | None:
+        """
+        Get an API key by its ID.
+
+        Args:
+            key_id: The key ID
+
+        Returns:
+            APIKey or None if not found
+        """
+        result = await self.api_keys_collection.find_one({"key_id": key_id})
+        return APIKey(**result) if result else None
+
+    async def get_api_keys_by_user(self, user_id: str) -> list[APIKey]:
+        """
+        Get all API keys for a user.
+
+        Args:
+            user_id: The user ID
+
+        Returns:
+            List of APIKey instances
+        """
+        cursor = self.api_keys_collection.find({"user_id": user_id})
+        results = await cursor.to_list(length=None)
+        return [APIKey(**key) for key in results]
+
+    async def update_api_key_usage(self, key_hash: str) -> bool:
+        """
+        Update the usage statistics for an API key.
+        Increments usage_count and sets last_used_at.
+
+        Args:
+            key_hash: SHA-256 hash of the API key
+
+        Returns:
+            bool: True if update was successful
+        """
+        from common.utils.time import utcnow
+
+        result = await self.api_keys_collection.update_one(
+            {"key_hash": key_hash},
+            {
+                "$set": {"last_used_at": utcnow()},
+                "$inc": {"usage_count": 1},
+            },
+        )
+        return result.modified_count > 0
+
+    async def deactivate_api_key(self, key_id: str) -> bool:
+        """
+        Deactivate an API key.
+
+        Args:
+            key_id: The key ID
+
+        Returns:
+            bool: True if deactivation was successful
+        """
+        result = await self.api_keys_collection.update_one(
+            {"key_id": key_id},
+            {"$set": {"is_active": False}},
+        )
+        return result.modified_count > 0
+
+    async def delete_api_key(self, key_id: str) -> bool:
+        """
+        Delete an API key.
+
+        Args:
+            key_id: The key ID
+
+        Returns:
+            bool: True if deletion was successful
+        """
+        result = await self.api_keys_collection.delete_one({"key_id": key_id})
+        return result.deleted_count > 0
+    
 
 mongodb = MongoDB()
 

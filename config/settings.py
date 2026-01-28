@@ -44,6 +44,10 @@ class Settings(BaseSettings):
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True # enable/disable agent health check
+
+    # Discovery API Settings
+    discovery_confidence_threshold: float = 0.0  # Minimum similarity score to return an agent
+    discovery_default_limit: int = 5  # Default number of agents to return
     
     class Config:
         env_file = ".env"
