@@ -196,6 +196,46 @@ class SSEManager:
         }
         await self.broadcast_to_room(room_id, "error", data)
 
+    async def send_rate_limit_error(
+        self,
+        room_id: str,
+        message_id: str,
+        agent_id: str,
+        reason: str,
+        retry_after_seconds: int | None = None,
+        user_requests_used: int = 0,
+        user_requests_limit: int | None = None,
+        system_requests_used: int = 0,
+        system_requests_limit: int | None = None,
+    ):
+        """
+        Send rate limit error event to room with detailed information.
+
+        Args:
+            room_id: The room ID
+            message_id: The message ID that triggered the rate limit
+            agent_id: The agent ID that was rate limited
+            reason: Human-readable error message
+            retry_after_seconds: Seconds until the user can retry
+            user_requests_used: Number of requests made by this user
+            user_requests_limit: Maximum requests allowed per user
+            system_requests_used: Total requests to this agent
+            system_requests_limit: Maximum total requests allowed
+        """
+        data = {
+            "error": reason,
+            "error_type": "rate_limit_exceeded",
+            "message_id": message_id,
+            "agent_id": agent_id,
+            "retry_after_seconds": retry_after_seconds,
+            "user_requests_used": user_requests_used,
+            "user_requests_limit": user_requests_limit,
+            "system_requests_used": system_requests_used,
+            "system_requests_limit": system_requests_limit,
+            "timestamp": utcnow().isoformat(),
+        }
+        await self.broadcast_to_room(room_id, "error", data)
+
     async def send_artifact_update(
         self,
         room_id: str,

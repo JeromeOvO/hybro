@@ -19,7 +19,7 @@ from a2a.types import (
 
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
-from models.agent import Agent
+from models.agent import Agent, AgentStatus
 from models.error import (
     AgentNotAssignedError,
     AgentNotFoundError,
@@ -44,6 +44,7 @@ from services.database_service import db_service
 from services.debate_service import debate_service
 from services.memory_service import chat_memory_service, room_memory_service
 from services.openai_service import openai_service
+from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.room_services import room_services
 from services.sse_services import sse_manager
@@ -135,6 +136,7 @@ class OrchestrationCenter:
         self.debate_service = debate_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
         self.room_coordinator_service = room_coordinator_service  # Use singleton
+        self.rate_limit_service = rate_limit_service  # Use singleton
 
     async def decompose_task(
         self, request: OrchestrationCenterRequest
@@ -289,14 +291,33 @@ class OrchestrationCenter:
             task_description = "No task description available"
 
         similar_agents = await self.database_service.query_similar_agents(
-            task_description, count=5
+            task_description, count=5, active_only=True
         )
+
+        if not similar_agents:
+            logger.error(
+                "OrchestrationCenter: No active agents found for task decomposition"
+            )
+            return OrchestrationCenterResponse(
+                task_id=root_task_id,
+                success=False,
+                error="No active agents available for task decomposition",
+                status_code=500,
+            )
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(
             task_description, similar_agents
         )
 
         best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
+        
+        # Verify the selected agent is active, fallback to first similar agent if not
+        if best_agent is None or best_agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "OrchestrationCenter: Selected agent %s is not active, falling back to first active agent",
+                best_agent_id
+            )
+            best_agent = similar_agents[0]  # Already filtered for active agents
 
         # Proceed with task decomposition
         decompose_task_response = await self.openai_service.decompose_task(
@@ -619,13 +640,43 @@ class OrchestrationCenter:
             return OrchestrationCenterResponse(
                 task_id=meta_task_id,
                 success=False,
-                error="No agent matched",
+                error="No active agent matched",
+                status_code=200,
+            )
+
+        # Filter for active agents only (safety check - db_service should already filter)
+        active_agents = [
+            agent for agent in agents_matched_response.agents
+            if agent.agent_status == AgentStatus.active
+        ]
+
+        if not active_agents:
+            logger.warning(
+                "OrchestrationCenter: No active agents available for meta task %s",
+                meta_task_id
+            )
+            return OrchestrationCenterResponse(
+                task_id=meta_task_id,
+                success=False,
+                error="No active agent available",
                 status_code=200,
             )
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(
-            meta_task.task_description, agents_matched_response.agents
+            meta_task.task_description, active_agents
         )
+
+        # Verify the selected agent is in our active list, fallback if not
+        best_agent = next(
+            (a for a in active_agents if a.agent_id == best_agent_id), 
+            None
+        )
+        if best_agent is None or best_agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "OrchestrationCenter: Selected agent %s is not active, using first active agent",
+                best_agent_id
+            )
+            best_agent_id = active_agents[0].agent_id
 
         meta_task.agent_id = best_agent_id
         update_response = await self.task_service.update_meta_task_by_task_id(
@@ -1888,6 +1939,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
+        # Get user_id from the user message for rate limiting
+        user_message = await self.database_service.get_room_user_message_by_message_id(
+            room_user_message_id
+        )
+        user_id = user_message.user_id if user_message else None
+
         # Get room memory context (ChatGPT/Claude style conversation history)
         room_memory, room_memory_content = await self._get_room_memory_context(room_id)
         if room_memory_content is None:
@@ -1939,7 +1996,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             )
 
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content, room_user_message_id
+            message_queue, room_id, room_memory_content, room_user_message_id, user_id
         )
 
         if not success:
@@ -2025,6 +2082,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id: str,
         room_memory_content: "MemoryContent",
         user_message_id: str,
+        user_id: str | None = None,
     ) -> bool:
         """
         Process all messages in the queue sequentially.
@@ -2034,6 +2092,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_id: The room ID
             room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             user_message_id: The user message ID for cancellation checks
+            user_id: The ID of the user making the request (for rate limiting)
         """
 
         while len(message_queue) > 0:
@@ -2061,7 +2120,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     )
                     return False
             else:
-                # Agent already assigned, fetch it
+                # Agent already assigned, fetch it and verify it's active
                 agent = await self.database_service.get_agent_by_agent_id(
                     current_message.agent_id
                 )
@@ -2072,6 +2131,58 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         current_message.message_id,
                     )
                     return False
+                
+                # Check if the assigned agent is still active
+                if agent.agent_status != AgentStatus.active:
+                    logger.warning(
+                        "OrchestrationCenter: Assigned agent %s is not active (status=%s), re-assigning for message %s",
+                        current_message.agent_id,
+                        agent.agent_status,
+                        current_message.message_id,
+                    )
+                    # Clear the agent_id and re-assign
+                    current_message.agent_id = None
+                    agent = await self._assign_agent(current_message)
+                    if agent is None:
+                        logger.error(
+                            "OrchestrationCenter: Failed to re-assign agent for message %s after inactive agent",
+                            current_message.message_id,
+                        )
+                        return False
+
+            # Check rate limits before processing (only if user_id is available)
+            if user_id:
+                rate_limit_result = await self.rate_limit_service.check_rate_limit(
+                    agent_id=agent.agent_id,
+                    user_id=user_id,
+                    rate_limit_per_user=agent.rate_limit_per_user_per_hour,
+                    rate_limit_system=agent.rate_limit_system_per_hour,
+                )
+
+                if not rate_limit_result.allowed:
+                    logger.warning(
+                        "OrchestrationCenter: Rate limit exceeded for agent %s, user %s: %s",
+                        agent.agent_id,
+                        user_id,
+                        rate_limit_result.reason,
+                    )
+                    # Send rate limit error via SSE with full details
+                    await self.sse_manager.send_rate_limit_error(
+                        room_id=room_id,
+                        message_id=user_message_id,
+                        agent_id=agent.agent_id,
+                        reason=rate_limit_result.reason or "Rate limit exceeded",
+                        retry_after_seconds=rate_limit_result.retry_after_seconds,
+                        user_requests_used=rate_limit_result.user_requests_used,
+                        user_requests_limit=rate_limit_result.user_requests_limit,
+                        system_requests_used=rate_limit_result.system_requests_used,
+                        system_requests_limit=rate_limit_result.system_requests_limit,
+                    )
+                    await self.sse_manager.send_processing_status(
+                        room_id, "rate_limited", user_message_id
+                    )
+                    # Return True: rate limiting is expected behavior, not a server error
+                    return True
 
             # Process the agent message
             status, response_text = await self._process_single_agent_message(
@@ -2088,6 +2199,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 # Graceful cancellation - don't treat as error
                 return True
 
+            # Record the request for rate limiting (only if user_id is available)
+            if user_id:
+                await self.rate_limit_service.record_request(
+                    agent_id=agent.agent_id,
+                    user_id=user_id,
+                )
+
             # Store agent response in conversation history (ChatGPT/Claude style)
             if response_text:
                 await self.room_memory_service.add_agent_response_to_memory(
@@ -2103,7 +2221,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return True
 
     async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
-        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided."""
+        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided.
+        
+        Only active agents will be assigned. If no active agents are found, returns None.
+        """
         # Gather any scoped agent list from extend_info (mentions/room) and merge with group agents for future group mentions
         allowed_agent_ids: list[str] = []
         target_group = None
@@ -2165,21 +2286,42 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             current_message.message_content.message_task.history[0].parts[0].root.text
         )
 
+        # Query similar agents - this already filters for active agents by default
         matched_agents = await self.database_service.query_similar_agents(
             user_input,
             allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
+            active_only=True,  # Only get active agents
         )
 
         if len(matched_agents) == 0:
             logger.error(
-                "OrchestrationCenter: No similar agent found for message %s (allowed_ids=%d)",
+                "OrchestrationCenter: No active agent found for message %s (allowed_ids=%d)",
                 current_message.message_id,
                 len(allowed_agent_ids),
             )
             return None
 
-        # Assign the best matching agent
-        agent = matched_agents[0]
+        # Find the first active agent (double-check status as safety)
+        agent = None
+        for candidate in matched_agents:
+            if candidate.agent_status == AgentStatus.active:
+                agent = candidate
+                break
+            else:
+                logger.warning(
+                    "OrchestrationCenter: Skipping inactive agent %s (status=%s) for message %s",
+                    candidate.agent_id,
+                    candidate.agent_status,
+                    current_message.message_id,
+                )
+
+        if agent is None:
+            logger.error(
+                "OrchestrationCenter: No active agent available for message %s after filtering",
+                current_message.message_id,
+            )
+            return None
+
         current_message.agent_id = agent.agent_id
 
         update_success = (
@@ -2197,7 +2339,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             return None
 
         logger.info(
-            "OrchestrationCenter: Successfully assigned agent %s to message %s",
+            "OrchestrationCenter: Successfully assigned active agent %s to message %s",
             agent.agent_id,
             current_message.message_id,
         )

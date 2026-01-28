@@ -162,6 +162,21 @@ class AgentCenter:
         """
         return await self.agent_service.get_all_agents(request)
 
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Retrieve all active agents in the system.
+
+        Returns a list of agents that have active status only,
+        filtering out inactive and deleted agents.
+
+        Args:
+            request: AgentCenterRequest (may contain filtering parameters)
+
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        return await self.agent_service.get_all_active_agents(request)
+
     async def get_agents_with_conditions(
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
@@ -202,3 +217,22 @@ class AgentCenter:
             AgentCenterResponse with list of all agents
         """
         return await self.agent_service.get_agents_by_provider_id(request)
+
+    def _mask_sensitive_information(
+            self, response: AgentCenterResponse, fields: list[str]
+    ) -> AgentCenterResponse:
+        """
+        Remove sensitive fields from an AgentCenterResponse.
+
+        This helper method applies field-level masking based on the
+        specified field paths (including nested attributes), and returns
+        a sanitized AgentCenterResponse suitable for API output.
+
+        Args:
+            response: AgentCenterResponse to be filtered
+            fields: list of field paths to mask (e.g., "agent_url", "agent_card.url")
+
+        Returns:
+            AgentCenterResponse with the specified fields removed
+        """
+        return self.agent_service._mask_sensitive_information(response, fields)

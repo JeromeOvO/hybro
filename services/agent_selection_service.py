@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from common.utils.logger import get_logger
-from models.agent import Agent
+from models.agent import Agent, AgentStatus
 from services.database_service import db_service
 from services.openai_service import openai_service
 
@@ -62,6 +62,8 @@ class AgentSelectionService:
         """
         Select agents for a message using vector search + LLM routing.
         
+        Only active agents will be considered for selection.
+        
         Args:
             message_text: The user's message to route
             top_k: Maximum number of candidate agents to consider
@@ -74,22 +76,22 @@ class AgentSelectionService:
             len(message_text)
         )
 
-        # Step 1: Vector search for candidate agents
+        # Step 1: Vector search for candidate agents (active only)
         candidates = await self.database_service.query_similar_agents(
-            message_text, count=top_k
+            message_text, count=top_k, active_only=True
         )
 
         if not candidates:
-            logger.warning("AgentSelectionService: No candidate agents found")
+            logger.warning("AgentSelectionService: No active candidate agents found")
             return AgentSelectionResult(
                 strategy=RoutingStrategy.SINGLE,
                 agents=[],
-                reasoning="No matching agents found in the network",
+                reasoning="No active matching agents found in the network",
                 needs_debate=False
             )
 
         logger.info(
-            "AgentSelectionService: Found %d candidate agents via vector search",
+            "AgentSelectionService: Found %d active candidate agents via vector search",
             len(candidates)
         )
 
@@ -106,6 +108,8 @@ class AgentSelectionService:
         """
         Use LLM to analyze message and decide routing strategy.
         
+        Only active agents will be selected.
+        
         Args:
             message_text: The user's message
             candidates: List of candidate agents from vector search
@@ -113,9 +117,26 @@ class AgentSelectionService:
         Returns:
             AgentSelectionResult with strategy and selected agents
         """
+        # Filter candidates to ensure only active agents are considered (safety check)
+        active_candidates = [
+            agent for agent in candidates 
+            if agent.agent_status == AgentStatus.active
+        ]
+        
+        if not active_candidates:
+            logger.warning(
+                "AgentSelectionService: No active agents in candidates after filtering"
+            )
+            return AgentSelectionResult(
+                strategy=RoutingStrategy.SINGLE,
+                agents=[],
+                reasoning="No active agents available",
+                needs_debate=False
+            )
+        
         try:
             routing_decision = await self.openai_service.analyze_message_routing(
-                message_text, candidates
+                message_text, active_candidates
             )
 
             # Parse LLM response
@@ -126,12 +147,19 @@ class AgentSelectionService:
             reasoning = routing_decision.get("reasoning", "")
             needs_debate = routing_decision.get("needs_debate", False)
 
-            # Build agent selections from the LLM's chosen agents
+            # Build agent selections from the LLM's chosen agents (only active ones)
             agent_selections = []
             agent_reasons = routing_decision.get("agent_reasons", {})
             
-            for agent in candidates:
+            for agent in active_candidates:
                 if agent.agent_id in selected_agent_ids:
+                    # Double-check agent is active before adding
+                    if agent.agent_status != AgentStatus.active:
+                        logger.warning(
+                            "AgentSelectionService: Skipping inactive agent %s in selection",
+                            agent.agent_id
+                        )
+                        continue
                     reason = agent_reasons.get(
                         agent.agent_id, 
                         f"Best match for: {agent.agent_card.description[:50]}..."
@@ -142,9 +170,9 @@ class AgentSelectionService:
                         reason=reason
                     ))
 
-            # If LLM didn't select any agents, fall back to first candidate
-            if not agent_selections and candidates:
-                first_agent = candidates[0]
+            # If LLM didn't select any agents, fall back to first active candidate
+            if not agent_selections and active_candidates:
+                first_agent = active_candidates[0]
                 agent_selections.append(AgentSelection(
                     agent_id=first_agent.agent_id,
                     agent_name=first_agent.agent_card.name,
@@ -171,9 +199,9 @@ class AgentSelectionService:
                 "AgentSelectionService: Failed to analyze routing, falling back to single agent: %s",
                 str(e)
             )
-            # Fallback: use first candidate with single strategy
-            if candidates:
-                first_agent = candidates[0]
+            # Fallback: use first active candidate with single strategy
+            if active_candidates:
+                first_agent = active_candidates[0]
                 return AgentSelectionResult(
                     strategy=RoutingStrategy.SINGLE,
                     agents=[AgentSelection(
@@ -187,7 +215,7 @@ class AgentSelectionService:
             return AgentSelectionResult(
                 strategy=RoutingStrategy.SINGLE,
                 agents=[],
-                reasoning="No agents available",
+                reasoning="No active agents available",
                 needs_debate=False
             )
 

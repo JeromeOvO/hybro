@@ -937,6 +937,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         selected_agent_set: dict = None,
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
+        agents: list[Agent] = None,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
@@ -1045,7 +1046,33 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
         # === NORMAL MODE: Enhanced with decomposition decision ===
         agent_list = ""
-        if selected_agent_set:
+        if agents:
+            # Build detailed agent descriptions with capabilities and skills
+            agent_descriptions = []
+            for agent in agents:
+                agent_desc = f"- Agent ID: {agent.agent_id}\n"
+                agent_desc += f"  Name: {agent.agent_card.name}\n"
+                agent_desc += f"  Description: {agent.agent_card.description or 'No description'}\n"
+                
+                # Format capabilities
+                capabilities = agent.agent_card.capabilities
+                if isinstance(capabilities, dict):
+                    cap_strings = [f"{k}: {v}" for k, v in capabilities.items()]
+                    agent_desc += f"  Capabilities: {', '.join(cap_strings)}\n"
+                
+                # Format skills
+                skills = agent.agent_card.skills
+                if isinstance(skills, list) and skills:
+                    skill_names = [
+                        (s.name or s.id or "Unknown") if hasattr(s, 'name') else str(s)
+                        for s in skills
+                    ]
+                    agent_desc += f"  Skills: {', '.join(skill_names)}\n"
+                
+                agent_descriptions.append(agent_desc)
+            agent_list = "\n".join(agent_descriptions)
+        elif selected_agent_set:
+            # Fallback to basic agent info if full Agent objects not provided
             agent_list = "\n".join(
                 [
                     f"- Agent ID: {aid}, Name: {aname}"
@@ -1073,9 +1100,10 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 
                 3. ASSIGN AGENTS (AUTO MODE)
                 - You MUST assign an agent from the available pool to EACH step
-                - Choose the most appropriate agent based on their name and the task content
+                - Choose the most appropriate agent based on their description, capabilities, skills, and the task content
+                - DIVERSIFY agent assignment: Different steps should ideally use different agents based on their specializations
+                - Match agent capabilities and skills to task requirements - read each agent's description carefully
                 - If only one agent is available, assign that agent to all steps
-                - Match agent capabilities to task requirements
                 - If task mentions a specific agent with <@...>, prioritize that agent for relevant steps
 
                 CRITICAL RULES:

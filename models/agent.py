@@ -38,6 +38,13 @@ class Agent(BaseModel):
     # Dislike count from user
     dislike_count: int = 0
 
+    # Rate limiting configuration
+    # Maximum requests per user per hour (None = unlimited)
+    rate_limit_per_user_per_hour: int | None = None
+
+    # Maximum requests for entire system per hour (None = unlimited)
+    rate_limit_system_per_hour: int | None = None
+
     @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:
         """Convert Enum to string value for storage"""

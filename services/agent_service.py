@@ -230,6 +230,26 @@ class AgentService:
             agents=agents, success=True, error=None, status_code=200
         )
 
+    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+        """
+        Get all agents with active status from the database.
+        
+        Args:
+            request: AgentCenterRequest (unused but kept for consistency)
+            
+        Returns:
+            AgentCenterResponse with list of active agents only
+        """
+        try:
+            agents = await self.database_service.get_all_active_agents()
+        except Exception as e:
+            logger.error(f"AgentCenter: Failed to get all active agents in database: {str(e)}")
+            return AgentCenterResponse(success=False, error=str(e), status_code=500)
+
+        return AgentCenterResponse(
+            agents=agents, success=True, error=None, status_code=200
+        )
+
     async def get_agents_with_conditions(
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
@@ -384,6 +404,46 @@ class AgentService:
         """Get agent by ID - internal service method"""
 
         return await self.database_service.get_agent_by_agent_id(agent_id)
+
+    def _mask_sensitive_information(
+            self, response: AgentCenterResponse, fields: list[str]
+    ) -> AgentCenterResponse:
+        """
+        Sanitize sensitive fields in AgentCenterResponse.
+        Supports:
+          - top-level fields (e.g. 'agent_url')
+          - nested fields (e.g. 'agent_card.url','agent_card.skills.id')
+          - nested agent fields for resp.agent and resp.agents list
+        Returns a NEW AgentCenterResponse
+        """
+        data = response.model_dump()
+
+        def remove_nested_field(obj, path_parts):
+            if not path_parts:
+                return
+
+            if isinstance(obj, dict):
+                if len(path_parts) == 1:
+                    obj[path_parts[0]] = ""
+                elif path_parts[0] in obj:
+                    remove_nested_field(obj[path_parts[0]], path_parts[1:])
+
+            elif isinstance(obj, list):
+                for item in obj:
+                    remove_nested_field(item, path_parts)
+
+        for field_path in fields:
+            parts = field_path.split(".")
+
+            if len(parts) == 1:
+                data.pop(parts[0], None)
+            else:
+                if "agents" in data:
+                    remove_nested_field(data["agents"], parts)
+                if "agent" in data:
+                    remove_nested_field(data["agent"], parts)
+
+        return AgentCenterResponse(**data)
 
 
 
