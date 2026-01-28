@@ -1,14 +1,15 @@
 // Inspection-related API functions
-import type { 
-  InspectionCenterRequest, 
+import type {
+  InspectionCenterRequest,
   InspectionCenterResponse,
-  InsepectionCenterConnectionValidationResponse 
+  InsepectionCenterConnectionValidationResponse
 } from '@/lib/types'
 
-import { getApiUrl } from '../utils'
+import { getApiUrl, getInspectionTimeoutMs } from '../utils'
 import { apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('inspectionCenter')
+const INSPECTION_TIMEOUT_MS = getInspectionTimeoutMs()
 
 // Inspect agent card
 export async function inspectAgentCard(
@@ -30,6 +31,8 @@ export async function inspectA2AConnection(
   return apiPost<InsepectionCenterConnectionValidationResponse>(
     `${API_BASE_URL}/inspectA2AConnection`,
     request,
-    getToken
+    getToken,
+    undefined,  // signal
+    INSPECTION_TIMEOUT_MS
   )
 } 
