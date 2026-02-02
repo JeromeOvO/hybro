@@ -96,19 +96,11 @@ class DiscoveryService:
         
         if not agent_id_to_score:
             best_score = max(all_scores) if all_scores else 0.0
-            logger.warning(
-                f"DiscoveryService: No agents met threshold {self.threshold}. "
-                f"Found {len(matches)} matches. Best score: {best_score}, All scores: {all_scores[:5]}"
-            )
-            raise ValueError(
-                f"No agent found matching your query with sufficient confidence "
-                f"(threshold: {self.threshold}, best score: {best_score})"
-            )
-        
-        logger.info(
-            f"DiscoveryService: Found {len(agent_id_to_score)} agents meeting threshold"
-        )
-        
+            logger.warning(f"(No match: threshold: {self.threshold}, best score: {best_score})")    
+            raise ValueError(f"No agent found matching your query with sufficient confidence ")
+                      
+        logger.info(f"DiscoveryService: Found {len(agent_id_to_score)} agents meeting threshold")
+            
         # Step 4: Fetch full agent information from MongoDB
         agent_ids = list(agent_id_to_score.keys())
         db_query = {"agent_id": {"$in": agent_ids}}

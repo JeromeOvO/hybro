@@ -46,8 +46,11 @@ class Settings(BaseSettings):
     agent_health_check_enabled: bool = True # enable/disable agent health check
 
     # Discovery API Settings
-    discovery_confidence_threshold: float = 0.0  # Minimum similarity score to return an agent
+    discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
     discovery_default_limit: int = 5  # Default number of agents to return
+    discovery_query_expansion_threshold: int = 5  # Maximum word count for query expansion
+    discovery_rate_limit_per_key: int | None = 100  # Requests per API key per hour (None = unlimited)
+    discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
     
     class Config:
         env_file = ".env"

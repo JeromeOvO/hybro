@@ -22,6 +22,7 @@ from api import (
     task,
 )
 from common.auth import get_current_user
+from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
@@ -105,15 +106,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
+# Add Discovery API CORS middleware
+# This applies permissive CORS only to /api/v1/discovery/* paths
+# Note: Middleware runs in reverse order, so adding first means it runs last
+app.add_middleware(DiscoveryCORSMiddleware)
+
 # Add CORS middleware
-# Allow all origins for the Discovery API (external access)
-# Also allow X-API-Key header for API key authentication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for external API access
-    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
+    allow_credentials=True, 
     allow_methods=["*"],
-    allow_headers=["*"],  # Includes X-API-Key, Content-Type, etc.
+    allow_headers=["*"]
 )
 
 

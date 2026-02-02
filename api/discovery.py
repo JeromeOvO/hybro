@@ -5,7 +5,7 @@ Public API for external developers to discover agents using semantic search.
 Requires API key authentication via X-API-Key header.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -13,6 +13,7 @@ from common.api_key_auth import get_api_key
 from config.settings import settings
 from models.api_key import APIKey
 from models.response import DiscoveryErrorResponse, DiscoveryResponse
+from services.discovery_rate_limit_service import discovery_rate_limit_service
 from services.discovery_service import discovery_service
 
 router = APIRouter()
@@ -35,6 +36,7 @@ class DiscoveryRequest(BaseModel):
     responses={
         401: {"model": DiscoveryErrorResponse, "description": "Invalid or missing API key"},
         404: {"model": DiscoveryErrorResponse, "description": "No agents found matching query"},
+        429: {"model": DiscoveryErrorResponse, "description": "Rate limit exceeded"},
         500: {"model": DiscoveryErrorResponse, "description": "Internal server error"},
     },
     summary="Discover Agents",
@@ -89,6 +91,7 @@ async def discover_agents(
     Raises:
         HTTPException 401: Invalid or missing API key
         HTTPException 404: No agents found matching query
+        HTTPException 429: Rate limit exceeded
         HTTPException 500: Internal server error
     """
     # Log the request (anonymized)
@@ -98,12 +101,18 @@ async def discover_agents(
         f"Query: '{query_preview}' | Limit: {request_body.limit or settings.discovery_default_limit}"
     )
     
+    # Check rate limits before processing
+    await discovery_rate_limit_service.check_rate_limit(api_key)
+    
     try:
         # Perform agent discovery
         result = await discovery_service.discover_agents(
             query=request_body.query,
             limit=request_body.limit,
         )
+        
+        # Record successful request for rate limiting
+        await discovery_rate_limit_service.record_request(api_key)
         
         # Log success
         logger.info(
@@ -112,6 +121,9 @@ async def discover_agents(
         
         return result
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (including rate limit errors from check_rate_limit)
+        raise
     except ValueError as e:
         # No agents found matching query with sufficient confidence
         logger.info(
@@ -123,8 +135,7 @@ async def discover_agents(
                 "error": "no_agent_found",
                 "message": str(e),
             },
-        )
-        
+        ) from e
     except Exception as e:
         # Unexpected error
         logger.error(
@@ -136,5 +147,5 @@ async def discover_agents(
                 "error": "internal_error",
                 "message": "An unexpected error occurred while searching for agents",
             },
-        )
+        ) from e
 

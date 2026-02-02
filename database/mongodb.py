@@ -174,6 +174,15 @@ class MongoDB:
             )
         return self.db.agent_requests
 
+    @property
+    def discovery_api_requests_collection(self):
+        """Get discovery API requests collection for rate limiting"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.discovery_api_requests
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """

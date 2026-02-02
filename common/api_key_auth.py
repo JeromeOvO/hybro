@@ -66,7 +66,7 @@ async def validate_api_key(api_key: str) -> APIKey:
             },
         )
     
-    # Update usage statistics (fire and forget - don't block the request)
+    # Update usage statistics 
     try:
         await mongodb.update_api_key_usage(key_hash)
     except Exception as e:

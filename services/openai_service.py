@@ -60,8 +60,8 @@ class OpenAIService:
         query = query.strip()
         word_count = len(query.split())
         
-        # Only expand if query is very short (1-3 words)
-        if word_count > 3:
+        # Expand short queries
+        if word_count > settings.discovery_query_expansion_threshold:
             return query
         
         system_prompt = """You are a query expansion assistant for an AI agent discovery system.
@@ -70,16 +70,14 @@ that will help find relevant AI agents.
 
 EXPANSION RULES:
 1. Add context about what the user might be looking for
-2. Include synonyms and related terms
+2. Expand the query into more detailed sentences, not phrases.
 3. Add use case context (e.g., "help with", "specializes in", "can do")
 4. Keep the original intent but make it more descriptive
 5. Don't change the core meaning
 
 EXAMPLES:
-- "story" → "storytelling agent, narrative writing, creative writing assistance, fiction writing help"
-- "data" → "data analysis agent, data processing, data visualization, data insights"
-- "translate" → "translation agent, language translation, multilingual translation service"
-- "code" → "coding assistant, programming help, software development, code generation"
+- "story" → "The agent supports storytelling, narrative writing, creative writing assistance, and fiction writing help."
+- "data" → "The agent supports data analysis, data processing, data visualization, and generating actionable insights from data."
 
 Return ONLY the expanded query, no explanations."""
 
