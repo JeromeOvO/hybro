@@ -377,6 +377,111 @@ class A2ATaskService:
             tasks.append(doc)
         return tasks
 
+    async def save_continuation(
+        self,
+        internal_id: str,
+        continuation_data: dict[str, Any],
+    ) -> bool:
+        """
+        Save queue continuation state for a push notification task.
+
+        When a push notification task is submitted, we need to pause the queue
+        and save its state so we can resume processing when the task completes.
+
+        Args:
+            internal_id: Our internal task ID
+            continuation_data: Serialized queue state including:
+                - remaining_queue: List of serialized RoomAgentMessage objects
+                - room_id: The room ID
+                - room_memory_content: Serialized MemoryContent
+                - user_message_id: The user message ID for cancellation checks
+                - request_user_id: The user ID making the request
+
+        Returns:
+            True if saved successfully
+        """
+        try:
+            result = await self.collection.update_one(
+                {"_id": ObjectId(internal_id)},
+                {
+                    "$set": {
+                        "pending_continuation": continuation_data,
+                        "updated_at": datetime.now(UTC),
+                    }
+                },
+            )
+            if result.modified_count > 0:
+                logger.info(f"Saved continuation for task {internal_id}")
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Failed to save continuation for task {internal_id}: {e}")
+            return False
+
+    async def get_and_clear_continuation(
+        self, internal_id: str
+    ) -> dict[str, Any] | None:
+        """
+        Get and atomically clear continuation state for a task.
+
+        This is called when a push notification task completes and we need
+        to resume queue processing.
+
+        Args:
+            internal_id: Our internal task ID
+
+        Returns:
+            The continuation data if present, None otherwise
+        """
+        try:
+            # Use findOneAndUpdate for atomic get-and-clear
+            doc = await self.collection.find_one_and_update(
+                {
+                    "_id": ObjectId(internal_id),
+                    "pending_continuation": {"$exists": True, "$ne": None},
+                },
+                {
+                    "$set": {
+                        "pending_continuation": None,
+                        "updated_at": datetime.now(UTC),
+                    }
+                },
+                return_document=False,  # Return the document before update
+            )
+            if doc and doc.get("pending_continuation"):
+                logger.info(
+                    f"Retrieved and cleared continuation for task {internal_id}"
+                )
+                return doc["pending_continuation"]
+            return None
+        except Exception as e:
+            logger.error(
+                f"Failed to get/clear continuation for task {internal_id}: {e}"
+            )
+            return None
+
+    async def has_continuation(self, internal_id: str) -> bool:
+        """
+        Check if a task has pending continuation state.
+
+        Args:
+            internal_id: Our internal task ID
+
+        Returns:
+            True if continuation exists
+        """
+        try:
+            doc = await self.collection.find_one(
+                {
+                    "_id": ObjectId(internal_id),
+                    "pending_continuation": {"$exists": True, "$ne": None},
+                },
+                {"_id": 1},
+            )
+            return doc is not None
+        except Exception as e:
+            logger.error(f"Failed to check continuation for task {internal_id}: {e}")
+            return False
+
 
 # Singleton instance will be created in main.py after MongoDB connection
 a2a_task_service: A2ATaskService | None = None

@@ -27,6 +27,36 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+async def resume_queue_continuation(
+    internal_id: str,
+    task_result_text: str | None = None,
+) -> None:
+    """
+    Resume queue processing after a push notification task completes.
+
+    This is called as a background task when a webhook indicates a task
+    has reached a terminal state.
+
+    Args:
+        internal_id: The internal ID of the completed task
+        task_result_text: The result text from the completed task
+    """
+    # Import here to avoid circular imports
+    from api.orchestration_center import orchestration_center
+
+    try:
+        resumed = await orchestration_center.resume_queue_from_continuation(
+            internal_id, task_result_text
+        )
+        if resumed:
+            logger.info(f"Successfully resumed queue processing for task {internal_id}")
+    except Exception as e:
+        logger.error(
+            f"Failed to resume queue for task {internal_id}: {e}",
+            exc_info=True,
+        )
+
+
 async def notify_task_update(
     internal_id: str,
     task: Task,
@@ -286,6 +316,13 @@ async def handle_a2a_webhook(
     new_state = updated_task.status.state
     should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
 
+    # Extract content for queue resumption (if task completed successfully)
+    task_result_text = None
+    if is_terminal_state(new_state):
+        state_value = new_state.value if hasattr(new_state, "value") else str(new_state)
+        if state_value == "completed" and updated_task.artifacts:
+            task_result_text = extract_text_from_artifacts(updated_task.artifacts)
+
     if should_notify:
         # Get created_at from task document for consistent ordering
         created_at = None
@@ -301,6 +338,14 @@ async def handle_a2a_webhook(
             agent_name=current.get("agent_name"),
             agent_id=current.get("agent_id"),
             created_at=created_at,
+        )
+
+    # 7. Resume queue processing if task reached terminal state and has continuation
+    if is_terminal_state(new_state):
+        background_tasks.add_task(
+            resume_queue_continuation,
+            internal_id=internal_id,
+            task_result_text=task_result_text,
         )
 
     return {"status": "accepted"}
