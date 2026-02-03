@@ -140,23 +140,67 @@ class DatabaseService:
         """
         return await self.mongo.get_all_agents()
 
-    async def get_all_active_agents(self) -> list[Agent]:
+    def _build_visibility_filter(self, user_id: str | None) -> dict[str, Any]:
+        """Build a MongoDB filter for agent visibility.
+
+        Public agents include documents where is_public is True or missing.
+        If user_id is provided, include that user's private agents.
         """
-        Get all active agents from MongoDB.
+        public_filter: dict[str, Any] = {
+            "$or": [
+                {"is_public": True},
+                {"is_public": {"$exists": False}},
+            ]
+        }
+        if user_id:
+            return {
+                "$or": [
+                    {"provider_id": user_id},
+                    {"is_public": True},
+                    {"is_public": {"$exists": False}},
+                ]
+            }
+        return public_filter
+
+    async def get_all_visible_agents(self, user_id: str | None = None) -> list[Agent]:
+        """
+        Get all visible agents from MongoDB.
+
+        Args:
+            user_id: Optional user ID - if provided, includes user's private agents
 
         Returns:
-            List[Agent]: List of agents with active status only
+            List[Agent]: List of agents visible to the requesting user
         """
-        all_agents = await self.mongo.get_all_agents()
-        active_agents = [
-            agent for agent in all_agents if agent.agent_status == AgentStatus.active
-        ]
+        query = self._build_visibility_filter(user_id)
+        return await self.mongo.get_agents_with_conditions(query)
+
+    async def get_all_active_agents(self, user_id: str | None = None) -> list[Agent]:
+        """
+        Get all active and visible agents from MongoDB.
+        
+        Args:
+            user_id: Optional user ID - if provided, includes user's private agents
+        
+        Returns:
+            List[Agent]: List of agents with active status that are either:
+                - Public (visible to everyone)
+                - Private but owned by the requesting user
+        """
+        visibility_filter = self._build_visibility_filter(user_id)
+        query: dict[str, Any] = {
+            "$and": [
+                {"agent_status": AgentStatus.active.value},
+                visibility_filter,
+            ]
+        }
+        visible_agents = await self.mongo.get_agents_with_conditions(query)
         logger.debug(
-            "DatabaseService: Filtered to %d active agents out of %d total",
-            len(active_agents),
-            len(all_agents),
+            "DatabaseService: Found %d visible active agents (user_id=%s)",
+            len(visible_agents),
+            user_id
         )
-        return active_agents
+        return visible_agents
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -166,12 +210,34 @@ class DatabaseService:
         """
         return await self.mongo.get_agents_with_conditions(query, limit)
 
+    async def get_agents_with_conditions_visible(
+        self,
+        user_id: str | None = None,
+        query: dict[str, Any] | None = None,
+        limit: int = 0,
+    ) -> list[Agent]:
+        """
+        Get agents with conditions, filtered by visibility.
+        """
+        visibility_filter = self._build_visibility_filter(user_id)
+        if query is None:
+            query = {}
+
+        combined_query: dict[str, Any]
+        if "$and" in query:
+            combined_query = {"$and": [*query["$and"], visibility_filter]}
+        else:
+            combined_query = {"$and": [query, visibility_filter]}
+
+        return await self.mongo.get_agents_with_conditions(combined_query, limit)
+
     async def query_similar_agents(
         self,
         query_text: str,
         count: int = 5,
         allowed_agent_ids: list[str] | None = None,
         active_only: bool = True,
+        user_id: str | None = None,
     ) -> list[Agent]:
         """
         Find similar agents based on task description embedding and return their full information
@@ -181,6 +247,7 @@ class DatabaseService:
             count: Number of results to return
             allowed_agent_ids: Optional list of agent IDs to restrict the search to
             active_only: If True, only return agents with active status (default: True)
+            user_id: Optional user ID to include private agents
 
         Returns:
             List[Agent]: List of similar agents with complete information from MongoDB
@@ -221,6 +288,11 @@ class DatabaseService:
 
         # Fetch complete agent information from MongoDB
         query = {"agent_id": {"$in": agent_ids}}
+        
+        # Apply visibility filter
+        visibility_filter = self._build_visibility_filter(user_id)
+        query = {"$and": [query, visibility_filter]}
+        
         agents = await self.mongo.get_agents_with_conditions(query)
 
         # Filter for active agents only if requested

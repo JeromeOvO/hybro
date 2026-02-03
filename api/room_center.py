@@ -53,6 +53,7 @@ async def create_new_room(
         room_agent_set=room_agent_set,
         applied_from_group=applied_from_group,
         extend_info=extend_info,
+        requesting_user_id=user.user_id,  # Pass user for agent visibility validation
     )
     room_center_response = await room_center.create_new_room(room_center_request)
     return room_center_response
@@ -106,7 +107,9 @@ async def update_room_agent_set(
     await verify_room_ownership(room_id, user)
 
     room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id, room_agent_set=room_agent_set
+        room_id=room_id,
+        room_agent_set=room_agent_set,
+        requesting_user_id=user.user_id,  # Pass user for agent visibility validation
     )
     room_center_response = await room_center.update_room_agent_set(room_center_request)
     return room_center_response

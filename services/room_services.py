@@ -109,6 +109,26 @@ class RoomServices:
 
         return normalized
 
+    async def _validate_agents_access(
+        self, agent_ids: list[str], user_id: str
+    ) -> list[str]:
+        """
+        Validate that the user has access to all specified agents.
+        Private agents can only be added by their owner.
+        
+        Returns:
+            List of inaccessible agent IDs (empty if all accessible)
+        """
+        if not agent_ids:
+            return []
+        
+        # Fetch all agents in one query
+        agents = await self.database_service.get_agents_with_conditions(
+            {"agent_id": {"$in": agent_ids}}
+        )
+        
+        return [agent.agent_id for agent in agents if not agent.is_public and agent.provider_id != user_id]
+
     # room setting management
     async def create_new_room(
         self, room_create_request: RoomCenterRoomSettingRequest
@@ -135,12 +155,30 @@ class RoomServices:
                 status_code=400,
             )
 
-        if room_create_request.room is not None:
-            room = room_create_request.room
-        else:
+        # Validate that user has access to all agents being added
+        if room_create_request.room_agent_set:
             normalized_agent_set = self._normalize_room_agent_set(
                 room_create_request.room_agent_set
             )
+            requesting_user = room_create_request.requesting_user_id or room_create_request.room_owner_id
+            if requesting_user:
+                inaccessible = await self._validate_agents_access(
+                    list(normalized_agent_set.keys()), requesting_user
+                )
+                if inaccessible:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=None,
+                        room=None,
+                        success=False,
+                        error=f"Access denied to private agents: {', '.join(inaccessible)}",
+                        status_code=403,
+                    )
+        else:
+            normalized_agent_set = {}
+
+        if room_create_request.room is not None:
+            room = room_create_request.room
+        else:
             room = Room(
                 room_id=str(uuid4()),
                 room_name=room_create_request.room_name,
@@ -258,7 +296,28 @@ class RoomServices:
             )
 
         # Normalize incoming mapping to {agent_id: agent_name}
-        room.room_agent_set = self._normalize_room_agent_set(request.room_agent_set)
+        normalized_agent_set = self._normalize_room_agent_set(request.room_agent_set)
+
+        # Validate that user has access to any NEW agents being added
+        if request.requesting_user_id:
+            # Find which agents are new (not already in room)
+            existing_agent_ids = set(room.room_agent_set.keys()) if room.room_agent_set else set()
+            new_agent_ids = set(normalized_agent_set.keys()) - existing_agent_ids
+            
+            if new_agent_ids:
+                inaccessible = await self._validate_agents_access(
+                    list(new_agent_ids), request.requesting_user_id
+                )
+                if inaccessible:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=room_id,
+                        room=None,
+                        success=False,
+                        error=f"Access denied to private agents: {', '.join(inaccessible)}",
+                        status_code=403,
+                    )
+
+        room.room_agent_set = normalized_agent_set
         success = await self.database_service.update_room_by_room_id(room_id, room)
         if success:
             return RoomCenterRoomSettingResponse(
