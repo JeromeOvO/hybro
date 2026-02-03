@@ -14,17 +14,26 @@ import { Button } from '@/components/ui/button'
 import { ConversationRound, type ConversationRoundData } from './conversation-round'
 import { ConversationNavigator } from './conversation-navigator'
 import { MessageBubble } from './message-bubble'
+import { TaskStatusMessage } from './task-status-message'
 import { cn } from '@/lib/utils'
+import type { TaskState } from '@/lib/types/sse'
 
 export interface MessageData {
   id: string
-  type: 'user' | 'agent'
+  type: 'user' | 'agent' | 'task'
   content: string
   sender_name: string
   timestamp: string
   user_id?: string
   agent_id?: string
   related_message_id?: string | null
+  // Task-specific fields (for type: 'task')
+  task_internal_id?: string
+  task_status?: string
+  task_error?: string | null
+  task_status_message?: string | null
+  task_requires_input?: boolean
+  task_requires_auth?: boolean
 }
 
 // Processing Status Component - Styled to match agent message bubbles
@@ -113,7 +122,7 @@ function LoadingState() {
 /**
  * Groups a flat array of messages into conversation rounds.
  * A "round" starts with a user message and includes all subsequent
- * agent messages until the next user message.
+ * agent/task messages until the next user message.
  */
 function groupMessagesIntoRounds(
   messages: MessageData[],
@@ -122,49 +131,82 @@ function groupMessagesIntoRounds(
   const rounds: ConversationRoundData[] = []
   const orphanedAgentMessages: MessageData[] = []
   const userRoundMap = new Map<string, ConversationRoundData>()
-  let currentRound: ConversationRoundData | null = null
+  const messageById = new Map<string, MessageData>()
   let roundNumber = 0
 
   for (const message of messages) {
-    if (message.type === 'user') {
-      // Save previous round if exists
-      if (currentRound) {
-        rounds.push(currentRound)
-      }
-      
-      roundNumber++
-      
-      // Create new round with this user message
-      currentRound = {
-        id: `round-${roundNumber}-${message.id}`,
-        roundNumber,
-        userMessage: message,
-        agentResponses: [],
-        timestamp: message.timestamp,
-        isCollapsed: collapsedRounds.has(roundNumber)
-      }
-      userRoundMap.set(message.id, currentRound)
-      
-    } else if (message.type === 'agent') {
-      // Prefer grouping by explicit parent user message if provided
-      const parentId = message.related_message_id || null
-      const targetRound = parentId ? userRoundMap.get(parentId) : currentRound
+    messageById.set(message.id, message)
+  }
 
-      if (targetRound) {
-        targetRound.agentResponses.push(message)
-      } else {
-        // Agent message before any user message
-        orphanedAgentMessages.push(message)
+  for (const message of messages) {
+    if (message.type !== 'user') continue
+    roundNumber++
+    const round: ConversationRoundData = {
+      id: `round-${roundNumber}-${message.id}`,
+      roundNumber,
+      userMessage: message,
+      agentResponses: [],
+      timestamp: message.timestamp,
+      isCollapsed: collapsedRounds.has(roundNumber)
+    }
+    rounds.push(round)
+    userRoundMap.set(message.id, round)
+  }
+
+  const resolveUserParentId = (message: MessageData): string | null => {
+    let parentId = message.related_message_id ?? null
+    const visited = new Set<string>()
+
+    while (parentId) {
+      if (visited.has(parentId)) {
+        return null
       }
+      visited.add(parentId)
+
+      const parentMessage = messageById.get(parentId)
+      if (!parentMessage) return null
+      if (parentMessage.type === 'user') return parentMessage.id
+
+      parentId = parentMessage.related_message_id ?? null
+    }
+
+    return null
+  }
+
+  let lastRound: ConversationRoundData | null = null
+  for (const message of messages) {
+    if (message.type === 'user') {
+      lastRound = userRoundMap.get(message.id) ?? null
+      continue
+    }
+
+    if (message.type !== 'agent' && message.type !== 'task') {
+      continue
+    }
+
+    // Prefer grouping by explicit parent user message if provided
+    const parentUserId = resolveUserParentId(message)
+    const targetRound = parentUserId
+      ? userRoundMap.get(parentUserId)
+      : lastRound
+
+    if (targetRound) {
+      targetRound.agentResponses.push(message)
+    } else {
+      // Agent/task message before any user message
+      orphanedAgentMessages.push(message)
     }
   }
-  
-  // Don't forget the last round
-  if (currentRound) {
-    rounds.push(currentRound)
-  }
-  
+
   return { rounds, orphanedAgentMessages }
+}
+
+function shouldRenderTaskAsAgent(message: MessageData): boolean {
+  return message.type === 'task' && message.task_status === 'completed' && !!message.content
+}
+
+function toAgentMessage(message: MessageData): MessageData {
+  return message.type === 'agent' ? message : { ...message, type: 'agent' }
 }
 
 interface RoomMessagesProps {
@@ -187,7 +229,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   const mapButtonRef = useRef<HTMLButtonElement>(null)
   const navigatorRef = useRef<HTMLDivElement>(null)
   const allAgentIds = useMemo(
-    () => messages.filter(m => m.type === 'agent').map(m => m.id),
+    () => messages.filter(m => m.type === 'agent' || shouldRenderTaskAsAgent(m)).map(m => m.id),
     [messages]
   )
   const allTimelineExpanded = useMemo(
@@ -206,7 +248,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
   }, [messages])
   const lastAgentMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].type === 'agent') {
+      if (messages[i].type === 'agent' || shouldRenderTaskAsAgent(messages[i])) {
         return messages[i].id
       }
     }
@@ -553,18 +595,33 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                   <div className="text-xs text-muted-foreground mb-2">
                     Earlier messages
                   </div>
-                  {orphanedAgentMessages.map(msg => (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      defaultExpanded={msg.id === lastAgentMessageId}
-                  collapseSignal={collapseSignal}
-                  autoCollapseVersion={autoCollapseVersion}
-                  isLatestAgent={msg.id === lastAgentMessageId}
-                  isUserExpanded={userExpandedIds.has(msg.id)}
-                  onUserToggle={handleUserToggle}
-                    />
-                  ))}
+                  {orphanedAgentMessages.map(msg => {
+                    if (msg.type === 'task' && !shouldRenderTaskAsAgent(msg)) {
+                      return (
+                        <TaskStatusMessage
+                          key={msg.id}
+                          internalId={msg.task_internal_id || msg.id}
+                          agentName={msg.sender_name}
+                          initialStatus={(msg.task_status || 'working') as TaskState}
+                          content={msg.content || null}
+                          error={msg.task_error}
+                          statusMessage={msg.task_status_message}
+                        />
+                      )
+                    }
+                    return (
+                      <MessageBubble
+                        key={msg.id}
+                        message={msg.type === 'user' ? msg : toAgentMessage(msg)}
+                        defaultExpanded={msg.id === lastAgentMessageId}
+                        collapseSignal={collapseSignal}
+                        autoCollapseVersion={autoCollapseVersion}
+                        isLatestAgent={msg.id === lastAgentMessageId}
+                        isUserExpanded={userExpandedIds.has(msg.id)}
+                        onUserToggle={handleUserToggle}
+                      />
+                    )
+                  })}
                 </div>
               )}
 
@@ -592,18 +649,35 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
               ) : (
                 // Timeline view (flat chronological)
           <div className="space-y-4">
-                  {messages.map(msg => (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      defaultExpanded={msg.id === lastAgentMessageId}
-                      collapseSignal={collapseSignal}
-                      autoCollapseVersion={autoCollapseVersion}
-                      isLatestAgent={msg.id === lastAgentMessageId}
-                      isUserExpanded={userExpandedIds.has(msg.id)}
-                      onUserToggle={handleUserToggle}
-                    />
-            ))}
+                  {messages.map(msg => {
+                    // Render task messages with TaskStatusMessage component
+                    if (msg.type === 'task' && !shouldRenderTaskAsAgent(msg)) {
+                      return (
+                        <TaskStatusMessage
+                          key={msg.id}
+                          internalId={msg.task_internal_id || msg.id}
+                          agentName={msg.sender_name}
+                          initialStatus={(msg.task_status || 'working') as TaskState}
+                          content={msg.content || null}
+                          error={msg.task_error}
+                          statusMessage={msg.task_status_message}
+                        />
+                      )
+                    }
+                    // Render regular messages
+                    return (
+                      <MessageBubble
+                        key={msg.id}
+                        message={msg.type === 'user' ? msg : toAgentMessage(msg)}
+                        defaultExpanded={msg.id === lastAgentMessageId}
+                        collapseSignal={collapseSignal}
+                        autoCollapseVersion={autoCollapseVersion}
+                        isLatestAgent={msg.id === lastAgentMessageId}
+                        isUserExpanded={userExpandedIds.has(msg.id)}
+                        onUserToggle={handleUserToggle}
+                      />
+                    )
+                  })}
                 </div>
               )}
             

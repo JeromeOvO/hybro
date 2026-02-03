@@ -9,6 +9,7 @@ import {
 } from '@/lib/api/room'
 import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { cancelMessage } from '@/lib/api/sse'
+import { listRoomTasks, getTaskStatus, extractTaskContent, extractTaskError } from '@/lib/api/a2a-tasks'
 import { banner } from "@/components/ui/banner"
 import { useQuery } from '@tanstack/react-query'
 // Import the correct RoomMessage type from response.ts (API response format)
@@ -16,7 +17,7 @@ import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
 import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
-import type { SSEMessage } from '@/lib/types/sse'
+import type { SSEMessage, TaskState } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { getAllActiveAgents } from '@/lib/api/agent'
 
@@ -207,6 +208,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     let content: string = ''
     let senderName: string = ''
     let relatedMessageId: string | null = null
+    let taskInternalId: string | undefined
+    let taskStatus: string | undefined
     if (typeof apiMessage.related_message_id === 'string') {
       relatedMessageId = apiMessage.related_message_id
     } else if (typeof apiMessage.message_content?.message_task?.metadata?.related_message_id === 'string') {
@@ -222,6 +225,29 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       content = ''
     }
 
+    // If message_text is empty but a task exists, derive content from task artifacts/status
+    if (!content && apiMessage.message_content?.message_task) {
+      const taskContent = extractTaskContent(apiMessage.message_content.message_task as any)
+      const taskError = extractTaskError(apiMessage.message_content.message_task as any)
+      if (taskContent) {
+        content = taskContent
+      } else if (taskError) {
+        content = taskError
+      }
+    }
+
+    // Capture internal task id if present (used to reconcile placeholders)
+    const messageTask = apiMessage.message_content?.message_task
+    const maybeInternalId = messageTask?.metadata?.internal_id
+    if (typeof maybeInternalId === 'string') {
+      taskInternalId = maybeInternalId
+    }
+    const maybeStatus = messageTask?.status?.state
+    if (typeof maybeStatus === 'string') {
+      taskStatus = maybeStatus
+    }
+
+    let resolvedAgentId: string | undefined
     // Determine sender name based on message type
     if (apiMessage.message_type === 'user') {
       // Prefer provided userName, then userId, then fallback
@@ -236,6 +262,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       } else if (apiMessage.message_content?.message_task?.metadata?.agent_id) {
         agentId = apiMessage.message_content.message_task.metadata.agent_id as string
       }
+      resolvedAgentId = agentId
       
       // Fetch agent name using the agent_id
       if (agentId) {
@@ -263,6 +290,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       user_id: apiMessage.message_type === 'user' ? userId : undefined,
       agent_id: apiMessage.message_type === 'agent' ? (apiMessage.agent_id || 'agent_id') : undefined,
       related_message_id: relatedMessageId,
+      task_internal_id: taskInternalId,
+      task_status: taskStatus,
     }
   }, [userId, userName, getAgentName, normalizeTimestamp])
 
@@ -286,6 +315,116 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         const converted = await Promise.all(
           response.message_list.map(msg => convertApiMessageToMessageData(msg))
         )
+
+        // Also fetch A2A tasks for this room and convert to task messages
+        try {
+          const tasksResponse = await listRoomTasks(roomId, 50, getToken)
+          if (tasksResponse.success && tasksResponse.tasks && tasksResponse.tasks.length > 0) {
+            console.log(`📋 Found ${tasksResponse.tasks.length} A2A tasks for room`)
+            
+            // Fetch full task details for each task to get content
+            const taskMessages: MessageData[] = []
+            const existingTasksById = new Map<string, MessageData>()
+            converted.forEach(msg => {
+              if (msg.task_internal_id) {
+                existingTasksById.set(msg.task_internal_id, msg)
+              }
+            })
+            const completedAgentMessages = converted.filter(
+              msg =>
+                msg.type === 'agent' &&
+                !!msg.content &&
+                !!msg.task_status &&
+                msg.task_status === 'completed'
+            )
+            for (const taskItem of tasksResponse.tasks) {
+              try {
+                const taskDetail = await getTaskStatus(taskItem.internal_id, getToken)
+                if (taskDetail.success && taskDetail.task) {
+                  const task = taskDetail.task
+                  const content = extractTaskContent(task.task) || ''
+                  const error = extractTaskError(task.task)
+                  const relatedMessageId =
+                    task.related_message_id ?? taskItem.related_message_id ?? null
+                  let resolvedAgentName = task.agent_name
+                  if (!resolvedAgentName && task.agent_id) {
+                    try {
+                      resolvedAgentName = await getAgentName(task.agent_id)
+                    } catch (agentError) {
+                      console.warn('Failed to resolve agent name for task:', agentError)
+                    }
+                  }
+                  const existingTaskMessage = existingTasksById.get(task.internal_id)
+                  const hasCompletedAgentMessage = completedAgentMessages.some(msg => {
+                    if (task.agent_id && msg.agent_id && task.agent_id !== msg.agent_id) return false
+                    return true
+                  })
+                  const taskTime = new Date(task.created_at).getTime()
+                  const hasNearbyContentMessage = converted.some(msg => {
+                    if (msg.type !== 'agent' || !msg.content || msg.task_internal_id) return false
+                    if (task.agent_id && msg.agent_id && task.agent_id !== msg.agent_id) return false
+                    const msgTime = new Date(msg.timestamp).getTime()
+                    return Math.abs(taskTime - msgTime) < 5000
+                  })
+
+                  // If we already have a room agent message for this task, prefer it.
+                  if (existingTaskMessage?.content || hasCompletedAgentMessage || hasNearbyContentMessage) {
+                    continue
+                  }
+                  
+                  taskMessages.push({
+                    id: `task-${task.internal_id}`,
+                    type: 'agent',
+                    content: content,
+                    sender_name: resolvedAgentName || 'Agent',
+                    timestamp: task.created_at,
+                    agent_id: task.agent_id,
+                    related_message_id: relatedMessageId,
+                    task_internal_id: task.internal_id,
+                    task_status: task.status,
+                    task_error: error || null,
+                  })
+                }
+              } catch (taskError) {
+                console.warn(`Failed to fetch task ${taskItem.internal_id}:`, taskError)
+              }
+            }
+            
+            // Merge task messages with regular messages, removing empty placeholders
+            if (taskMessages.length > 0) {
+              const taskIds = new Set(
+                taskMessages.map(msg => msg.task_internal_id).filter(Boolean) as string[]
+              )
+              const taskByAgent = taskMessages.map(msg => ({
+                agent: msg.sender_name,
+                time: new Date(msg.timestamp).getTime(),
+              }))
+
+              const filtered = converted.filter(msg => {
+                if (msg.type !== 'agent' || msg.content) return true
+                if (msg.task_internal_id && taskIds.has(msg.task_internal_id)) return false
+
+                // Fallback: drop empty placeholders that align with a task message
+                const msgTime = new Date(msg.timestamp).getTime()
+                const hasNearbyTask = taskByAgent.some(task => {
+                  return task.agent === msg.sender_name && Math.abs(task.time - msgTime) < 5000
+                })
+                if (hasNearbyTask && msg.task_status && msg.task_status !== 'completed') {
+                  return false
+                }
+                return true
+              })
+
+              console.log(`✅ Added ${taskMessages.length} task messages`)
+              filtered.push(...taskMessages)
+              return filtered
+            }
+          }
+        } catch (tasksError) {
+          console.warn('Failed to fetch A2A tasks:', tasksError)
+          // Don't fail the whole query if tasks fail
+        }
+
         return converted
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
@@ -413,11 +552,83 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         // Heartbeat message, no action needed
         console.log('💓 SSE heartbeat received')
         break
+
+      case 'task_submitted':
+        console.log('📋 Task submitted via SSE:', sseMessage.data)
+        // Add a task message to the UI
+        if (sseMessage.data?.internal_id) {
+          let resolvedAgentName = sseMessage.data.agent_name
+          if (!resolvedAgentName && sseMessage.data.agent_id) {
+            resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
+          }
+          const taskMessage: MessageData = {
+            id: `task-${sseMessage.data.internal_id}`,
+            type: 'task',
+            content: '', // Will be filled when task completes
+            sender_name: resolvedAgentName || 'Agent',
+            timestamp: normalizeTimestamp(sseMessage.timestamp),
+            related_message_id: sseMessage.data.related_message_id ?? null,
+            task_internal_id: sseMessage.data.internal_id,
+            task_status: sseMessage.data.status || 'working',
+            agent_id: sseMessage.data.agent_id,
+          }
+          addLiveMessage(roomId, taskMessage)
+          setProcessing(true)
+        }
+        break
+
+      case 'task_update':
+        console.log('📋 Task update via SSE:', sseMessage.data)
+        // Update the existing task message
+        if (sseMessage.data?.internal_id) {
+          const taskId = `task-${sseMessage.data.internal_id}`
+          const status = sseMessage.data.status as TaskState
+          let resolvedAgentName = sseMessage.data.agent_name
+          if (!resolvedAgentName && sseMessage.data.agent_id) {
+            resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
+          }
+          
+          // Find and update the task message
+          const updatedTaskMessage: MessageData = {
+            id: taskId,
+            type: 'task',
+            content: sseMessage.data.content || '',
+            sender_name: resolvedAgentName || 'Agent',
+            timestamp: normalizeTimestamp(sseMessage.timestamp),
+            related_message_id: sseMessage.data.related_message_id ?? null,
+            task_internal_id: sseMessage.data.internal_id,
+            task_status: status,
+            task_error: sseMessage.data.error || null,
+            task_status_message: sseMessage.data.status_message || null,
+            task_requires_input: sseMessage.data.requires_input || false,
+            task_requires_auth: sseMessage.data.requires_auth || false,
+            agent_id: sseMessage.data.agent_id,
+          }
+          
+          // Replace the existing task message with updated one
+          replaceLiveMessage(roomId, taskId, updatedTaskMessage)
+          
+          // If task is terminal, stop processing indicator
+          const terminalStates = ['completed', 'failed', 'canceled', 'rejected']
+          if (terminalStates.includes(status)) {
+            setProcessing(false)
+            
+            // Show appropriate notification
+            if (status === 'failed') {
+              banner.error(sseMessage.data.error || 'Task failed')
+            } else if (status === 'rejected') {
+              banner.error(sseMessage.data.error || 'Task was rejected')
+            } else if (status === 'canceled') {
+              banner.info('Task was canceled')
+            }
+          }
+        }
+        break
         
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, addLiveMessage, roomId, setProcessing, normalizeTimestamp])
+  }, [getAgentName, addLiveMessage, replaceLiveMessage, roomId, setProcessing, normalizeTimestamp])
 
   // Initialize SSE connection
   const {
