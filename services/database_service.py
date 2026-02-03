@@ -143,19 +143,18 @@ class DatabaseService:
     async def get_all_active_agents(self) -> list[Agent]:
         """
         Get all active agents from MongoDB.
-        
+
         Returns:
             List[Agent]: List of agents with active status only
         """
         all_agents = await self.mongo.get_all_agents()
         active_agents = [
-            agent for agent in all_agents
-            if agent.agent_status == AgentStatus.active
+            agent for agent in all_agents if agent.agent_status == AgentStatus.active
         ]
         logger.debug(
             "DatabaseService: Filtered to %d active agents out of %d total",
             len(active_agents),
-            len(all_agents)
+            len(all_agents),
         )
         return active_agents
 
@@ -227,12 +226,11 @@ class DatabaseService:
         # Filter for active agents only if requested
         if active_only:
             agents = [
-                agent for agent in agents
-                if agent.agent_status == AgentStatus.active
+                agent for agent in agents if agent.agent_status == AgentStatus.active
             ]
             logger.debug(
                 "DatabaseService: Filtered to %d active agents from query results",
-                len(agents)
+                len(agents),
             )
 
         # Sort agents in the same order as the Pinecone results
@@ -709,6 +707,22 @@ class DatabaseService:
             )
             return []
 
+    async def get_room_agent_message_by_task_internal_id(
+        self, internal_id: str
+    ) -> RoomAgentMessage | None:
+        """
+        Get room agent message by stored A2A task internal id.
+        """
+        try:
+            return await self.mongo.get_room_agent_message_by_task_internal_id(
+                internal_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to get room agent message by task id {internal_id} from databases: {str(e)}"
+            )
+            return None
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
@@ -722,6 +736,25 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to update room agent message {message_id} in databases: {str(e)}"
+            )
+            return False
+
+    async def set_room_agent_message_task_internal_id(
+        self, message_id: str, internal_id: str
+    ) -> bool:
+        """
+        Set the task internal_id on a room agent message.
+        """
+        try:
+            return await self.mongo.set_room_agent_message_task_internal_id(
+                message_id, internal_id
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to set task internal_id %s on message %s: %s",
+                internal_id,
+                message_id,
+                str(e),
             )
             return False
 
