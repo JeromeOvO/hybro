@@ -10,6 +10,7 @@ import {
 import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { cancelMessage } from '@/lib/api/sse'
 import { listRoomTasks, getTaskStatus, extractTaskContent, extractTaskError } from '@/lib/api/a2a-tasks'
+import type { A2ATaskStatus } from '@/lib/api/a2a-tasks'
 import { banner } from "@/components/ui/banner"
 import { useQuery } from '@tanstack/react-query'
 // Import the correct RoomMessage type from response.ts (API response format)
@@ -207,14 +208,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Extract message content - both user and agent messages use message_text field
     let content: string = ''
     let senderName: string = ''
-    let relatedMessageId: string | null = null
     let taskInternalId: string | undefined
     let taskStatus: string | undefined
-    if (typeof apiMessage.related_message_id === 'string') {
-      relatedMessageId = apiMessage.related_message_id
-    } else if (typeof apiMessage.message_content?.message_task?.metadata?.related_message_id === 'string') {
-      relatedMessageId = apiMessage.message_content.message_task.metadata.related_message_id
-    }
     
     // Extract content from MessageContent object
     // For both user and agent messages, we use message_content.message_text as the display content
@@ -227,8 +222,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     // If message_text is empty but a task exists, derive content from task artifacts/status
     if (!content && apiMessage.message_content?.message_task) {
-      const taskContent = extractTaskContent(apiMessage.message_content.message_task as any)
-      const taskError = extractTaskError(apiMessage.message_content.message_task as any)
+      const messageTask = apiMessage.message_content
+        .message_task as A2ATaskStatus['task']
+      const taskContent = extractTaskContent(messageTask)
+      const taskError = extractTaskError(messageTask)
       if (taskContent) {
         content = taskContent
       } else if (taskError) {
@@ -247,7 +244,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       taskStatus = maybeStatus
     }
 
-    let resolvedAgentId: string | undefined
     // Determine sender name based on message type
     if (apiMessage.message_type === 'user') {
       // Prefer provided userName, then userId, then fallback
@@ -262,8 +258,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       } else if (apiMessage.message_content?.message_task?.metadata?.agent_id) {
         agentId = apiMessage.message_content.message_task.metadata.agent_id as string
       }
-      resolvedAgentId = agentId
-      
       // Fetch agent name using the agent_id
       if (agentId) {
         try {
@@ -289,7 +283,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       timestamp: normalizeTimestamp(apiMessage.message_created_at),
       user_id: apiMessage.message_type === 'user' ? userId : undefined,
       agent_id: apiMessage.message_type === 'agent' ? (apiMessage.agent_id || 'agent_id') : undefined,
-      related_message_id: relatedMessageId,
       task_internal_id: taskInternalId,
       task_status: taskStatus,
     }
@@ -344,8 +337,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                   const task = taskDetail.task
                   const content = extractTaskContent(task.task) || ''
                   const error = extractTaskError(task.task)
-                  const relatedMessageId =
-                    task.related_message_id ?? taskItem.related_message_id ?? null
                   let resolvedAgentName = task.agent_name
                   if (!resolvedAgentName && task.agent_id) {
                     try {
@@ -379,7 +370,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                     sender_name: resolvedAgentName || 'Agent',
                     timestamp: task.created_at,
                     agent_id: task.agent_id,
-                    related_message_id: relatedMessageId,
                     task_internal_id: task.internal_id,
                     task_status: task.status,
                     task_error: error || null,
@@ -497,7 +487,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             sender_name: agentName,
             timestamp: normalizeTimestamp(sseMessage.timestamp),
             agent_id: sseMessage.data.agent_id,
-            related_message_id: sseMessage.data.related_message_id ?? null,
           }
           addLiveMessage(roomId, newMessage)
         }
@@ -567,7 +556,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             content: '', // Will be filled when task completes
             sender_name: resolvedAgentName || 'Agent',
             timestamp: normalizeTimestamp(sseMessage.timestamp),
-            related_message_id: sseMessage.data.related_message_id ?? null,
             task_internal_id: sseMessage.data.internal_id,
             task_status: sseMessage.data.status || 'working',
             agent_id: sseMessage.data.agent_id,
@@ -595,7 +583,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             content: sseMessage.data.content || '',
             sender_name: resolvedAgentName || 'Agent',
             timestamp: normalizeTimestamp(sseMessage.timestamp),
-            related_message_id: sseMessage.data.related_message_id ?? null,
             task_internal_id: sseMessage.data.internal_id,
             task_status: status,
             task_error: sseMessage.data.error || null,
