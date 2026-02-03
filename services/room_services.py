@@ -13,7 +13,7 @@ from a2a.types import (
     TextPart,
 )
 
-from common.utils.context_utils import build_context_for_agent, clean_mention_format
+from common.utils.context_utils import build_context_for_agent
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.memory import MemoryContent
@@ -39,12 +39,12 @@ from models.room import (
     RoomUserMessage,
 )
 from services.a2a_service import a2a_service
+from services.agent_selection_service import agent_selection_service
 from services.agent_service import agent_service
 from services.database_service import db_service
+from services.memory_service import room_memory_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
-from services.agent_selection_service import agent_selection_service
-from services.memory_service import room_memory_service
 
 logger = get_logger(__name__)
 
@@ -757,6 +757,7 @@ class RoomServices:
         related_message_id: str,
         agent_id: str,
         content: str,
+        user_id: str | None = None,
         extend_info: dict | None = None,
     ) -> RoomAgentMessage:
         """
@@ -768,6 +769,7 @@ class RoomServices:
             if related_message_id
             else str(uuid4()),
             agent_id=agent_id if agent_id else None,
+            user_id=user_id,
             message_id=str(uuid4()),
             message_content=self._generate_agent_message_content(content),
             message_created_at=utcnow(),
@@ -779,6 +781,7 @@ class RoomServices:
         parsed_result: dict,
         user_message_id: str,
         room_id: str,
+        user_id: str | None = None,
         extend_info: dict | None = None,
     ) -> list[RoomAgentMessage]:
         """
@@ -854,6 +857,7 @@ class RoomServices:
                 related_message_id,
                 agent_id,
                 task_content,
+                user_id=user_id,
                 extend_info=extend_info,
             )
 
@@ -883,6 +887,7 @@ class RoomServices:
         user_message_id: str,
         message_text: str,
         selected_agent_set: dict,
+        user_id: str | None = None,
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
         target_group: str | None = None,
@@ -929,7 +934,11 @@ class RoomServices:
         }
 
         agent_messages = await self._generate_agent_messages_based_on_parsed_result(
-            parsed_result, user_message_id, room_id, extend_info=extend_info
+            parsed_result,
+            user_message_id,
+            room_id,
+            user_id=user_id,
+            extend_info=extend_info,
         )
 
         return True if agent_messages else False
@@ -993,6 +1002,7 @@ class RoomServices:
             user_message.message_id,
             message_text,
             selected_agent_set,
+            user_message.user_id,
             is_debate_mode,
             auto_assign_agents=auto_assign,
             target_group=target_group,
@@ -1104,11 +1114,10 @@ class RoomServices:
         is_debate_mode: bool,
     ) -> tuple[dict, bool, list]:
         """Resolve selected agents and auto-assign flag based on target_group.
-        
+
         Returns:
             tuple: (selected_agent_set: dict, auto_assign: bool, agents: list[Agent])
         """
-        from models.agent import Agent
 
         async def select_agents_all_agents_mode() -> tuple[dict, bool, list]:
             try:
@@ -1131,7 +1140,7 @@ class RoomServices:
                         )
                         if full_agent:
                             full_agents.append(full_agent)
-                    
+
                     logger.info(
                         "All Agents mode: Selected %s agents with strategy=%s",
                         len(selection_result.agents),
@@ -1202,7 +1211,7 @@ class RoomServices:
         """Fetch full Agent objects from an agent_set dict {agent_id: agent_name}."""
         if not agent_set:
             return []
-        
+
         agents = []
         for agent_id in agent_set.keys():
             agent = await self.database_service.get_agent_by_agent_id(agent_id)
@@ -1229,6 +1238,7 @@ class RoomServices:
                 "I couldn't find any agents for this room or via selection. "
                 "Please choose agents or a group and try again."
             ),
+            user_id=user_message.user_id,
             extend_info={
                 "system_fallback": True,
                 "reason": "no_agents_found",
@@ -1387,6 +1397,7 @@ class RoomServices:
                             message_id=str(uuid4()),
                             related_message_id=previous_message_id,
                             agent_id=task_info["agent_id"],
+                            user_id=message.user_id,
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
@@ -1409,6 +1420,7 @@ class RoomServices:
                             message_id=str(uuid4()),
                             related_message_id=message.message_id,
                             agent_id=task_info["agent_id"],
+                            user_id=message.user_id,
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
@@ -1508,7 +1520,9 @@ class RoomServices:
                         agent_name=agent_name,
                         include_system_instruction=True,
                     )
-                elif isinstance(room_memory_content, str) and room_memory_content.strip():
+                elif (
+                    isinstance(room_memory_content, str) and room_memory_content.strip()
+                ):
                     # Legacy style: Use raw text as context
                     context = (
                         f"[Context]\n{room_memory_content}\n\n"
@@ -1564,6 +1578,27 @@ class RoomServices:
                 error="Message is required",
                 status_code=400,
             )
+
+        # Preserve existing task metadata if incoming message omits it.
+        if (
+            message.message_content
+            and message.message_content.message_task
+            and message.message_content.message_task.metadata is None
+        ):
+            existing_message = (
+                await self.database_service.get_room_agent_message_by_message_id(
+                    message_id
+                )
+            )
+            if (
+                existing_message
+                and existing_message.message_content
+                and existing_message.message_content.message_task
+                and existing_message.message_content.message_task.metadata is not None
+            ):
+                message.message_content.message_task.metadata = (
+                    existing_message.message_content.message_task.metadata
+                )
 
         update_message_success = (
             await self.database_service.update_room_agent_message_by_message_id(
@@ -1766,9 +1801,17 @@ class RoomServices:
                         room_id=agent_msg.room_id,
                         message_id=agent_msg.message_id,
                         message_type="agent",
-                        message_content=MessageContent(message_text=agent_content),
+                        message_content=MessageContent(
+                            message_text=agent_content,
+                            message_task=(
+                                agent_msg.message_content.message_task
+                                if agent_msg.message_content
+                                else None
+                            ),
+                        ),
                         message_created_at=agent_msg.message_created_at,
                         agent_id=agent_msg.agent_id,
+                        related_message_id=agent_msg.related_message_id,
                     )
                     combined_messages.append(room_message)
 

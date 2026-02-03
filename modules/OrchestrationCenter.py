@@ -16,7 +16,6 @@ from a2a.types import (
     TextPart,
 )
 
-
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
@@ -39,6 +38,7 @@ from models.response import OrchestrationCenterResponse
 from models.room import RoomAgentMessage
 from models.task import MetaTask, TaskDefaultValue
 from services.a2a_service import a2a_service
+from services.a2a_task_service import get_a2a_task_service
 from services.agent_service import agent_service
 from services.database_service import db_service
 from services.debate_service import debate_service
@@ -55,6 +55,7 @@ logger = get_logger(__name__)
 
 class ProcessingStatus(Enum):
     """Status of message processing operations."""
+
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -310,12 +311,12 @@ class OrchestrationCenter:
         )
 
         best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
-        
+
         # Verify the selected agent is active, fallback to first similar agent if not
         if best_agent is None or best_agent.agent_status != AgentStatus.active:
             logger.warning(
                 "OrchestrationCenter: Selected agent %s is not active, falling back to first active agent",
-                best_agent_id
+                best_agent_id,
             )
             best_agent = similar_agents[0]  # Already filtered for active agents
 
@@ -646,14 +647,15 @@ class OrchestrationCenter:
 
         # Filter for active agents only (safety check - db_service should already filter)
         active_agents = [
-            agent for agent in agents_matched_response.agents
+            agent
+            for agent in agents_matched_response.agents
             if agent.agent_status == AgentStatus.active
         ]
 
         if not active_agents:
             logger.warning(
                 "OrchestrationCenter: No active agents available for meta task %s",
-                meta_task_id
+                meta_task_id,
             )
             return OrchestrationCenterResponse(
                 task_id=meta_task_id,
@@ -668,13 +670,12 @@ class OrchestrationCenter:
 
         # Verify the selected agent is in our active list, fallback if not
         best_agent = next(
-            (a for a in active_agents if a.agent_id == best_agent_id), 
-            None
+            (a for a in active_agents if a.agent_id == best_agent_id), None
         )
         if best_agent is None or best_agent.agent_status != AgentStatus.active:
             logger.warning(
                 "OrchestrationCenter: Selected agent %s is not active, using first active agent",
-                best_agent_id
+                best_agent_id,
             )
             best_agent_id = active_agents[0].agent_id
 
@@ -1471,21 +1472,44 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return await self.task_service.get_task_from_agent(agent_card, task_id)
 
     def _get_message_from_task(self, task: Task) -> Message | None:
-        # task.artifacts[].parts[].root -> message
-        all_parts = []
-        if not task.artifacts:
-            return None
-        for artifact in task.artifacts:
-            for part in artifact.parts:
-                if part.root:
-                    all_parts.append(part.root)
-        message = Message(
-            role=Role.agent,
-            message_id=str(uuid.uuid4()),
-            task_id=task.id,
-            parts=all_parts,
-        )
-        return message
+        """
+        Extract message from a Task object.
+
+        Per A2A spec, task outputs should be in artifacts. We check:
+        1. task.artifacts - A2A-compliant location for task outputs
+        2. task.status.message - status messages (for compatibility)
+        3. task.history - conversation history (fallback)
+        """
+        # Check task.artifacts first (A2A-compliant: task outputs go in artifacts)
+        if task.artifacts:
+            all_parts = []
+            for artifact in task.artifacts:
+                # Artifact.parts is a list of Part objects
+                all_parts.extend(artifact.parts)
+            if all_parts:
+                logger.debug("Found %d parts in task.artifacts", len(all_parts))
+                message = Message(
+                    role=Role.agent,
+                    message_id=str(uuid.uuid4()),
+                    task_id=task.id,
+                    parts=all_parts,
+                )
+                return message
+
+        # Check task.status.message (for status updates, less common for final output)
+        if task.status and task.status.message:
+            logger.debug("Found message in task.status.message")
+            return task.status.message
+
+        # Check task.history for the last agent message (fallback)
+        if task.history:
+            for msg in reversed(task.history):
+                if hasattr(msg, "role") and msg.role == Role.agent:
+                    logger.debug("Found agent message in task.history")
+                    return msg
+
+        logger.warning("No message found in task %s", task.id)
+        return None
 
     def _get_text_from_message(self, message: Message | None) -> str:
         if message is None:
@@ -1553,7 +1577,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 # Clear cancellation flag and stop immediately without sending any response
                 self.sse_manager.clear_cancellation(user_message_id)
                 # Return with cancellation status
-                return ProcessingStatus.CANCELLED, message_streaming_state.full_response_text
+                return (
+                    ProcessingStatus.CANCELLED,
+                    message_streaming_state.full_response_text,
+                )
 
             # Handle JSON-RPC errors
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
@@ -1561,7 +1588,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 logger.error(f"OrchestrationCenter: Agent error: {error_message}")
                 if send_sse:
                     await self.sse_manager.send_error(room_id, error_message)
-                return ProcessingStatus.FAILED, message_streaming_state.full_response_text
+                return (
+                    ProcessingStatus.FAILED,
+                    message_streaming_state.full_response_text,
+                )
             # Below this, there is no error - process the response
             # Extract result from response
             result = a2a_response.root.result
@@ -1934,8 +1964,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         if validation_response:
             return validation_response
 
-
-
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
@@ -1996,7 +2024,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             )
 
         success = await self._process_agent_message_queue(
-            message_queue, room_id, room_memory_content, room_user_message_id, user_id
+            message_queue,
+            room_id,
+            room_memory_content,
+            room_user_message_id,
+            request_user_id=user_id,
         )
 
         if not success:
@@ -2082,7 +2114,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id: str,
         room_memory_content: "MemoryContent",
         user_message_id: str,
-        user_id: str | None = None,
+        request_user_id: str | None = None,
     ) -> bool:
         """
         Process all messages in the queue sequentially.
@@ -2092,9 +2124,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_id: The room ID
             room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             user_message_id: The user message ID for cancellation checks
-            user_id: The ID of the user making the request (for rate limiting)
+            request_user_id: The ID of the user making the request (for rate limiting)
         """
-
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
 
@@ -2131,7 +2162,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         current_message.message_id,
                     )
                     return False
-                
+
                 # Check if the assigned agent is still active
                 if agent.agent_status != AgentStatus.active:
                     logger.warning(
@@ -2151,10 +2182,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                         return False
 
             # Check rate limits before processing (only if user_id is available)
-            if user_id:
+            if request_user_id:
                 rate_limit_result = await self.rate_limit_service.check_rate_limit(
                     agent_id=agent.agent_id,
-                    user_id=user_id,
+                    user_id=request_user_id,
                     rate_limit_per_user=agent.rate_limit_per_user_per_hour,
                     rate_limit_system=agent.rate_limit_system_per_hour,
                 )
@@ -2163,7 +2194,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     logger.warning(
                         "OrchestrationCenter: Rate limit exceeded for agent %s, user %s: %s",
                         agent.agent_id,
-                        user_id,
+                        request_user_id,
                         rate_limit_result.reason,
                     )
                     # Send rate limit error via SSE with full details
@@ -2200,10 +2231,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 return True
 
             # Record the request for rate limiting (only if user_id is available)
-            if user_id:
+            if request_user_id:
                 await self.rate_limit_service.record_request(
                     agent_id=agent.agent_id,
-                    user_id=user_id,
+                    user_id=request_user_id,
                 )
 
             # Store agent response in conversation history (ChatGPT/Claude style)
@@ -2222,7 +2253,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
     async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
         """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided.
-        
+
         Only active agents will be assigned. If no active agents are found, returns None.
         """
         # Gather any scoped agent list from extend_info (mentions/room) and merge with group agents for future group mentions
@@ -2399,10 +2430,22 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 return status, full_response_text
         else:
             success, full_response_text = await self._handle_sync_response_for_room(
-                current_message, agent.agent_card, prepared_message, room_id
+                current_message,
+                agent.agent_card,
+                prepared_message,
+                room_id,
+                current_message.user_id,
             )
             if not success:
                 return ProcessingStatus.FAILED, ""
+
+        if full_response_text is None:
+            logger.info(
+                "OrchestrationCenter: Async task submitted for message %s; "
+                "skipping immediate agent response",
+                current_message.message_id,
+            )
+            return ProcessingStatus.SUCCESS, ""
 
         # Get updated message from database
         current_message = (
@@ -2435,14 +2478,87 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         agent_card: AgentCard,
         prepared_message: Message,
         room_id: str,
-    ) -> tuple[bool, str]:
+        user_id: str | None,
+    ) -> tuple[bool, str | None]:
         """Handle synchronous (non-streaming) response from an agent."""
+        if self.a2a_service.has_push_notification_capability(agent_card):
+            try:
+                response = await self.a2a_service.send_message_with_task_tracking(
+                    room_id,
+                    user_id or "unknown",
+                    agent_card,
+                    prepared_message,
+                    agent_id=current_message.agent_id,
+                    related_message_id=current_message.related_message_id,
+                )
+            except Exception as exc:
+                logger.error("Agent error: %s", exc, exc_info=True)
+                await self.sse_manager.send_error(room_id, str(exc))
+                return False, ""
+
+            internal_id = response.get("internal_id")
+            if internal_id:
+                # Persist internal task id on the agent message for refresh lookups.
+                if (
+                    current_message.message_content
+                    and current_message.message_content.message_task
+                ):
+                    set_success = await self.database_service.set_room_agent_message_task_internal_id(
+                        current_message.message_id, internal_id
+                    )
+                    if set_success:
+                        logger.info(
+                            "Persisted internal_id %s to agent message %s",
+                            internal_id,
+                            current_message.message_id,
+                        )
+                    else:
+                        logger.error(
+                            "Failed to persist internal_id %s to agent message %s",
+                            internal_id,
+                            current_message.message_id,
+                        )
+                else:
+                    logger.warning(
+                        "Cannot persist internal_id %s: message_content or message_task is None",
+                        internal_id,
+                    )
+
+                a2a_task_service = get_a2a_task_service()
+                task_doc = await a2a_task_service.get_task(internal_id)
+                if task_doc and task_doc.get("task"):
+                    await self._handle_a2a_response_for_room(
+                        current_message, task_doc["task"]
+                    )
+
+            if response.get("type") == "message":
+                full_response_text = response.get("content") or ""
+                return True, full_response_text
+
+            if response.get("type") == "task":
+                task_id = response.get("task_id") or "pending"
+                status = response.get("status") or "working"
+                agent_name = response.get("agent_name") or agent_card.name
+                await self.sse_manager.send_task_submitted(
+                    room_id=room_id,
+                    internal_id=internal_id or "unknown",
+                    task_id=task_id,
+                    agent_name=agent_name,
+                    agent_id=current_message.agent_id,
+                    status=status,
+                    related_message_id=current_message.related_message_id,
+                )
+                return True, None
+
+            logger.error("Unexpected response type from task tracking: %s", response)
+            return False, ""
+
         a2a_response = await self.a2a_service.send_message_sync(
             agent_card, prepared_message
         )
 
         if isinstance(a2a_response.root, JSONRPCErrorResponse):
-            logger.error(f"Agent error: {a2a_response.root.error}")
+            logger.error("Agent error: %s", a2a_response.root.error)
             await self.sse_manager.send_error(room_id, str(a2a_response.root.error))
             return False, ""
 
@@ -2497,7 +2613,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         1. Logging/debugging
         2. Future enhancements (e.g., periodic LLM summarization of long conversations)
         """
-
 
         # Get current context stats for logging
         if room_memory and room_memory.memory_content:

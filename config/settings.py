@@ -44,10 +44,24 @@ class Settings(BaseSettings):
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True # enable/disable agent health check
-    
+
+    # A2A Long-Running Tasks Settings
+    webhook_base_url: str = ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
+    webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
+    allowed_agent_hosts: set[str] = set()  # Comma-separated allowlist of trusted agent hosts (optional)
+    max_tasks_per_user: int = 100  # Max concurrent non-terminal tasks per user
+    max_tasks_per_room: int = 50  # Max concurrent non-terminal tasks per room
+    stale_check_minutes: int = 10  # Poll tasks not updated in this time
+    task_expiry_hours: int = 4  # Auto-fail tasks older than this
+    pending_task_warning_hours: int = 1  # Warn (log) after this time
+
     class Config:
         env_file = ".env"
         extra = "ignore"
+        # Ensure .env is read from the project root regardless of CWD
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env_file = os.path.join(base_dir, ".env")
 
     @field_validator("frontend_origins", mode="before")
     @classmethod
@@ -56,6 +70,14 @@ class Settings(BaseSettings):
             # Split comma-separated string into list
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
+
+    @field_validator("allowed_agent_hosts", mode="before")
+    @classmethod
+    def parse_allowed_agent_hosts(cls, v):
+        if isinstance(v, str) and v.strip():
+            # Split comma-separated string into set
+            return {host.strip() for host in v.split(",") if host.strip()}
+        return set() if not v else v
 
 
 settings = Settings()
