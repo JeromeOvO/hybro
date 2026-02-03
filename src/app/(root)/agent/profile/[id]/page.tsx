@@ -16,7 +16,9 @@ import {
   Terminal,
   ArrowRightLeft,
   Settings,
-  Save
+  Save,
+  Globe,
+  Lock
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
@@ -57,6 +59,9 @@ export default function AgentProfilePage() {
   const [userLimitValue, setUserLimitValue] = useState<string>("")
   const [enableSystemLimit, setEnableSystemLimit] = useState(false)
   const [systemLimitValue, setSystemLimitValue] = useState<string>("")
+  
+  // Visibility state
+  const [isPublic, setIsPublic] = useState(true)
 
   const getStatusColor = (status: Agent['agent_status']) => {
     switch (status) {
@@ -94,6 +99,8 @@ export default function AgentProfilePage() {
           setEnableSystemLimit(false)
           setSystemLimitValue("")
         }
+        // Initialize visibility state (default to true if not set)
+        setIsPublic(agent.is_public !== false)
       } else {
         const errorMessage = response.error || "Failed to load agent details"
         banner.error("Failed to load agent details", {
@@ -158,21 +165,22 @@ export default function AgentProfilePage() {
         {
           rate_limit_per_user_per_hour: userLimit,
           rate_limit_system_per_hour: systemLimit,
+          is_public: isPublic,
         },
         getToken
       )
 
       if (response.success) {
-        banner.success("Rate limits saved successfully")
+        banner.success("Settings saved successfully")
         // Reload agent data to reflect changes
         await loadAgentDetail()
       } else {
-        banner.error("Failed to save rate limits", {
+        banner.error("Failed to save settings", {
           description: response.error || "An unexpected error occurred"
         })
       }
     } catch (error) {
-      banner.error("Failed to save rate limits", {
+      banner.error("Failed to save settings", {
         description: error instanceof Error ? error.message : "An unexpected error occurred"
       })
     } finally {
@@ -565,19 +573,44 @@ export default function AgentProfilePage() {
             </CardContent>
           </Card>
 
-      {/* Rate Limits Settings - Only visible to agent owner */}
+      {/* Agent Settings - Only visible to agent owner */}
       {userId && agentData?.agent?.provider_id === userId && (
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
               <Settings className="h-5 w-5" />
-              <CardTitle>Rate Limits</CardTitle>
+              <CardTitle>Agent Settings</CardTitle>
             </div>
             <CardDescription>
-              Control how often users can request this agent. Set limits to prevent abuse and manage load.
+              Configure visibility and rate limits for your agent.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
+            {/* Visibility Toggle */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="visibility-toggle" className="text-base font-medium flex items-center gap-2">
+                    {isPublic ? <Globe className="h-4 w-4 text-green-500" /> : <Lock className="h-4 w-4 text-yellow-500" />}
+                    Visibility
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    {isPublic 
+                      ? "Public - Everyone can discover and use this agent"
+                      : "Private - Only you can see and use this agent"
+                    }
+                  </p>
+                </div>
+                <Switch
+                  id="visibility-toggle"
+                  checked={isPublic}
+                  onCheckedChange={setIsPublic}
+                />
+              </div>
+            </div>
+
+            <Separator />
+
             {/* Per-User Rate Limit */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">

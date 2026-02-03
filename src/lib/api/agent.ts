@@ -40,6 +40,7 @@ export interface UpdateAgentRequest {
   rate_limit_per_user_per_hour?: number | null
   rate_limit_system_per_hour?: number | null
   agent_status?: 'active' | 'inactive'
+  is_public?: boolean
 }
 
 export async function updateAgent(
@@ -81,20 +82,25 @@ export async function getAgentCardFromUrl(
 // Get agent by ID - PUBLIC
 export async function getAgent(
   agentId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  getToken?: () => Promise<string | null>
 ): Promise<AgentCenterResponse> {
   return apiGet<AgentCenterResponse>(
     `${API_BASE_URL}/getAgent/${agentId}`,
-    undefined,
+    getToken,
     signal
   )
 }
 
 // Get all agents - PUBLIC, with optional timeout override
-export async function getAllAgents(signal?: AbortSignal, timeoutMs?: number): Promise<AgentCenterResponse> {
+export async function getAllAgents(
+  signal?: AbortSignal, 
+  timeoutMs?: number,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
   return apiGet<AgentCenterResponse>(
     `${API_BASE_URL}/getAllAgents`,
-    undefined,
+    getToken,
     signal,
     timeoutMs
   )
@@ -102,10 +108,14 @@ export async function getAllAgents(signal?: AbortSignal, timeoutMs?: number): Pr
 
 // Get all active agents - PUBLIC, with optional timeout override
 // Returns only agents with active status, filtering out inactive and deleted agents
-export async function getAllActiveAgents(signal?: AbortSignal, timeoutMs?: number): Promise<AgentCenterResponse> {
+export async function getAllActiveAgents(
+  signal?: AbortSignal, 
+  timeoutMs?: number,
+  getToken?: () => Promise<string | null>
+): Promise<AgentCenterResponse> {
   return apiGet<AgentCenterResponse>(
     `${API_BASE_URL}/getAllActiveAgents`,
-    undefined,
+    getToken,
     signal,
     timeoutMs
   )
@@ -113,10 +123,12 @@ export async function getAllActiveAgents(signal?: AbortSignal, timeoutMs?: numbe
 
 // Get agent list with conditions - PUBLIC
 export async function getAgentListWithConditions(
-  request: AgentCenterRequest
+  request: AgentCenterRequest,
+  getToken?: () => Promise<string | null>
 ): Promise<AgentCenterResponse> {
   return apiPost<AgentCenterResponse>(
     `${API_BASE_URL}/getAgentListWithConditions`,
-    request
+    request,
+    getToken
   )
 } 
