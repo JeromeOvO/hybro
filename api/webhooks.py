@@ -35,6 +35,7 @@ async def notify_task_update(
     related_message_id: str | None = None,
     agent_name: str | None = None,
     agent_id: str | None = None,
+    created_at: str | None = None,
 ) -> None:
     """
     Send SSE notification when task state changes.
@@ -45,6 +46,7 @@ async def notify_task_update(
         task: The updated A2A Task
         room_id: Room to notify
         user_id: User who owns the task
+        created_at: Task creation timestamp (for consistent ordering)
     """
     task_service = get_a2a_task_service()
     state = task.status.state
@@ -151,6 +153,7 @@ async def notify_task_update(
         agent_name=agent_name,
         agent_id=agent_id,
         related_message_id=related_message_id,
+        created_at=created_at,
     )
 
     logger.info(f"Sent SSE notification for task {internal_id} state {state_value}")
@@ -284,6 +287,10 @@ async def handle_a2a_webhook(
     should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
 
     if should_notify:
+        # Get created_at from task document for consistent ordering
+        created_at = None
+        if current.get("created_at"):
+            created_at = current["created_at"].isoformat()
         background_tasks.add_task(
             notify_task_update,
             internal_id=internal_id,
@@ -293,6 +300,7 @@ async def handle_a2a_webhook(
             related_message_id=current.get("related_message_id"),
             agent_name=current.get("agent_name"),
             agent_id=current.get("agent_id"),
+            created_at=created_at,
         )
 
     return {"status": "accepted"}

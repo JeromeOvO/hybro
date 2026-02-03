@@ -2539,6 +2539,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 task_id = response.get("task_id") or "pending"
                 status = response.get("status") or "working"
                 agent_name = response.get("agent_name") or agent_card.name
+                # Get created_at from task_doc for consistent ordering
+                created_at = None
+                if task_doc and task_doc.get("created_at"):
+                    created_at = task_doc["created_at"].isoformat()
                 await self.sse_manager.send_task_submitted(
                     room_id=room_id,
                     internal_id=internal_id or "unknown",
@@ -2547,6 +2551,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     agent_id=current_message.agent_id,
                     status=status,
                     related_message_id=current_message.related_message_id,
+                    created_at=created_at,
                 )
                 return True, None
 

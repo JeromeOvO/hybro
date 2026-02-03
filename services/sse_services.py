@@ -290,6 +290,7 @@ class SSEManager:
         agent_id: str | None = None,
         status: str = "working",
         related_message_id: str | None = None,
+        created_at: str | None = None,
     ):
         """
         Send task submitted event for long-running tasks.
@@ -300,6 +301,7 @@ class SSEManager:
             task_id: The agent's task ID
             agent_name: Name of the agent processing the task
             status: Initial status (submitted or working)
+            created_at: Task creation timestamp (for consistent ordering)
         """
         data = {
             "internal_id": internal_id,
@@ -308,6 +310,7 @@ class SSEManager:
             "agent_id": agent_id,
             "status": status,
             "related_message_id": related_message_id,
+            "created_at": created_at or utcnow().isoformat(),
             "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "task_submitted", data)
@@ -325,6 +328,7 @@ class SSEManager:
         agent_name: str | None = None,
         agent_id: str | None = None,
         related_message_id: str | None = None,
+        created_at: str | None = None,
     ):
         """
         Send task update event when task state changes.
@@ -338,6 +342,7 @@ class SSEManager:
             requires_input: True if input_required state
             requires_auth: True if auth_required state
             status_message: Human-readable status message from agent
+            created_at: Task creation timestamp (for consistent ordering)
         """
         data = {
             "internal_id": internal_id,
@@ -350,6 +355,7 @@ class SSEManager:
             "agent_name": agent_name,
             "agent_id": agent_id,
             "related_message_id": related_message_id,
+            "created_at": created_at,
             "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "task_update", data)
