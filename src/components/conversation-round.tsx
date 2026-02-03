@@ -6,6 +6,16 @@ import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import type { MessageData } from './room-messages'
 import { AgentMessageBubble, UserMessageBubble } from './message-bubble'
+import { TaskStatusMessage } from './task-status-message'
+import type { TaskState } from '@/lib/types/sse'
+
+function shouldRenderTaskAsAgent(message: MessageData): boolean {
+  return message.type === 'task' && message.task_status === 'completed' && !!message.content
+}
+
+function toAgentMessage(message: MessageData): MessageData {
+  return message.type === 'agent' ? message : { ...message, type: 'agent' }
+}
 
 export interface ConversationRoundData {
   id: string
@@ -280,19 +290,36 @@ export function ConversationRound({
                         </span>
                       </div>
                       <div className="space-y-2">
-                        {group.messages.map(msg => (
-                          <AgentMessageBubble
-                            key={msg.id}
-                            message={msg}
-                            compact
-                            defaultExpanded={msg.id === lastAgentMessageId}
-                            collapseSignal={collapseSignal}
-                            autoCollapseVersion={autoCollapseVersion}
-                            isLatestAgent={msg.id === lastAgentMessageId}
-                            isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
-                            onUserToggle={onUserToggle}
-                          />
-                        ))}
+                        {group.messages.map(msg => {
+                          // Render task messages with TaskStatusMessage component
+                          if (msg.type === 'task' && !shouldRenderTaskAsAgent(msg)) {
+                            return (
+                              <TaskStatusMessage
+                                key={msg.id}
+                                internalId={msg.task_internal_id || msg.id}
+                                agentName={msg.sender_name}
+                                initialStatus={(msg.task_status || 'working') as TaskState}
+                                content={msg.content || null}
+                                error={msg.task_error}
+                                statusMessage={msg.task_status_message}
+                              />
+                            )
+                          }
+                          // Render regular agent messages
+                          return (
+                            <AgentMessageBubble
+                              key={msg.id}
+                              message={toAgentMessage(msg)}
+                              compact
+                              defaultExpanded={msg.id === lastAgentMessageId}
+                              collapseSignal={collapseSignal}
+                              autoCollapseVersion={autoCollapseVersion}
+                              isLatestAgent={msg.id === lastAgentMessageId}
+                              isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
+                              onUserToggle={onUserToggle}
+                            />
+                          )
+                        })}
                       </div>
                     </div>
                   )
@@ -301,18 +328,35 @@ export function ConversationRound({
             ) : (
               // Timeline view (chronological)
               <div className="space-y-3">
-                {round.agentResponses.map(msg => (
-                  <AgentMessageBubble
-                    key={msg.id}
-                    message={msg}
-                    defaultExpanded={msg.id === lastAgentMessageId}
-                    collapseSignal={collapseSignal}
-                    autoCollapseVersion={autoCollapseVersion}
-                    isLatestAgent={msg.id === lastAgentMessageId}
-                    isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
-                    onUserToggle={onUserToggle}
-                  />
-                ))}
+                {round.agentResponses.map(msg => {
+                  // Render task messages with TaskStatusMessage component
+                  if (msg.type === 'task' && !shouldRenderTaskAsAgent(msg)) {
+                    return (
+                      <TaskStatusMessage
+                        key={msg.id}
+                        internalId={msg.task_internal_id || msg.id}
+                        agentName={msg.sender_name}
+                        initialStatus={(msg.task_status || 'working') as TaskState}
+                        content={msg.content || null}
+                        error={msg.task_error}
+                        statusMessage={msg.task_status_message}
+                      />
+                    )
+                  }
+                  // Render regular agent messages
+                  return (
+                    <AgentMessageBubble
+                      key={msg.id}
+                      message={toAgentMessage(msg)}
+                      defaultExpanded={msg.id === lastAgentMessageId}
+                      collapseSignal={collapseSignal}
+                      autoCollapseVersion={autoCollapseVersion}
+                      isLatestAgent={msg.id === lastAgentMessageId}
+                      isUserExpanded={userExpandedIds?.has(msg.id) ?? false}
+                      onUserToggle={onUserToggle}
+                    />
+                  )
+                })}
               </div>
             )}
           </div>
