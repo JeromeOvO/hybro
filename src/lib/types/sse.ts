@@ -27,6 +27,7 @@ export interface SSEMessage {
     requires_input?: boolean
     requires_auth?: boolean
     status_message?: string
+    created_at?: string // Task creation timestamp for consistent ordering
   }
 }
 

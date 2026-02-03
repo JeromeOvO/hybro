@@ -550,12 +550,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           if (!resolvedAgentName && sseMessage.data.agent_id) {
             resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
           }
+          // Use created_at for consistent ordering, fallback to SSE timestamp
+          const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
           const taskMessage: MessageData = {
             id: `task-${sseMessage.data.internal_id}`,
             type: 'task',
             content: '', // Will be filled when task completes
             sender_name: resolvedAgentName || 'Agent',
-            timestamp: normalizeTimestamp(sseMessage.timestamp),
+            timestamp: normalizeTimestamp(taskTimestamp),
             task_internal_id: sseMessage.data.internal_id,
             task_status: sseMessage.data.status || 'working',
             agent_id: sseMessage.data.agent_id,
@@ -576,13 +578,17 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
           }
           
+          // Use created_at for consistent ordering (preserves original task position)
+          // This ensures the task bubble doesn't jump around when it completes
+          const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
+          
           // Find and update the task message
           const updatedTaskMessage: MessageData = {
             id: taskId,
             type: 'task',
             content: sseMessage.data.content || '',
             sender_name: resolvedAgentName || 'Agent',
-            timestamp: normalizeTimestamp(sseMessage.timestamp),
+            timestamp: normalizeTimestamp(taskTimestamp),
             task_internal_id: sseMessage.data.internal_id,
             task_status: status,
             task_error: sseMessage.data.error || null,
