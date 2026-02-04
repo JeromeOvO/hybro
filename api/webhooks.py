@@ -27,6 +27,36 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+async def resume_queue_continuation(
+    internal_id: str,
+    task_result_text: str | None = None,
+) -> None:
+    """
+    Resume queue processing after a push notification task completes.
+
+    This is called as a background task when a webhook indicates a task
+    has reached a terminal state.
+
+    Args:
+        internal_id: The internal ID of the completed task
+        task_result_text: The result text from the completed task
+    """
+    # Import here to avoid circular imports
+    from api.orchestration_center import orchestration_center
+
+    try:
+        resumed = await orchestration_center.resume_queue_from_continuation(
+            internal_id, task_result_text
+        )
+        if resumed:
+            logger.info(f"Successfully resumed queue processing for task {internal_id}")
+    except Exception as e:
+        logger.error(
+            f"Failed to resume queue for task {internal_id}: {e}",
+            exc_info=True,
+        )
+
+
 async def notify_task_update(
     internal_id: str,
     task: Task,
@@ -35,6 +65,9 @@ async def notify_task_update(
     related_message_id: str | None = None,
     agent_name: str | None = None,
     agent_id: str | None = None,
+    created_at: str | None = None,
+    step_number: int | None = None,
+    total_steps: int | None = None,
 ) -> None:
     """
     Send SSE notification when task state changes.
@@ -45,6 +78,9 @@ async def notify_task_update(
         task: The updated A2A Task
         room_id: Room to notify
         user_id: User who owns the task
+        created_at: Task creation timestamp (for consistent ordering)
+        step_number: Current step number in the workflow (1-indexed)
+        total_steps: Total number of steps in the workflow
     """
     task_service = get_a2a_task_service()
     state = task.status.state
@@ -139,6 +175,11 @@ async def notify_task_update(
                 internal_id,
             )
 
+    # Extract task_content from the room agent message for frontend display
+    task_content = None
+    if room_agent_message and room_agent_message.message_content:
+        task_content = room_agent_message.message_content.message_text
+
     await sse_manager.send_task_update(
         room_id=room_id,
         internal_id=internal_id,
@@ -151,6 +192,11 @@ async def notify_task_update(
         agent_name=agent_name,
         agent_id=agent_id,
         related_message_id=related_message_id,
+        created_at=created_at,
+        message_id=room_agent_message.message_id if room_agent_message else None,
+        step_number=step_number,
+        total_steps=total_steps,
+        task_content=task_content,
     )
 
     logger.info(f"Sent SSE notification for task {internal_id} state {state_value}")
@@ -283,7 +329,18 @@ async def handle_a2a_webhook(
     new_state = updated_task.status.state
     should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
 
+    # Extract content for queue resumption (if task completed successfully)
+    task_result_text = None
+    if is_terminal_state(new_state):
+        state_value = new_state.value if hasattr(new_state, "value") else str(new_state)
+        if state_value == "completed" and updated_task.artifacts:
+            task_result_text = extract_text_from_artifacts(updated_task.artifacts)
+
     if should_notify:
+        # Get created_at from task document for consistent ordering
+        created_at = None
+        if current.get("created_at"):
+            created_at = current["created_at"].isoformat()
         background_tasks.add_task(
             notify_task_update,
             internal_id=internal_id,
@@ -293,6 +350,17 @@ async def handle_a2a_webhook(
             related_message_id=current.get("related_message_id"),
             agent_name=current.get("agent_name"),
             agent_id=current.get("agent_id"),
+            created_at=created_at,
+            step_number=current.get("step_number"),
+            total_steps=current.get("total_steps"),
+        )
+
+    # 7. Resume queue processing if task reached terminal state and has continuation
+    if is_terminal_state(new_state):
+        background_tasks.add_task(
+            resume_queue_continuation,
+            internal_id=internal_id,
+            task_result_text=task_result_text,
         )
 
     return {"status": "accepted"}

@@ -749,7 +749,8 @@ class RoomServices:
             history=[a2a_message],
         )
 
-        return MessageContent(message_task=task)
+        # Store both the task and the text content for display
+        return MessageContent(message_task=task, message_text=content)
 
     def _generate_new_agent_message(
         self,
@@ -759,9 +760,21 @@ class RoomServices:
         content: str,
         user_id: str | None = None,
         extend_info: dict | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> RoomAgentMessage:
         """
         Generate a new agent message.
+
+        Args:
+            room_id: The room ID
+            related_message_id: The related message ID (parent in dependency chain)
+            agent_id: The agent ID (can be None for auto-assignment)
+            content: The task content
+            user_id: The user ID
+            extend_info: Additional info
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
         """
         return RoomAgentMessage(
             room_id=room_id,
@@ -774,6 +787,8 @@ class RoomServices:
             message_content=self._generate_agent_message_content(content),
             message_created_at=utcnow(),
             extend_info=extend_info if extend_info else None,
+            step_number=step_number,
+            total_steps=total_steps,
         )
 
     async def _generate_agent_messages_based_on_parsed_result(
@@ -817,10 +832,13 @@ class RoomServices:
             logger.warning("No task steps in parsed result")
             return agent_messages
 
+        # Calculate total steps for progress tracking
+        total_steps = len(task_steps)
+
         # Map step_id to generated agent_message_id for dependency resolution
         step_to_message_id = {}
 
-        for step in task_steps:
+        for step_index, step in enumerate(task_steps, start=1):
             step_id = step.get("step_id")
             agent_id = step.get("agent_id")  # Can be None
             agent_name = step.get("agent_name")  # Can be None
@@ -851,7 +869,7 @@ class RoomServices:
                         f"but it's not found. Using user message as fallback."
                     )
 
-            # Create a2a Message
+            # Create a2a Message with step tracking info
             agent_message = self._generate_new_agent_message(
                 room_id,
                 related_message_id,
@@ -859,6 +877,8 @@ class RoomServices:
                 task_content,
                 user_id=user_id,
                 extend_info=extend_info,
+                step_number=step_index,
+                total_steps=total_steps,
             )
 
             agent_messages.append(agent_message)
@@ -876,7 +896,7 @@ class RoomServices:
                 )
 
             logger.info(
-                f"Generated agent message {agent_message.message_id} for step {step_id}"
+                f"Generated agent message {agent_message.message_id} for step {step_id} ({step_index}/{total_steps})"
             )
 
         return agent_messages
