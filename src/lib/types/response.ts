@@ -48,6 +48,8 @@ export interface Agent {
   rate_limit_per_user_per_hour?: number | null;
   /** Maximum requests for entire system per hour (null = unlimited) */
   rate_limit_system_per_hour?: number | null;
+  /** Visibility: true = public (everyone can see/use), false = private (owner only) */
+  is_public?: boolean;
 }
 /**
  * The AgentCard is a self-describing manifest for an agent. It provides essential

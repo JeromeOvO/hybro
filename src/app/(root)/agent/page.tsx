@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { Plus, Search, RefreshCw, ChevronDown } from "lucide-react"
 import { AgentCard, StatsCards } from "@/components/agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
+import { useAuth } from "@clerk/nextjs"
 import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
@@ -77,6 +78,7 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 
 export default function AgentPage() {
   const router = useRouter()
+  const { getToken } = useAuth()
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -85,10 +87,10 @@ export default function AgentPage() {
 
   const filteredAgents = useFilteredAgents(agents, searchTerm, statusFilter)
 
-  const loadAgents = async () => {
+  const loadAgents = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await getAllAgents()
+      const response = await getAllAgents(undefined, undefined, getToken)
 
       if (response.success && response.agents) {
         setAgents(response.agents)
@@ -100,11 +102,11 @@ export default function AgentPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [getToken])
 
   useEffect(() => {
     loadAgents()
-  }, [])
+  }, [loadAgents])
 
   if (loading) {
     return (
