@@ -14,6 +14,7 @@ import {
   Sparkles
 } from 'lucide-react'
 import { type TaskState, isTerminalState } from '@/lib/types/sse'
+import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
 
 interface TaskStatusMessageProps {
   internalId: string
@@ -25,6 +26,7 @@ interface TaskStatusMessageProps {
   stepNumber?: number // Current step number (1-indexed)
   totalSteps?: number // Total number of steps
   taskContent?: string // The task description being processed
+  taskCreatedAt?: string // Task creation timestamp for elapsed time calculation
   onComplete?: (content: string) => void
   onError?: (error: string) => void
 }
@@ -122,6 +124,7 @@ export function TaskStatusMessage({
   stepNumber: initialStepNumber,
   totalSteps: initialTotalSteps,
   taskContent,
+  taskCreatedAt,
   onComplete,
   onError,
 }: TaskStatusMessageProps) {
@@ -131,7 +134,12 @@ export function TaskStatusMessage({
   const [statusMessage, setStatusMessage] = useState<string | null>(initialStatusMessage || null)
   const [stepNumber, setStepNumber] = useState<number | undefined>(initialStepNumber)
   const [totalSteps, setTotalSteps] = useState<number | undefined>(initialTotalSteps)
-  const [elapsed, setElapsed] = useState(0)
+  
+  // Calculate initial elapsed time from task creation timestamp using centralized utility
+  const [elapsed, setElapsed] = useState(() => {
+    if (isTerminalState(initialStatus)) return 0
+    return elapsedSeconds(taskCreatedAt)
+  })
   
   // Track if we've already processed this update (deduplication)
   const processedStates = useRef<Set<string>>(new Set())
@@ -194,12 +202,6 @@ export function TaskStatusMessage({
     return () => clearInterval(interval)
   }, [status])
 
-  const formatTime = (s: number) => {
-    if (s < 60) return `${s}s`
-    if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`
-    return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`
-  }
-
   // Completed state
   if (status === "completed" && content) {
     return (
@@ -220,7 +222,7 @@ export function TaskStatusMessage({
             </div>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <CheckCircle className="w-3 h-3" />
-              Completed in {formatTime(elapsed)}
+              Completed in {formatElapsedTime(elapsed)}
             </span>
           </div>
           <div className="text-green-800 dark:text-green-200">
@@ -298,7 +300,7 @@ export function TaskStatusMessage({
           </div>
           <p className="text-xs text-yellow-500 dark:text-yellow-400 mt-2 flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            {formatTime(elapsed)} elapsed
+            {formatElapsedTime(elapsed)} elapsed
           </p>
         </div>
       </div>
@@ -332,7 +334,7 @@ export function TaskStatusMessage({
           </div>
           <p className="text-xs text-orange-500 dark:text-orange-400 mt-2 flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            {formatTime(elapsed)} elapsed
+            {formatElapsedTime(elapsed)} elapsed
           </p>
         </div>
       </div>
@@ -383,7 +385,7 @@ export function TaskStatusMessage({
           {/* Elapsed time */}
           <p className="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            {formatTime(elapsed)} elapsed
+            {formatElapsedTime(elapsed)} elapsed
           </p>
         </div>
       </div>

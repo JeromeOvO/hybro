@@ -21,7 +21,6 @@ export interface SSEMessage {
     system_requests_used?: number
     system_requests_limit?: number
     // Task-specific fields (for task_submitted and task_update events)
-    internal_id?: string
     task_id?: string
     agent_name?: string
     requires_input?: boolean
@@ -78,7 +77,7 @@ export function isPendingState(state: TaskState): boolean {
 export interface TaskSubmittedEvent {
   type: "task_submitted"
   data: {
-    internal_id: string
+    message_id: string
     task_id: string
     agent_name: string
     agent_id?: string
@@ -90,7 +89,7 @@ export interface TaskSubmittedEvent {
 export interface TaskUpdateEvent {
   type: "task_update"
   data: {
-    internal_id: string
+    message_id: string
     status: TaskState
     content?: string          // Present if completed
     error?: string            // Present if failed/rejected/canceled

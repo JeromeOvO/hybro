@@ -7,6 +7,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
+import { formatTimestamp } from '@/lib/time'
 import type { MessageData } from './room-messages'
 
 interface MessageBubbleProps {
@@ -164,12 +165,7 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
             {message.sender_name}
           </span>
           <span className="text-xs opacity-70">
-            {new Date(message.timestamp).toLocaleString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
-            })}
+            {formatTimestamp(message.timestamp)}
           </span>
         </div>
         <div className="text-sm leading-relaxed">
@@ -261,12 +257,7 @@ export function AgentMessageBubble({
             {message.sender_name}
           </span>
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            {new Date(message.timestamp).toLocaleString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
-            })}
+            {formatTimestamp(message.timestamp)}
           </span>
         </div>
 
