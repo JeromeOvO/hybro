@@ -50,6 +50,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     setSseError,
     addLiveMessage,
     replaceLiveMessage,
+    removeLiveMessage,
     resetRoomState,
   } = useRoomUiStore()
 
@@ -66,6 +67,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   
   // Track current processing message ID for cancellation
   const currentProcessingMessageId = useRef<string | null>(null)
+  
+  // Processing placeholder ID - used to show "Processing your request" before first task arrives
+  const getProcessingPlaceholderId = useCallback(() => `processing-placeholder-${roomId}`, [roomId])
 
   const normalizeTimestamp = useCallback((value?: string | null): string => {
     if (!value) return new Date().toISOString()
@@ -502,6 +506,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             setProcessing(true)
           } else if (status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'rate_limited') {
             setProcessing(false)
+            // Remove processing placeholder if it's still showing
+            removeLiveMessage(roomId, getProcessingPlaceholderId())
             // Only clear ref if this event is for the message we're tracking
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
               currentProcessingMessageId.current = null
@@ -545,6 +551,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
       case 'task_submitted':
         console.log('📋 Task submitted via SSE:', sseMessage.data)
+        // Remove the generic processing placeholder when first real task arrives
+        removeLiveMessage(roomId, getProcessingPlaceholderId())
+        
         // Add a task message to the UI
         if (sseMessage.data?.internal_id) {
           // Use message_id if provided (for consistent ID with database messages),
@@ -655,7 +664,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, addLiveMessage, replaceLiveMessage, roomId, setProcessing, normalizeTimestamp, liveMessagesByRoom])
+  }, [getAgentName, addLiveMessage, replaceLiveMessage, removeLiveMessage, getProcessingPlaceholderId, roomId, setProcessing, normalizeTimestamp, liveMessagesByRoom])
 
   // Initialize SSE connection
   const {
@@ -763,6 +772,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     }
 
     addLiveMessage(roomId, optimisticUserMessage)
+    
+    // Step 0.5: Add processing placeholder that will be removed when first task arrives
+    const processingPlaceholderId = getProcessingPlaceholderId()
+    const processingPlaceholder: MessageData = {
+      id: processingPlaceholderId,
+      type: 'task',
+      content: '',
+      sender_name: 'HYBRO AI',
+      timestamp: new Date(Date.now() + 1).toISOString(), // Slightly after user message for ordering
+      task_status: 'working',
+      task_content: 'Processing your request...',
+    }
+    addLiveMessage(roomId, processingPlaceholder)
 
     try {
       setSending(true)  // Show spinner during message creation & parsing
@@ -841,7 +863,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = false
       // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing, getProcessingPlaceholderId])
 
   // Cancel ongoing message processing
   const cancelProcessing = useCallback(async () => {
