@@ -365,7 +365,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                   
                   taskMessages.push({
                     id: `task-${task.internal_id}`,
-                    type: 'agent',
+                    type: 'task',
                     content: content,
                     sender_name: resolvedAgentName || 'Agent',
                     timestamp: task.created_at,
@@ -391,7 +391,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               }))
 
               const filtered = converted.filter(msg => {
-                if (msg.type !== 'agent' || msg.content) return true
+                // Keep non-agent/non-task messages, or messages with content
+                if ((msg.type !== 'agent' && msg.type !== 'task') || msg.content) return true
                 if (msg.task_internal_id && taskIds.has(msg.task_internal_id)) return false
 
                 // Fallback: drop empty placeholders that align with a task message
@@ -546,6 +547,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         console.log('📋 Task submitted via SSE:', sseMessage.data)
         // Add a task message to the UI
         if (sseMessage.data?.internal_id) {
+          // Use message_id if provided (for consistent ID with database messages),
+          // otherwise fall back to task-based ID for backwards compatibility
+          const messageId = sseMessage.data.message_id || `task-${sseMessage.data.internal_id}`
           let resolvedAgentName = sseMessage.data.agent_name
           if (!resolvedAgentName && sseMessage.data.agent_id) {
             resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
@@ -553,7 +557,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           // Use created_at for consistent ordering, fallback to SSE timestamp
           const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
           const taskMessage: MessageData = {
-            id: `task-${sseMessage.data.internal_id}`,
+            id: messageId,
             type: 'task',
             content: '', // Will be filled when task completes
             sender_name: resolvedAgentName || 'Agent',
@@ -561,9 +565,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             task_internal_id: sseMessage.data.internal_id,
             task_status: sseMessage.data.status || 'working',
             agent_id: sseMessage.data.agent_id,
+            step_number: sseMessage.data.step_number,
+            total_steps: sseMessage.data.total_steps,
+            task_content: sseMessage.data.task_content,
           }
           addLiveMessage(roomId, taskMessage)
-          setProcessing(true)
+          // Note: Don't setProcessing(true) here - the "AI Agents Processing..." bubble
+          // should only show at the beginning of a workflow (when user sends a message),
+          // not every time a task status bubble appears. Task bubbles have their own
+          // visual indicators for showing work in progress.
         }
         break
 
@@ -571,7 +581,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         console.log('📋 Task update via SSE:', sseMessage.data)
         // Update the existing task message
         if (sseMessage.data?.internal_id) {
-          const taskId = `task-${sseMessage.data.internal_id}`
+          // Use message_id if provided (for consistent ID with database messages),
+          // otherwise fall back to task-based ID for backwards compatibility
+          const messageId = sseMessage.data.message_id || `task-${sseMessage.data.internal_id}`
+          const oldTaskId = `task-${sseMessage.data.internal_id}`
           const status = sseMessage.data.status as TaskState
           let resolvedAgentName = sseMessage.data.agent_name
           if (!resolvedAgentName && sseMessage.data.agent_id) {
@@ -582,9 +595,22 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           // This ensures the task bubble doesn't jump around when it completes
           const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
           
+          // Get task_content from SSE event, or preserve from existing message as fallback
+          let taskContent = sseMessage.data.task_content
+          if (!taskContent) {
+            // Try to find existing message and preserve its task_content
+            const existingMessages = liveMessagesByRoom[roomId] || []
+            const existingMessage = existingMessages.find(
+              m => m.id === messageId || m.id === oldTaskId || m.task_internal_id === sseMessage.data?.internal_id
+            )
+            if (existingMessage) {
+              taskContent = existingMessage.task_content
+            }
+          }
+          
           // Find and update the task message
           const updatedTaskMessage: MessageData = {
-            id: taskId,
+            id: messageId,
             type: 'task',
             content: sseMessage.data.content || '',
             sender_name: resolvedAgentName || 'Agent',
@@ -596,10 +622,18 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             task_requires_input: sseMessage.data.requires_input || false,
             task_requires_auth: sseMessage.data.requires_auth || false,
             agent_id: sseMessage.data.agent_id,
+            step_number: sseMessage.data.step_number,
+            total_steps: sseMessage.data.total_steps,
+            task_content: taskContent,
           }
           
           // Replace the existing task message with updated one
-          replaceLiveMessage(roomId, taskId, updatedTaskMessage)
+          // Try both the old task-based ID and the new message_id to handle transitions
+          replaceLiveMessage(roomId, oldTaskId, updatedTaskMessage)
+          if (messageId !== oldTaskId) {
+            // Also replace by message_id in case it was already using that
+            replaceLiveMessage(roomId, messageId, updatedTaskMessage)
+          }
           
           // If task is terminal, stop processing indicator
           const terminalStates = ['completed', 'failed', 'canceled', 'rejected']
@@ -621,7 +655,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, addLiveMessage, replaceLiveMessage, roomId, setProcessing, normalizeTimestamp])
+  }, [getAgentName, addLiveMessage, replaceLiveMessage, roomId, setProcessing, normalizeTimestamp, liveMessagesByRoom])
 
   // Initialize SSE connection
   const {

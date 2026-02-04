@@ -2,7 +2,6 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { 
-  Sparkles,
   MessageSquareText,
   ChevronsDownUp, 
   ChevronsUpDown,
@@ -27,54 +26,10 @@ export interface MessageData {
   task_status_message?: string | null
   task_requires_input?: boolean
   task_requires_auth?: boolean
-}
-
-// Processing Status Component - Styled to match agent message bubbles
-function ProcessingStatus({ processing }: { processing: boolean }) {
-  if (!processing) return null
-
-  return (
-    <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-      {/* Avatar matching agent bubble style */}
-      <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-violet-100 to-fuchsia-100 dark:from-violet-900 dark:to-fuchsia-900 border-violet-300 dark:border-violet-700">
-        <Sparkles className="h-4 w-4 text-violet-600 dark:text-violet-300 animate-pulse" />
-      </div>
-
-      {/* Message content matching agent bubble style */}
-      <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50/50 to-fuchsia-50/30 dark:from-violet-950/50 dark:to-fuchsia-950/30 message-bubble">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-violet-700 dark:text-violet-300">
-            AI Agents
-          </span>
-          <span className="text-xs text-muted-foreground">
-            Processing...
-          </span>
-        </div>
-
-        {/* Animated content */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-violet-600 dark:text-violet-300 font-medium">
-              Analyzing your request
-            </span>
-          </div>
-          
-          {/* Animated typing indicator */}
-          <div className="flex items-center gap-3">
-            <div className="flex gap-1.5">
-              <div className="w-2 h-2 bg-violet-400 dark:bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '0ms', animationDuration: '0.6s' }} />
-              <div className="w-2 h-2 bg-fuchsia-400 dark:bg-fuchsia-500 rounded-full animate-bounce" style={{ animationDelay: '150ms', animationDuration: '0.6s' }} />
-              <div className="w-2 h-2 bg-violet-400 dark:bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '300ms', animationDuration: '0.6s' }} />
-            </div>
-            <span className="text-xs text-muted-foreground">
-              Finding the best agents for your task
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+  task_content?: string // The task description being processed
+  // Workflow step tracking from backend
+  step_number?: number
+  total_steps?: number
 }
 
 // Empty state component
@@ -123,10 +78,9 @@ function toAgentMessage(message: MessageData): MessageData {
 interface RoomMessagesProps {
   messages: MessageData[]
   loading?: boolean
-  processing?: boolean
 }
 
-export function RoomMessages({ messages, loading, processing = false }: RoomMessagesProps) {
+export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
@@ -217,13 +171,6 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
     previousMessageCountRef.current = messages.length
   }, [messages, shouldAutoScroll])
 
-  // Auto scroll when processing state changes
-  useEffect(() => {
-    if (shouldAutoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-    }
-  }, [processing, shouldAutoScroll])
-
   if (loading) {
     return <LoadingState />
   }
@@ -238,7 +185,7 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
         className="flex-1 h-full w-full overflow-y-auto"
       >
         <div className="py-4 min-h-full px-4 sm:px-6 max-w-4xl mx-auto">
-          {messages.length === 0 && !processing ? (
+          {messages.length === 0 ? (
             <EmptyState />
           ) : (
             <>
@@ -278,6 +225,9 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                         content={msg.content || null}
                         error={msg.task_error}
                         statusMessage={msg.task_status_message}
+                        stepNumber={msg.step_number}
+                        totalSteps={msg.total_steps}
+                        taskContent={msg.task_content}
                       />
                     )
                   }
@@ -296,9 +246,6 @@ export function RoomMessages({ messages, loading, processing = false }: RoomMess
                   )
                 })}
               </div>
-            
-              {/* Processing Status */}
-              <ProcessingStatus processing={processing} />
             
               <div ref={messagesEndRef} className="h-4" />
             </>

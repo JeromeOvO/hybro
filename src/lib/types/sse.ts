@@ -28,6 +28,11 @@ export interface SSEMessage {
     requires_auth?: boolean
     status_message?: string
     created_at?: string // Task creation timestamp for consistent ordering
+    // Workflow step tracking
+    step_number?: number // Current step number in the workflow (1-indexed)
+    total_steps?: number // Total number of steps in the workflow
+    // Task content (the description of what the agent is working on)
+    task_content?: string
   }
 }
 
@@ -94,5 +99,6 @@ export interface TaskUpdateEvent {
     status_message?: string   // Human-readable status from agent
     agent_name?: string
     agent_id?: string
+    task_content?: string     // The task description being processed
   }
 }
