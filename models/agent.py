@@ -45,6 +45,9 @@ class Agent(BaseModel):
     # Maximum requests for entire system per hour (None = unlimited)
     rate_limit_system_per_hour: int | None = None
 
+    # Visibility: True = public (everyone can see/use), False = private (owner only)
+    is_public: bool = True
+
     @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:
         """Convert Enum to string value for storage"""
