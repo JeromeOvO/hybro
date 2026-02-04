@@ -110,6 +110,8 @@ class A2ATaskService:
         agent_name: str | None = None,
         agent_id: str | None = None,
         related_message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[str, str]:
         """
         Create new task record.
@@ -122,6 +124,8 @@ class A2ATaskService:
             agent_name: Optional agent name for display
             agent_id: Optional agent ID for frontend rendering
             related_message_id: Optional room user message ID that initiated the task
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
 
         Returns:
             Tuple of (internal_id, webhook_token).
@@ -148,6 +152,8 @@ class A2ATaskService:
             "task": task.model_dump(mode="json"),
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
+            "step_number": step_number,
+            "total_steps": total_steps,
         }
         result = await self.collection.insert_one(doc)
         internal_id = str(result.inserted_id)

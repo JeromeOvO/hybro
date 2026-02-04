@@ -156,7 +156,7 @@ class A2AService:
         )
         return has_caps and bool(push_val)
 
-    async def send_message_with_task_tracking(
+    async def create_task_for_tracking(
         self,
         room_id: str,
         user_id: str,
@@ -164,37 +164,39 @@ class A2AService:
         message: Message,
         agent_id: str | None = None,
         related_message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> dict[str, Any]:
         """
-        Send message to agent with task tracking for long-running operations.
+        Create a task record for tracking before sending to agent.
 
-        This method:
-        1. Creates a placeholder task record to get internal_id and webhook token
-        2. Sends message to agent with push notification config (if supported)
-        3. Handles Message response (fast path) or Task response (async path)
-        4. Returns appropriate response for frontend
+        This is the first part of the split task tracking flow, allowing
+        callers to send SSE events before the blocking agent call.
 
         Args:
-            room_id: Room this message belongs to
-            user_id: User who sent the message
+            room_id: Room this task belongs to
+            user_id: User who initiated the task
             agent_card: The agent's card
             message: A2A Message to send
             agent_id: Optional agent ID for frontend rendering
             related_message_id: Optional room user message ID that initiated the task
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
 
         Returns:
-            For Message response: {"type": "message", "content": "..."}
-            For Task response: {"type": "task", "internal_id": "...", "status": "..."}
-            For Interactive states: {"type": "task", "status": "input_required", ...}
+            Dict with internal_id, created_at, context_id, webhook_token, step_number, total_steps
         """
         from services.a2a_task_service import get_a2a_task_service
 
         task_service = get_a2a_task_service()
 
-        # 1. Create placeholder task record to get internal_id and webhook token
+        # Create placeholder task record to get internal_id and webhook token
+        # Use context_id as part of placeholder ID to avoid duplicate key errors
+        # when multiple tasks are created for the same agent concurrently
+        context_id = message.context_id or str(uuid4())
         placeholder_task = Task(
-            id="pending",
-            context_id=message.context_id or str(uuid4()),
+            id=f"pending-{context_id}",
+            context_id=context_id,
             status=TaskStatus(state=TaskState.submitted),
         )
 
@@ -207,12 +209,59 @@ class A2AService:
                 agent_name=agent_card.name,
                 agent_id=agent_id,
                 related_message_id=related_message_id,
+                step_number=step_number,
+                total_steps=total_steps,
             )
         except ValueError as e:
             # Task limit exceeded
             raise A2AServiceError(str(e)) from e
 
-        # 2. Build request with push notification config
+        # Get the task doc to retrieve created_at
+        task_doc = await task_service.get_task(internal_id)
+        created_at = None
+        if task_doc and task_doc.get("created_at"):
+            created_at = task_doc["created_at"].isoformat()
+
+        return {
+            "internal_id": internal_id,
+            "webhook_token": webhook_token,
+            "context_id": context_id,
+            "created_at": created_at,
+            "step_number": step_number,
+            "total_steps": total_steps,
+        }
+
+    async def send_message_to_tracked_agent(
+        self,
+        agent_card: AgentCard,
+        message: Message,
+        internal_id: str,
+        webhook_token: str,
+        context_id: str,
+    ) -> dict[str, Any]:
+        """
+        Send message to agent with an existing task record.
+
+        This is the second part of the split task tracking flow, called
+        after SSE events have been sent.
+
+        Args:
+            agent_card: The agent's card
+            message: A2A Message to send
+            internal_id: The task's internal ID from create_task_for_tracking
+            webhook_token: The webhook token from create_task_for_tracking
+            context_id: The context ID from create_task_for_tracking
+
+        Returns:
+            For Message response: {"type": "message", "content": "..."}
+            For Task response: {"type": "task", "internal_id": "...", "status": "..."}
+            For Interactive states: {"type": "task", "status": "input_required", ...}
+        """
+        from services.a2a_task_service import get_a2a_task_service
+
+        task_service = get_a2a_task_service()
+
+        # Build request with push notification config
         push_config = None
         has_capability = self.has_push_notification_capability(agent_card)
         webhook_url = (
@@ -262,7 +311,7 @@ class A2AService:
             params=payload,
         )
 
-        # 3. Send to agent
+        # Send to agent
         try:
             a2a_client = await self.create_a2a_client(agent_card)
             response = await a2a_client.send_message(send_message_request)
@@ -270,7 +319,7 @@ class A2AService:
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
             failed_task = Task(
                 id="failed",
-                context_id=placeholder_task.context_id,
+                context_id=context_id,
                 status=TaskStatus(
                     state=TaskState.failed,
                     message=Message(
@@ -288,7 +337,7 @@ class A2AService:
             error_msg = str(response.root.error.message)
             failed_task = Task(
                 id="failed",
-                context_id=placeholder_task.context_id,
+                context_id=context_id,
                 status=TaskStatus(
                     state=TaskState.failed,
                     message=Message(
@@ -302,12 +351,10 @@ class A2AService:
 
         result = response.root.result
 
-        # 4. Handle Message response (fast path)
+        # Handle Message response (fast path)
         if result.kind == "message":
             # Create completed task with message as artifact
-            completed_task = self._message_to_completed_task(
-                result, placeholder_task.context_id
-            )
+            completed_task = self._message_to_completed_task(result, context_id)
             await task_service.update_task(internal_id, completed_task)
 
             return {
@@ -316,7 +363,7 @@ class A2AService:
                 "content": self._extract_text_from_message(result),
             }
 
-        # 5. Handle Task response (async path)
+        # Handle Task response (async path)
         if result.kind == "task":
             # Update with real task from agent
             await task_service.update_task(internal_id, result)
@@ -354,6 +401,62 @@ class A2AService:
             }
 
         raise A2AServiceError(f"Unexpected response kind: {result.kind}")
+
+    async def send_message_with_task_tracking(
+        self,
+        room_id: str,
+        user_id: str,
+        agent_card: AgentCard,
+        message: Message,
+        agent_id: str | None = None,
+        related_message_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Send message to agent with task tracking for long-running operations.
+
+        This method:
+        1. Creates a placeholder task record to get internal_id and webhook token
+        2. Sends message to agent with push notification config (if supported)
+        3. Handles Message response (fast path) or Task response (async path)
+        4. Returns appropriate response for frontend
+
+        Args:
+            room_id: Room this message belongs to
+            user_id: User who sent the message
+            agent_card: The agent's card
+            message: A2A Message to send
+            agent_id: Optional agent ID for frontend rendering
+            related_message_id: Optional room user message ID that initiated the task
+
+        Returns:
+            For Message response: {"type": "message", "content": "..."}
+            For Task response: {"type": "task", "internal_id": "...", "status": "..."}
+            For Interactive states: {"type": "task", "status": "input_required", ...}
+        """
+        # Create task record first
+        task_info = await self.create_task_for_tracking(
+            room_id=room_id,
+            user_id=user_id,
+            agent_card=agent_card,
+            message=message,
+            agent_id=agent_id,
+            related_message_id=related_message_id,
+        )
+
+        # Send message to agent
+        response = await self.send_message_to_tracked_agent(
+            agent_card=agent_card,
+            message=message,
+            internal_id=task_info["internal_id"],
+            webhook_token=task_info["webhook_token"],
+            context_id=task_info["context_id"],
+        )
+
+        # Add created_at to response if not present
+        if "created_at" not in response and task_info.get("created_at"):
+            response["created_at"] = task_info["created_at"]
+
+        return response
 
     def _message_to_completed_task(self, message: Message, context_id: str) -> Task:
         """Convert a Message response to a completed Task."""

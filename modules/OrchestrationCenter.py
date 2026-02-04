@@ -1534,6 +1534,114 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             for part in message.parts
         )
 
+    async def _setup_task_tracking(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            logger.info(
+                "OrchestrationCenter: Setting up task tracking for message %s (step %s/%s, agent: %s)",
+                current_message.message_id,
+                step_number,
+                total_steps,
+                agent_card.name,
+            )
+            task_info = await self.a2a_service.create_task_for_tracking(
+                room_id,
+                current_message.user_id or "unknown",
+                agent_card,
+                prepared_message,
+                agent_id=current_message.agent_id,
+                related_message_id=current_message.related_message_id,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+            internal_id = task_info["internal_id"]
+            created_at = task_info.get("created_at")
+
+            # Persist internal task id on the agent message for refresh lookups
+            if (
+                current_message.message_content
+                and current_message.message_content.message_task
+            ):
+                await self.database_service.set_room_agent_message_task_internal_id(
+                    current_message.message_id, internal_id
+                )
+
+            # Extract task content from the message for frontend display
+            task_content = None
+            if current_message.message_content:
+                task_content = current_message.message_content.message_text
+
+            logger.info(
+                "OrchestrationCenter: Sending task_submitted SSE for step %s/%s, task_content: %s",
+                step_number,
+                total_steps,
+                task_content[:50] if task_content else "None",
+            )
+
+            # Send task_submitted SSE before agent call
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                internal_id=internal_id,
+                task_id="pending",
+                agent_name=agent_card.name,
+                agent_id=current_message.agent_id,
+                status="working",
+                related_message_id=current_message.related_message_id,
+                created_at=created_at,
+                message_id=current_message.message_id,
+                step_number=step_number,
+                total_steps=total_steps,
+                task_content=task_content,
+            )
+            return task_info
+        except Exception as exc:
+            logger.warning("Failed to setup task tracking: %s", exc)
+            return None
+
+    async def _send_task_update(
+        self,
+        *,
+        room_id: str,
+        internal_id: str | None,
+        status: str,
+        agent_card: AgentCard,
+        agent_id: str | None,
+        created_at: str | None,
+        message_id: str | None,
+        content: str | None = None,
+        error: str | None = None,
+        requires_input: bool | None = None,
+        requires_auth: bool | None = None,
+        status_message: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> None:
+        if not internal_id:
+            return
+        await self.sse_manager.send_task_update(
+            room_id=room_id,
+            internal_id=internal_id,
+            status=status,
+            content=content,
+            error=error,
+            agent_name=agent_card.name,
+            agent_id=agent_id,
+            created_at=created_at,
+            requires_input=requires_input,
+            requires_auth=requires_auth,
+            status_message=status_message,
+            message_id=message_id,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
+
     async def _handle_streaming_response_for_room(
         self,
         current_message: RoomAgentMessage,
@@ -1542,15 +1650,19 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_id: str,
         user_message_id: str,
         send_sse: bool = False,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[ProcessingStatus, str]:
         """
         Handle streaming responses from an agent for a room message.
 
         This method:
-        1. Streams responses from the agent in real-time
-        2. Processes each event type (message, task, status-update, artifact-update)
-        3. Updates the database as events arrive
-        4. Optionally sends SSE events to the frontend
+        1. Creates a task record for tracking (for consistent UX)
+        2. Sends task_submitted SSE before streaming starts
+        3. Streams responses from the agent in real-time
+        4. Processes each event type (message, task, status-update, artifact-update)
+        5. Updates the database as events arrive
+        6. Sends task_update SSE when streaming completes
 
         Args:
             current_message: The RoomAgentMessage being processed
@@ -1559,10 +1671,23 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_id: The room ID for SSE events
             user_message_id: The user message ID for cancellation checks
             send_sse: Whether to send SSE notifications to frontend (default: False)
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
 
         Returns:
             Tuple of (status: ProcessingStatus, full_response_text: str)
         """
+        # Step 1: Create task record and emit task_submitted SSE
+        task_info = await self._setup_task_tracking(
+            current_message,
+            agent_card,
+            prepared_message,
+            room_id,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
+        internal_id = task_info["internal_id"] if task_info else None
+        created_at = task_info.get("created_at") if task_info else None
 
         # Use a state object to track streaming state immutably
         class MessageStreamingState:
@@ -1585,6 +1710,18 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     "OrchestrationCenter: Streaming cancelled for message %s, stopping all processing",
                     user_message_id,
                 )
+                # Send task_update with cancelled status
+                await self._send_task_update(
+                    room_id=room_id,
+                    internal_id=internal_id,
+                    status="canceled",
+                    agent_card=agent_card,
+                    agent_id=current_message.agent_id,
+                    created_at=created_at,
+                    message_id=current_message.message_id,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
                 # Send cancelled status via SSE
                 await self.sse_manager.send_processing_status(
                     room_id, "cancelled", user_message_id
@@ -1601,6 +1738,19 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
                 error_message = a2a_response.root.error.model_dump_json()
                 logger.error(f"OrchestrationCenter: Agent error: {error_message}")
+                # Send task_update with failed status
+                await self._send_task_update(
+                    room_id=room_id,
+                    internal_id=internal_id,
+                    status="failed",
+                    agent_card=agent_card,
+                    agent_id=current_message.agent_id,
+                    created_at=created_at,
+                    message_id=current_message.message_id,
+                    error=error_message,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
                 if send_sse:
                     await self.sse_manager.send_error(room_id, error_message)
                 return (
@@ -1885,6 +2035,20 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
         )
 
+        # Send task_update with completed status
+        await self._send_task_update(
+            room_id=room_id,
+            internal_id=internal_id,
+            status="completed",
+            agent_card=agent_card,
+            agent_id=current_message.agent_id,
+            created_at=created_at,
+            message_id=current_message.message_id,
+            content=message_streaming_state.full_response_text,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
+
         return ProcessingStatus.SUCCESS, message_streaming_state.full_response_text
 
     async def _handle_a2a_response_for_room(
@@ -2144,8 +2308,19 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         Returns:
             True if processing completed successfully (or was paused for continuation)
         """
+        logger.info(
+            "OrchestrationCenter: Starting to process message queue with %d messages",
+            len(message_queue),
+        )
         while len(message_queue) > 0:
             current_message = message_queue.popleft()
+            logger.info(
+                "OrchestrationCenter: Processing message %s (step %s/%s), %d messages remaining in queue",
+                current_message.message_id,
+                current_message.step_number,
+                current_message.total_steps,
+                len(message_queue),
+            )
 
             # Check for cancellation before processing each agent message
             if self.sse_manager.is_cancelled(user_message_id):
@@ -2234,12 +2409,15 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                     return True
 
             # Process the agent message
+            # Step info comes from the RoomAgentMessage (set during task decomposition)
             result = await self._process_single_agent_message(
                 current_message,
                 room_id,
                 room_memory_content,
                 agent,
                 user_message_id,
+                step_number=current_message.step_number,
+                total_steps=current_message.total_steps,
             )
 
             if result.status == ProcessingStatus.FAILED:
@@ -2288,6 +2466,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Queue up next messages in the chain
             await self._queue_next_messages(current_message, message_queue)
 
+        logger.info("OrchestrationCenter: Finished processing message queue")
         return True
 
     async def _save_queue_continuation(
@@ -2306,6 +2485,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         This allows the queue to be resumed when the task completes via webhook.
         """
         # Serialize the remaining messages in the queue
+        # Each message carries its own step_number and total_steps from decomposition
         serialized_queue = [msg.model_dump(mode="json") for msg in message_queue]
 
         continuation_data = {
@@ -2550,6 +2730,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         room_memory_content: "MemoryContent",
         agent: Agent,
         user_message_id: str,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> ProcessingResult:
         """
         Process a single agent message with streaming support.
@@ -2560,6 +2742,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             agent: The agent to process the message
             user_message_id: User message ID for cancellation checks
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
 
         Returns:
             ProcessingResult with:
@@ -2594,6 +2778,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 prepared_message,
                 room_id,
                 user_message_id,
+                step_number=step_number,
+                total_steps=total_steps,
             )
             if status != ProcessingStatus.SUCCESS:
                 return ProcessingResult(status, full_response_text)
@@ -2608,6 +2794,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 prepared_message,
                 room_id,
                 current_message.user_id,
+                step_number=step_number,
+                total_steps=total_steps,
             )
             if not success:
                 return ProcessingResult(ProcessingStatus.FAILED)
@@ -2644,18 +2832,10 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         if current_message is None:
             return ProcessingResult(ProcessingStatus.FAILED, full_response_text)
 
-        # Send agent response to room
-        logger.debug(
-            "OrchestrationCenter: Sending agent response to room %s for message %s",
-            room_id,
-            current_message.message_id,
-        )
-        await self.sse_manager.send_agent_response(
-            room_id,
-            current_message.message_id,
-            current_message.agent_id,
-            full_response_text,
-        )
+        # Note: We no longer send agent_response here since task_update already
+        # delivers the content with message_id for consistent frontend tracking.
+        # The task_update event is sent at the end of streaming (line ~1954) or
+        # sync response (line ~2852) with status="completed".
 
         return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
@@ -2666,8 +2846,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         prepared_message: Message,
         room_id: str,
         user_id: str | None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None]:
         """Handle synchronous (non-streaming) response from an agent.
+
+        All agents now use task tracking for consistent UX (task status bubbles)
+        and SSE reconnection support.
 
         Returns:
             Tuple of (success, response_text, task_internal_id):
@@ -2676,126 +2861,148 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 - task_internal_id: Internal ID if this is a push notification task
                   that requires queue pausing (None otherwise)
         """
-        if self.a2a_service.has_push_notification_capability(agent_card):
-            try:
-                response = await self.a2a_service.send_message_with_task_tracking(
-                    room_id,
-                    user_id or "unknown",
-                    agent_card,
-                    prepared_message,
-                    agent_id=current_message.agent_id,
-                    related_message_id=current_message.related_message_id,
-                )
-            except Exception as exc:
-                logger.error("Agent error: %s", exc, exc_info=True)
-                await self.sse_manager.send_error(room_id, str(exc))
-                return False, "", None
+        # Step 1: Create task record and emit task_submitted SSE
+        task_info = await self._setup_task_tracking(
+            current_message,
+            agent_card,
+            prepared_message,
+            room_id,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
+        if not task_info:
+            await self.sse_manager.send_error(room_id, "Failed to create task record")
+            return False, "", None
 
-            internal_id = response.get("internal_id")
-            if internal_id:
-                # Persist internal task id on the agent message for refresh lookups.
-                if (
-                    current_message.message_content
-                    and current_message.message_content.message_task
-                ):
-                    set_success = await self.database_service.set_room_agent_message_task_internal_id(
-                        current_message.message_id, internal_id
-                    )
-                    if set_success:
-                        logger.info(
-                            "Persisted internal_id %s to agent message %s",
-                            internal_id,
-                            current_message.message_id,
-                        )
-                    else:
-                        logger.error(
-                            "Failed to persist internal_id %s to agent message %s",
-                            internal_id,
-                            current_message.message_id,
-                        )
-                else:
-                    logger.warning(
-                        "Cannot persist internal_id %s: message_content or message_task is None",
-                        internal_id,
-                    )
+        internal_id = task_info["internal_id"]
+        created_at = task_info.get("created_at")
 
-                a2a_task_service = get_a2a_task_service()
-                task_doc = await a2a_task_service.get_task(internal_id)
-                if task_doc and task_doc.get("task"):
-                    await self._handle_a2a_response_for_room(
-                        current_message, task_doc["task"]
-                    )
+        # Step 3: Call the agent (this blocks until response)
+        try:
+            response = await self.a2a_service.send_message_to_tracked_agent(
+                agent_card=agent_card,
+                message=prepared_message,
+                internal_id=internal_id,
+                webhook_token=task_info["webhook_token"],
+                context_id=task_info["context_id"],
+            )
+        except Exception as exc:
+            logger.error("Agent error: %s", exc, exc_info=True)
+            # Send task_update with failed status
+            await self._send_task_update(
+                room_id=room_id,
+                internal_id=internal_id,
+                status="failed",
+                agent_card=agent_card,
+                agent_id=current_message.agent_id,
+                created_at=created_at,
+                message_id=current_message.message_id,
+                error=str(exc),
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+            await self.sse_manager.send_error(room_id, str(exc))
+            return False, "", None
 
-            if response.get("type") == "message":
-                full_response_text = response.get("content") or ""
-                return True, full_response_text, None
+        # Step 4: Handle the response and update task in room
+        a2a_task_service = get_a2a_task_service()
+        task_doc = await a2a_task_service.get_task(internal_id)
+        if task_doc and task_doc.get("task"):
+            await self._handle_a2a_response_for_room(current_message, task_doc["task"])
 
-            if response.get("type") == "task":
-                task_id = response.get("task_id") or "pending"
-                status = response.get("status") or "working"
-                agent_name = response.get("agent_name") or agent_card.name
-                # Get created_at from task_doc for consistent ordering
-                created_at = None
-                if task_doc and task_doc.get("created_at"):
-                    created_at = task_doc["created_at"].isoformat()
-                await self.sse_manager.send_task_submitted(
-                    room_id=room_id,
-                    internal_id=internal_id or "unknown",
-                    task_id=task_id,
-                    agent_name=agent_name,
-                    agent_id=current_message.agent_id,
-                    status=status,
-                    related_message_id=current_message.related_message_id,
-                    created_at=created_at,
-                )
-                # Return internal_id to signal that queue should be paused
+        # Step 5: Handle "message" response (fast path - agent returned immediately)
+        if response.get("type") == "message":
+            full_response_text = response.get("content") or ""
+
+            # Send task_update with completed status
+            await self._send_task_update(
+                room_id=room_id,
+                internal_id=internal_id,
+                status="completed",
+                agent_card=agent_card,
+                agent_id=current_message.agent_id,
+                created_at=created_at,
+                message_id=current_message.message_id,
+                content=full_response_text,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+
+            return True, full_response_text, None
+
+        # Step 6: Handle "task" response (async path - agent is still working)
+        if response.get("type") == "task":
+            status = response.get("status") or "working"
+
+            # Send task_update with current status (may be working, input_required, etc.)
+            await self._send_task_update(
+                room_id=room_id,
+                internal_id=internal_id,
+                status=status,
+                agent_card=agent_card,
+                agent_id=current_message.agent_id,
+                created_at=created_at,
+                message_id=current_message.message_id,
+                requires_input=response.get("requires_input", False),
+                requires_auth=response.get("requires_auth", False),
+                status_message=response.get("message"),
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+
+            # Only pause queue for push notification agents
+            # Non-push agents complete synchronously, no need to pause
+            if self.a2a_service.has_push_notification_capability(agent_card):
                 return True, None, internal_id
+            else:
+                # Non-push agent returned a task response but will complete quickly
+                return True, None, None
 
-            logger.error("Unexpected response type from task tracking: %s", response)
-            return False, "", None
-
-        a2a_response = await self.a2a_service.send_message_sync(
-            agent_card, prepared_message
-        )
-
-        if isinstance(a2a_response.root, JSONRPCErrorResponse):
-            logger.error("Agent error: %s", a2a_response.root.error)
-            await self.sse_manager.send_error(room_id, str(a2a_response.root.error))
-            return False, "", None
-
-        logger.debug(
-            "OrchestrationCenter: Received sync response for message %s: %s",
-            current_message.message_id,
-            a2a_response.root.result,
-        )
-
-        # Save the full response
-        success = await self._handle_a2a_response_for_room(
-            current_message, a2a_response.root.result
-        )
-
-        # Extract text from the response
-        full_response_text = self._get_text_from_a2a_response(a2a_response.root.result)
-
-        return success, full_response_text, None
+        logger.error("Unexpected response type from task tracking: %s", response)
+        return False, "", None
 
     async def _queue_next_messages(
         self, current_message: RoomAgentMessage, message_queue: deque
     ) -> None:
         """Queue up next messages in the chain after processing current message."""
+        logger.info(
+            "OrchestrationCenter: Looking for next messages related to %s (step %s/%s)",
+            current_message.message_id,
+            current_message.step_number,
+            current_message.total_steps,
+        )
         next_messages = (
             await self.database_service.get_room_agent_messages_by_related_message_id(
                 current_message.message_id
             )
         )
+        logger.info(
+            "OrchestrationCenter: Found %d next messages for message %s",
+            len(next_messages),
+            current_message.message_id,
+        )
 
         for next_message in next_messages:
+            logger.info(
+                "OrchestrationCenter: Queueing next message %s (step %s/%s, task_content: %s)",
+                next_message.message_id,
+                next_message.step_number,
+                next_message.total_steps,
+                next_message.message_content.message_text[:50]
+                if next_message.message_content
+                and next_message.message_content.message_text
+                else "None",
+            )
             new_agent_message = (
                 await self.debate_service.inject_short_debate_for_agent_message(
                     next_message
                 )
             )
             if new_agent_message is None:
+                logger.warning(
+                    "OrchestrationCenter: inject_short_debate_for_agent_message returned None for message %s",
+                    next_message.message_id,
+                )
                 continue
             message_queue.append(new_agent_message)
 

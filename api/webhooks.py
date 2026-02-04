@@ -66,6 +66,8 @@ async def notify_task_update(
     agent_name: str | None = None,
     agent_id: str | None = None,
     created_at: str | None = None,
+    step_number: int | None = None,
+    total_steps: int | None = None,
 ) -> None:
     """
     Send SSE notification when task state changes.
@@ -77,6 +79,8 @@ async def notify_task_update(
         room_id: Room to notify
         user_id: User who owns the task
         created_at: Task creation timestamp (for consistent ordering)
+        step_number: Current step number in the workflow (1-indexed)
+        total_steps: Total number of steps in the workflow
     """
     task_service = get_a2a_task_service()
     state = task.status.state
@@ -171,6 +175,11 @@ async def notify_task_update(
                 internal_id,
             )
 
+    # Extract task_content from the room agent message for frontend display
+    task_content = None
+    if room_agent_message and room_agent_message.message_content:
+        task_content = room_agent_message.message_content.message_text
+
     await sse_manager.send_task_update(
         room_id=room_id,
         internal_id=internal_id,
@@ -184,6 +193,10 @@ async def notify_task_update(
         agent_id=agent_id,
         related_message_id=related_message_id,
         created_at=created_at,
+        message_id=room_agent_message.message_id if room_agent_message else None,
+        step_number=step_number,
+        total_steps=total_steps,
+        task_content=task_content,
     )
 
     logger.info(f"Sent SSE notification for task {internal_id} state {state_value}")
@@ -338,6 +351,8 @@ async def handle_a2a_webhook(
             agent_name=current.get("agent_name"),
             agent_id=current.get("agent_id"),
             created_at=created_at,
+            step_number=current.get("step_number"),
+            total_steps=current.get("total_steps"),
         )
 
     # 7. Resume queue processing if task reached terminal state and has continuation

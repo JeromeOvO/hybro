@@ -291,6 +291,10 @@ class SSEManager:
         status: str = "working",
         related_message_id: str | None = None,
         created_at: str | None = None,
+        message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
     ):
         """
         Send task submitted event for long-running tasks.
@@ -302,6 +306,10 @@ class SSEManager:
             agent_name: Name of the agent processing the task
             status: Initial status (submitted or working)
             created_at: Task creation timestamp (for consistent ordering)
+            message_id: Room agent message ID for consistent frontend message tracking
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
+            task_content: The task description/content being processed
         """
         data = {
             "internal_id": internal_id,
@@ -311,6 +319,10 @@ class SSEManager:
             "status": status,
             "related_message_id": related_message_id,
             "created_at": created_at or utcnow().isoformat(),
+            "message_id": message_id,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "task_submitted", data)
@@ -329,6 +341,10 @@ class SSEManager:
         agent_id: str | None = None,
         related_message_id: str | None = None,
         created_at: str | None = None,
+        message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
     ):
         """
         Send task update event when task state changes.
@@ -343,6 +359,10 @@ class SSEManager:
             requires_auth: True if auth_required state
             status_message: Human-readable status message from agent
             created_at: Task creation timestamp (for consistent ordering)
+            message_id: Room agent message ID for consistent frontend message tracking
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
+            task_content: The task description/content being processed
         """
         data = {
             "internal_id": internal_id,
@@ -356,6 +376,10 @@ class SSEManager:
             "agent_id": agent_id,
             "related_message_id": related_message_id,
             "created_at": created_at,
+            "message_id": message_id,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
         await self.broadcast_to_room(room_id, "task_update", data)
