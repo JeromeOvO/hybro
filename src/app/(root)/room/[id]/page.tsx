@@ -511,7 +511,6 @@ export default function RoomChatPage() {
             <RoomMessages
               messages={messages}
               loading={false}
-              processing={processing}
             />
           </main>
         </div>

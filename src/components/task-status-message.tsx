@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -13,8 +13,7 @@ import {
   KeyRound,
   Sparkles
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { type TaskState, isTerminalState, PENDING_STATES, INTERACTIVE_STATES } from '@/lib/types/sse'
+import { type TaskState, isTerminalState } from '@/lib/types/sse'
 
 interface TaskStatusMessageProps {
   internalId: string
@@ -23,8 +22,36 @@ interface TaskStatusMessageProps {
   content?: string | null
   error?: string | null
   statusMessage?: string | null
+  stepNumber?: number // Current step number (1-indexed)
+  totalSteps?: number // Total number of steps
+  taskContent?: string // The task description being processed
   onComplete?: (content: string) => void
   onError?: (error: string) => void
+}
+
+// Simple step indicator - shows "Step X / Y" consistently
+function StepIndicator({ 
+  stepNumber, 
+  totalSteps 
+}: { 
+  stepNumber?: number
+  totalSteps?: number
+}) {
+  if (!stepNumber || !totalSteps || totalSteps <= 0) {
+    return null
+  }
+  
+  return (
+    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-current/10">
+      Step {stepNumber} / {totalSteps}
+    </span>
+  )
+}
+
+// Truncate text to fit UI, with ellipsis
+function truncateText(text: string, maxLength: number = 150): string {
+  if (!text || text.length <= maxLength) return text
+  return text.slice(0, maxLength).trim() + '...'
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -92,6 +119,9 @@ export function TaskStatusMessage({
   content: initialContent,
   error: initialError,
   statusMessage: initialStatusMessage,
+  stepNumber: initialStepNumber,
+  totalSteps: initialTotalSteps,
+  taskContent,
   onComplete,
   onError,
 }: TaskStatusMessageProps) {
@@ -99,6 +129,8 @@ export function TaskStatusMessage({
   const [content, setContent] = useState<string | null>(initialContent || null)
   const [error, setError] = useState<string | null>(initialError || null)
   const [statusMessage, setStatusMessage] = useState<string | null>(initialStatusMessage || null)
+  const [stepNumber, setStepNumber] = useState<number | undefined>(initialStepNumber)
+  const [totalSteps, setTotalSteps] = useState<number | undefined>(initialTotalSteps)
   const [elapsed, setElapsed] = useState(0)
   
   // Track if we've already processed this update (deduplication)
@@ -110,6 +142,8 @@ export function TaskStatusMessage({
     content?: string
     error?: string
     status_message?: string
+    step_number?: number
+    total_steps?: number
   }) => {
     // Deduplicate by status (don't re-render for same state)
     const stateKey = `${data.status}-${data.content || ""}-${data.error || ""}`
@@ -130,19 +164,27 @@ export function TaskStatusMessage({
     if (data.status_message) {
       setStatusMessage(data.status_message)
     }
+    if (data.step_number !== undefined) {
+      setStepNumber(data.step_number)
+    }
+    if (data.total_steps !== undefined) {
+      setTotalSteps(data.total_steps)
+    }
   }, [onComplete, onError])
 
   // Update from props when they change (SSE updates)
   useEffect(() => {
-    if (initialStatus !== status) {
+    if (initialStatus !== status || initialStepNumber !== stepNumber || initialTotalSteps !== totalSteps) {
       handleUpdate({
         status: initialStatus,
         content: initialContent || undefined,
         error: initialError || undefined,
         status_message: initialStatusMessage || undefined,
+        step_number: initialStepNumber,
+        total_steps: initialTotalSteps,
       })
     }
-  }, [initialStatus, initialContent, initialError, initialStatusMessage, status, handleUpdate])
+  }, [initialStatus, initialContent, initialError, initialStatusMessage, initialStepNumber, initialTotalSteps, status, stepNumber, totalSteps, handleUpdate])
 
   // Elapsed time counter (only for non-terminal states)
   useEffect(() => {
@@ -168,11 +210,14 @@ export function TaskStatusMessage({
         </div>
 
         {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50/50 to-emerald-50/30 dark:from-green-950/50 dark:to-emerald-950/30 message-bubble">
+        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50/50 to-emerald-50/30 dark:from-green-950/50 dark:to-emerald-950/30 message-bubble text-green-600 dark:text-green-400">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-green-700 dark:text-green-300">
-              {agentName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-green-700 dark:text-green-300">
+                {agentName}
+              </span>
+              <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
+            </div>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <CheckCircle className="w-3 h-3" />
               Completed in {formatTime(elapsed)}
@@ -202,11 +247,14 @@ export function TaskStatusMessage({
         </div>
 
         {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50/50 to-rose-50/30 dark:from-red-950/50 dark:to-rose-950/30 message-bubble">
+        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50/50 to-rose-50/30 dark:from-red-950/50 dark:to-rose-950/30 message-bubble text-red-600 dark:text-red-400">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-red-700 dark:text-red-300">
-              {agentName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-red-700 dark:text-red-300">
+                {agentName}
+              </span>
+              <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
+            </div>
             <span className="text-xs text-red-600 dark:text-red-400">
               {titles[status]}
             </span>
@@ -231,11 +279,14 @@ export function TaskStatusMessage({
         </div>
 
         {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-yellow-200 dark:border-yellow-800 bg-gradient-to-br from-yellow-50/50 to-amber-50/30 dark:from-yellow-950/50 dark:to-amber-950/30 message-bubble">
+        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-yellow-200 dark:border-yellow-800 bg-gradient-to-br from-yellow-50/50 to-amber-50/30 dark:from-yellow-950/50 dark:to-amber-950/30 message-bubble text-yellow-600 dark:text-yellow-400">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
-              {agentName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+                {agentName}
+              </span>
+              <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
+            </div>
             <span className="text-xs text-yellow-600 dark:text-yellow-400 font-medium">
               Input required
             </span>
@@ -264,11 +315,14 @@ export function TaskStatusMessage({
         </div>
 
         {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/50 dark:to-amber-950/30 message-bubble">
+        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/50 dark:to-amber-950/30 message-bubble text-orange-600 dark:text-orange-400">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-orange-700 dark:text-orange-300">
-              {agentName}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-orange-700 dark:text-orange-300">
+                {agentName}
+              </span>
+              <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
+            </div>
             <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">
               Authentication required
             </span>
@@ -286,6 +340,9 @@ export function TaskStatusMessage({
   }
 
   // Working/Submitted states (default - in progress)
+  // Display task content if available, otherwise show generic message
+  const displayContent = taskContent ? truncateText(taskContent) : 'Processing your request'
+  
   return (
     <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
       {/* Avatar matching agent bubble style */}
@@ -294,23 +351,26 @@ export function TaskStatusMessage({
       </div>
 
       {/* Message content */}
-      <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 dark:from-blue-950/50 dark:to-indigo-950/30 message-bubble">
+      <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 dark:from-blue-950/50 dark:to-indigo-950/30 message-bubble text-blue-600 dark:text-blue-300">
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
-            {agentName}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
+              {agentName}
+            </span>
+            <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
+          </div>
           <span className="text-xs text-muted-foreground">
             Working...
           </span>
         </div>
 
-        {/* Animated content */}
+        {/* Task content */}
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400" />
-            <span className="text-sm text-blue-600 dark:text-blue-300 font-medium">
-              Processing your request
+          <div className="flex items-start gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+            <span className="text-sm text-blue-600 dark:text-blue-300">
+              {displayContent}
             </span>
           </div>
 

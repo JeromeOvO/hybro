@@ -14,16 +14,35 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<SSEConnection | null>(null)
+  
+  // Use refs for callbacks to avoid recreating connect/disconnect and triggering reconnections
+  const onMessageRef = useRef(onMessage)
+  const onConnectionChangeRef = useRef(onConnectionChange)
+  const getTokenRef = useRef(getToken)
+  
+  // Keep refs up to date without triggering reconnections
+  useEffect(() => {
+    onMessageRef.current = onMessage
+  }, [onMessage])
+  
+  useEffect(() => {
+    onConnectionChangeRef.current = onConnectionChange
+  }, [onConnectionChange])
+  
+  useEffect(() => {
+    getTokenRef.current = getToken
+  }, [getToken])
 
+  // Stable handlers that use refs - won't change and won't trigger reconnections
   const handleMessage = useCallback((message: SSEMessage) => {
     console.log('📨 SSE Hook received message:', message)
-    onMessage?.(message)
-  }, [onMessage])
+    onMessageRef.current?.(message)
+  }, [])
 
   const handleConnectionChange = useCallback((isConnected: boolean) => {
     setConnected(isConnected)
-    onConnectionChange?.(isConnected)
-  }, [onConnectionChange])
+    onConnectionChangeRef.current?.(isConnected)
+  }, [])
 
   const connect = useCallback(async () => {
     if (!enabled || !roomId || connectionRef.current?.isConnected()) {
@@ -39,10 +58,10 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
         connectionRef.current.disconnect()
       }
 
-      // Create new connection
+      // Create new connection using ref for getToken
       connectionRef.current = new SSEConnection({
         roomId,
-        getToken,
+        getToken: () => getTokenRef.current?.() ?? Promise.resolve(null),
         onMessage: handleMessage,
         onOpen: () => {
           console.log('✅ SSE connected')
@@ -69,7 +88,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       setConnecting(false)
       handleConnectionChange(false)
     }
-  }, [roomId, enabled, getToken, handleMessage, handleConnectionChange])
+  }, [roomId, enabled, handleMessage, handleConnectionChange])
 
   const disconnect = useCallback(() => {
     if (connectionRef.current) {
@@ -81,30 +100,29 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     setError(null)
   }, [handleConnectionChange])
 
-  // Auto connect/disconnect based on enabled and roomId
+  // Auto connect/disconnect based on enabled and roomId ONLY
+  // Removed connect/disconnect from deps to prevent reconnection loops
   useEffect(() => {
     if (enabled && roomId) {
       // Ensure previous connection is closed before creating a new one
-      disconnect()
+      if (connectionRef.current) {
+        connectionRef.current.disconnect()
+        connectionRef.current = null
+      }
       connect()
     } else {
       disconnect()
     }
 
-    // Cleanup on unmount or dependency change
-    return () => {
-      disconnect()
-    }
-  }, [roomId, enabled, connect, disconnect])
-
-  // Cleanup on unmount
-  useEffect(() => {
+    // Cleanup on unmount or when roomId/enabled change
     return () => {
       if (connectionRef.current) {
         connectionRef.current.disconnect()
+        connectionRef.current = null
       }
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, enabled])
 
   return {
     connected,
