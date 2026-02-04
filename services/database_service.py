@@ -220,11 +220,11 @@ class DatabaseService:
         Get agents with conditions, filtered by visibility.
         """
         visibility_filter = self._build_visibility_filter(user_id)
-        if query is None:
-            query = {}
 
         combined_query: dict[str, Any]
-        if "$and" in query:
+        if not query:
+            combined_query = visibility_filter
+        elif "$and" in query:
             combined_query = {"$and": [*query["$and"], visibility_filter]}
         else:
             combined_query = {"$and": [query, visibility_filter]}
