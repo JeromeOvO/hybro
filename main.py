@@ -27,7 +27,6 @@ from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from jobs.stale_task_checker import stale_task_checker
-from services.a2a_task_service import init_a2a_task_service
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -82,21 +81,16 @@ async def lifespan(app: FastAPI):
     # Start the agent health check service
     await agent_health_service.start()
 
-    # Initialize A2A Task Service for long-running tasks
+    # Initialize task tracking indexes for room_agent_messages
     if settings.webhook_signing_key:
-        init_a2a_task_service(
-            collection=mongodb.a2a_tasks_collection,
-            webhook_signing_key=settings.webhook_signing_key,
-        )
-        # Create indexes for a2a_tasks collection
-        await mongodb.create_a2a_tasks_indexes()
+        await mongodb.create_task_tracking_indexes()
         # Start stale task checker background job
         await stale_task_checker.start()
-        logger.info("A2A long-running tasks support initialized")
-    else:
-        logger.warning(
-            "WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled"
+        logger.info(
+            "A2A long-running tasks support initialized (using room_agent_messages)"
         )
+    else:
+        logger.warning("WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled")
 
     # Start change stream watcher for message cancellations
     try:

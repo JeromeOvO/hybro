@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -11,6 +12,8 @@ from models.agent_group import AgentGroup
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
 from models.task import BaseTask, MetaTask, TaskSession
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -163,15 +166,6 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.agent_requests
-
-    @property
-    def a2a_tasks_collection(self):
-        """Get A2A tasks collection for long-running task tracking"""
-        if not self.client:
-            raise ConnectionError(
-                "MongoDB client is not connected. Please call connect() first."
-            )
-        return self.db.a2a_tasks
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -521,6 +515,20 @@ class MongoDB:
         )
         return result.modified_count >= 0
 
+    async def update_room_processing_status(
+        self, room_id: str, processing_message_id: str | None
+    ) -> bool:
+        """
+        Update the processing_message_id field on a room.
+        Used to track which user message is currently being processed.
+        Set to message_id when processing starts, None when complete/cancelled/failed.
+        """
+        result = await self.rooms_collection.update_one(
+            {"room_id": room_id},
+            {"$set": {"processing_message_id": processing_message_id}},
+        )
+        return result.modified_count >= 0
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
@@ -627,57 +635,42 @@ class MongoDB:
             RoomAgentMessage(**room_agent_message) for room_agent_message in results
         ]
 
-    async def get_room_agent_message_by_task_internal_id(
-        self, internal_id: str
-    ) -> RoomAgentMessage | None:
-        """
-        Get a room agent message by stored A2A task internal id.
-        """
-        result = await self.room_agent_messages_collection.find_one(
-            {"message_content.message_task.metadata.internal_id": internal_id}
-        )
-        return RoomAgentMessage(**result) if result else None
-
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
         """
-        Update a room agent message by message_id
-        """
-        # Use mode="json" without exclude_unset to ensure nested changes are persisted
-        result = await self.room_agent_messages_collection.update_one(
-            {"message_id": message_id},
-            {"$set": room_agent_message.model_dump(mode="json")},
-        )
-        return result.modified_count > 0
+        Update a room agent message by message_id.
 
-    async def set_room_agent_message_task_internal_id(
-        self, message_id: str, internal_id: str
-    ) -> bool:
+        Note: This preserves task tracking fields (webhook_token_hash, etc.)
+        if they are None in the update object, to avoid overwriting values set by
+        enable_task_tracking_on_message.
         """
-        Set the task internal_id on a room agent message.
-        """
+        update_data = room_agent_message.model_dump(mode="json")
+
+        # Preserve task tracking fields if they are None in the update
+        # These fields are set separately by enable_task_tracking_on_message
+        task_tracking_fields = [
+            "webhook_token_hash",
+            "pending_continuation",
+            "last_notified_state",
+            "agent_url",
+            "task_created_at",
+            "task_updated_at",
+            "task_content",
+            "has_task_tracking",
+        ]
+        for field in task_tracking_fields:
+            if update_data.get(field) is None:
+                update_data.pop(field, None)
+
         result = await self.room_agent_messages_collection.update_one(
             {"message_id": message_id},
-            [
-                {
-                    "$set": {
-                        "message_content.message_task.metadata": {
-                            "$ifNull": [
-                                "$message_content.message_task.metadata",
-                                {},
-                            ]
-                        }
-                    }
-                },
-                {
-                    "$set": {
-                        "message_content.message_task.metadata.internal_id": internal_id
-                    }
-                },
-            ],
+            {"$set": update_data},
         )
-        return result.modified_count > 0
+        # Use matched_count instead of modified_count because MongoDB returns
+        # modified_count=0 when the update data is identical to existing data,
+        # which is still a successful operation (document was found and processed)
+        return result.matched_count > 0
 
     async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
         """
@@ -687,6 +680,398 @@ class MongoDB:
             {"message_id": message_id}
         )
         return result.deleted_count > 0
+
+    # Task tracking methods on room_agent_messages (consolidated from a2a_tasks)
+
+    async def update_room_agent_message_task_fields(
+        self,
+        message_id: str,
+        webhook_token_hash: str | None = None,
+        pending_continuation: dict | None = None,
+        last_notified_state: str | None = None,
+        agent_url: str | None = None,
+        task_created_at: str | None = None,
+        task_updated_at: str | None = None,
+    ) -> bool:
+        """
+        Update task tracking fields on a room agent message.
+        """
+        update_fields = {}
+        if webhook_token_hash is not None:
+            update_fields["webhook_token_hash"] = webhook_token_hash
+        if pending_continuation is not None:
+            update_fields["pending_continuation"] = pending_continuation
+        if last_notified_state is not None:
+            update_fields["last_notified_state"] = last_notified_state
+        if agent_url is not None:
+            update_fields["agent_url"] = agent_url
+        if task_created_at is not None:
+            update_fields["task_created_at"] = task_created_at
+        if task_updated_at is not None:
+            update_fields["task_updated_at"] = task_updated_at
+
+        if not update_fields:
+            return False
+
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id},
+            {"$set": update_fields},
+        )
+        return result.modified_count > 0
+
+    async def enable_task_tracking_on_message(
+        self,
+        message_id: str,
+        webhook_token_hash: str,
+        agent_url: str,
+        task_created_at,  # datetime
+        task_updated_at,  # datetime
+        task_data: dict,
+    ) -> bool:
+        """
+        Enable task tracking on a room agent message and set initial task data atomically.
+
+        This sets has_task_tracking=True and stores the webhook token hash and task data.
+        The message_id is used for webhook URLs and lookups.
+        """
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id},
+            {
+                "$set": {
+                    "has_task_tracking": True,
+                    "webhook_token_hash": webhook_token_hash,
+                    "agent_url": agent_url,
+                    "task_created_at": task_created_at,
+                    "task_updated_at": task_updated_at,
+                    "message_content.message_task": task_data,
+                }
+            },
+        )
+        logger.info(
+            "enable_task_tracking_on_message: message_id=%s, matched=%d, modified=%d",
+            message_id,
+            result.matched_count,
+            result.modified_count,
+        )
+
+        # Verify the update by reading back the document
+        if result.matched_count > 0:
+            verify_doc = await self.room_agent_messages_collection.find_one(
+                {"message_id": message_id}, {"has_task_tracking": 1, "message_id": 1}
+            )
+            if verify_doc:
+                logger.info(
+                    "enable_task_tracking_on_message: VERIFY - found doc with message_id=%s, "
+                    "has_task_tracking=%s",
+                    verify_doc.get("message_id"),
+                    verify_doc.get("has_task_tracking"),
+                )
+            else:
+                logger.error(
+                    "enable_task_tracking_on_message: VERIFY FAILED - doc not found after update! "
+                    "message_id=%s",
+                    message_id,
+                )
+
+        if result.matched_count == 0:
+            logger.error(
+                "enable_task_tracking_on_message: No document found with message_id=%s",
+                message_id,
+            )
+        elif result.modified_count == 0:
+            # Document was found but data was identical - this is OK for retry scenarios
+            logger.debug(
+                "enable_task_tracking_on_message: Document found but not modified for message_id=%s "
+                "(matched=%d, modified=%d) - data may be identical",
+                message_id,
+                result.matched_count,
+                result.modified_count,
+            )
+        # Use matched_count instead of modified_count because MongoDB returns
+        # modified_count=0 when the update data is identical to existing data,
+        # which is still a successful operation (document was found and processed)
+        return result.matched_count > 0
+
+    async def verify_webhook_token_on_message(self, message_id: str) -> str | None:
+        """
+        Get the webhook_token_hash for a message by message_id.
+        Returns the hash for verification, or None if not found.
+        """
+        result = await self.room_agent_messages_collection.find_one(
+            {"message_id": message_id},
+            {"webhook_token_hash": 1, "has_task_tracking": 1},
+        )
+        if not result:
+            logger.warning(
+                "verify_webhook_token_on_message: No document found with message_id=%s",
+                message_id,
+            )
+            return None
+        if not result.get("has_task_tracking"):
+            logger.warning(
+                "verify_webhook_token_on_message: Document found but has_task_tracking is not set "
+                "for message_id=%s",
+                message_id,
+            )
+            return None
+        webhook_hash = result.get("webhook_token_hash")
+        if not webhook_hash:
+            logger.warning(
+                "verify_webhook_token_on_message: Document found but webhook_token_hash is missing/empty "
+                "for message_id=%s",
+                message_id,
+            )
+        return webhook_hash
+
+    async def update_last_notified_state(self, message_id: str, state: str) -> bool:
+        """
+        Update last_notified_state only if it's different (for idempotency).
+        Returns True if this is a new notification (state changed).
+        """
+        result = await self.room_agent_messages_collection.update_one(
+            {
+                "message_id": message_id,
+                "last_notified_state": {"$ne": state},
+            },
+            {"$set": {"last_notified_state": state}},
+        )
+        return result.modified_count > 0
+
+    async def get_stale_task_messages(
+        self, stale_minutes: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with tasks that haven't been updated recently.
+        """
+        from datetime import timedelta
+
+        from common.utils.time import utcnow
+
+        threshold = utcnow() - timedelta(minutes=stale_minutes)
+        cursor = self.room_agent_messages_collection.find(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "task_updated_at": {"$lt": threshold},
+                "has_task_tracking": True,
+            }
+        )
+        results = await cursor.to_list(length=None)
+        return [RoomAgentMessage(**msg) for msg in results]
+
+    async def get_expired_task_messages(
+        self, max_age_hours: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with tasks that have been non-terminal for too long.
+        """
+        from datetime import timedelta
+
+        from common.utils.time import utcnow
+
+        threshold = utcnow() - timedelta(hours=max_age_hours)
+        cursor = self.room_agent_messages_collection.find(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "task_created_at": {"$lt": threshold},
+                "has_task_tracking": True,
+            }
+        )
+        results = await cursor.to_list(length=None)
+        return [RoomAgentMessage(**msg) for msg in results]
+
+    async def get_orphaned_agent_messages(
+        self, orphan_threshold_minutes: int
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages that were created but never processed.
+
+        These are messages where:
+        - has_task_tracking is False or missing (never started processing)
+        - message_content.message_task.status is null/missing (no task status)
+        - message_created_at is older than threshold (not just created)
+
+        This catches messages orphaned when user refreshes before processRoomUserMessage runs.
+        """
+        from datetime import timedelta
+
+        from common.utils.time import utcnow
+
+        threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
+        cursor = self.room_agent_messages_collection.find(
+            {
+                "message_type": "agent",
+                "message_created_at": {"$lt": threshold},
+                "$and": [
+                    {
+                        "$or": [
+                            {"has_task_tracking": {"$ne": True}},
+                            {"has_task_tracking": {"$exists": False}},
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {"message_content.message_task.status": {"$exists": False}},
+                            {"message_content.message_task.status": None},
+                        ]
+                    },
+                ],
+            }
+        )
+        results = await cursor.to_list(length=None)
+        return [RoomAgentMessage(**msg) for msg in results]
+
+    async def get_task_messages_for_room(
+        self, room_id: str, limit: int = 50
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with task tracking, newest first.
+        """
+        cursor = (
+            self.room_agent_messages_collection.find(
+                {
+                    "room_id": room_id,
+                    "has_task_tracking": True,
+                }
+            )
+            .sort("task_created_at", -1)
+            .limit(limit)
+        )
+        results = await cursor.to_list(length=None)
+        return [RoomAgentMessage(**msg) for msg in results]
+
+    async def get_pending_task_messages_for_user(
+        self, user_id: str, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get all non-terminal task messages for a user.
+        """
+        cursor = self.room_agent_messages_collection.find(
+            {
+                "user_id": user_id,
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "has_task_tracking": True,
+            }
+        ).sort("task_created_at", -1)
+        results = await cursor.to_list(length=None)
+        return [RoomAgentMessage(**msg) for msg in results]
+
+    async def count_non_terminal_tasks_for_user(
+        self, user_id: str, non_terminal_states: list[str]
+    ) -> int:
+        """
+        Count non-terminal tasks for a user (for quota enforcement).
+        """
+        return await self.room_agent_messages_collection.count_documents(
+            {
+                "user_id": user_id,
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "has_task_tracking": True,
+            }
+        )
+
+    async def count_non_terminal_tasks_for_room(
+        self, room_id: str, non_terminal_states: list[str]
+    ) -> int:
+        """
+        Count non-terminal tasks for a room (for quota enforcement).
+        """
+        return await self.room_agent_messages_collection.count_documents(
+            {
+                "room_id": room_id,
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "has_task_tracking": True,
+            }
+        )
+
+    async def touch_task_message(self, message_id: str) -> bool:
+        """
+        Update task_updated_at timestamp without changing other fields.
+        """
+        from common.utils.time import utcnow
+
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id, "has_task_tracking": True},
+            {"$set": {"task_updated_at": utcnow()}},
+        )
+        return result.modified_count > 0
+
+    async def save_continuation_on_message(
+        self, message_id: str, continuation_data: dict
+    ) -> bool:
+        """
+        Save queue continuation state on a room agent message.
+        """
+        from common.utils.time import utcnow
+
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id},
+            {
+                "$set": {
+                    "pending_continuation": continuation_data,
+                    "task_updated_at": utcnow(),
+                }
+            },
+        )
+        if result.matched_count == 0:
+            logger.error(
+                "save_continuation_on_message: No document found with message_id=%s",
+                message_id,
+            )
+        elif result.modified_count == 0:
+            logger.warning(
+                "save_continuation_on_message: Document found but not modified for message_id=%s "
+                "(matched=%d, modified=%d)",
+                message_id,
+                result.matched_count,
+                result.modified_count,
+            )
+        return result.modified_count > 0
+
+    async def get_and_clear_continuation_on_message(
+        self, message_id: str
+    ) -> dict | None:
+        """
+        Get and atomically clear continuation state from a room agent message.
+        """
+        from common.utils.time import utcnow
+
+        doc = await self.room_agent_messages_collection.find_one_and_update(
+            {
+                "message_id": message_id,
+                "pending_continuation": {"$exists": True, "$ne": None},
+            },
+            {
+                "$set": {
+                    "pending_continuation": None,
+                    "task_updated_at": utcnow(),
+                }
+            },
+            return_document=False,
+        )
+        return doc.get("pending_continuation") if doc else None
+
+    async def has_continuation_on_message(self, message_id: str) -> bool:
+        """
+        Check if a message has pending continuation state.
+        """
+        doc = await self.room_agent_messages_collection.find_one(
+            {
+                "message_id": message_id,
+                "pending_continuation": {"$exists": True, "$ne": None},
+            },
+            {"_id": 1},
+        )
+        return doc is not None
 
     # room memory management
     async def add_room_memory(self, room_memory: RoomMemory) -> str:
@@ -864,46 +1249,57 @@ class MongoDB:
         )
         return result.deleted_count > 0
 
-    async def create_a2a_tasks_indexes(self) -> None:
+    async def create_task_tracking_indexes(self) -> None:
         """
-        Create indexes for the a2a_tasks collection.
+        Create indexes for task tracking on room_agent_messages collection.
         Should be called on application startup.
         """
         try:
-            collection = self.a2a_tasks_collection
+            collection = self.room_agent_messages_collection
 
-            # Primary queries
-            await collection.create_index("room_id")
-            await collection.create_index("user_id")
-            await collection.create_index("task.status.state")
-
-            # Prevent duplicate tasks from same agent
+            # Task tracking flag index (for filtering messages with task tracking)
             await collection.create_index(
-                [("agent_url", 1), ("task.id", 1)],
-                unique=True,
+                "has_task_tracking",
                 sparse=True,
             )
 
-            # Stale task detection (includes interactive states)
+            # Stale task detection (tasks not updated recently)
             await collection.create_index(
-                [("updated_at", 1), ("task.status.state", 1)],
+                [
+                    ("task_updated_at", 1),
+                    ("message_content.message_task.status.state", 1),
+                ],
+                sparse=True,
             )
 
-            # TTL index: Auto-delete completed tasks after 30 days
-            # Note: MongoDB TTL indexes only work on date fields
+            # Expired task detection (tasks created too long ago)
             await collection.create_index(
-                "updated_at",
-                expireAfterSeconds=2592000,  # 30 days
-                partialFilterExpression={
-                    "task.status.state": {
-                        "$in": ["completed", "failed", "canceled", "rejected"]
-                    }
-                },
+                [
+                    ("task_created_at", 1),
+                    ("message_content.message_task.status.state", 1),
+                ],
+                sparse=True,
             )
 
-            print("A2A tasks indexes created successfully")
+            # User's pending tasks lookup
+            await collection.create_index(
+                [
+                    ("user_id", 1),
+                    ("message_content.message_task.status.state", 1),
+                    ("has_task_tracking", 1),
+                ],
+                sparse=True,
+            )
+
+            # Room's task messages lookup
+            await collection.create_index(
+                [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
+                sparse=True,
+            )
+
+            print("Task tracking indexes created successfully on room_agent_messages")
         except Exception as e:
-            print(f"Error creating A2A tasks indexes: {e}")
+            print(f"Error creating task tracking indexes: {e}")
 
 
 mongodb = MongoDB()

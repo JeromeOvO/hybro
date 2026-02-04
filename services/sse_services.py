@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from services.database_service import db_service
 
 logger = get_logger(__name__)
 
@@ -272,7 +273,22 @@ class SSEManager:
     async def send_processing_status(
         self, room_id: str, status: str, message_id: str = None, details: str = None
     ):
-        """send processing status"""
+        """Send processing status and persist to room for page refresh recovery.
+
+        Args:
+            room_id: The room ID
+            status: One of "processing", "completed", "cancelled", "failed"
+            message_id: The user message ID being processed
+            details: Optional details about the status
+        """
+        # Persist processing state to room for page refresh recovery
+        # Set processing_message_id when processing starts, clear it when done
+        if status == "processing" and message_id:
+            await db_service.update_room_processing_status(room_id, message_id)
+        elif status in ("completed", "cancelled", "failed"):
+            await db_service.update_room_processing_status(room_id, None)
+
+        # Send SSE event to connected clients
         data = {
             "status": status,  # "processing", "completed", "cancelled", "failed"
             "message_id": message_id,
@@ -284,14 +300,13 @@ class SSEManager:
     async def send_task_submitted(
         self,
         room_id: str,
-        internal_id: str,
+        message_id: str,
         task_id: str,
         agent_name: str,
         agent_id: str | None = None,
         status: str = "working",
         related_message_id: str | None = None,
         created_at: str | None = None,
-        message_id: str | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
@@ -301,25 +316,23 @@ class SSEManager:
 
         Args:
             room_id: The room ID
-            internal_id: Our internal task ID
+            message_id: The message ID (used for task tracking and frontend message identification)
             task_id: The agent's task ID
             agent_name: Name of the agent processing the task
             status: Initial status (submitted or working)
             created_at: Task creation timestamp (for consistent ordering)
-            message_id: Room agent message ID for consistent frontend message tracking
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
             task_content: The task description/content being processed
         """
         data = {
-            "internal_id": internal_id,
+            "message_id": message_id,
             "task_id": task_id,
             "agent_name": agent_name,
             "agent_id": agent_id,
             "status": status,
             "related_message_id": related_message_id,
             "created_at": created_at or utcnow().isoformat(),
-            "message_id": message_id,
             "step_number": step_number,
             "total_steps": total_steps,
             "task_content": task_content,
@@ -330,7 +343,7 @@ class SSEManager:
     async def send_task_update(
         self,
         room_id: str,
-        internal_id: str,
+        message_id: str,
         status: str,
         content: str | None = None,
         error: str | None = None,
@@ -341,7 +354,6 @@ class SSEManager:
         agent_id: str | None = None,
         related_message_id: str | None = None,
         created_at: str | None = None,
-        message_id: str | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
@@ -351,7 +363,7 @@ class SSEManager:
 
         Args:
             room_id: The room ID
-            internal_id: Our internal task ID
+            message_id: The message ID (used for task tracking and frontend message identification)
             status: The new task status
             content: Content if task completed
             error: Error message if task failed
@@ -359,13 +371,12 @@ class SSEManager:
             requires_auth: True if auth_required state
             status_message: Human-readable status message from agent
             created_at: Task creation timestamp (for consistent ordering)
-            message_id: Room agent message ID for consistent frontend message tracking
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
             task_content: The task description/content being processed
         """
         data = {
-            "internal_id": internal_id,
+            "message_id": message_id,
             "status": status,
             "content": content,
             "error": error,
@@ -376,7 +387,6 @@ class SSEManager:
             "agent_id": agent_id,
             "related_message_id": related_message_id,
             "created_at": created_at,
-            "message_id": message_id,
             "step_number": step_number,
             "total_steps": total_steps,
             "task_content": task_content,
