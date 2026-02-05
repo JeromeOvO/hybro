@@ -5,6 +5,7 @@ This module provides a background job that:
 1. Polls agents for tasks that haven't received webhook updates
 2. Auto-fails tasks that have been pending too long
 3. Handles tasks that were never acknowledged by agents
+4. Recovers orphaned agent messages that were never processed
 """
 
 import asyncio
@@ -16,9 +17,15 @@ from api.webhooks import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
-from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
+from models.request import OrchestrationCenterRequest
+from models.room import RoomAgentMessage
+from services.a2a_constants import (
+    INTERACTIVE_STATES,
+    NON_TERMINAL_STATES,
+    is_terminal_state,
+)
 from services.a2a_service import a2a_service
-from services.a2a_task_service import get_a2a_task_service
+from services.database_service import db_service
 
 logger = get_logger(__name__)
 
@@ -31,6 +38,7 @@ class StaleTaskChecker:
     1. Stale tasks: Poll agent for current status
     2. Expired tasks: Auto-fail tasks that have been pending too long
     3. Never-acknowledged tasks: Fail tasks where agent never responded
+    4. Orphaned messages: Recover agent messages that were never processed
     """
 
     def __init__(
@@ -39,6 +47,7 @@ class StaleTaskChecker:
         task_expiry_hours: int = 4,
         pending_task_warning_hours: int = 1,
         check_interval_minutes: int = 5,
+        orphan_threshold_minutes: int = 2,
     ):
         """
         Initialize the stale task checker.
@@ -48,11 +57,13 @@ class StaleTaskChecker:
             task_expiry_hours: Auto-fail tasks older than this
             pending_task_warning_hours: Warn (log) after this time
             check_interval_minutes: How often to run the check
+            orphan_threshold_minutes: Recover orphaned messages older than this
         """
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
         self.check_interval_minutes = check_interval_minutes
+        self.orphan_threshold_minutes = orphan_threshold_minutes
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -92,57 +103,77 @@ class StaleTaskChecker:
 
     async def check_stale_tasks(self) -> None:
         """
-        Main check function that handles stale and expired tasks.
+        Main check function that handles stale, expired, and orphaned tasks.
 
         This is called periodically by the background loop.
         """
-        try:
-            task_service = get_a2a_task_service()
-        except RuntimeError:
-            logger.debug("A2A Task Service not initialized yet, skipping check")
-            return
+        # Get non-terminal state values for queries
+        non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
 
         # 1. Check stale tasks (not updated recently)
-        stale_tasks = await task_service.get_stale_tasks(self.stale_check_minutes)
-        logger.info(f"Found {len(stale_tasks)} stale tasks to check")
+        stale_messages = await db_service.get_stale_task_messages(
+            self.stale_check_minutes, non_terminal_state_values
+        )
+        logger.info(f"Found {len(stale_messages)} stale tasks to check")
 
-        for stored_task in stale_tasks:
-            await self._process_stale_task(stored_task, task_service)
+        for msg in stale_messages:
+            await self._process_stale_task(msg)
 
         # 2. Auto-fail expired tasks (been pending too long)
-        expired_tasks = await task_service.get_expired_tasks(self.task_expiry_hours)
-        logger.info(f"Found {len(expired_tasks)} expired tasks to auto-fail")
+        expired_messages = await db_service.get_expired_task_messages(
+            self.task_expiry_hours, non_terminal_state_values
+        )
+        logger.info(f"Found {len(expired_messages)} expired tasks to auto-fail")
 
-        for stored_task in expired_tasks:
-            await self._auto_fail_expired_task(stored_task, task_service)
+        for msg in expired_messages:
+            await self._auto_fail_expired_task(msg)
+
+        # 3. Recover orphaned agent messages (never processed)
+        await self._recover_orphaned_messages()
 
     async def _process_stale_task(
         self,
-        stored_task: dict,
-        task_service,
+        msg: RoomAgentMessage,
     ) -> None:
         """Process a single stale task."""
-        internal_id = stored_task["internal_id"]
-        agent_url = stored_task["agent_url"]
-        agent_task_id = stored_task["task"].id
-        created_at = ensure_utc(stored_task["created_at"])
+        message_id = msg.message_id
+        if not msg.has_task_tracking:
+            return
+
+        agent_url = msg.agent_url
+        task = msg.message_content.message_task if msg.message_content else None
+        if not task:
+            return
+
+        agent_task_id = task.id
+        created_at = (
+            ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
+        )
 
         # Log warning for long-running tasks
         age_hours = (utcnow() - created_at).total_seconds() / 3600
         if age_hours > self.pending_task_warning_hours:
             logger.warning(
-                f"Task {internal_id} has been pending for {age_hours:.1f} hours"
+                f"Task for message {message_id} has been pending for {age_hours:.1f} hours"
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id == "pending":
-            logger.warning(f"Task {internal_id} never acknowledged, marking failed")
-            await self._mark_task_failed(
-                internal_id=internal_id,
-                stored_task=stored_task,
-                error="Agent did not acknowledge the task",
-                task_service=task_service,
+        if agent_task_id.startswith("pending"):
+            logger.warning(
+                f"Task for message {message_id} never acknowledged, marking failed"
             )
+            await self._mark_task_failed(
+                message_id=message_id,
+                msg=msg,
+                error="Agent did not acknowledge the task",
+            )
+            return
+
+        if not agent_url:
+            logger.warning(
+                f"Task for message {message_id} has no agent_url, touching timestamp"
+            )
+            await db_service.touch_task_message(message_id)
             return
 
         try:
@@ -153,32 +184,36 @@ class StaleTaskChecker:
             if current_task is None:
                 # Agent doesn't have this task anymore
                 logger.warning(
-                    f"Task {internal_id} not found on agent, touching timestamp"
+                    f"Task for message {message_id} not found on agent, touching timestamp"
                 )
-                await task_service.touch_task(internal_id)
+                await db_service.touch_task_message(message_id)
                 return
 
             # Update our record
-            await task_service.update_task(internal_id, current_task)
+            await db_service.update_task_on_message(
+                message_id, current_task.model_dump(mode="json")
+            )
 
             # Notify if terminal or interactive state changed
             new_state = current_task.status.state
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
                 await notify_task_update(
-                    internal_id=internal_id,
+                    message_id=message_id,
                     task=current_task,
-                    room_id=stored_task["room_id"],
-                    user_id=stored_task["user_id"],
+                    room_id=msg.room_id,
+                    user_id=msg.user_id or "",
                 )
             else:
-                # Still working - timestamp already touched by update_task
-                logger.debug(f"Task {internal_id} still in state: {new_state}")
+                # Still working - timestamp already touched by update_task_on_message
+                logger.debug(
+                    f"Task for message {message_id} still in state: {new_state}"
+                )
 
         except Exception as e:
-            logger.warning(f"Failed to poll stale task {internal_id}: {e}")
+            logger.warning(f"Failed to poll stale task for message {message_id}: {e}")
             # Don't fail the task yet - might be transient network issue
             # Touch timestamp to prevent immediate re-check
-            await task_service.touch_task(internal_id)
+            await db_service.touch_task_message(message_id)
 
     async def _get_task_from_agent(self, agent_card, task_id: str) -> Task | None:
         """Get task status from agent."""
@@ -198,39 +233,45 @@ class StaleTaskChecker:
 
     async def _auto_fail_expired_task(
         self,
-        stored_task: dict,
-        task_service,
+        msg: RoomAgentMessage,
     ) -> None:
         """Auto-fail a task that has been pending too long."""
-        internal_id = stored_task["internal_id"]
-        created_at = ensure_utc(stored_task["created_at"])
+        message_id = msg.message_id
+        if not msg.has_task_tracking:
+            return
+
+        created_at = (
+            ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
+        )
 
         age_hours = (utcnow() - created_at).total_seconds() / 3600
 
         logger.error(
-            f"Auto-failing task {internal_id} after {age_hours:.1f} hours "
+            f"Auto-failing task for message {message_id} after {age_hours:.1f} hours "
             f"(threshold: {self.task_expiry_hours}h)"
         )
 
         await self._mark_task_failed(
-            internal_id=internal_id,
-            stored_task=stored_task,
+            message_id=message_id,
+            msg=msg,
             error=f"Task expired after {self.task_expiry_hours} hours without completion. "
             "The agent may be unresponsive.",
-            task_service=task_service,
         )
 
     async def _mark_task_failed(
         self,
-        internal_id: str,
-        stored_task: dict,
+        message_id: str,
+        msg: RoomAgentMessage,
         error: str,
-        task_service,
     ) -> None:
         """Mark a task as failed and notify the user."""
+        task = msg.message_content.message_task if msg.message_content else None
+        task_id = task.id if task else "unknown"
+        context_id = task.context_id if task else ""
+
         failed_task = Task(
-            id=stored_task["task"].id,
-            context_id=stored_task["task"].context_id,
+            id=task_id,
+            context_id=context_id,
             status=TaskStatus(
                 state=TaskState.failed,
                 message=Message(
@@ -242,14 +283,100 @@ class StaleTaskChecker:
             ),
         )
 
-        await task_service.update_task(internal_id, failed_task)
+        await db_service.update_task_on_message(
+            message_id, failed_task.model_dump(mode="json")
+        )
 
         await notify_task_update(
-            internal_id=internal_id,
+            message_id=message_id,
             task=failed_task,
-            room_id=stored_task["room_id"],
-            user_id=stored_task["user_id"],
+            room_id=msg.room_id,
+            user_id=msg.user_id or "",
         )
+
+    async def _recover_orphaned_messages(self) -> None:
+        """
+        Recover orphaned agent messages that were never processed.
+
+        This handles the case where:
+        1. User sends a message
+        2. SendMessage creates user message + agent messages
+        3. User refreshes before processRoomUserMessage is called
+        4. Agent messages exist but were never executed
+
+        Recovery groups orphaned messages by their related_message_id (user message)
+        and triggers processing for each unique user message.
+        """
+        from modules.OrchestrationCenter import OrchestrationCenter
+
+        orphaned_messages = await db_service.get_orphaned_agent_messages(
+            self.orphan_threshold_minutes
+        )
+
+        if not orphaned_messages:
+            return
+
+        logger.info(
+            f"Found {len(orphaned_messages)} orphaned agent messages to recover"
+        )
+
+        # Group by related_message_id (user message) to avoid duplicate processing
+        user_messages_to_process: dict[str, str] = {}  # user_message_id -> room_id
+
+        for msg in orphaned_messages:
+            user_message_id = msg.related_message_id
+            if user_message_id and user_message_id not in user_messages_to_process:
+                user_messages_to_process[user_message_id] = msg.room_id
+                logger.info(
+                    f"Orphaned message {msg.message_id} belongs to user message {user_message_id} "
+                    f"in room {msg.room_id}"
+                )
+
+        # Trigger processing for each unique user message
+        orchestration_center = OrchestrationCenter()
+
+        for user_message_id, room_id in user_messages_to_process.items():
+            try:
+                logger.info(
+                    f"Recovering orphaned messages for user message {user_message_id} in room {room_id}"
+                )
+
+                request = OrchestrationCenterRequest(
+                    room_id=room_id,
+                    room_user_message_id=user_message_id,
+                    room_related_message_id="",
+                )
+
+                # Process in background to not block the checker
+                asyncio.create_task(
+                    self._process_orphaned_user_message(orchestration_center, request)
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to trigger recovery for user message {user_message_id}: {e}"
+                )
+
+    async def _process_orphaned_user_message(
+        self,
+        orchestration_center,
+        request: OrchestrationCenterRequest,
+    ) -> None:
+        """Process an orphaned user message in the background."""
+        try:
+            result = await orchestration_center.process_room_user_message(request)
+            if result.success:
+                logger.info(
+                    f"Successfully recovered orphaned messages for user message {request.room_user_message_id}"
+                )
+            else:
+                logger.warning(
+                    f"Recovery for user message {request.room_user_message_id} completed with error: {result.error}"
+                )
+        except Exception as e:
+            logger.error(
+                f"Exception during recovery of user message {request.room_user_message_id}: {e}"
+            )
 
 
 # Singleton instance
@@ -257,4 +384,5 @@ stale_task_checker = StaleTaskChecker(
     stale_check_minutes=settings.stale_check_minutes,
     task_expiry_hours=settings.task_expiry_hours,
     pending_task_warning_hours=settings.pending_task_warning_hours,
+    orphan_threshold_minutes=settings.orphan_threshold_minutes,
 )

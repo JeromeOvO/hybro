@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from collections import deque
@@ -6,18 +7,22 @@ from typing import Any
 
 from a2a.types import (
     AgentCard,
+    GetTaskRequest,
     JSONRPCErrorResponse,
     Message,
     Part,
     Role,
     Task,
+    TaskQueryParams,
     TaskState,
     TaskStatus,
     TextPart,
 )
 
+from api.webhooks import extract_error_message, extract_text_from_artifacts
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
 from models.agent import Agent, AgentStatus
 from models.error import (
     AgentNotAssignedError,
@@ -37,8 +42,8 @@ from models.request import (
 from models.response import OrchestrationCenterResponse
 from models.room import RoomAgentMessage
 from models.task import MetaTask, TaskDefaultValue
+from services.a2a_constants import is_terminal_state
 from services.a2a_service import a2a_service
-from services.a2a_task_service import get_a2a_task_service
 from services.agent_service import agent_service
 from services.database_service import db_service
 from services.debate_service import debate_service
@@ -69,11 +74,13 @@ class ProcessingResult:
         self,
         status: ProcessingStatus,
         response_text: str = "",
-        task_internal_id: str | None = None,
+        message_id: str | None = None,
     ):
         self.status = status
         self.response_text = response_text
-        self.task_internal_id = task_internal_id  # Set when status is PAUSED
+        # message_id is set when status is PAUSED (for push notification tasks)
+        # This is used in webhook URLs for task tracking
+        self.message_id = message_id
 
 
 class OrchestrationCenter:
@@ -388,12 +395,13 @@ class OrchestrationCenter:
                     logger.warning("Skipping invalid step: %s", step)
                     continue
 
-                # Combine step information into task description
+                # Combine step information into action-oriented task description
                 task_description = (
-                    f"Step Description: {step['step_description']}\n"
-                    f"Execution Context: {step['execution_context']}\n"
-                    f"Expected Output: {step['expected_output']}\n"
-                    f"Depends On Steps: {step['depends_on_steps']}"
+                    f"YOUR TASK: {step['step_description']}\n\n"
+                    f"CONTEXT: {step['execution_context']}\n\n"
+                    f"REQUIRED OUTPUT: {step['expected_output']}\n\n"
+                    f"IMPORTANT: Execute this task completely and provide the actual results. "
+                    f"Do NOT just describe what should be done or outline a plan - actually perform the task and deliver concrete output."
                 )
 
                 # Create a new Task for the meta task
@@ -1300,11 +1308,17 @@ class OrchestrationCenter:
         context_section += "\n=== END CONTEXT ===\n\n"
 
         # Combine with instructions
-        enhanced_description = f"""{base_description}
+        enhanced_description = f"""EXECUTE THE FOLLOWING TASK:
+{base_description}
 
 {context_section}
 
-IMPORTANT: Use the context from previous steps above to inform your response. Reference and build upon the previous results as needed to complete this step effectively."""
+CRITICAL INSTRUCTIONS:
+1. Execute this task completely - do NOT just describe what should be done
+2. Provide concrete, actionable results and deliverables
+3. Use the context from previous steps to inform your work
+4. Deliver the expected output, not a plan for how to create it
+5. If the task asks you to create something, actually create it - don't just outline how you would create it"""
 
         return enhanced_description
 
@@ -1560,18 +1574,9 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 related_message_id=current_message.related_message_id,
                 step_number=step_number,
                 total_steps=total_steps,
+                message_id=current_message.message_id,
             )
-            internal_id = task_info["internal_id"]
             created_at = task_info.get("created_at")
-
-            # Persist internal task id on the agent message for refresh lookups
-            if (
-                current_message.message_content
-                and current_message.message_content.message_task
-            ):
-                await self.database_service.set_room_agent_message_task_internal_id(
-                    current_message.message_id, internal_id
-                )
 
             # Extract task content from the message for frontend display
             task_content = None
@@ -1588,14 +1593,13 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Send task_submitted SSE before agent call
             await self.sse_manager.send_task_submitted(
                 room_id=room_id,
-                internal_id=internal_id,
+                message_id=current_message.message_id,
                 task_id="pending",
                 agent_name=agent_card.name,
                 agent_id=current_message.agent_id,
                 status="working",
                 related_message_id=current_message.related_message_id,
                 created_at=created_at,
-                message_id=current_message.message_id,
                 step_number=step_number,
                 total_steps=total_steps,
                 task_content=task_content,
@@ -1609,12 +1613,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         self,
         *,
         room_id: str,
-        internal_id: str | None,
+        message_id: str | None,
         status: str,
         agent_card: AgentCard,
         agent_id: str | None,
         created_at: str | None,
-        message_id: str | None,
         content: str | None = None,
         error: str | None = None,
         requires_input: bool | None = None,
@@ -1623,11 +1626,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         step_number: int | None = None,
         total_steps: int | None = None,
     ) -> None:
-        if not internal_id:
+        if not message_id:
             return
         await self.sse_manager.send_task_update(
             room_id=room_id,
-            internal_id=internal_id,
+            message_id=message_id,
             status=status,
             content=content,
             error=error,
@@ -1637,10 +1640,122 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             requires_input=requires_input,
             requires_auth=requires_auth,
             status_message=status_message,
-            message_id=message_id,
             step_number=step_number,
             total_steps=total_steps,
         )
+
+    async def _poll_task_until_complete(
+        self,
+        agent_card: AgentCard,
+        task_id: str,
+        message_id: str,
+        timeout_seconds: int = 120,
+        initial_delay: float = 0.5,
+        max_delay: float = 5.0,
+    ) -> Task | None:
+        """
+        Poll an agent for task completion with exponential backoff.
+
+        This is used for non-push-notification agents that return a "task" response
+        but are expected to complete quickly. We poll until the task reaches a
+        terminal state or the timeout is reached.
+
+        Args:
+            agent_card: The agent's card information
+            task_id: The agent's task ID to poll
+            message_id: The message ID (for logging)
+            timeout_seconds: Maximum time to wait for completion (default: 120s)
+            initial_delay: Initial delay between polls (default: 0.5s)
+            max_delay: Maximum delay between polls (default: 5s)
+
+        Returns:
+            The completed Task if found, None if timeout or error
+        """
+        start_time = asyncio.get_event_loop().time()
+        delay = initial_delay
+        poll_count = 0
+
+        logger.info(
+            "OrchestrationCenter: Starting poll for task %s (agent task: %s), "
+            "timeout: %ds",
+            message_id,
+            task_id,
+            timeout_seconds,
+        )
+
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout_seconds:
+                logger.warning(
+                    "OrchestrationCenter: Poll timeout for task %s after %.1fs "
+                    "(%d polls)",
+                    message_id,
+                    elapsed,
+                    poll_count,
+                )
+                return None
+
+            # Wait before polling (except first iteration)
+            if poll_count > 0:
+                await asyncio.sleep(delay)
+                # Exponential backoff with cap
+                delay = min(delay * 1.5, max_delay)
+
+            poll_count += 1
+
+            try:
+                a2a_client = await self.a2a_service.create_a2a_client(agent_card)
+                response = await a2a_client.get_task(
+                    GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
+                )
+
+                if not response or isinstance(response.root, JSONRPCErrorResponse):
+                    logger.warning(
+                        "OrchestrationCenter: Poll %d for task %s returned error/empty",
+                        poll_count,
+                        message_id,
+                    )
+                    continue
+
+                task = response.root.result
+                if task is None:
+                    logger.warning(
+                        "OrchestrationCenter: Poll %d for task %s returned no result",
+                        poll_count,
+                        message_id,
+                    )
+                    continue
+
+                state = task.status.state
+                state_value = state.value if hasattr(state, "value") else str(state)
+
+                if is_terminal_state(state):
+                    logger.info(
+                        "OrchestrationCenter: Task %s completed with state %s "
+                        "after %.1fs (%d polls)",
+                        message_id,
+                        state_value,
+                        asyncio.get_event_loop().time() - start_time,
+                        poll_count,
+                    )
+                    return task
+
+                logger.debug(
+                    "OrchestrationCenter: Poll %d for task %s: state=%s",
+                    poll_count,
+                    message_id,
+                    state_value,
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "OrchestrationCenter: Poll %d for task %s failed: %s",
+                    poll_count,
+                    message_id,
+                    e,
+                )
+                # Continue polling despite errors (might be transient)
+                continue
 
     async def _handle_streaming_response_for_room(
         self,
@@ -1686,7 +1801,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             step_number=step_number,
             total_steps=total_steps,
         )
-        internal_id = task_info["internal_id"] if task_info else None
+        # Use current_message.message_id for task updates (task_info["message_id"] is the same)
+        # Only send task updates if task_info was successfully created
         created_at = task_info.get("created_at") if task_info else None
 
         # Use a state object to track streaming state immutably
@@ -1713,12 +1829,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 # Send task_update with cancelled status
                 await self._send_task_update(
                     room_id=room_id,
-                    internal_id=internal_id,
+                    message_id=current_message.message_id if task_info else None,
                     status="canceled",
                     agent_card=agent_card,
                     agent_id=current_message.agent_id,
                     created_at=created_at,
-                    message_id=current_message.message_id,
                     step_number=step_number,
                     total_steps=total_steps,
                 )
@@ -1741,12 +1856,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 # Send task_update with failed status
                 await self._send_task_update(
                     room_id=room_id,
-                    internal_id=internal_id,
+                    message_id=current_message.message_id if task_info else None,
                     status="failed",
                     agent_card=agent_card,
                     agent_id=current_message.agent_id,
                     created_at=created_at,
-                    message_id=current_message.message_id,
                     error=error_message,
                     step_number=step_number,
                     total_steps=total_steps,
@@ -2035,15 +2149,44 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
         )
 
+        # Update task status to completed in database
+        # This ensures the status is persisted for page reloads (SSE only notifies live clients)
+        if (
+            current_message.message_content
+            and current_message.message_content.message_task
+        ):
+            current_message.message_content.message_task.status = TaskStatus(
+                state=TaskState.completed
+            )
+            # Also update message_text with the response content for display
+            if message_streaming_state.full_response_text:
+                current_message.message_content.message_text = (
+                    message_streaming_state.full_response_text
+                )
+            # Update task_updated_at for staleness detection on page reload
+            current_message.task_updated_at = utcnow()
+
+            update_response = (
+                await self.room_services.update_agent_message_by_message_id(
+                    RoomCenterAgentMessageRequest(
+                        message_id=current_message.message_id,
+                        message=current_message,
+                    )
+                )
+            )
+            if not update_response.success:
+                logger.error(
+                    f"OrchestrationCenter: Failed to update message status to completed: {update_response.error}"
+                )
+
         # Send task_update with completed status
         await self._send_task_update(
             room_id=room_id,
-            internal_id=internal_id,
+            message_id=current_message.message_id if task_info else None,
             status="completed",
             agent_card=agent_card,
             agent_id=current_message.agent_id,
             created_at=created_at,
-            message_id=current_message.message_id,
             content=message_streaming_state.full_response_text,
             step_number=step_number,
             total_steps=total_steps,
@@ -2152,12 +2295,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
         user_id = user_message.user_id if user_message else None
 
-        # Get room memory context (ChatGPT/Claude style conversation history)
-        room_memory, room_memory_content = await self._get_room_memory_context(room_id)
-        if room_memory_content is None:
-            # Initialize empty memory content if not available
-            room_memory_content = MemoryContent()
-
         # Query agent messages to process
         query_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(
@@ -2205,7 +2342,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         success = await self._process_agent_message_queue(
             message_queue,
             room_id,
-            room_memory_content,
             room_user_message_id,
             request_user_id=user_id,
         )
@@ -2229,7 +2365,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             room_id, "completed", room_user_message_id
         )
 
-        # Update room memory with new content
+        # Update room memory with new content (fetch fresh from DB for logging)
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         await self._update_room_memory_after_processing(
             room_id, room_memory, query_response.message_list
         )
@@ -2291,7 +2428,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         self,
         message_queue: deque,
         room_id: str,
-        room_memory_content: "MemoryContent",
         user_message_id: str,
         request_user_id: str | None = None,
     ) -> bool:
@@ -2301,7 +2437,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         Args:
             message_queue: Queue of agent messages to process
             room_id: The room ID
-            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             user_message_id: The user message ID for cancellation checks
             request_user_id: The ID of the user making the request (for rate limiting)
 
@@ -2413,7 +2548,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             result = await self._process_single_agent_message(
                 current_message,
                 room_id,
-                room_memory_content,
                 agent,
                 user_message_id,
                 step_number=current_message.step_number,
@@ -2428,21 +2562,20 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             elif result.status == ProcessingStatus.PAUSED:
                 # Push notification task submitted - save continuation state
                 # First, queue up next messages so they're included in continuation
-                await self._queue_next_messages(current_message, message_queue)
+                await self._queue_next_messages(current_message, message_queue, room_id)
 
-                if result.task_internal_id and len(message_queue) > 0:
+                if result.message_id and len(message_queue) > 0:
                     await self._save_queue_continuation(
-                        task_internal_id=result.task_internal_id,
+                        message_id=result.message_id,
                         message_queue=message_queue,
                         room_id=room_id,
-                        room_memory_content=room_memory_content,
                         user_message_id=user_message_id,
                         request_user_id=request_user_id,
                         current_agent=agent,
                     )
                     logger.info(
-                        "OrchestrationCenter: Queue paused for task %s with %d remaining messages",
-                        result.task_internal_id,
+                        "OrchestrationCenter: Queue paused for message %s with %d remaining messages",
+                        result.message_id,
                         len(message_queue),
                     )
                 return True  # Successfully paused, webhook will resume
@@ -2464,17 +2597,16 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 )
 
             # Queue up next messages in the chain
-            await self._queue_next_messages(current_message, message_queue)
+            await self._queue_next_messages(current_message, message_queue, room_id)
 
         logger.info("OrchestrationCenter: Finished processing message queue")
         return True
 
     async def _save_queue_continuation(
         self,
-        task_internal_id: str,
+        message_id: str,
         message_queue: deque,
         room_id: str,
-        room_memory_content: "MemoryContent",
         user_message_id: str,
         request_user_id: str | None,
         current_agent: Agent,
@@ -2483,35 +2615,38 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         Save queue continuation state for a push notification task.
 
         This allows the queue to be resumed when the task completes via webhook.
+
+        Args:
+            message_id: The message ID (used in webhook URLs for task tracking)
         """
         # Serialize the remaining messages in the queue
         # Each message carries its own step_number and total_steps from decomposition
         serialized_queue = [msg.model_dump(mode="json") for msg in message_queue]
 
+        # Note: room_memory_content is NOT saved here - it will be fetched fresh
+        # from the database when the queue resumes (single source of truth)
         continuation_data = {
             "remaining_queue": serialized_queue,
             "room_id": room_id,
-            "room_memory_content": room_memory_content.model_dump(mode="json"),
             "user_message_id": user_message_id,
             "request_user_id": request_user_id,
             "current_agent_id": current_agent.agent_id,
             "current_agent_name": current_agent.agent_card.name,
         }
 
-        a2a_task_service = get_a2a_task_service()
-        success = await a2a_task_service.save_continuation(
-            task_internal_id, continuation_data
+        success = await db_service.save_continuation_on_message(
+            message_id, continuation_data
         )
 
         if not success:
             logger.error(
-                "OrchestrationCenter: Failed to save continuation for task %s",
-                task_internal_id,
+                "OrchestrationCenter: Failed to save continuation for message %s",
+                message_id,
             )
 
     async def resume_queue_from_continuation(
         self,
-        task_internal_id: str,
+        message_id: str,
         task_result_text: str | None = None,
     ) -> bool:
         """
@@ -2520,38 +2655,34 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         This is called from the webhook handler when a task reaches a terminal state.
 
         Args:
-            task_internal_id: The internal ID of the completed task
+            message_id: The message ID (used in webhook URLs for task tracking)
             task_result_text: The result text from the completed task (for context)
 
         Returns:
             True if queue was resumed successfully
         """
-        a2a_task_service = get_a2a_task_service()
-        continuation = await a2a_task_service.get_and_clear_continuation(
-            task_internal_id
+        continuation = await db_service.get_and_clear_continuation_on_message(
+            message_id
         )
 
         if not continuation:
             logger.debug(
-                "OrchestrationCenter: No continuation found for task %s",
-                task_internal_id,
+                "OrchestrationCenter: No continuation found for message %s",
+                message_id,
             )
             return False
 
         logger.info(
-            "OrchestrationCenter: Resuming queue for task %s with %d remaining messages",
-            task_internal_id,
+            "OrchestrationCenter: Resuming queue for message %s with %d remaining messages",
+            message_id,
             len(continuation.get("remaining_queue", [])),
         )
 
-        # Deserialize the queue and memory content
+        # Deserialize the queue (room_memory_content is fetched fresh from DB
+        # in _process_single_agent_message - single source of truth)
         remaining_queue = deque()
         for msg_data in continuation.get("remaining_queue", []):
             remaining_queue.append(RoomAgentMessage.model_validate(msg_data))
-
-        room_memory_content = MemoryContent.model_validate(
-            continuation.get("room_memory_content", {})
-        )
 
         room_id = continuation.get("room_id")
         user_message_id = continuation.get("user_message_id")
@@ -2559,8 +2690,8 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
 
         if not room_id or not user_message_id:
             logger.error(
-                "OrchestrationCenter: Invalid continuation data for task %s",
-                task_internal_id,
+                "OrchestrationCenter: Invalid continuation data for message %s",
+                message_id,
             )
             return False
 
@@ -2580,7 +2711,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             success = await self._process_agent_message_queue(
                 remaining_queue,
                 room_id,
-                room_memory_content,
                 user_message_id,
                 request_user_id,
             )
@@ -2727,7 +2857,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         self,
         current_message: RoomAgentMessage,
         room_id: str,
-        room_memory_content: "MemoryContent",
         agent: Agent,
         user_message_id: str,
         step_number: int | None = None,
@@ -2739,7 +2868,6 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         Args:
             current_message: The agent message to process
             room_id: The room ID
-            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             agent: The agent to process the message
             user_message_id: User message ID for cancellation checks
             step_number: Current step number in the workflow (1-indexed)
@@ -2749,12 +2877,19 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             ProcessingResult with:
                 - status: SUCCESS, FAILED, CANCELLED, or PAUSED
                 - response_text: The agent's response text (for storing in history)
-                - task_internal_id: Set when status is PAUSED (push notification task)
+                - message_id: Set when status is PAUSED (push notification task)
         """
+        # Fetch room_memory_content fresh from database to ensure we have
+        # the latest conversation history (single source of truth)
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        room_memory_content = (
+            room_memory.memory_content if room_memory else MemoryContent()
+        )
+
         # Prepare the agent message with context (ChatGPT/Claude style)
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,  # Pass MemoryContent instead of string
+            room_memory_content,
         )
 
         if not process_response.success:
@@ -2770,7 +2905,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         )
 
         full_response_text = ""
-        task_internal_id = None
+        paused_message_id = None
         if support_streaming:
             status, full_response_text = await self._handle_streaming_response_for_room(
                 current_message,
@@ -2787,7 +2922,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             (
                 success,
                 full_response_text,
-                task_internal_id,
+                paused_message_id,
             ) = await self._handle_sync_response_for_room(
                 current_message,
                 agent.agent_card,
@@ -2801,17 +2936,16 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 return ProcessingResult(ProcessingStatus.FAILED)
 
         # Check if this is a push notification task that requires queue pausing
-        if full_response_text is None and task_internal_id:
+        if full_response_text is None and paused_message_id:
             logger.info(
-                "OrchestrationCenter: Push notification task %s submitted for message %s; "
+                "OrchestrationCenter: Push notification task submitted for message %s; "
                 "queue will be paused until task completes",
-                task_internal_id,
-                current_message.message_id,
+                paused_message_id,
             )
             return ProcessingResult(
                 ProcessingStatus.PAUSED,
                 response_text="",
-                task_internal_id=task_internal_id,
+                message_id=paused_message_id,
             )
 
         if full_response_text is None:
@@ -2855,11 +2989,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         and SSE reconnection support.
 
         Returns:
-            Tuple of (success, response_text, task_internal_id):
+            Tuple of (success, response_text, message_id):
                 - success: Whether the operation succeeded
                 - response_text: The response text (None for async tasks)
-                - task_internal_id: Internal ID if this is a push notification task
-                  that requires queue pausing (None otherwise)
+                - message_id: The message ID if this is a push notification task
+                  that requires queue pausing (None otherwise). This is used
+                  in webhook URLs for task tracking.
         """
         # Step 1: Create task record and emit task_submitted SSE
         task_info = await self._setup_task_tracking(
@@ -2874,15 +3009,15 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             await self.sse_manager.send_error(room_id, "Failed to create task record")
             return False, "", None
 
-        internal_id = task_info["internal_id"]
         created_at = task_info.get("created_at")
+        message_id = current_message.message_id
 
         # Step 3: Call the agent (this blocks until response)
         try:
             response = await self.a2a_service.send_message_to_tracked_agent(
                 agent_card=agent_card,
                 message=prepared_message,
-                internal_id=internal_id,
+                message_id=message_id,
                 webhook_token=task_info["webhook_token"],
                 context_id=task_info["context_id"],
             )
@@ -2891,12 +3026,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Send task_update with failed status
             await self._send_task_update(
                 room_id=room_id,
-                internal_id=internal_id,
+                message_id=message_id,
                 status="failed",
                 agent_card=agent_card,
                 agent_id=current_message.agent_id,
                 created_at=created_at,
-                message_id=current_message.message_id,
                 error=str(exc),
                 step_number=step_number,
                 total_steps=total_steps,
@@ -2904,25 +3038,50 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
-        # Step 4: Handle the response and update task in room
-        a2a_task_service = get_a2a_task_service()
-        task_doc = await a2a_task_service.get_task(internal_id)
-        if task_doc and task_doc.get("task"):
-            await self._handle_a2a_response_for_room(current_message, task_doc["task"])
+        # Note: Task data is already updated in the database by send_message_to_tracked_agent
+        # via update_task_on_message. We don't need to call _handle_a2a_response_for_room here
+        # as it could potentially overwrite the updated task with stale data from current_message.
 
         # Step 5: Handle "message" response (fast path - agent returned immediately)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
 
+            # Update task status to completed in database
+            # This ensures the status is persisted for page reloads (SSE only notifies live clients)
+            if (
+                current_message.message_content
+                and current_message.message_content.message_task
+            ):
+                current_message.message_content.message_task.status = TaskStatus(
+                    state=TaskState.completed
+                )
+                # Also update message_text with the response content for display
+                if full_response_text:
+                    current_message.message_content.message_text = full_response_text
+                # Update task_updated_at for staleness detection on page reload
+                current_message.task_updated_at = utcnow()
+
+                update_response = (
+                    await self.room_services.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=current_message.message_id,
+                            message=current_message,
+                        )
+                    )
+                )
+                if not update_response.success:
+                    logger.error(
+                        f"OrchestrationCenter: Failed to update sync message status to completed: {update_response.error}"
+                    )
+
             # Send task_update with completed status
             await self._send_task_update(
                 room_id=room_id,
-                internal_id=internal_id,
+                message_id=message_id,
                 status="completed",
                 agent_card=agent_card,
                 agent_id=current_message.agent_id,
                 created_at=created_at,
-                message_id=current_message.message_id,
                 content=full_response_text,
                 step_number=step_number,
                 total_steps=total_steps,
@@ -2937,12 +3096,11 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Send task_update with current status (may be working, input_required, etc.)
             await self._send_task_update(
                 room_id=room_id,
-                internal_id=internal_id,
+                message_id=message_id,
                 status=status,
                 agent_card=agent_card,
                 agent_id=current_message.agent_id,
                 created_at=created_at,
-                message_id=current_message.message_id,
                 requires_input=response.get("requires_input", False),
                 requires_auth=response.get("requires_auth", False),
                 status_message=response.get("message"),
@@ -2953,18 +3111,92 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             # Only pause queue for push notification agents
             # Non-push agents complete synchronously, no need to pause
             if self.a2a_service.has_push_notification_capability(agent_card):
-                return True, None, internal_id
+                return True, None, message_id
             else:
-                # Non-push agent returned a task response but will complete quickly
-                return True, None, None
+                # Non-push agent returned a task response - poll for completion
+                # These agents don't support webhooks, so we need to poll
+                agent_task_id = response.get("task_id")
+                if not agent_task_id:
+                    logger.warning(
+                        "OrchestrationCenter: Non-push agent returned task response "
+                        "without task_id, cannot poll for completion"
+                    )
+                    return True, None, None
+
+                logger.info(
+                    "OrchestrationCenter: Non-push agent returned task response, "
+                    "polling for completion (task_id: %s)",
+                    agent_task_id,
+                )
+
+                # Poll until task completes (with 2 minute timeout)
+                completed_task = await self._poll_task_until_complete(
+                    agent_card=agent_card,
+                    task_id=agent_task_id,
+                    message_id=message_id,
+                    timeout_seconds=120,
+                )
+
+                if completed_task:
+                    state = completed_task.status.state
+                    state_value = state.value if hasattr(state, "value") else str(state)
+
+                    # Update database with final task state
+                    await db_service.update_task_on_message(
+                        message_id, completed_task.model_dump(mode="json")
+                    )
+
+                    # Extract content or error based on final state
+                    final_content = None
+                    final_error = None
+
+                    if state_value == "completed" and completed_task.artifacts:
+                        final_content = extract_text_from_artifacts(
+                            completed_task.artifacts
+                        )
+                    elif state_value in ("failed", "rejected", "canceled"):
+                        final_error = extract_error_message(completed_task)
+                        if not final_error:
+                            final_error = f"Task {state_value}"
+
+                    # Send final task_update SSE
+                    await self._send_task_update(
+                        room_id=room_id,
+                        message_id=message_id,
+                        status=state_value,
+                        agent_card=agent_card,
+                        agent_id=current_message.agent_id,
+                        created_at=created_at,
+                        content=final_content,
+                        error=final_error,
+                        step_number=step_number,
+                        total_steps=total_steps,
+                    )
+
+                    # Return the content for storing in conversation history
+                    return True, final_content, None
+                else:
+                    # Polling timed out - task will be handled by stale task checker
+                    logger.warning(
+                        "OrchestrationCenter: Polling timed out for task %s, "
+                        "will be handled by stale task checker",
+                        message_id,
+                    )
+                    return True, None, None
 
         logger.error("Unexpected response type from task tracking: %s", response)
         return False, "", None
 
     async def _queue_next_messages(
-        self, current_message: RoomAgentMessage, message_queue: deque
+        self, current_message: RoomAgentMessage, message_queue: deque, room_id: str
     ) -> None:
-        """Queue up next messages in the chain after processing current message."""
+        """Queue up next messages in the chain after processing current message.
+
+        Args:
+            current_message: The message that was just processed
+            message_queue: The queue to add next messages to
+            room_id: The room ID to check for debate mode
+        """
         logger.info(
             "OrchestrationCenter: Looking for next messages related to %s (step %s/%s)",
             current_message.message_id,
@@ -2982,6 +3214,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             current_message.message_id,
         )
 
+        # Check if room is in debate mode
+        is_debate_mode = False
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if room and room.extend_info and isinstance(room.extend_info, dict):
+            is_debate_mode = bool(room.extend_info.get("debateMode", False))
+
         for next_message in next_messages:
             logger.info(
                 "OrchestrationCenter: Queueing next message %s (step %s/%s, task_content: %s)",
@@ -2993,18 +3231,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 and next_message.message_content.message_text
                 else "None",
             )
-            new_agent_message = (
-                await self.debate_service.inject_short_debate_for_agent_message(
-                    next_message
+
+            # Only inject debate prompt if room is in debate mode
+            if is_debate_mode:
+                new_agent_message = (
+                    await self.debate_service.inject_short_debate_for_agent_message(
+                        next_message
+                    )
                 )
-            )
-            if new_agent_message is None:
-                logger.warning(
-                    "OrchestrationCenter: inject_short_debate_for_agent_message returned None for message %s",
-                    next_message.message_id,
-                )
-                continue
-            message_queue.append(new_agent_message)
+                if new_agent_message is None:
+                    logger.warning(
+                        "OrchestrationCenter: inject_short_debate_for_agent_message returned None for message %s",
+                        next_message.message_id,
+                    )
+                    continue
+                message_queue.append(new_agent_message)
+            else:
+                # Non-debate mode: queue message directly without debate prompt injection
+                message_queue.append(next_message)
 
     async def _update_room_memory_after_processing(
         self,

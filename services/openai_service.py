@@ -163,11 +163,11 @@ Provide an expanded version that includes synonyms, related terms, and use case 
 
         # Continue with normal decomposition logic
         system_prompt = """You are a task decomposition assistant. Your job is
-        to break down tasks into subtasks using a hybrid strategy that combines:
+        to break down tasks into executable subtasks using a hybrid strategy that combines:
         1.	Recursive Least Commitment Decomposition (RLCD):
-        - Decompose tasks incrementally.
-        - Avoid overcommitting to specific methods too early.
-        - Keep steps abstract until details are necessary.
+        - Decompose tasks incrementally into concrete, actionable steps.
+        - Each step should be specific enough that an agent can execute it without further clarification.
+        - Avoid abstract planning steps - focus on executable actions that produce tangible outputs.
         2.	Constraint-Based Decomposition (CBD):
         - Apply explicit constraints from the task description (e.g., deadlines, resources, ordering rules).
         - Use these constraints to validate or eliminate candidate subtasks.
@@ -175,26 +175,33 @@ Provide an expanded version that includes synonyms, related terms, and use case 
           you MUST create exactly that many execution steps. Do not add planning, validation, or orchestration steps.
         3.	Merge-and-Prune:
         - Merge overlapping or redundant subtasks.
-        - Prune infeasible, irrelevant, or duplicate branches. 
+        - Prune infeasible, irrelevant, or duplicate branches.
+        - Remove any meta-steps like "plan the approach" or "outline the solution".
         Important: Max 8 steps (unless explicitly constrained to fewer).
-        Your goal is to create a structured execution plan for all steps.
+        Your goal is to create a structured execution plan with directly actionable steps.
+        
+        CRITICAL EXECUTION FOCUS:
+        - Every step must be directly executable, NOT a planning or description step
+        - Steps should produce concrete outputs and deliverables, not descriptions of work
+        - Avoid steps like "analyze requirements", "plan approach", "outline solution" - instead use "create X", "implement Y", "generate Z"
+        - Each step should result in actual work product that can be used or delivered
         
         Return the response in the following JSON format:
         {
             "execution_steps": [
                 {
                     "step_number": 1,
-                    "step_description": "Concise description of what this step does",
-                    "execution_context": "Context needed for the step",
-                    "expected_output": "What this step should produce",
+                    "step_description": "Concrete action to perform (e.g., 'Create a Python script that...' not 'Plan how to create...')",
+                    "execution_context": "Specific context and inputs needed for execution",
+                    "expected_output": "Concrete deliverable (e.g., 'A working Python script' not 'A plan for the script')",
                     "depends_on_steps": []  # List of step numbers this step depends on
                 }
             ]
         }
         
         Each step should be:
-        1. Specific and actionable
-        2. Clear enough for an AI agent to understand and solve
+        1. Specific and directly actionable - the agent should be able to execute immediately
+        2. Clear enough for an AI agent to complete without asking clarifying questions
         3. Independent or minimal dependencies on other steps
         4. If a step needs results from previous steps, list those step numbers in depends_on_steps
         """
@@ -1051,22 +1058,22 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 agent_desc = f"- Agent ID: {agent.agent_id}\n"
                 agent_desc += f"  Name: {agent.agent_card.name}\n"
                 agent_desc += f"  Description: {agent.agent_card.description or 'No description'}\n"
-                
+
                 # Format capabilities
                 capabilities = agent.agent_card.capabilities
                 if isinstance(capabilities, dict):
                     cap_strings = [f"{k}: {v}" for k, v in capabilities.items()]
                     agent_desc += f"  Capabilities: {', '.join(cap_strings)}\n"
-                
+
                 # Format skills
                 skills = agent.agent_card.skills
                 if isinstance(skills, list) and skills:
                     skill_names = [
-                        (s.name or s.id or "Unknown") if hasattr(s, 'name') else str(s)
+                        (s.name or s.id or "Unknown") if hasattr(s, "name") else str(s)
                         for s in skills
                     ]
                     agent_desc += f"  Skills: {', '.join(skill_names)}\n"
-                
+
                 agent_descriptions.append(agent_desc)
             agent_list = "\n".join(agent_descriptions)
         elif selected_agent_set:
@@ -1110,6 +1117,14 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 - If unsure, assign the first available agent
                 - If "needs_decomposition" is false, there MUST be exactly one task step
 
+                EXECUTION FOCUS (VERY IMPORTANT):
+                - Each step's task_content must be a DIRECT ACTION, not a planning or description task
+                - Use action verbs: "Create...", "Write...", "Generate...", "Build...", "Implement..."
+                - AVOID planning verbs: "Plan how to...", "Outline...", "Describe how...", "Analyze requirements for..."
+                - Each step should produce a concrete deliverable, not a description of work to be done
+                - BAD example: "Plan the data analysis approach" 
+                - GOOD example: "Analyze the sales data and generate a summary report with key metrics"
+
                 OUTPUT STRUCTURE (strict JSON):
                 {{
                 "message_type": "AUTO_ASSIGNED" | "SINGLE_MENTION" | "MULTIPLE_MENTIONS",
@@ -1121,7 +1136,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                     "step_id": "step_1",
                     "agent_id": "uuid from available agents",
                     "agent_name": "name from available agents",
-                    "task_content": "what to do (clean text, remove all <@...> mentions)",
+                    "task_content": "ACTIONABLE task - what to actually DO and PRODUCE (clean text, remove all <@...> mentions)",
                     "dependencies": ["step_id", ...]
                     }}
                 ]
@@ -1132,7 +1147,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 - Break by functional areas (data → analysis → visualization)
                 - Break by sequential dependencies (A must complete before B)
                 - Keep steps granular but not too fine (3-7 steps optimal)
-                - Each step should be independently executable
+                - Each step should be independently executable and produce concrete output
 
                 DEPENDENCY RULES:
                 - Empty [] = no dependencies, can start immediately
@@ -1164,6 +1179,14 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 NO agent mentions in message = ALL agent_id = null
                 Do NOT auto-assign agents based on task type or capabilities if not mentioned.
                 ADDITIONAL CRITICAL RULE: If "needs_decomposition" is false, there MUST be exactly one task step, and its "task_content" MUST be the "original_text" with all <@...> mentions removed.
+
+                EXECUTION FOCUS (VERY IMPORTANT):
+                - Each step's task_content must be a DIRECT ACTION, not a planning or description task
+                - Use action verbs: "Create...", "Write...", "Generate...", "Build...", "Implement..."
+                - AVOID planning verbs: "Plan how to...", "Outline...", "Describe how...", "Analyze requirements for..."
+                - Each step should produce a concrete deliverable, not a description of work to be done
+                - BAD example: "Plan the data analysis approach" 
+                - GOOD example: "Analyze the sales data and generate a summary report with key metrics"
                 
                 SCENARIOS:
 
@@ -1201,7 +1224,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                     "step_id": "step_1",
                     "agent_id": "uuid" | null,
                     "agent_name": "name" | null,
-                    "task_content": "what to do (clean text, remove all <@...> mentions)",
+                    "task_content": "ACTIONABLE task - what to actually DO and PRODUCE (clean text, remove all <@...> mentions)",
                     "dependencies": ["step_id", ...]
                     }
                 ]
@@ -1212,7 +1235,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 - Break by functional areas (data → analysis → visualization)
                 - Break by sequential dependencies (A must complete before B)
                 - Keep steps granular but not too fine (3-7 steps optimal)
-                - Each step should be independently executable
+                - Each step should be independently executable and produce concrete output
 
                 DEPENDENCY RULES:
                 - Empty [] = no dependencies, can start immediately

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
     # Agent Health Check Settings
-    agent_health_check_enabled: bool = True # enable/disable agent health check
+    agent_health_check_enabled: bool = True  # enable/disable agent health check
 
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
@@ -53,20 +53,26 @@ class Settings(BaseSettings):
     discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
     
     # A2A Long-Running Tasks Settings
-    webhook_base_url: str = ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
+    webhook_base_url: str = (
+        ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
+    )
     webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-    allowed_agent_hosts: set[str] = set()  # Comma-separated allowlist of trusted agent hosts (optional)
+    allowed_agent_hosts: set[str] = (
+        set()
+    )  # Comma-separated allowlist of trusted agent hosts (optional)
     max_tasks_per_user: int = 100  # Max concurrent non-terminal tasks per user
     max_tasks_per_room: int = 50  # Max concurrent non-terminal tasks per room
     stale_check_minutes: int = 10  # Poll tasks not updated in this time
     task_expiry_hours: int = 4  # Auto-fail tasks older than this
     pending_task_warning_hours: int = 1  # Warn (log) after this time
+    orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
 
     class Config:
         env_file = ".env"
         extra = "ignore"
         # Ensure .env is read from the project root regardless of CWD
         import os
+
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         env_file = os.path.join(base_dir, ".env")
 
