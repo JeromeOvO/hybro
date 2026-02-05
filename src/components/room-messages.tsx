@@ -20,13 +20,15 @@ export interface MessageData {
   user_id?: string
   agent_id?: string
   // Task-specific fields (for type: 'task')
-  task_internal_id?: string
   task_status?: string
   task_error?: string | null
   task_status_message?: string | null
   task_requires_input?: boolean
   task_requires_auth?: boolean
   task_content?: string // The task description being processed
+  task_updated_at?: string // Last update timestamp for staleness detection
+  task_created_at?: string // Task creation timestamp for elapsed time calculation
+  timestamp_was_missing?: boolean // Flag if original timestamp was missing (implies defaulted to now)
   // Workflow step tracking from backend
   step_number?: number
   total_steps?: number
@@ -219,7 +221,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                     return (
                       <TaskStatusMessage
                         key={msg.id}
-                        internalId={msg.task_internal_id || msg.id}
+                        internalId={msg.id}
                         agentName={msg.sender_name}
                         initialStatus={(msg.task_status || 'working') as TaskState}
                         content={msg.content || null}
@@ -228,6 +230,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                         stepNumber={msg.step_number}
                         totalSteps={msg.total_steps}
                         taskContent={msg.task_content}
+                        taskCreatedAt={msg.task_created_at || msg.timestamp}
                       />
                     )
                   }

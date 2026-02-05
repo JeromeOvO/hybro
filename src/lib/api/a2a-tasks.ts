@@ -11,7 +11,7 @@ import type { TaskState } from '../types/sse'
 const API_BASE_URL = getApiUrl('a2a-tasks')
 
 export interface A2ATaskStatus {
-  internal_id: string
+  message_id: string
   status: TaskState
   task: {
     id: string
@@ -39,7 +39,7 @@ export interface A2ATaskStatus {
 }
 
 export interface A2ATaskListItem {
-  internal_id: string
+  message_id: string
   task_id: string
   agent_name?: string
   agent_id?: string
@@ -164,8 +164,12 @@ export function extractTaskContent(task: A2ATaskStatus['task']): string | undefi
   const texts: string[] = []
   for (const artifact of task.artifacts) {
     for (const part of artifact.parts || []) {
-      if (part.text) {
-        texts.push(part.text)
+      // Handle both direct text and root-wrapped text (Pydantic RootModel)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyPart = part as any
+      const text = anyPart.text || anyPart.root?.text
+      if (text) {
+        texts.push(text)
       }
     }
   }
@@ -179,5 +183,8 @@ export function extractTaskContent(task: A2ATaskStatus['task']): string | undefi
 export function extractTaskError(task: A2ATaskStatus['task']): string | undefined {
   const parts = task.status?.message?.parts
   if (!parts || parts.length === 0) return undefined
-  return parts[0].text
+  // Handle both direct text and root-wrapped text (Pydantic RootModel)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyPart = parts[0] as any
+  return anyPart.text || anyPart.root?.text
 }

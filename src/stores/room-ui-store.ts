@@ -19,6 +19,7 @@ interface RoomUiState {
   setSseError: (v: string | null) => void
   addLiveMessage: (roomId: RoomId, msg: MessageData) => void
   replaceLiveMessage: (roomId: RoomId, tempId: string, msg: MessageData) => void
+  removeLiveMessage: (roomId: RoomId, messageId: string) => void
   resetRoomState: (roomId: RoomId) => void
   resetAll: () => void
 }
@@ -62,6 +63,17 @@ export const useRoomUiStore = create<RoomUiState>((set) => ({
         liveMessagesByRoom: {
           ...state.liveMessagesByRoom,
           [roomId]: deduped,
+        },
+      }
+    }),
+  removeLiveMessage: (roomId, messageId) =>
+    set((state) => {
+      const existing = state.liveMessagesByRoom[roomId] || []
+      const filtered = existing.filter((m) => m.id !== messageId)
+      return {
+        liveMessagesByRoom: {
+          ...state.liveMessagesByRoom,
+          [roomId]: filtered,
         },
       }
     }),

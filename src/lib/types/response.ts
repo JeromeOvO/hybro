@@ -465,6 +465,9 @@ export interface Room {
   };
   room_created_at?: string;
   extend_info?: unknown;
+  // Track which user message is currently being processed (null = idle)
+  // Used to restore "Processing your request..." placeholder on page refresh
+  processing_message_id?: string | null;
 }
 export interface RoomCenterAgentMessageResponse {
   room_id?: string | null;
@@ -697,6 +700,13 @@ export interface RoomMessage {
   agent_id?: string | null;
   related_message_id?: string | null;
   message_content: MessageContent;
+  // Step tracking from task decomposition (1-indexed) - for agent messages
+  step_number?: number | null;
+  total_steps?: number | null;
+  // Task timestamp for staleness detection (only set for agent messages with tasks)
+  task_updated_at?: string | null;
+  // Task description being processed (only set for agent messages with tasks)
+  task_content?: string | null;
 }
 export interface RoomCenterRoomSettingResponse {
   room_id?: string | null;
