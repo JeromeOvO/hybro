@@ -368,6 +368,14 @@ async def handle_a2a_webhook(
         created_at = None
         if current_msg.task_created_at:
             created_at = current_msg.task_created_at.isoformat()
+
+        # Look up agent name from room's agent set
+        agent_name = None
+        if current_msg.agent_id:
+            room = await db_service.get_room_by_room_id(current_msg.room_id)
+            if room and room.room_agent_set:
+                agent_name = room.room_agent_set.get(current_msg.agent_id)
+
         background_tasks.add_task(
             notify_task_update,
             message_id=message_id,
@@ -375,7 +383,7 @@ async def handle_a2a_webhook(
             room_id=current_msg.room_id,
             user_id=current_msg.user_id or "",
             related_message_id=current_msg.related_message_id,
-            agent_name=None,  # Will be looked up from agent_id if needed
+            agent_name=agent_name,
             agent_id=current_msg.agent_id,
             created_at=created_at,
             step_number=current_msg.step_number,
