@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from a2a.types import AgentCard
+from pymongo.errors import DuplicateKeyError
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -48,6 +49,7 @@ class DatabaseService:
             bool: True if successful, False otherwise
 
         Raises:
+            ValueError: If agent already exists (duplicate agent_id or normalized_url)
             Exception: If any database operation fails
         """
         # check if agent_id is provided
@@ -78,6 +80,13 @@ class DatabaseService:
             self.pinecone.upsert([vector_data])
 
             return True
+
+        except DuplicateKeyError as e:
+            # Handle unique index violation (duplicate normalized_url)
+            logger.warning(
+                f"Duplicate agent URL detected for agent {agent.agent_id}: {str(e)}"
+            )
+            raise ValueError("Agent with this URL is already registered") from e
 
         except Exception as e:
             # Rollback MongoDB insertion if needed
@@ -184,10 +193,10 @@ class DatabaseService:
     async def get_all_active_agents(self, user_id: str | None = None) -> list[Agent]:
         """
         Get all active and visible agents from MongoDB.
-        
+
         Args:
             user_id: Optional user ID - if provided, includes user's private agents
-        
+
         Returns:
             List[Agent]: List of agents with active status that are either:
                 - Public (visible to everyone)
@@ -204,7 +213,7 @@ class DatabaseService:
         logger.debug(
             "DatabaseService: Found %d visible active agents (user_id=%s)",
             len(visible_agents),
-            user_id
+            user_id,
         )
         return visible_agents
 
@@ -294,11 +303,11 @@ class DatabaseService:
 
         # Fetch complete agent information from MongoDB
         query = {"agent_id": {"$in": agent_ids}}
-        
+
         # Apply visibility filter
         visibility_filter = self._build_visibility_filter(user_id)
         query = {"$and": [query, visibility_filter]}
-        
+
         agents = await self.mongo.get_agents_with_conditions(query)
 
         # Filter for active agents only if requested
