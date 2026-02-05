@@ -2295,12 +2295,6 @@ CRITICAL INSTRUCTIONS:
         )
         user_id = user_message.user_id if user_message else None
 
-        # Get room memory context (ChatGPT/Claude style conversation history)
-        room_memory, room_memory_content = await self._get_room_memory_context(room_id)
-        if room_memory_content is None:
-            # Initialize empty memory content if not available
-            room_memory_content = MemoryContent()
-
         # Query agent messages to process
         query_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(
@@ -2348,7 +2342,6 @@ CRITICAL INSTRUCTIONS:
         success = await self._process_agent_message_queue(
             message_queue,
             room_id,
-            room_memory_content,
             room_user_message_id,
             request_user_id=user_id,
         )
@@ -2372,7 +2365,8 @@ CRITICAL INSTRUCTIONS:
             room_id, "completed", room_user_message_id
         )
 
-        # Update room memory with new content
+        # Update room memory with new content (fetch fresh from DB for logging)
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         await self._update_room_memory_after_processing(
             room_id, room_memory, query_response.message_list
         )
@@ -2434,7 +2428,6 @@ CRITICAL INSTRUCTIONS:
         self,
         message_queue: deque,
         room_id: str,
-        room_memory_content: "MemoryContent",
         user_message_id: str,
         request_user_id: str | None = None,
     ) -> bool:
@@ -2444,7 +2437,6 @@ CRITICAL INSTRUCTIONS:
         Args:
             message_queue: Queue of agent messages to process
             room_id: The room ID
-            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             user_message_id: The user message ID for cancellation checks
             request_user_id: The ID of the user making the request (for rate limiting)
 
@@ -2556,7 +2548,6 @@ CRITICAL INSTRUCTIONS:
             result = await self._process_single_agent_message(
                 current_message,
                 room_id,
-                room_memory_content,
                 agent,
                 user_message_id,
                 step_number=current_message.step_number,
@@ -2578,7 +2569,6 @@ CRITICAL INSTRUCTIONS:
                         message_id=result.message_id,
                         message_queue=message_queue,
                         room_id=room_id,
-                        room_memory_content=room_memory_content,
                         user_message_id=user_message_id,
                         request_user_id=request_user_id,
                         current_agent=agent,
@@ -2617,7 +2607,6 @@ CRITICAL INSTRUCTIONS:
         message_id: str,
         message_queue: deque,
         room_id: str,
-        room_memory_content: "MemoryContent",
         user_message_id: str,
         request_user_id: str | None,
         current_agent: Agent,
@@ -2634,10 +2623,11 @@ CRITICAL INSTRUCTIONS:
         # Each message carries its own step_number and total_steps from decomposition
         serialized_queue = [msg.model_dump(mode="json") for msg in message_queue]
 
+        # Note: room_memory_content is NOT saved here - it will be fetched fresh
+        # from the database when the queue resumes (single source of truth)
         continuation_data = {
             "remaining_queue": serialized_queue,
             "room_id": room_id,
-            "room_memory_content": room_memory_content.model_dump(mode="json"),
             "user_message_id": user_message_id,
             "request_user_id": request_user_id,
             "current_agent_id": current_agent.agent_id,
@@ -2688,14 +2678,11 @@ CRITICAL INSTRUCTIONS:
             len(continuation.get("remaining_queue", [])),
         )
 
-        # Deserialize the queue and memory content
+        # Deserialize the queue (room_memory_content is fetched fresh from DB
+        # in _process_single_agent_message - single source of truth)
         remaining_queue = deque()
         for msg_data in continuation.get("remaining_queue", []):
             remaining_queue.append(RoomAgentMessage.model_validate(msg_data))
-
-        room_memory_content = MemoryContent.model_validate(
-            continuation.get("room_memory_content", {})
-        )
 
         room_id = continuation.get("room_id")
         user_message_id = continuation.get("user_message_id")
@@ -2724,7 +2711,6 @@ CRITICAL INSTRUCTIONS:
             success = await self._process_agent_message_queue(
                 remaining_queue,
                 room_id,
-                room_memory_content,
                 user_message_id,
                 request_user_id,
             )
@@ -2871,7 +2857,6 @@ CRITICAL INSTRUCTIONS:
         self,
         current_message: RoomAgentMessage,
         room_id: str,
-        room_memory_content: "MemoryContent",
         agent: Agent,
         user_message_id: str,
         step_number: int | None = None,
@@ -2883,7 +2868,6 @@ CRITICAL INSTRUCTIONS:
         Args:
             current_message: The agent message to process
             room_id: The room ID
-            room_memory_content: MemoryContent with conversation history (ChatGPT/Claude style)
             agent: The agent to process the message
             user_message_id: User message ID for cancellation checks
             step_number: Current step number in the workflow (1-indexed)
@@ -2895,10 +2879,17 @@ CRITICAL INSTRUCTIONS:
                 - response_text: The agent's response text (for storing in history)
                 - message_id: Set when status is PAUSED (push notification task)
         """
+        # Fetch room_memory_content fresh from database to ensure we have
+        # the latest conversation history (single source of truth)
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        room_memory_content = (
+            room_memory.memory_content if room_memory else MemoryContent()
+        )
+
         # Prepare the agent message with context (ChatGPT/Claude style)
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,  # Pass MemoryContent instead of string
+            room_memory_content,
         )
 
         if not process_response.success:
