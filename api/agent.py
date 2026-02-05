@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from api.agent_viewset import AgentViewSet
-from common.auth import ClerkUser, get_current_user
+from common.auth import ClerkUser, get_current_user, get_optional_user
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
 from modules.AgentCenter import AgentCenter
 from services.agent_service import agent_service
@@ -141,6 +141,9 @@ async def update_agent(
     if "agent_status" in request_dict:
         update_data["agent_status"] = request_dict["agent_status"]
 
+    if "is_public" in request_dict:
+        update_data["is_public"] = request_dict["is_public"]
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid fields to update")
 
@@ -174,12 +177,16 @@ async def get_agent_card_from_url(request: Request):
 
 
 @router.get("/agent/getAgent/{agent_id}")
-async def get_agent(agent_id: str):
-    """Get agent by ID - PUBLIC (no authentication required)"""
+async def get_agent(
+    agent_id: str,
+    user: ClerkUser | None = Depends(get_optional_user),
+):
+    """Get agent by ID - PUBLIC (authentication optional)"""
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
 
-    agent_center_request = AgentCenterRequest(agent_id=agent_id)
+    user_id = user.user_id if user else None
+    agent_center_request = AgentCenterRequest(agent_id=agent_id, user_id=user_id)
     agent_center_response = await agent_center.query_agent_by_agent_id(
         agent_center_request
     )
@@ -188,29 +195,39 @@ async def get_agent(agent_id: str):
 
 
 @router.get("/agent/getAllAgents")
-async def get_agent_list():
-    """Get all agents - PUBLIC (no authentication required)"""
-    agent_center_request = AgentCenterRequest()
+async def get_agent_list(
+    user: ClerkUser | None = Depends(get_optional_user)
+):
+    """Get all agents - PUBLIC (authentication optional)"""
+    user_id = user.user_id if user else None
+    agent_center_request = AgentCenterRequest(user_id=user_id)
     agent_center_response = await agent_center.get_all_agents(agent_center_request)
 
     return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.get("/agent/getAllActiveAgents")
-async def get_all_active_agents():
-    """Get all active agents - PUBLIC (no authentication required)
+async def get_all_active_agents(
+    user: ClerkUser | None = Depends(get_optional_user)
+):
+    """Get all active agents - PUBLIC (authentication optional)
     
     Returns only agents with active status, filtering out inactive and deleted agents.
+    If authenticated, also includes the user's private agents.
     """
-    agent_center_request = AgentCenterRequest()
+    user_id = user.user_id if user else None
+    agent_center_request = AgentCenterRequest(user_id=user_id)
     agent_center_response = await agent_center.get_all_active_agents(agent_center_request)
     return agent_center._mask_sensitive_information(agent_center_response, ["agent_url", "agent_card.url"])
 
 
 @router.post("/agent/getAgentListWithConditions")
-async def get_agent_list_with_conditions():
-    """Get agents with conditions - PUBLIC (no authentication required)"""
-    agent_center_request = AgentCenterRequest()
+async def get_agent_list_with_conditions(
+    user: ClerkUser | None = Depends(get_optional_user)
+):
+    """Get agents with conditions - PUBLIC (authentication optional)"""
+    user_id = user.user_id if user else None
+    agent_center_request = AgentCenterRequest(user_id=user_id)
     agent_center_response = await agent_center.get_agents_with_conditions(
         agent_center_request
     )

@@ -281,6 +281,109 @@ class SSEManager:
         }
         await self.broadcast_to_room(room_id, "processing_status", data)
 
+    async def send_task_submitted(
+        self,
+        room_id: str,
+        internal_id: str,
+        task_id: str,
+        agent_name: str,
+        agent_id: str | None = None,
+        status: str = "working",
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+    ):
+        """
+        Send task submitted event for long-running tasks.
+
+        Args:
+            room_id: The room ID
+            internal_id: Our internal task ID
+            task_id: The agent's task ID
+            agent_name: Name of the agent processing the task
+            status: Initial status (submitted or working)
+            created_at: Task creation timestamp (for consistent ordering)
+            message_id: Room agent message ID for consistent frontend message tracking
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
+            task_content: The task description/content being processed
+        """
+        data = {
+            "internal_id": internal_id,
+            "task_id": task_id,
+            "agent_name": agent_name,
+            "agent_id": agent_id,
+            "status": status,
+            "related_message_id": related_message_id,
+            "created_at": created_at or utcnow().isoformat(),
+            "message_id": message_id,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "task_content": task_content,
+            "timestamp": utcnow().isoformat(),
+        }
+        await self.broadcast_to_room(room_id, "task_submitted", data)
+
+    async def send_task_update(
+        self,
+        room_id: str,
+        internal_id: str,
+        status: str,
+        content: str | None = None,
+        error: str | None = None,
+        requires_input: bool = False,
+        requires_auth: bool = False,
+        status_message: str | None = None,
+        agent_name: str | None = None,
+        agent_id: str | None = None,
+        related_message_id: str | None = None,
+        created_at: str | None = None,
+        message_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+    ):
+        """
+        Send task update event when task state changes.
+
+        Args:
+            room_id: The room ID
+            internal_id: Our internal task ID
+            status: The new task status
+            content: Content if task completed
+            error: Error message if task failed
+            requires_input: True if input_required state
+            requires_auth: True if auth_required state
+            status_message: Human-readable status message from agent
+            created_at: Task creation timestamp (for consistent ordering)
+            message_id: Room agent message ID for consistent frontend message tracking
+            step_number: Current step number in the workflow (1-indexed)
+            total_steps: Total number of steps in the workflow
+            task_content: The task description/content being processed
+        """
+        data = {
+            "internal_id": internal_id,
+            "status": status,
+            "content": content,
+            "error": error,
+            "requires_input": requires_input,
+            "requires_auth": requires_auth,
+            "status_message": status_message,
+            "agent_name": agent_name,
+            "agent_id": agent_id,
+            "related_message_id": related_message_id,
+            "created_at": created_at,
+            "message_id": message_id,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "task_content": task_content,
+            "timestamp": utcnow().isoformat(),
+        }
+        await self.broadcast_to_room(room_id, "task_update", data)
+
     def get_room_status(self, room_id: str) -> dict:
         """get room status"""
         if room_id not in self.room_connections:

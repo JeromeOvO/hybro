@@ -114,6 +114,7 @@ class AgentCenterRequest(BaseModel):
     agent_id: str | None = None
     agent_url: str | None = None
     provider_id: str | None = None
+    user_id: str | None = None  # For visibility filtering (optional auth)
     agent_card: AgentCard | None = None
     call_increment: int | None = 0
     call_success_increment: int | None = 0
@@ -135,6 +136,8 @@ class BaseAgent(BaseModel):
     # Rate limiting configuration
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
+    # Visibility: True = public (everyone can see/use), False = private (owner only)
+    is_public: bool | None = None
     model_config = ConfigDict(use_enum_values=True)
 
 
@@ -159,6 +162,7 @@ class AgentUpdate(BaseAgent):
     agent_status: AgentStatus | None
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
+    is_public: bool | None = None
 
 
 class AgentPatch(BaseAgent):
@@ -166,10 +170,11 @@ class AgentPatch(BaseAgent):
 
 
 class AgentSettingsUpdateRequest(BaseModel):
-    """Request model for updating agent settings (rate limits, status)."""
+    """Request model for updating agent settings (rate limits, status, visibility)."""
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
     agent_status: AgentStatus | None = None
+    is_public: bool | None = None
     model_config = ConfigDict(use_enum_values=True)
 
 
@@ -213,6 +218,7 @@ class RoomCenterRoomSettingRequest(BaseModel):
     applied_from_group: str | None = None  # Group ID if agents applied from a group
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
+    requesting_user_id: str | None = None  # User making the request, for visibility validation
 
 
 class RoomCenterUserMessageRequest(BaseModel):

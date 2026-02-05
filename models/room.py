@@ -53,3 +53,6 @@ class RoomUserMessage(RoomMessage):
 class RoomAgentMessage(RoomMessage):
     message_type: str = "agent"
     extend_info: Any | None = None
+    # Step tracking from task decomposition (1-indexed)
+    step_number: int | None = None
+    total_steps: int | None = None

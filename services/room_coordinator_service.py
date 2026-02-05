@@ -248,11 +248,17 @@ class RoomCoordinatorService:
 
         summary_content = MessageContent(message_task=summary_task)
 
+        user_message = await self.database_service.get_room_user_message_by_message_id(
+            room_user_message_id
+        )
+        user_id = user_message.user_id if user_message else None
+
         summary_agent_message = RoomAgentMessage(
             room_id=room_id,
             message_id=str(uuid4()),
             agent_id=coordinator_agent_id,
             related_message_id=room_user_message_id,
+            user_id=user_id,
             message_content=summary_content,
             message_created_at=utcnow(),
             extend_info={

@@ -179,6 +179,15 @@ class AgentService:
             agent = await self.database_service.get_agent_by_agent_id(agent_id)
             if not agent:
                 raise AgentNotFoundError()
+            if not agent.is_public and (
+                request.user_id is None or agent.provider_id != request.user_id
+            ):
+                return AgentCenterResponse(
+                    agent_id=agent_id,
+                    success=False,
+                    error="Agent not found",
+                    status_code=404,
+                )
         except Exception as e:
             logger.error(f"AgentCenter: Failed to get agent in database: {str(e)}")
             return AgentCenterResponse(
@@ -221,7 +230,7 @@ class AgentService:
 
     async def get_all_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
         try:
-            agents = await self.database_service.get_all_agents()
+            agents = await self.database_service.get_all_visible_agents(request.user_id)
         except Exception as e:
             logger.error(f"AgentCenter: Failed to get all agents in database: {str(e)}")
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
@@ -235,13 +244,13 @@ class AgentService:
         Get all agents with active status from the database.
         
         Args:
-            request: AgentCenterRequest (unused but kept for consistency)
+            request: AgentCenterRequest - may contain user_id for visibility filtering
             
         Returns:
             AgentCenterResponse with list of active agents only
         """
         try:
-            agents = await self.database_service.get_all_active_agents()
+            agents = await self.database_service.get_all_active_agents(request.user_id)
         except Exception as e:
             logger.error(f"AgentCenter: Failed to get all active agents in database: {str(e)}")
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
@@ -254,8 +263,8 @@ class AgentService:
         self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
         try:
-            agents = await self.database_service.get_agents_with_conditions(
-                request.query, request.limit
+            agents = await self.database_service.get_agents_with_conditions_visible(
+                request.user_id, request.query, request.limit
             )
         except Exception as e:
             logger.error(
@@ -278,12 +287,12 @@ class AgentService:
             raise IllgalParameterError()
 
         try:
-            if request.agent_count is not None and request.agent_count > 0:
-                agents = await self.database_service.query_similar_agents(
-                    query_text, request.agent_count
-                )
-            else:
-                agents = await self.database_service.query_similar_agents(query_text, 5)
+            count = request.agent_count if (request.agent_count and request.agent_count > 0) else 5
+            agents = await self.database_service.query_similar_agents(
+                query_text=query_text,
+                count=count,
+                user_id=request.user_id,
+            )
         except Exception as e:
             logger.error(
                 f"AgentCenter: Failed to get similar agents in database: {str(e)}"

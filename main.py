@@ -11,6 +11,7 @@ from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
 
 from api import (
+    a2a_tasks,
     agent,
     agent_group,
     discovery,
@@ -20,12 +21,15 @@ from api import (
     room_center,
     sse,
     task,
+    webhooks,
 )
 from common.auth import get_current_user
 from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from jobs.stale_task_checker import stale_task_checker
+from services.a2a_task_service import init_a2a_task_service
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -80,6 +84,22 @@ async def lifespan(app: FastAPI):
     # Start the agent health check service
     await agent_health_service.start()
 
+    # Initialize A2A Task Service for long-running tasks
+    if settings.webhook_signing_key:
+        init_a2a_task_service(
+            collection=mongodb.a2a_tasks_collection,
+            webhook_signing_key=settings.webhook_signing_key,
+        )
+        # Create indexes for a2a_tasks collection
+        await mongodb.create_a2a_tasks_indexes()
+        # Start stale task checker background job
+        await stale_task_checker.start()
+        logger.info("A2A long-running tasks support initialized")
+    else:
+        logger.warning(
+            "WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled"
+        )
+
     # Start change stream watcher for message cancellations
     try:
         await sse_manager.start_change_stream_watcher(
@@ -94,6 +114,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the stale task checker
+        await stale_task_checker.stop()
+
         # Stop the agent health check service
         await agent_health_service.stop()
 
@@ -191,6 +214,19 @@ app.include_router(
     # Auth handled per-route via X-API-Key header in discovery.py
 )
 
+app.include_router(
+    a2a_tasks.router,
+    prefix=api_prefix,
+    tags=["a2a_tasks"],
+    # Auth handled per-route in a2a_tasks.py
+)
+# Webhook endpoint - no auth prefix, no authentication (uses token validation)
+app.include_router(
+    webhooks.router,
+    prefix=api_prefix,
+    tags=["webhooks"],
+    # No auth - webhook uses Bearer token validation
+)
 # For APIs that do not require authentication (user is optional)
 # app.include_router(
 #     router,

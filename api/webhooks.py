@@ -1,0 +1,455 @@
+"""
+A2A Webhook Handler
+
+This module handles webhook callbacks from A2A agents for long-running tasks.
+
+Per A2A spec section 4.3.3, push notifications use StreamResponse format:
+- {"task": Task} - Full task with artifacts (most common)
+- {"statusUpdate": TaskStatusUpdateEvent} - Status-only update
+- {"artifactUpdate": TaskArtifactUpdateEvent} - Artifact streaming
+- {"message": Message} - Direct message response
+"""
+
+import asyncio
+from typing import Any
+
+from a2a.types import Task, TaskStatusUpdateEvent
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+
+from common.utils.logger import get_logger
+from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
+from services.a2a_task_service import get_a2a_task_service
+from services.database_service import db_service
+from services.sse_services import sse_manager
+
+logger = get_logger(__name__)
+
+router = APIRouter()
+
+
+async def resume_queue_continuation(
+    internal_id: str,
+    task_result_text: str | None = None,
+) -> None:
+    """
+    Resume queue processing after a push notification task completes.
+
+    This is called as a background task when a webhook indicates a task
+    has reached a terminal state.
+
+    Args:
+        internal_id: The internal ID of the completed task
+        task_result_text: The result text from the completed task
+    """
+    # Import here to avoid circular imports
+    from api.orchestration_center import orchestration_center
+
+    try:
+        resumed = await orchestration_center.resume_queue_from_continuation(
+            internal_id, task_result_text
+        )
+        if resumed:
+            logger.info(f"Successfully resumed queue processing for task {internal_id}")
+    except Exception as e:
+        logger.error(
+            f"Failed to resume queue for task {internal_id}: {e}",
+            exc_info=True,
+        )
+
+
+async def notify_task_update(
+    internal_id: str,
+    task: Task,
+    room_id: str,
+    user_id: str,
+    related_message_id: str | None = None,
+    agent_name: str | None = None,
+    agent_id: str | None = None,
+    created_at: str | None = None,
+    step_number: int | None = None,
+    total_steps: int | None = None,
+) -> None:
+    """
+    Send SSE notification when task state changes.
+    Uses idempotency tracking to prevent duplicate notifications.
+
+    Args:
+        internal_id: Our internal task ID
+        task: The updated A2A Task
+        room_id: Room to notify
+        user_id: User who owns the task
+        created_at: Task creation timestamp (for consistent ordering)
+        step_number: Current step number in the workflow (1-indexed)
+        total_steps: Total number of steps in the workflow
+    """
+    task_service = get_a2a_task_service()
+    state = task.status.state
+
+    # Check if we already notified for this state (prevents duplicates)
+    is_new_notification = await task_service.update_notified_state(
+        internal_id, state.value if hasattr(state, "value") else str(state)
+    )
+    if not is_new_notification:
+        logger.debug(
+            f"Skipping duplicate notification for task {internal_id} state {state}"
+        )
+        return
+
+    content = None
+    error = None
+    requires_input = False
+    requires_auth = False
+    status_message = None
+
+    state_value = state.value if hasattr(state, "value") else str(state)
+
+    if state_value == "completed" and task.artifacts:
+        content = extract_text_from_artifacts(task.artifacts)
+        logger.info(
+            f"Task {internal_id} completed. Artifacts count: {len(task.artifacts)}, "
+            f"Extracted content length: {len(content) if content else 0}"
+        )
+        if not content:
+            # Debug: log artifact structure
+            for i, artifact in enumerate(task.artifacts):
+                logger.warning(
+                    f"Artifact {i}: parts={len(artifact.parts) if artifact.parts else 0}"
+                )
+                if artifact.parts:
+                    for j, part in enumerate(artifact.parts):
+                        logger.warning(
+                            f"  Part {j}: type={type(part).__name__}, "
+                            f"has_text={hasattr(part, 'text')}, "
+                            f"has_root={hasattr(part, 'root')}"
+                        )
+
+    elif state_value == "failed":
+        error = extract_error_message(task) or "Task failed"
+
+    elif state_value == "rejected":
+        error = extract_error_message(task) or "Task was rejected by the agent"
+
+    elif state_value == "canceled":
+        error = "Task was canceled"
+
+    elif state_value == "input_required":
+        requires_input = True
+        status_message = extract_status_message(task)
+
+    elif state_value == "auth_required":
+        requires_auth = True
+        status_message = extract_status_message(task) or "Authentication required"
+
+    # Persist task updates into the room agent message (for refresh rendering)
+    # Use retry logic to handle race condition where webhook arrives before
+    # OrchestrationCenter finishes persisting internal_id to the message
+    room_agent_message = None
+    for attempt in range(3):
+        room_agent_message = (
+            await db_service.get_room_agent_message_by_task_internal_id(internal_id)
+        )
+        if room_agent_message:
+            break
+        if attempt < 2:
+            await asyncio.sleep(0.5)  # Wait 500ms before retry
+
+    if room_agent_message and room_agent_message.message_content:
+        room_agent_message.message_content.message_task = task
+
+        # Only backfill message_text if it's empty to avoid overwriting real content
+        if not room_agent_message.message_content.message_text:
+            if content:
+                room_agent_message.message_content.message_text = content
+            elif error:
+                room_agent_message.message_content.message_text = error
+            elif status_message:
+                room_agent_message.message_content.message_text = status_message
+
+        update_success = await db_service.update_room_agent_message_by_message_id(
+            room_agent_message.message_id, room_agent_message
+        )
+        if not update_success:
+            logger.error(
+                "Failed to update room agent message %s for task %s",
+                room_agent_message.message_id,
+                internal_id,
+            )
+
+    # Extract task_content from the room agent message for frontend display
+    task_content = None
+    if room_agent_message and room_agent_message.message_content:
+        task_content = room_agent_message.message_content.message_text
+
+    await sse_manager.send_task_update(
+        room_id=room_id,
+        internal_id=internal_id,
+        status=state_value,
+        content=content,
+        error=error,
+        requires_input=requires_input,
+        requires_auth=requires_auth,
+        status_message=status_message,
+        agent_name=agent_name,
+        agent_id=agent_id,
+        related_message_id=related_message_id,
+        created_at=created_at,
+        message_id=room_agent_message.message_id if room_agent_message else None,
+        step_number=step_number,
+        total_steps=total_steps,
+        task_content=task_content,
+    )
+
+    logger.info(f"Sent SSE notification for task {internal_id} state {state_value}")
+
+
+def extract_text_from_artifacts(artifacts: list) -> str | None:
+    """Extract text content from A2A artifacts with robust type handling."""
+    texts = []
+    for artifact in artifacts:
+        if not artifact.parts:
+            continue
+        for part in artifact.parts:
+            # Handle different part type structures
+            text = None
+            if hasattr(part, "text") and part.text:
+                text = part.text
+            elif hasattr(part, "root"):
+                # Discriminated union wrapper
+                root = part.root
+                if hasattr(root, "text") and root.text:
+                    text = root.text
+            if text:
+                texts.append(text)
+    return "".join(texts) if texts else None
+
+
+def extract_error_message(task: Task) -> str | None:
+    """Extract error message from task status."""
+    if not task.status.message:
+        return None
+    if not task.status.message.parts:
+        return None
+    for part in task.status.message.parts:
+        if hasattr(part, "text") and part.text:
+            return part.text
+        if hasattr(part, "root") and hasattr(part.root, "text"):
+            return part.root.text
+    return None
+
+
+def extract_status_message(task: Task) -> str | None:
+    """Extract human-readable status message."""
+    return extract_error_message(task)  # Same extraction logic
+
+
+@router.post("/webhooks/a2a/{internal_id}")
+async def handle_a2a_webhook(
+    request: Request,
+    internal_id: str,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(default=""),
+) -> dict[str, Any]:
+    """
+    Receive task updates from A2A agents.
+
+    Per A2A spec section 4.3.3, payload is StreamResponse format containing one of:
+    - task: Full Task object with artifacts
+    - statusUpdate: TaskStatusUpdateEvent for status-only updates
+    - artifactUpdate: TaskArtifactUpdateEvent for streaming artifacts
+    - message: Message object for direct responses
+
+    Security: Validates Bearer token against stored hash.
+    Idempotency: Safe to call multiple times with same status.
+
+    Args:
+        request: FastAPI request object
+        internal_id: Our internal task ID
+        background_tasks: FastAPI background tasks
+        authorization: Authorization header with Bearer token
+
+    Returns:
+        Status response
+    """
+    task_service = get_a2a_task_service()
+
+    # 1. Extract and validate token (hash-based, not plaintext comparison)
+    token = authorization.replace("Bearer ", "") if authorization else ""
+
+    if not token:
+        logger.warning(f"Webhook for task {internal_id}: Missing authorization token")
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    if not await task_service.verify_webhook_token(internal_id, token):
+        logger.warning(f"Webhook for task {internal_id}: Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # 2. Parse StreamResponse payload (A2A-compliant format)
+    try:
+        payload = await request.json()
+        logger.info(
+            f"Webhook for task {internal_id}: Received payload keys: {list(payload.keys())}"
+        )
+        updated_task = parse_stream_response(payload, internal_id)
+        logger.info(
+            f"Webhook for task {internal_id}: Parsed task state={updated_task.status.state}, "
+            f"artifacts={len(updated_task.artifacts) if updated_task.artifacts else 0}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Invalid webhook payload for task {internal_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}") from e
+
+    # 3. Get current task to check state
+    current = await task_service.get_task(internal_id)
+    if not current:
+        logger.warning(f"Webhook for unknown task {internal_id}")
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # 4. Don't update if already terminal (idempotency)
+    current_state = current["task"].status.state
+    if is_terminal_state(current_state):
+        logger.debug(
+            f"Webhook for task {internal_id}: Already terminal ({current_state})"
+        )
+        return {
+            "status": "already_terminal",
+            "state": current_state.value
+            if hasattr(current_state, "value")
+            else str(current_state),
+        }
+
+    # 5. Update task
+    await task_service.update_task(internal_id, updated_task)
+    logger.info(
+        f"Webhook updated task {internal_id} to state {updated_task.status.state}"
+    )
+
+    # 6. Notify frontend via SSE (with idempotency check)
+    new_state = updated_task.status.state
+    should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
+
+    # Extract content for queue resumption (if task completed successfully)
+    task_result_text = None
+    if is_terminal_state(new_state):
+        state_value = new_state.value if hasattr(new_state, "value") else str(new_state)
+        if state_value == "completed" and updated_task.artifacts:
+            task_result_text = extract_text_from_artifacts(updated_task.artifacts)
+
+    if should_notify:
+        # Get created_at from task document for consistent ordering
+        created_at = None
+        if current.get("created_at"):
+            created_at = current["created_at"].isoformat()
+        background_tasks.add_task(
+            notify_task_update,
+            internal_id=internal_id,
+            task=updated_task,
+            room_id=current["room_id"],
+            user_id=current["user_id"],
+            related_message_id=current.get("related_message_id"),
+            agent_name=current.get("agent_name"),
+            agent_id=current.get("agent_id"),
+            created_at=created_at,
+            step_number=current.get("step_number"),
+            total_steps=current.get("total_steps"),
+        )
+
+    # 7. Resume queue processing if task reached terminal state and has continuation
+    if is_terminal_state(new_state):
+        background_tasks.add_task(
+            resume_queue_continuation,
+            internal_id=internal_id,
+            task_result_text=task_result_text,
+        )
+
+    return {"status": "accepted"}
+
+
+def parse_stream_response(payload: dict[str, Any], internal_id: str) -> Task:
+    """
+    Parse A2A StreamResponse format into a Task object.
+
+    Per A2A spec section 4.3.3, StreamResponse is a discriminated union with one of:
+    - task: Full Task object (preferred, includes artifacts)
+    - statusUpdate: TaskStatusUpdateEvent (status only, no artifacts)
+    - artifactUpdate: TaskArtifactUpdateEvent (for streaming)
+    - message: Message object
+
+    Args:
+        payload: The webhook payload in StreamResponse format
+        internal_id: Our internal task ID (for logging)
+
+    Returns:
+        Task object parsed from the payload
+
+    Raises:
+        HTTPException: If payload format is invalid
+    """
+    # Handle "task" variant (full Task with artifacts) - preferred
+    if "task" in payload:
+        logger.debug(
+            f"Webhook for task {internal_id}: Received full Task in StreamResponse"
+        )
+        return Task.model_validate(payload["task"])
+
+    # Handle "statusUpdate" variant (TaskStatusUpdateEvent - status only)
+    if "statusUpdate" in payload:
+        logger.debug(
+            f"Webhook for task {internal_id}: Received statusUpdate in StreamResponse"
+        )
+        status_event = TaskStatusUpdateEvent.model_validate(payload["statusUpdate"])
+        # Convert to Task object (note: no artifacts in status-only update)
+        return Task(
+            id=status_event.taskId,
+            context_id=status_event.contextId,
+            status=status_event.status,
+        )
+
+    # Handle "message" variant - convert to completed task
+    if "message" in payload:
+        logger.debug(
+            f"Webhook for task {internal_id}: Received message in StreamResponse"
+        )
+        import uuid
+
+        from a2a.types import Artifact, Message, TaskState, TaskStatus
+
+        message = Message.model_validate(payload["message"])
+        return Task(
+            id=str(uuid.uuid4()),
+            context_id=message.context_id or "",
+            status=TaskStatus(state=TaskState.completed),
+            artifacts=[
+                Artifact(
+                    artifact_id=str(uuid.uuid4()),
+                    name="response",
+                    parts=message.parts,
+                )
+            ],
+        )
+
+    # Handle "artifactUpdate" variant - not fully supported yet
+    if "artifactUpdate" in payload:
+        logger.warning(
+            f"Webhook for task {internal_id}: artifactUpdate not fully supported, "
+            "client should poll for full task"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="artifactUpdate not supported; send full task or use polling",
+        )
+
+    # Fallback: Try parsing as raw Task (backwards compatibility)
+    # This handles non-compliant agents that send Task directly
+    if "id" in payload and "status" in payload:
+        logger.warning(
+            f"Webhook for task {internal_id}: Received raw Task (not StreamResponse). "
+            "Agent should send StreamResponse format per A2A spec."
+        )
+        return Task.model_validate(payload)
+
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid StreamResponse: expected 'task', 'statusUpdate', 'message', or 'artifactUpdate' key",
+    )

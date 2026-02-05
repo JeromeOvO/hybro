@@ -182,6 +182,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.discovery_api_requests
+      
+    @property
+    def a2a_tasks_collection(self):
+        """Get A2A tasks collection for long-running task tracking"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.a2a_tasks
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -637,15 +646,55 @@ class MongoDB:
             RoomAgentMessage(**room_agent_message) for room_agent_message in results
         ]
 
+    async def get_room_agent_message_by_task_internal_id(
+        self, internal_id: str
+    ) -> RoomAgentMessage | None:
+        """
+        Get a room agent message by stored A2A task internal id.
+        """
+        result = await self.room_agent_messages_collection.find_one(
+            {"message_content.message_task.metadata.internal_id": internal_id}
+        )
+        return RoomAgentMessage(**result) if result else None
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
         """
         Update a room agent message by message_id
         """
+        # Use mode="json" without exclude_unset to ensure nested changes are persisted
         result = await self.room_agent_messages_collection.update_one(
             {"message_id": message_id},
-            {"$set": room_agent_message.model_dump(exclude_unset=True, mode="json")},
+            {"$set": room_agent_message.model_dump(mode="json")},
+        )
+        return result.modified_count > 0
+
+    async def set_room_agent_message_task_internal_id(
+        self, message_id: str, internal_id: str
+    ) -> bool:
+        """
+        Set the task internal_id on a room agent message.
+        """
+        result = await self.room_agent_messages_collection.update_one(
+            {"message_id": message_id},
+            [
+                {
+                    "$set": {
+                        "message_content.message_task.metadata": {
+                            "$ifNull": [
+                                "$message_content.message_task.metadata",
+                                {},
+                            ]
+                        }
+                    }
+                },
+                {
+                    "$set": {
+                        "message_content.message_task.metadata.internal_id": internal_id
+                    }
+                },
+            ],
         )
         return result.modified_count > 0
 
@@ -796,9 +845,7 @@ class MongoDB:
         try:
             # Only insert if not exist (upsert with $setOnInsert)
             await self.cancelled_messages_collection.update_one(
-                {"message_id": message_id},
-                {"$setOnInsert": doc},
-                upsert=True
+                {"message_id": message_id}, {"$setOnInsert": doc}, upsert=True
             )
             return True
         except Exception as e:
@@ -944,6 +991,47 @@ class MongoDB:
         result = await self.api_keys_collection.delete_one({"key_id": key_id})
         return result.deleted_count > 0
     
+    async def create_a2a_tasks_indexes(self) -> None:
+        """
+        Create indexes for the a2a_tasks collection.
+        Should be called on application startup.
+        """
+        try:
+            collection = self.a2a_tasks_collection
+
+            # Primary queries
+            await collection.create_index("room_id")
+            await collection.create_index("user_id")
+            await collection.create_index("task.status.state")
+
+            # Prevent duplicate tasks from same agent
+            await collection.create_index(
+                [("agent_url", 1), ("task.id", 1)],
+                unique=True,
+                sparse=True,
+            )
+
+            # Stale task detection (includes interactive states)
+            await collection.create_index(
+                [("updated_at", 1), ("task.status.state", 1)],
+            )
+
+            # TTL index: Auto-delete completed tasks after 30 days
+            # Note: MongoDB TTL indexes only work on date fields
+            await collection.create_index(
+                "updated_at",
+                expireAfterSeconds=2592000,  # 30 days
+                partialFilterExpression={
+                    "task.status.state": {
+                        "$in": ["completed", "failed", "canceled", "rejected"]
+                    }
+                },
+            )
+
+            print("A2A tasks indexes created successfully")
+        except Exception as e:
+            print(f"Error creating A2A tasks indexes: {e}")
+
 
 mongodb = MongoDB()
 
