@@ -47,6 +47,72 @@ class OpenAIService:
 
         return embedding
 
+    async def expand_query_for_discovery(self, query: str) -> str:
+        """
+        Use LLM to semantically expand short queries for better agent discovery matching.
+        
+        Args:
+            query: The original user query
+            
+        Returns:
+            Expanded query with synonyms, related terms, and use case context
+        """
+        query = query.strip()
+        word_count = len(query.split())
+        
+        # Expand short queries
+        if word_count > settings.discovery_query_expansion_threshold:
+            return query
+        
+        system_prompt = """You are a query expansion assistant for an AI agent discovery system.
+Your job is to expand short user queries into more descriptive, semantically rich queries
+that will help find relevant AI agents.
+
+EXPANSION RULES:
+1. Add context about what the user might be looking for
+2. Expand the query into more detailed sentences, not phrases.
+3. Add use case context (e.g., "help with", "specializes in", "can do")
+4. Keep the original intent but make it more descriptive
+5. Don't change the core meaning
+
+EXAMPLES:
+- "story" → "The agent supports storytelling, narrative writing, creative writing assistance, and fiction writing help."
+- "data" → "The agent supports data analysis, data processing, data visualization, and generating actionable insights from data."
+
+Return ONLY the expanded query, no explanations."""
+
+        user_prompt = f"""Expand this query for better agent discovery:
+"{query}"
+
+Provide an expanded version that includes synonyms, related terms, and use case context."""
+
+        try:
+            messages = [
+                ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+                ChatCompletionUserMessageParam(role="user", content=user_prompt),
+            ]
+            
+            response = await self.client.chat.completions.create(
+                model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
+                messages=messages,
+                temperature=0.3,  # Lower temperature for more consistent expansions
+                max_tokens=100,  # Keep expansions concise
+            )
+            
+            expanded = response.choices[0].message.content.strip()
+            
+            # Fallback to original if expansion fails
+            if not expanded or len(expanded) < len(query):
+                logger.warning("Query expansion returned invalid result, using original query")
+                return query
+                
+            logger.info(f"Query expanded: '{query}' → '{expanded[:100]}...'")
+            return expanded
+            
+        except Exception as e:
+            logger.warning(f"Query expansion failed: {e}, using original query")
+            return query
+
     async def decompose_task(
         self, base_task: BaseTask, context_data: ContextData, best_agent: Agent | None
     ) -> str:

@@ -14,6 +14,7 @@ from api import (
     a2a_tasks,
     agent,
     agent_group,
+    discovery,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -23,6 +24,7 @@ from api import (
     webhooks,
 )
 from common.auth import get_current_user
+from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
@@ -121,13 +123,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
+# Add Discovery API CORS middleware
+# This applies permissive CORS only to /api/v1/discovery/* paths
+# Note: Middleware runs in reverse order, so adding first means it runs last
+app.add_middleware(DiscoveryCORSMiddleware)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.frontend_origins,  # Allow all frontend URLs from env
-    allow_credentials=True,
+    allow_credentials=True, 
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 
@@ -191,6 +198,16 @@ app.include_router(
     tags=["agent_group"],
     dependencies=[Depends(get_current_user)],
 )
+
+# Discovery API - External public API with API key auth 
+# Uses open CORS to allow external access from any origin
+app.include_router(
+    discovery.router,
+    prefix=api_prefix,
+    tags=["discovery"],
+    # Auth handled per-route via X-API-Key header in discovery.py
+)
+
 app.include_router(
     a2a_tasks.router,
     prefix=api_prefix,
