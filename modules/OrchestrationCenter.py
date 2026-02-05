@@ -395,12 +395,13 @@ class OrchestrationCenter:
                     logger.warning("Skipping invalid step: %s", step)
                     continue
 
-                # Combine step information into task description
+                # Combine step information into action-oriented task description
                 task_description = (
-                    f"Step Description: {step['step_description']}\n"
-                    f"Execution Context: {step['execution_context']}\n"
-                    f"Expected Output: {step['expected_output']}\n"
-                    f"Depends On Steps: {step['depends_on_steps']}"
+                    f"YOUR TASK: {step['step_description']}\n\n"
+                    f"CONTEXT: {step['execution_context']}\n\n"
+                    f"REQUIRED OUTPUT: {step['expected_output']}\n\n"
+                    f"IMPORTANT: Execute this task completely and provide the actual results. "
+                    f"Do NOT just describe what should be done or outline a plan - actually perform the task and deliver concrete output."
                 )
 
                 # Create a new Task for the meta task
@@ -1307,11 +1308,17 @@ class OrchestrationCenter:
         context_section += "\n=== END CONTEXT ===\n\n"
 
         # Combine with instructions
-        enhanced_description = f"""{base_description}
+        enhanced_description = f"""EXECUTE THE FOLLOWING TASK:
+{base_description}
 
 {context_section}
 
-IMPORTANT: Use the context from previous steps above to inform your response. Reference and build upon the previous results as needed to complete this step effectively."""
+CRITICAL INSTRUCTIONS:
+1. Execute this task completely - do NOT just describe what should be done
+2. Provide concrete, actionable results and deliverables
+3. Use the context from previous steps to inform your work
+4. Deliver the expected output, not a plan for how to create it
+5. If the task asks you to create something, actually create it - don't just outline how you would create it"""
 
         return enhanced_description
 
@@ -2564,7 +2571,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             elif result.status == ProcessingStatus.PAUSED:
                 # Push notification task submitted - save continuation state
                 # First, queue up next messages so they're included in continuation
-                await self._queue_next_messages(current_message, message_queue)
+                await self._queue_next_messages(current_message, message_queue, room_id)
 
                 if result.message_id and len(message_queue) > 0:
                     await self._save_queue_continuation(
@@ -2600,7 +2607,7 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 )
 
             # Queue up next messages in the chain
-            await self._queue_next_messages(current_message, message_queue)
+            await self._queue_next_messages(current_message, message_queue, room_id)
 
         logger.info("OrchestrationCenter: Finished processing message queue")
         return True
@@ -3190,9 +3197,15 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
         return False, "", None
 
     async def _queue_next_messages(
-        self, current_message: RoomAgentMessage, message_queue: deque
+        self, current_message: RoomAgentMessage, message_queue: deque, room_id: str
     ) -> None:
-        """Queue up next messages in the chain after processing current message."""
+        """Queue up next messages in the chain after processing current message.
+
+        Args:
+            current_message: The message that was just processed
+            message_queue: The queue to add next messages to
+            room_id: The room ID to check for debate mode
+        """
         logger.info(
             "OrchestrationCenter: Looking for next messages related to %s (step %s/%s)",
             current_message.message_id,
@@ -3210,6 +3223,12 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
             current_message.message_id,
         )
 
+        # Check if room is in debate mode
+        is_debate_mode = False
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if room and room.extend_info and isinstance(room.extend_info, dict):
+            is_debate_mode = bool(room.extend_info.get("debateMode", False))
+
         for next_message in next_messages:
             logger.info(
                 "OrchestrationCenter: Queueing next message %s (step %s/%s, task_content: %s)",
@@ -3221,18 +3240,24 @@ IMPORTANT: Use the context from previous steps above to inform your response. Re
                 and next_message.message_content.message_text
                 else "None",
             )
-            new_agent_message = (
-                await self.debate_service.inject_short_debate_for_agent_message(
-                    next_message
+
+            # Only inject debate prompt if room is in debate mode
+            if is_debate_mode:
+                new_agent_message = (
+                    await self.debate_service.inject_short_debate_for_agent_message(
+                        next_message
+                    )
                 )
-            )
-            if new_agent_message is None:
-                logger.warning(
-                    "OrchestrationCenter: inject_short_debate_for_agent_message returned None for message %s",
-                    next_message.message_id,
-                )
-                continue
-            message_queue.append(new_agent_message)
+                if new_agent_message is None:
+                    logger.warning(
+                        "OrchestrationCenter: inject_short_debate_for_agent_message returned None for message %s",
+                        next_message.message_id,
+                    )
+                    continue
+                message_queue.append(new_agent_message)
+            else:
+                # Non-debate mode: queue message directly without debate prompt injection
+                message_queue.append(next_message)
 
     async def _update_room_memory_after_processing(
         self,

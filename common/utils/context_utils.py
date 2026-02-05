@@ -19,7 +19,9 @@ MAX_CONTEXT_CHARS = 12000  # Approximate character limit before summarization ki
 SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
 
 
-def clean_mention_format(text: str, room_agent_set: dict[str, str] | None = None) -> str:
+def clean_mention_format(
+    text: str, room_agent_set: dict[str, str] | None = None
+) -> str:
     """
     Convert <@uuid|name> mentions to clean @AgentName format for storage.
 
@@ -202,8 +204,9 @@ def build_context_for_agent(
     if include_system_instruction and agent_name:
         parts.append("")
         parts.append(
-            f"You are {agent_name}. Please respond to the current request above, "
-            "using the conversation context if relevant."
+            f"You are {agent_name}. Execute the current request above and provide concrete results. "
+            "Do NOT just describe or plan what should be done - actually complete the task and deliver the output. "
+            "Use the conversation context if relevant."
         )
 
     return "\n".join(parts)

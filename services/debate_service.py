@@ -31,17 +31,29 @@ class DebateService:
         related_message_content = (
             related_message.message_content.message_task.history[-1].parts[0].root.text
         )
-        short_term_debate_prompt = f"""Original question: {agent_messsage.message_content.message_task.history[-1].parts[0].root.text}
-                    Previous debate responses from other agents:{related_message_content}
-                    Based on the discussion so far, please provide your updated analysis and opinion. You can agree, disagree, or build upon previous points.
-                    And for your answer, you should start with  "based on the previous from {related_messsage_agent_name} """
+
+        # Get the current agent's task
+        current_task = (
+            agent_messsage.message_content.message_task.history[-1].parts[0].root.text
+        )
+
+        short_term_debate_prompt = f"""YOUR TASK: {current_task}
+
+=== RESPONSE FROM PREVIOUS AGENT ({related_messsage_agent_name}) ===
+{related_message_content}
+=== END PREVIOUS RESPONSE ===
+
+DEBATE MODE INSTRUCTIONS:
+- Review the previous agent's response above
+- Provide your own perspective on the topic - you may agree, disagree, or build upon their points
+- Focus on adding value: new insights, alternative viewpoints, or deeper analysis
+- Execute your task and deliver concrete results, not just commentary on the previous response
+"""
 
         new_message_task = agent_messsage.message_content.message_task
 
-        new_message_task.history[-1].parts[0].root.text = (
-            short_term_debate_prompt
-            + agent_messsage.message_content.message_task.history[-1].parts[0].root.text
-        )
+        # Replace the message content with the debate prompt (task is already included in prompt)
+        new_message_task.history[-1].parts[0].root.text = short_term_debate_prompt
         new_message_content = MessageContent(
             message_task=new_message_task,
             message_text=agent_messsage.message_content.message_text,  # Preserve the original message_text
