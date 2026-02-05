@@ -1,9 +1,15 @@
+import hashlib
+import hmac
+import secrets
 import uuid
+from datetime import datetime
 from typing import Any
 
 from a2a.types import AgentCard
 
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
+from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from models.agent import Agent, AgentStatus
@@ -647,6 +653,23 @@ class DatabaseService:
             logger.error(f"Failed to update room {room_id} in databases: {str(e)}")
             return False
 
+    async def update_room_processing_status(
+        self, room_id: str, processing_message_id: str | None
+    ) -> bool:
+        """
+        Update the processing_message_id field on a room.
+        Used to track which user message is currently being processed.
+        """
+        try:
+            return await self.mongo.update_room_processing_status(
+                room_id, processing_message_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to update room processing status for {room_id}: {str(e)}"
+            )
+            return False
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
@@ -779,22 +802,6 @@ class DatabaseService:
             )
             return []
 
-    async def get_room_agent_message_by_task_internal_id(
-        self, internal_id: str
-    ) -> RoomAgentMessage | None:
-        """
-        Get room agent message by stored A2A task internal id.
-        """
-        try:
-            return await self.mongo.get_room_agent_message_by_task_internal_id(
-                internal_id
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to get room agent message by task id {internal_id} from databases: {str(e)}"
-            )
-            return None
-
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
@@ -808,25 +815,6 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to update room agent message {message_id} in databases: {str(e)}"
-            )
-            return False
-
-    async def set_room_agent_message_task_internal_id(
-        self, message_id: str, internal_id: str
-    ) -> bool:
-        """
-        Set the task internal_id on a room agent message.
-        """
-        try:
-            return await self.mongo.set_room_agent_message_task_internal_id(
-                message_id, internal_id
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to set task internal_id %s on message %s: %s",
-                internal_id,
-                message_id,
-                str(e),
             )
             return False
 
@@ -863,6 +851,376 @@ class DatabaseService:
             logger.error(
                 f"Failed to delete room agent message {message_id} from databases: {str(e)}"
             )
+            return False
+
+    # Consolidated task tracking methods (on room_agent_messages)
+
+    async def update_room_agent_message_task_fields(
+        self,
+        message_id: str,
+        webhook_token_hash: str | None = None,
+        pending_continuation: dict | None = None,
+        last_notified_state: str | None = None,
+        agent_url: str | None = None,
+        task_created_at: str | None = None,
+        task_updated_at: str | None = None,
+    ) -> bool:
+        """
+        Update task tracking fields on a room agent message.
+        """
+        try:
+            return await self.mongo.update_room_agent_message_task_fields(
+                message_id=message_id,
+                webhook_token_hash=webhook_token_hash,
+                pending_continuation=pending_continuation,
+                last_notified_state=last_notified_state,
+                agent_url=agent_url,
+                task_created_at=task_created_at,
+                task_updated_at=task_updated_at,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to update task fields on message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def enable_task_tracking_on_message(
+        self,
+        message_id: str,
+        webhook_token_hash: str,
+        agent_url: str,
+        task_created_at: datetime,
+        task_updated_at: datetime,
+        task_data: dict,
+    ) -> bool:
+        """
+        Enable task tracking on a room agent message and set initial task data atomically.
+
+        This sets has_task_tracking=True and stores the webhook token hash and task data.
+        The message_id is used for webhook URLs and lookups.
+
+        Args:
+            message_id: The message ID to update
+            webhook_token_hash: Hashed webhook token
+            agent_url: Agent URL for fallback polling
+            task_created_at: Task creation timestamp (datetime)
+            task_updated_at: Task update timestamp (datetime)
+            task_data: The task data to store (serialized Task)
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            return await self.mongo.enable_task_tracking_on_message(
+                message_id=message_id,
+                webhook_token_hash=webhook_token_hash,
+                agent_url=agent_url,
+                task_created_at=task_created_at,
+                task_updated_at=task_updated_at,
+                task_data=task_data,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to enable task tracking on message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def verify_webhook_token_on_message(self, message_id: str) -> str | None:
+        """
+        Get the webhook_token_hash for verification.
+        """
+        try:
+            return await self.mongo.verify_webhook_token_on_message(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to get webhook token hash for message {message_id}: {str(e)}"
+            )
+            return None
+
+    async def update_last_notified_state(self, message_id: str, state: str) -> bool:
+        """
+        Update last_notified_state for idempotency.
+        Returns True if this is a new notification.
+        """
+        try:
+            return await self.mongo.update_last_notified_state(message_id, state)
+        except Exception as e:
+            logger.error(
+                f"Failed to update notified state for message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def get_stale_task_messages(
+        self, stale_minutes: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with stale tasks.
+        """
+        try:
+            return await self.mongo.get_stale_task_messages(
+                stale_minutes, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to get stale task messages: {str(e)}")
+            return []
+
+    async def get_expired_task_messages(
+        self, max_age_hours: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with expired tasks.
+        """
+        try:
+            return await self.mongo.get_expired_task_messages(
+                max_age_hours, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to get expired task messages: {str(e)}")
+            return []
+
+    async def get_orphaned_agent_messages(
+        self, orphan_threshold_minutes: int
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages that were created but never processed.
+        """
+        try:
+            return await self.mongo.get_orphaned_agent_messages(
+                orphan_threshold_minutes
+            )
+        except Exception as e:
+            logger.error(f"Failed to get orphaned agent messages: {str(e)}")
+            return []
+
+    async def get_task_messages_for_room(
+        self, room_id: str, limit: int = 50
+    ) -> list[RoomAgentMessage]:
+        """
+        Get room agent messages with task tracking for a room.
+        """
+        try:
+            return await self.mongo.get_task_messages_for_room(room_id, limit)
+        except Exception as e:
+            logger.error(f"Failed to get task messages for room {room_id}: {str(e)}")
+            return []
+
+    async def get_pending_task_messages_for_user(
+        self, user_id: str, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get pending task messages for a user.
+        """
+        try:
+            return await self.mongo.get_pending_task_messages_for_user(
+                user_id, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to get pending tasks for user {user_id}: {str(e)}")
+            return []
+
+    async def count_non_terminal_tasks_for_user(
+        self, user_id: str, non_terminal_states: list[str]
+    ) -> int:
+        """
+        Count non-terminal tasks for quota enforcement.
+        """
+        try:
+            return await self.mongo.count_non_terminal_tasks_for_user(
+                user_id, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to count tasks for user {user_id}: {str(e)}")
+            return 0
+
+    async def count_non_terminal_tasks_for_room(
+        self, room_id: str, non_terminal_states: list[str]
+    ) -> int:
+        """
+        Count non-terminal tasks for quota enforcement.
+        """
+        try:
+            return await self.mongo.count_non_terminal_tasks_for_room(
+                room_id, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to count tasks for room {room_id}: {str(e)}")
+            return 0
+
+    async def touch_task_message(self, message_id: str) -> bool:
+        """
+        Update task_updated_at timestamp.
+        """
+        try:
+            return await self.mongo.touch_task_message(message_id)
+        except Exception as e:
+            logger.error(f"Failed to touch task message {message_id}: {str(e)}")
+            return False
+
+    async def save_continuation_on_message(
+        self, message_id: str, continuation_data: dict
+    ) -> bool:
+        """
+        Save queue continuation state on a message.
+        """
+        try:
+            return await self.mongo.save_continuation_on_message(
+                message_id, continuation_data
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to save continuation for message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def get_and_clear_continuation_on_message(
+        self, message_id: str
+    ) -> dict | None:
+        """
+        Get and clear continuation state atomically.
+        """
+        try:
+            return await self.mongo.get_and_clear_continuation_on_message(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to get/clear continuation for message {message_id}: {str(e)}"
+            )
+            return None
+
+    async def has_continuation_on_message(self, message_id: str) -> bool:
+        """
+        Check if a message has pending continuation.
+        """
+        try:
+            return await self.mongo.has_continuation_on_message(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to check continuation for message {message_id}: {str(e)}"
+            )
+            return False
+
+    # Webhook token utilities (migrated from A2ATaskService)
+
+    # Configurable limits
+    MAX_TASKS_PER_USER = 100  # Max concurrent non-terminal tasks per user
+    MAX_TASKS_PER_ROOM = 50  # Max concurrent non-terminal tasks per room
+
+    def _get_webhook_signing_key(self) -> bytes:
+        """Get the webhook signing key from settings."""
+        if not settings.webhook_signing_key:
+            raise RuntimeError("WEBHOOK_SIGNING_KEY not configured")
+        return settings.webhook_signing_key.encode()
+
+    def hash_webhook_token(self, token: str) -> str:
+        """Hash webhook token for storage (never store plaintext)."""
+        return hmac.new(
+            self._get_webhook_signing_key(), token.encode(), hashlib.sha256
+        ).hexdigest()
+
+    def verify_webhook_token(self, token: str, stored_hash: str) -> bool:
+        """Verify token against stored hash (constant-time comparison)."""
+        computed_hash = self.hash_webhook_token(token)
+        return hmac.compare_digest(computed_hash, stored_hash)
+
+    def generate_webhook_token(self) -> str:
+        """Generate a secure webhook token."""
+        return secrets.token_urlsafe(32)
+
+    async def check_task_limits(
+        self, user_id: str, room_id: str, non_terminal_states: list[str]
+    ) -> None:
+        """
+        Check if user/room can create more tasks.
+
+        Args:
+            user_id: The user ID
+            room_id: The room ID
+            non_terminal_states: List of non-terminal state values
+
+        Raises:
+            ValueError: If limits exceeded
+        """
+        user_count = await self.count_non_terminal_tasks_for_user(
+            user_id, non_terminal_states
+        )
+        if user_count >= self.MAX_TASKS_PER_USER:
+            raise ValueError(
+                f"User has too many pending tasks ({user_count}). "
+                "Please wait for some to complete."
+            )
+
+        room_count = await self.count_non_terminal_tasks_for_room(
+            room_id, non_terminal_states
+        )
+        if room_count >= self.MAX_TASKS_PER_ROOM:
+            raise ValueError(
+                f"Room has too many pending tasks ({room_count}). "
+                "Please wait for some to complete."
+            )
+
+    async def verify_webhook_token_for_task(
+        self, message_id: str, token: str
+    ) -> tuple[bool, str]:
+        """
+        Verify webhook token for a task.
+
+        Args:
+            message_id: The message ID (used in webhook URLs)
+            token: Token from Authorization header
+
+        Returns:
+            Tuple of (is_valid, error_reason):
+                - is_valid: True if token is valid
+                - error_reason: Empty string if valid, otherwise "task_not_found" or "invalid_token"
+        """
+        try:
+            stored_hash = await self.verify_webhook_token_on_message(message_id)
+            if not stored_hash:
+                logger.warning(
+                    "verify_webhook_token_for_task: No stored hash found for message %s",
+                    message_id,
+                )
+                return False, "task_not_found"
+            is_valid = self.verify_webhook_token(token, stored_hash)
+            if not is_valid:
+                logger.warning(
+                    "verify_webhook_token_for_task: Token hash mismatch for message %s "
+                    "(token_len=%d, stored_hash_len=%d)",
+                    message_id,
+                    len(token) if token else 0,
+                    len(stored_hash) if stored_hash else 0,
+                )
+                return False, "invalid_token"
+            return True, ""
+        except Exception as e:
+            logger.error(
+                f"Failed to verify webhook token for message {message_id}: {str(e)}"
+            )
+            return False, "verification_error"
+
+    async def update_task_on_message(self, message_id: str, task_data: dict) -> bool:
+        """
+        Update the task data on a room agent message.
+
+        Args:
+            message_id: The message ID
+            task_data: The task data to update (serialized Task)
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                {"message_id": message_id},
+                {
+                    "$set": {
+                        "message_content.message_task": task_data,
+                        "task_updated_at": utcnow(),
+                    }
+                },
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Failed to update task on message {message_id}: {str(e)}")
             return False
 
     # room memory management

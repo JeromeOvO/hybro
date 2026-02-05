@@ -24,6 +24,7 @@ from models.request import (
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
+    TaskCenterRequest,
 )
 from models.response import (
     RoomCenterAgentMessageResponse,
@@ -45,6 +46,7 @@ from services.database_service import db_service
 from services.memory_service import room_memory_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
+from services.task_service import task_service
 
 logger = get_logger(__name__)
 
@@ -59,6 +61,7 @@ class RoomServices:
 
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
+        self.task_service = task_service  # Use singleton
 
     # === room_agent_set normalization helpers ===
     @staticmethod
@@ -821,6 +824,7 @@ class RoomServices:
         extend_info: dict | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
+        task_content: str | None = None,
     ) -> RoomAgentMessage:
         """
         Generate a new agent message.
@@ -834,6 +838,7 @@ class RoomServices:
             extend_info: Additional info
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
+            task_content: The task description being processed
         """
         return RoomAgentMessage(
             room_id=room_id,
@@ -848,6 +853,8 @@ class RoomServices:
             extend_info=extend_info if extend_info else None,
             step_number=step_number,
             total_steps=total_steps,
+            task_content=task_content
+            or content,  # Use task_content if provided, else content
         )
 
     async def _generate_agent_messages_based_on_parsed_result(
@@ -1481,6 +1488,7 @@ class RoomServices:
                                 message_task=task_info["task"]
                             ),
                             message_created_at=utcnow(),
+                            task_content=shared_content,
                         )
 
                         agent_message_success = (
@@ -1504,6 +1512,7 @@ class RoomServices:
                                 message_task=task_info["task"]
                             ),
                             message_created_at=utcnow(),
+                            task_content=shared_content,
                         )
 
                         agent_message_success = (
@@ -1730,6 +1739,67 @@ class RoomServices:
         messages = await self.database_service.get_room_agent_messages_by_room_id(
             room_id
         )
+
+        # Sync task status for non-terminal tasks
+        # This handles cases where SSE updates were missed or task state changed in background
+        terminal_states = [
+            TaskState.completed,
+            TaskState.failed,
+            TaskState.canceled,
+            TaskState.rejected,
+        ]
+
+        for msg in messages:
+            # Check if this is a task message with task tracking enabled
+            if (
+                msg.message_content
+                and msg.message_content.message_task
+                and msg.has_task_tracking
+            ):
+                current_state = msg.message_content.message_task.status.state
+
+                # If currently working/submitted/etc. -> check for updates
+                if current_state not in terminal_states:
+                    try:
+                        # Query the actual task (MetaTask)
+                        task_res = await self.task_service.query_meta_task_by_task_id(
+                            TaskCenterRequest(task_id=msg.message_id)
+                        )
+
+                        if (
+                            task_res.success
+                            and task_res.meta_task
+                            and task_res.meta_task.task
+                        ):
+                            real_task = task_res.meta_task.task
+                            real_state = real_task.status.state
+
+                            # If status mismatch, update the message
+                            if real_state != current_state:
+                                logger.info(
+                                    f"Syncing stale task status for msg {msg.message_id}: {current_state} -> {real_state}"
+                                )
+
+                                # Update fields
+                                msg.message_content.message_task = real_task
+                                msg.task_updated_at = utcnow()  # Mark as updated
+
+                                # Also update task_content if available (it might have changed during execution)
+                                if task_res.meta_task.task_description:
+                                    # Don't overwrite if it was manually set to something else, but here we assume sync
+                                    # Actually, task_content in msg is specific to message display
+                                    pass
+
+                                # Persist to DB to fix the record permanently
+                                await self.database_service.update_room_agent_message_by_message_id(
+                                    msg.message_id, msg
+                                )
+                    except Exception as e:
+                        # Log but don't fail the request
+                        logger.warning(
+                            f"Failed to sync task status for message {msg.message_id}: {e}"
+                        )
+
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
         )
@@ -1843,37 +1913,61 @@ class RoomServices:
             # Process agent messages
             if agent_messages_response.success and agent_messages_response.message_list:
                 for agent_msg in agent_messages_response.message_list:
-                    # Extract latest agent message from task.history
+                    # Extract content from task - try history first, then artifacts
                     agent_content = ""
-                    if (
-                        agent_msg.message_content
-                        and agent_msg.message_content.message_task
-                        and agent_msg.message_content.message_task.history
-                    ):
-                        # Find the latest message with role "agent"
-                        agent_messages = [
-                            msg
-                            for msg in agent_msg.message_content.message_task.history
-                            if msg.role == Role.agent
-                        ]
+                    task = (
+                        agent_msg.message_content.message_task
+                        if agent_msg.message_content
+                        else None
+                    )
 
-                        if agent_messages:
-                            # Get the latest agent message
-                            latest_agent_message = agent_messages[-1]
+                    if task:
+                        # First, try to extract from task.history (streaming agents)
+                        if task.history:
+                            # Find the latest message with role "agent"
+                            agent_messages = [
+                                msg for msg in task.history if msg.role == Role.agent
+                            ]
 
-                            # Extract text parts from ALL message parts, not just the first one
+                            if agent_messages:
+                                # Get the latest agent message
+                                latest_agent_message = agent_messages[-1]
+
+                                # Extract text parts from ALL message parts
+                                text_parts = []
+                                if (
+                                    hasattr(latest_agent_message, "parts")
+                                    and latest_agent_message.parts
+                                ):
+                                    for part in latest_agent_message.parts:
+                                        if hasattr(part, "root") and hasattr(
+                                            part.root, "text"
+                                        ):
+                                            text_parts.append(part.root.text)
+
+                                # Combine all text parts
+                                agent_content = (
+                                    "".join(text_parts) if text_parts else ""
+                                )
+
+                        # If no content from history, try artifacts (non-push-notification agents)
+                        if not agent_content and task.artifacts:
                             text_parts = []
-                            if (
-                                hasattr(latest_agent_message, "parts")
-                                and latest_agent_message.parts
-                            ):
-                                for part in latest_agent_message.parts:
-                                    if hasattr(part, "root") and hasattr(
-                                        part.root, "text"
-                                    ):
-                                        text_parts.append(part.root.text)
-
-                            # Combine all text parts
+                            for artifact in task.artifacts:
+                                if not artifact.parts:
+                                    continue
+                                for part in artifact.parts:
+                                    # Handle different part type structures
+                                    text = None
+                                    if hasattr(part, "text") and part.text:
+                                        text = part.text
+                                    elif hasattr(part, "root"):
+                                        # Discriminated union wrapper
+                                        root = part.root
+                                        if hasattr(root, "text") and root.text:
+                                            text = root.text
+                                    if text:
+                                        text_parts.append(text)
                             agent_content = "".join(text_parts) if text_parts else ""
 
                     room_message = RoomMessage(
@@ -1891,11 +1985,22 @@ class RoomServices:
                         message_created_at=agent_msg.message_created_at,
                         agent_id=agent_msg.agent_id,
                         related_message_id=agent_msg.related_message_id,
+                        step_number=agent_msg.step_number,
+                        total_steps=agent_msg.total_steps,
+                        task_updated_at=agent_msg.task_updated_at,
+                        task_content=agent_msg.task_content,
                     )
                     combined_messages.append(room_message)
 
-            # Sort by creation time
-            combined_messages.sort(key=lambda x: x.message_created_at)
+            # Sort by creation time, then by step_number for task messages, then by message_id for stability
+            # This ensures consistent ordering when multiple messages have the same timestamp
+            combined_messages.sort(
+                key=lambda x: (
+                    x.message_created_at,
+                    x.step_number if x.step_number is not None else float("inf"),
+                    x.message_id,
+                )
+            )
 
             return RoomCenterRoomMessageResponse(
                 room_id=room_id,

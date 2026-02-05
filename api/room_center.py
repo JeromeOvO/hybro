@@ -1,16 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from common.auth import ClerkUser, get_current_user
 from models.request import (
+    OrchestrationCenterRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
+from modules.OrchestrationCenter import OrchestrationCenter
 from modules.RoomCenter import RoomCenter
 from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
+orchestration_center = OrchestrationCenter()  # Singleton for auto-processing
 
 
 async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
@@ -77,7 +80,9 @@ async def inquiry_room_setting(
 
 
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
-async def inquiry_rooms_by_room_owner_id(request: Request, user: ClerkUser = Depends(get_current_user)):
+async def inquiry_rooms_by_room_owner_id(
+    request: Request, user: ClerkUser = Depends(get_current_user)
+):
     request_data = await request.json()
     room_owner_id = request_data.get("room_owner_id")
 
@@ -199,9 +204,18 @@ async def inquiry_room_messages(
 @router.post("/roomCenter/sendMessage")
 async def send_message(
     request: Request,
+    background_tasks: BackgroundTasks,
     user: ClerkUser = Depends(get_current_user),
 ):
-    """Send message to room - PROTECTED (requires room ownership)"""
+    """Send message to room - PROTECTED (requires room ownership)
+
+    This endpoint:
+    1. Creates the user message and generates agent messages
+    2. Automatically queues background processing of agent messages
+
+    The frontend no longer needs to call processRoomUserMessage separately.
+    Processing happens atomically to prevent orphaned messages on page refresh.
+    """
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
@@ -216,6 +230,19 @@ async def send_message(
     room_center_response = await room_center.send_message_to_room(
         room_center_request, target_group
     )
+
+    # Auto-trigger processing as background task if message was created successfully
+    # This prevents orphaned messages when user refreshes before frontend calls processRoomUserMessage
+    if room_center_response.success and room_center_response.message_id:
+        orchestration_request = OrchestrationCenterRequest(
+            room_id=room_id,
+            room_user_message_id=room_center_response.message_id,
+            room_related_message_id="",
+        )
+        background_tasks.add_task(
+            orchestration_center.process_room_user_message, orchestration_request
+        )
+
     return room_center_response
 
 

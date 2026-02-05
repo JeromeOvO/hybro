@@ -268,6 +268,7 @@ class RoomCoordinatorService:
                 if coordinator_agent_id == "debate_summary"
                 else "non_debate",
             },
+            task_content=summary_text,
         )
 
         await self.database_service.add_room_agent_message(summary_agent_message)
