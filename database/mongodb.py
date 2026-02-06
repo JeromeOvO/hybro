@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from a2a.types import AgentCard
+from a2a.types import AgentCard, Task
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -17,6 +17,25 @@ from models.task import BaseTask, MetaTask, TaskSession
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+
+def _ensure_task_validation(msg: RoomAgentMessage) -> RoomAgentMessage:
+    """
+    Ensure the Task object in message_content is properly validated as a Pydantic model.
+
+    When retrieving from MongoDB, nested RootModel objects (like Part) may not be
+    properly reconstructed. This function explicitly validates the Task to ensure
+    all nested models are properly instantiated.
+    """
+    if (
+        msg.message_content
+        and msg.message_content.message_task
+        and isinstance(msg.message_content.message_task, dict)
+    ):
+        msg.message_content.message_task = Task.model_validate(
+            msg.message_content.message_task
+        )
+    return msg
 
 
 class MongoDB:
@@ -635,7 +654,8 @@ class MongoDB:
         cursor = self.room_agent_messages_collection.find({"room_id": room_id})
         results = await cursor.to_list(length=None)
         return [
-            RoomAgentMessage(**room_agent_message) for room_agent_message in results
+            _ensure_task_validation(RoomAgentMessage(**room_agent_message))
+            for room_agent_message in results
         ]
 
     async def get_room_agent_message_by_message_id(
@@ -647,7 +667,9 @@ class MongoDB:
         result = await self.room_agent_messages_collection.find_one(
             {"message_id": message_id}
         )
-        return RoomAgentMessage(**result) if result else None
+        if not result:
+            return None
+        return _ensure_task_validation(RoomAgentMessage(**result))
 
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
@@ -660,7 +682,8 @@ class MongoDB:
         )
         results = await cursor.to_list(length=None)
         return [
-            RoomAgentMessage(**room_agent_message) for room_agent_message in results
+            _ensure_task_validation(RoomAgentMessage(**room_agent_message))
+            for room_agent_message in results
         ]
 
     async def update_room_agent_message_by_message_id(
@@ -886,7 +909,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [RoomAgentMessage(**msg) for msg in results]
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
 
     async def get_expired_task_messages(
         self, max_age_hours: int, non_terminal_states: list[str]
@@ -909,7 +932,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [RoomAgentMessage(**msg) for msg in results]
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
 
     async def get_orphaned_agent_messages(
         self, orphan_threshold_minutes: int
@@ -950,7 +973,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [RoomAgentMessage(**msg) for msg in results]
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
 
     async def get_task_messages_for_room(
         self, room_id: str, limit: int = 50
@@ -969,7 +992,7 @@ class MongoDB:
             .limit(limit)
         )
         results = await cursor.to_list(length=None)
-        return [RoomAgentMessage(**msg) for msg in results]
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
 
     async def get_pending_task_messages_for_user(
         self, user_id: str, non_terminal_states: list[str]
@@ -987,7 +1010,7 @@ class MongoDB:
             }
         ).sort("task_created_at", -1)
         results = await cursor.to_list(length=None)
-        return [RoomAgentMessage(**msg) for msg in results]
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
 
     async def count_non_terminal_tasks_for_user(
         self, user_id: str, non_terminal_states: list[str]

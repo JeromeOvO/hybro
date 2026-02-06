@@ -1970,6 +1970,11 @@ class RoomServices:
                                         text_parts.append(text)
                             agent_content = "".join(text_parts) if text_parts else ""
 
+                    # Fallback to existing message_text if task extraction yielded nothing
+                    # This preserves content that was stored directly (e.g., from webhook handler)
+                    if not agent_content and agent_msg.message_content:
+                        agent_content = agent_msg.message_content.message_text or ""
+
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
                         message_id=agent_msg.message_id,
