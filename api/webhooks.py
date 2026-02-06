@@ -11,9 +11,10 @@ Per A2A spec section 4.3.3, push notifications use StreamResponse format:
 """
 
 import asyncio
+import uuid
 from typing import Any
 
-from a2a.types import Task, TaskStatusUpdateEvent
+from a2a.types import Artifact, Part, Task, TaskStatusUpdateEvent, TextPart
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from common.utils.logger import get_logger
@@ -152,6 +153,33 @@ async def notify_task_update(
             await asyncio.sleep(0.5)  # Wait 500ms before retry
 
     if room_agent_message and room_agent_message.message_content:
+        # Ensure task has artifacts when completed (A2A compliance)
+        # Some agents send statusUpdate without artifacts; we need to populate them
+        # from message_text if available
+        existing_text = room_agent_message.message_content.message_text
+        if (
+            state_value == "completed"
+            and existing_text
+            and (not task.artifacts or len(task.artifacts) == 0)
+        ):
+            task = Task(
+                id=task.id,
+                context_id=task.context_id,
+                status=task.status,
+                history=task.history,
+                metadata=task.metadata,
+                artifacts=[
+                    Artifact(
+                        artifact_id=str(uuid.uuid4()),
+                        name="response",
+                        parts=[Part(root=TextPart(text=existing_text))],
+                    )
+                ],
+            )
+            logger.info(
+                f"Task {message_id}: Populated artifacts from message_text for A2A compliance"
+            )
+
         room_agent_message.message_content.message_task = task
 
         # Only backfill message_text if it's empty to avoid overwriting real content
