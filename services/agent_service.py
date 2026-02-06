@@ -1,6 +1,6 @@
-import re
 import uuid
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from common.utils.logger import get_logger
 from database.mongodb import get_db
@@ -10,7 +10,7 @@ from models.error import (
     AgentIdRequiredError,
     AgentNotFoundError,
     IllgalParameterError,
-    QueryTextRequiredError, ProviderIdRequiredError,
+    QueryTextRequiredError,
 )
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
@@ -20,6 +20,69 @@ from services.domain_alias_service import domain_alias_service
 from services.openai_service import openai_service
 
 logger = get_logger(__name__)
+
+# Local host aliases that should be normalized to "localhost"
+LOCAL_HOST_ALIASES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def normalize_agent_url(url: str) -> str:
+    """
+    Normalize an agent URL for consistent comparison.
+    - Lowercase the hostname
+    - Normalize localhost aliases (127.0.0.1, ::1, 0.0.0.0) to "localhost"
+    - Remove default ports (80 for http, 443 for https)
+    - Remove trailing slashes from path
+    - Remove .well-known paths
+    """
+    if not url:
+        return url
+
+    # Remove well-known paths first
+    for well_known_path in ["/.well-known/agent-card.json", "/.well-known/agent.json"]:
+        if well_known_path in url:
+            url = url.split(well_known_path)[0]
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url  # Return as-is if parsing fails
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return url  # Invalid URL, return as-is
+
+    # Normalize localhost aliases to canonical "localhost"
+    if hostname in LOCAL_HOST_ALIASES:
+        hostname = "localhost"
+
+    # Remove default ports
+    port = parsed.port
+    if (parsed.scheme == "https" and port == 443) or (
+        parsed.scheme == "http" and port == 80
+    ):
+        port = None
+
+    # Reconstruct netloc
+    netloc = hostname
+    if port:
+        netloc = f"{hostname}:{port}"
+
+    # Remove trailing slash from path
+    path = parsed.path.rstrip("/")
+
+    # Reconstruct URL (preserve query string - some agents may use it)
+    normalized = urlunparse(
+        (
+            parsed.scheme.lower(),
+            netloc,
+            path,
+            "",  # params
+            parsed.query,  # preserve query string
+            "",  # fragment
+        )
+    )
+
+    return normalized
 
 
 class AgentService:
@@ -50,6 +113,16 @@ class AgentService:
         if request.agent_card is None:
             raise AgentCardRequiredError()
 
+        # Check for duplicate using normalized URL from agent_card
+        normalized_url = normalize_agent_url(request.agent_card.url)
+        existing_agent = await self._find_agent_by_normalized_url(normalized_url)
+        if existing_agent:
+            return AgentCenterResponse(
+                success=False,
+                error="Agent with this URL is already registered",
+                status_code=400,
+            )
+
         new_agent_id = str(uuid.uuid4())
         provider_id = request.provider_id
 
@@ -61,21 +134,38 @@ class AgentService:
                 agent_id=new_agent_id,
                 preferred_subdomain=getattr(request, "preferred_subdomain", None),
             )
-            logger.info(f"AgentCenter: Generated public URL {public_url} for agent {new_agent_id}")
+            logger.info(
+                f"AgentCenter: Generated public URL {public_url} for agent {new_agent_id}"
+            )
         except Exception as e:
-            logger.warning(f"AgentCenter: Failed to generate public URL for agent {new_agent_id}: {str(e)}")
+            logger.warning(
+                f"AgentCenter: Failed to generate public URL for agent {new_agent_id}: {str(e)}"
+            )
 
-        # create agent with public_url
+        # create agent with public_url and normalized_url
         agent = Agent(
             agent_id=new_agent_id,
             agent_card=request.agent_card,
             provider_id=provider_id,
             public_url=public_url,
+            normalized_url=normalized_url,
         )
 
         # add agent to database
         try:
             agent_add_result = await self.database_service.add_agent(agent)
+        except ValueError as e:
+            # Handle duplicate key error from database
+            if "already registered" in str(e).lower() or "duplicate" in str(e).lower():
+                return AgentCenterResponse(
+                    success=False,
+                    error="Agent with this URL is already registered",
+                    status_code=400,
+                )
+            logger.error(f"AgentCenter: Failed to add agent to database: {str(e)}")
+            return AgentCenterResponse(
+                agent_id=new_agent_id, success=False, error=str(e), status_code=500
+            )
         except Exception as e:
             logger.error(f"AgentCenter: Failed to add agent to database: {str(e)}")
             return AgentCenterResponse(
@@ -91,6 +181,24 @@ class AgentService:
             status_code=200,
             public_url=public_url,
         )
+
+    async def _find_agent_by_normalized_url(self, normalized_url: str) -> Agent | None:
+        """Find agent by normalized URL - checks both normalized_url field and agent_card.url."""
+        mongo_db = await get_db()
+
+        # First try exact match on normalized_url field (for new agents)
+        agent_doc = await mongo_db.agents.find_one({"normalized_url": normalized_url})
+        if agent_doc:
+            return Agent(**agent_doc)
+
+        # Fallback: check agent_card.url for legacy agents without normalized_url
+        cursor = mongo_db.agents.find({"normalized_url": {"$exists": False}})
+        async for doc in cursor:
+            if doc.get("agent_card", {}).get("url"):
+                if normalize_agent_url(doc["agent_card"]["url"]) == normalized_url:
+                    return Agent(**doc)
+
+        return None
 
     async def update_agent(self, request: AgentCenterRequest) -> AgentCenterResponse:
         agent_id = request.agent_id
@@ -203,7 +311,7 @@ class AgentService:
         )
 
     async def get_agents_by_provider_id(
-            self, request: AgentCenterRequest
+        self, request: AgentCenterRequest
     ) -> AgentCenterResponse:
         provider_id = request.provider_id
         if not provider_id:
@@ -239,20 +347,24 @@ class AgentService:
             agents=agents, success=True, error=None, status_code=200
         )
 
-    async def get_all_active_agents(self, request: AgentCenterRequest) -> AgentCenterResponse:
+    async def get_all_active_agents(
+        self, request: AgentCenterRequest
+    ) -> AgentCenterResponse:
         """
         Get all agents with active status from the database.
-        
+
         Args:
             request: AgentCenterRequest - may contain user_id for visibility filtering
-            
+
         Returns:
             AgentCenterResponse with list of active agents only
         """
         try:
             agents = await self.database_service.get_all_active_agents(request.user_id)
         except Exception as e:
-            logger.error(f"AgentCenter: Failed to get all active agents in database: {str(e)}")
+            logger.error(
+                f"AgentCenter: Failed to get all active agents in database: {str(e)}"
+            )
             return AgentCenterResponse(success=False, error=str(e), status_code=500)
 
         return AgentCenterResponse(
@@ -287,7 +399,11 @@ class AgentService:
             raise IllgalParameterError()
 
         try:
-            count = request.agent_count if (request.agent_count and request.agent_count > 0) else 5
+            count = (
+                request.agent_count
+                if (request.agent_count and request.agent_count > 0)
+                else 5
+            )
             agents = await self.database_service.query_similar_agents(
                 query_text=query_text,
                 count=count,
@@ -382,7 +498,7 @@ class AgentService:
         )
 
     def get_agent_root_url(self, agent_url: str) -> str:
-        """Extract the root URL from a full agent URL escluding well-known paths and trailing slashes."""
+        """Extract the root URL from a full agent URL excluding well-known paths and trailing slashes."""
 
         # remove well-known path (.well-known/agent.json) if present
         if "/.well-known/agent.json" in agent_url:
@@ -392,22 +508,14 @@ class AgentService:
             return agent_url[:-1]
         return agent_url
 
-    async def get_agent_by_url(self, agent_url: str) -> AgentCenterResponse:
-        """Get agent by URL."""
+    async def get_agent_by_url(self, agent_url: str) -> Agent | None:
+        """Get agent by URL using normalized URL matching."""
 
         if agent_url is None:
             raise IllgalParameterError("agent_url is required")
 
-        root_url = self.get_agent_root_url(agent_url)
-        escaped_root_url = re.escape(root_url)
-        mongo_db = await get_db()
-        agent_query_result = await mongo_db.agents.find_one(
-            {"agent_card.url": {"$regex": escaped_root_url}}
-        )
-        if agent_query_result is None:
-            return None
-
-        return agent_query_result
+        normalized_url = normalize_agent_url(agent_url)
+        return await self._find_agent_by_normalized_url(normalized_url)
 
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
         """Get agent by ID - internal service method"""
@@ -415,7 +523,7 @@ class AgentService:
         return await self.database_service.get_agent_by_agent_id(agent_id)
 
     def _mask_sensitive_information(
-            self, response: AgentCenterResponse, fields: list[str]
+        self, response: AgentCenterResponse, fields: list[str]
     ) -> AgentCenterResponse:
         """
         Sanitize sensitive fields in AgentCenterResponse.
@@ -453,7 +561,6 @@ class AgentService:
                     remove_nested_field(data["agent"], parts)
 
         return AgentCenterResponse(**data)
-
 
 
 agent_service = AgentService()

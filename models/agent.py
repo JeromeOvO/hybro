@@ -20,6 +20,9 @@ class Agent(BaseModel):
     # Agent card
     agent_card: AgentCard
 
+    # Normalized URL for duplicate detection (derived from agent_card.url)
+    normalized_url: str | None = None
+
     # Public (masked) URL for the agent
     public_url: str | None = None
 
