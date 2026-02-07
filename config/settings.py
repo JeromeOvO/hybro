@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     task_expiry_hours: int = 4  # Auto-fail tasks older than this
     pending_task_warning_hours: int = 1  # Warn (log) after this time
     orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
+    processing_status_expiry_minutes: int = 30  # Clear stuck processing status older than this
 
     class Config:
         env_file = ".env"

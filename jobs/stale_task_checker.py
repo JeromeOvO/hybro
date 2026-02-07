@@ -6,9 +6,11 @@ This module provides a background job that:
 2. Auto-fails tasks that have been pending too long
 3. Handles tasks that were never acknowledged by agents
 4. Recovers orphaned agent messages that were never processed
+5. Cleans up stuck room processing status
 """
 
 import asyncio
+from datetime import timedelta
 from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
@@ -17,11 +19,13 @@ from api.webhooks import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
+from database.mongodb import get_db
 from models.request import OrchestrationCenterRequest
 from models.room import RoomAgentMessage
 from services.a2a_constants import (
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
+    TERMINAL_STATES,
     is_terminal_state,
 )
 from services.a2a_service import a2a_service
@@ -39,6 +43,8 @@ class StaleTaskChecker:
     2. Expired tasks: Auto-fail tasks that have been pending too long
     3. Never-acknowledged tasks: Fail tasks where agent never responded
     4. Orphaned messages: Recover agent messages that were never processed
+    5. Stuck processing status: Clear processing_message_id on rooms where
+       all tasks are done but the status was never cleared
     """
 
     def __init__(
@@ -48,6 +54,7 @@ class StaleTaskChecker:
         pending_task_warning_hours: int = 1,
         check_interval_minutes: int = 5,
         orphan_threshold_minutes: int = 2,
+        processing_status_expiry_minutes: int = 30,
     ):
         """
         Initialize the stale task checker.
@@ -58,12 +65,14 @@ class StaleTaskChecker:
             pending_task_warning_hours: Warn (log) after this time
             check_interval_minutes: How often to run the check
             orphan_threshold_minutes: Recover orphaned messages older than this
+            processing_status_expiry_minutes: Clear stuck processing status older than this
         """
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
         self.check_interval_minutes = check_interval_minutes
         self.orphan_threshold_minutes = orphan_threshold_minutes
+        self.processing_status_expiry_minutes = processing_status_expiry_minutes
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -130,6 +139,9 @@ class StaleTaskChecker:
 
         # 3. Recover orphaned agent messages (never processed)
         await self._recover_orphaned_messages()
+
+        # 4. Clean up stuck room processing status
+        await self._cleanup_stuck_processing_status()
 
     async def _process_stale_task(
         self,
@@ -294,6 +306,107 @@ class StaleTaskChecker:
             user_id=msg.user_id or "",
         )
 
+    async def _cleanup_stuck_processing_status(self) -> None:
+        """
+        Clean up rooms with stuck processing_message_id.
+
+        This handles cases where processing_message_id was never cleared due to:
+        1. Server restart while processing a message
+        2. Unhandled exception during processing
+        3. All agent tasks completed but status was never cleared
+
+        For each room with processing_message_id set, checks if the referenced
+        user message is old enough and all related agent tasks are in terminal
+        state (or no agent messages exist). If so, clears the processing status.
+        """
+        mongo_db = await get_db()
+        rooms_collection = mongo_db.rooms
+        agent_messages_collection = mongo_db.room_agent_messages
+        user_messages_collection = mongo_db.room_user_messages
+
+        # Find rooms with processing_message_id set
+        rooms_with_processing = await rooms_collection.find(
+            {"processing_message_id": {"$ne": None}}
+        ).to_list(length=None)
+
+        if not rooms_with_processing:
+            return
+
+        terminal_state_values = [s.value for s in TERMINAL_STATES]
+        threshold = utcnow() - timedelta(
+            minutes=self.processing_status_expiry_minutes
+        )
+
+        rooms_to_clear = []
+
+        for room in rooms_with_processing:
+            room_id = room["room_id"]
+            processing_message_id = room["processing_message_id"]
+
+            # Get the user message being processed
+            user_message = await user_messages_collection.find_one(
+                {"message_id": processing_message_id}
+            )
+
+            if not user_message:
+                # User message doesn't exist - definitely stuck
+                rooms_to_clear.append(room_id)
+                logger.warning(
+                    f"Clearing stuck processing_message_id on room {room_id}: "
+                    f"user message {processing_message_id} not found"
+                )
+                continue
+
+            message_created_at = user_message.get("message_created_at")
+            if isinstance(message_created_at, str):
+                from dateutil.parser import parse
+
+                message_created_at = parse(message_created_at)
+
+            # Skip if message is recent (still legitimately processing)
+            if message_created_at and ensure_utc(message_created_at) > threshold:
+                continue
+
+            # Get agent messages for this user message
+            agent_messages = await agent_messages_collection.find(
+                {"related_message_id": processing_message_id}
+            ).to_list(length=None)
+
+            if not agent_messages:
+                # No agent messages but message is old - stuck
+                rooms_to_clear.append(room_id)
+                logger.warning(
+                    f"Clearing stuck processing_message_id on room {room_id}: "
+                    f"no agent messages for {processing_message_id}"
+                )
+                continue
+
+            # Check if all tasks are in terminal state (or have no task at all)
+            has_non_terminal_task = False
+            for msg in agent_messages:
+                task = msg.get("message_content", {}).get("message_task")
+                if task:
+                    state = task.get("status", {}).get("state")
+                    if state and state not in terminal_state_values:
+                        has_non_terminal_task = True
+                        break
+
+            if not has_non_terminal_task:
+                rooms_to_clear.append(room_id)
+                logger.warning(
+                    f"Clearing stuck processing_message_id on room {room_id}: "
+                    f"all tasks terminal for {processing_message_id}"
+                )
+
+        if rooms_to_clear:
+            logger.info(
+                f"Clearing stuck processing_message_id on {len(rooms_to_clear)} rooms"
+            )
+            await rooms_collection.update_many(
+                {"room_id": {"$in": rooms_to_clear}},
+                {"$set": {"processing_message_id": None}},
+            )
+
     async def _recover_orphaned_messages(self) -> None:
         """
         Recover orphaned agent messages that were never processed.
@@ -385,4 +498,5 @@ stale_task_checker = StaleTaskChecker(
     task_expiry_hours=settings.task_expiry_hours,
     pending_task_warning_hours=settings.pending_task_warning_hours,
     orphan_threshold_minutes=settings.orphan_threshold_minutes,
+    processing_status_expiry_minutes=settings.processing_status_expiry_minutes,
 )
