@@ -78,9 +78,9 @@ export function NavMain({
                         "group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0",
                         "group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!",
                         // History section header doesn't need hover highlight
-                        item.title !== "History" && "hover:bg-white/10 dark:hover:bg-white/15",
+                        item.title !== "History" && "hover:bg-black/10 dark:hover:bg-white/15",
                         "active:scale-[0.98]",
-                        hasActiveChild && item.title !== "History" && "bg-white/10 dark:bg-white/15 font-medium"
+                        hasActiveChild && item.title !== "History" && "bg-black/15 dark:bg-white/15 font-medium"
                       )}
                     >
                       {item.icon && (
@@ -128,12 +128,12 @@ export function NavMain({
                           className={cn(
                             "h-9 text-[0.9rem] pl-4 relative",
                             "transition-all duration-200 ease-out",
-                            "hover:bg-white/10 dark:hover:bg-white/15",
+                            "hover:bg-black/10 dark:hover:bg-white/15",
                             "before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2",
                             "before:h-1.5 before:w-1.5 before:rounded-full",
                             "before:transition-all before:duration-200",
                             isActive
-                              ? "bg-white/10 dark:bg-white/15 font-medium text-sidebar-primary before:bg-primary before:scale-100"
+                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-primary before:bg-primary before:scale-100"
                               : "before:bg-sidebar-border before:scale-75 hover:before:scale-100 hover:before:bg-sidebar-primary/50"
                           )}
                         >
