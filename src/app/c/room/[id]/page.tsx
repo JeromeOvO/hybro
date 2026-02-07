@@ -163,8 +163,8 @@ export default function RoomChatPage() {
     }))
   }, [gm.availableAgents])
 
-  // Get room form data for initialization
-  const roomFormData = getRoomFormData()
+  // Get room form data for initialization (memoized to avoid unstable references)
+  const roomFormData = useMemo(() => getRoomFormData(), [getRoomFormData])
 
   if (!isLoaded || loading) {
     return (

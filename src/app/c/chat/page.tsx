@@ -126,6 +126,18 @@ export default function ChatPage() {
         }))
     }, [gm.availableAgents])
 
+    // Memoize initialData for RoomSettingForm to avoid unstable references
+    const roomSettingsInitialData = useMemo(() => {
+        if (!preConfiguredRoom) return null
+        return {
+            roomName: preConfiguredRoom.roomName,
+            selectedAgents: Object.fromEntries(
+                preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
+            ),
+            debateMode: preConfiguredRoom.debateMode,
+        }
+    }, [preConfiguredRoom])
+
     const handleSubmit = async (value: string) => {
         if (!value.trim()) {
             banner.error("Please enter a message")
@@ -331,13 +343,7 @@ export default function ChatPage() {
                                         isEditing={false}
                                         requireRoomName={false}
                                         onRetryLoadAgents={gm.loadAvailableAgents}
-                                        initialData={preConfiguredRoom ? {
-                                            roomName: preConfiguredRoom.roomName,
-                                            selectedAgents: Object.fromEntries(
-                                                preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
-                                            ),
-                                            debateMode: preConfiguredRoom.debateMode,
-                                        } : null}
+                                        initialData={roomSettingsInitialData}
                                     />
                                 </div>
                             </DialogContent>
