@@ -256,7 +256,7 @@ export default function Workspace() {
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div className="flex flex-1 gap-4">
             <div className="relative flex-1">
-              <div className="grid grid-cols-15 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
                 {filteredAgents.map((agent) => (
                   <AgentCard key={agent.agent_id} agent={agent} />
                 ))}
