@@ -5,6 +5,30 @@
 
 import { getClientAuthHeaders } from './auth'
 
+/**
+ * Custom error class for API responses that carries the HTTP status code.
+ * Allows callers to distinguish between client errors (4xx) and server errors (5xx).
+ */
+export class ApiError extends Error {
+  public readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+
+  /** True for 4xx status codes (client/validation errors) */
+  get isClientError(): boolean {
+    return this.status >= 400 && this.status < 500
+  }
+
+  /** True for 5xx status codes (server errors) */
+  get isServerError(): boolean {
+    return this.status >= 500
+  }
+}
+
 interface ApiClientOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
   body?: unknown
@@ -67,7 +91,7 @@ export async function apiClient<T = unknown>(
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+      throw new ApiError(response.status, `HTTP error! status: ${response.status}, message: ${errorText}`)
     }
 
     return await response.json()
@@ -85,7 +109,13 @@ export async function apiClient<T = unknown>(
       throw error
     }
 
-    console.error('[apiClient] Request failed', { url, method, error })
+    // Use warn for client errors (4xx) since they are expected validation issues,
+    // and error for server errors (5xx) or unexpected failures.
+    if (error instanceof ApiError && error.isClientError) {
+      console.warn('[apiClient] Client error', { url, method, status: error.status, message: error.message })
+    } else {
+      console.error('[apiClient] Request failed', { url, method, message: error instanceof Error ? error.message : error })
+    }
     throw error
   }
 }

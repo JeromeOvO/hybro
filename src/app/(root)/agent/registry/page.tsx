@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { banner } from "@/components/ui/banner"
 import { getAgentCardFromUrl, registerAgent, inspectA2AConnection } from "@/lib/api"
+import { ApiError } from "@/lib/api-client"
 import type { 
   InspectionCenterResponse, 
   AgentCenterRequest,
@@ -163,9 +164,17 @@ export default function RegisterAgentPage() {
         })
       }
     } catch (error) {
-      banner.error("Registration failed", {
-        description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
-      })
+      if (error instanceof ApiError && error.isClientError) {
+        banner.warning("Registration failed", {
+          description: error.status === 400
+            ? "The agent URL is already registered or invalid."
+            : error.message
+        })
+      } else {
+        banner.error("Registration failed", {
+          description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
+        })
+      }
     } finally {
       setRegistering(false)
     }
