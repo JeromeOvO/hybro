@@ -3,6 +3,7 @@ import { useRouter } from 'next/navigation'
 import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { banner } from "@/components/ui/banner"
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
 
 interface UseChatRoomCreationProps {
@@ -125,13 +126,16 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
 
       if (response.success && response.room) {
         const roomId = response.room.room_id
-        console.log('✅ Room created successfully:', roomId)
-        
-        // Store initial message and target group in sessionStorage for the room page to pick up
-        sessionStorage.setItem(`room-${roomId}-initial-message`, userMessage)
-        if (targetGroup) {
-          sessionStorage.setItem(`room-${roomId}-target-group`, targetGroup)
+        if (!roomId) {
+          throw new Error('Room created but no room_id returned')
         }
+        console.log('Room created successfully:', roomId)
+        
+        // Store initial message and target group in Zustand for the room page to pick up
+        useRoomUiStore.getState().setPendingRoomData(roomId, {
+          initialMessage: userMessage,
+          targetGroup,
+        })
         
         return roomId
       } else {

@@ -1,9 +1,8 @@
 import {
-  BookOpen,
+  ClipboardList,
+  Code2,
   Globe,
-  InspectionPanel,
   MessageCirclePlus,
-  MonitorCog,
 } from "lucide-react"
 
 export type NavAgentItem = {
@@ -21,28 +20,22 @@ export const NAV_AGENTS: NavAgentItem[] = [
     colorClass: "icon-create",
   },
   {
-    name: "Agent Network",
+    name: "Developers",
+    url: "/developers",
+    icon: Code2,
+    colorClass: "icon-workflow",
+  },
+  {
+    name: "Agents",
     url: "/agent",
     icon: Globe,
     colorClass: "icon-network",
   },
   {
-    name: "Agent Inspector",
-    url: "/inspector",
-    icon: InspectionPanel,
-    colorClass: "icon-inspection",
-  },
-  {
-    name: "Agent Workspace",
-    url: "/workspace",
-    icon: MonitorCog,
+    name: "Register Agent",
+    url: "/agent/registry",
+    icon: ClipboardList,
     colorClass: "icon-workflow",
-  },
-  {
-    name: "About HYBRO",
-    url: "/about",
-    icon: BookOpen,
-    colorClass: "icon-learn",
   },
 ]
 
