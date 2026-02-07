@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Image from "next/image"
 import { Play } from "lucide-react"
 
 interface VideoEmbedProps {
@@ -43,11 +44,13 @@ export function VideoEmbed({ videoId, title = "Video", className = "" }: VideoEm
       aria-label={`Play ${title}`}
     >
       {/* Thumbnail */}
-      <img
+      <Image
         src={thumbnailUrl}
         alt={title}
-        className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+        fill
+        className="absolute inset-0 object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
+        unoptimized
       />
 
       {/* Dark overlay */}

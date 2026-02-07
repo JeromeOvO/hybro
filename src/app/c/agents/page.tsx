@@ -5,7 +5,7 @@ import { Search, RefreshCw, ChevronDown } from "lucide-react"
 import { AgentCard, StatsCards } from "@/components/agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useRouter } from "next/navigation"
+
 import { useAuth } from "@clerk/nextjs"
 import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
@@ -70,7 +70,6 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 }
 
 export default function ConsumerAgentsPage() {
-  const router = useRouter()
   const { getToken } = useAuth()
   const [allAgents, setAllAgents] = useState<Agent[]>([])
   const [loadingAll, setLoadingAll] = useState(true)

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
@@ -47,6 +47,18 @@ const quickStartTemplates = [
 ]
 
 export default function ChatPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-full">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        }>
+            <ChatPageContent />
+        </Suspense>
+    )
+}
+
+function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
     const { openWaitlist } = useClerk()
