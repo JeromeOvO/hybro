@@ -1052,10 +1052,16 @@ class RoomServices:
 
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
+            await self.sse_manager.send_processing_status(
+                request.room_id, "failed", user_message.message_id
+            )
             return memory_response
 
         room = await self.database_service.get_room_by_room_id(request.room_id)
         if not room:
+            await self.sse_manager.send_processing_status(
+                request.room_id, "completed", user_message.message_id
+            )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
@@ -1095,6 +1101,9 @@ class RoomServices:
             agents=agents,
         )
         if not parse_user_message_success:
+            await self.sse_manager.send_processing_status(
+                request.room_id, "failed", user_message.message_id
+            )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,

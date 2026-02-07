@@ -225,6 +225,12 @@ async def notify_task_update(
 
     logger.info(f"Sent SSE notification for task {message_id} state {state_value}")
 
+    # Clear room processing status when task reaches a terminal state via webhook.
+    # This ensures the "Working... Processing your request..." bubble is dismissed
+    # even when the task completes through the webhook path rather than streaming.
+    if state_value in ("completed", "failed", "canceled", "rejected"):
+        await sse_manager.send_processing_status(room_id, state_value, message_id)
+
 
 def extract_text_from_artifacts(artifacts: list) -> str | None:
     """Extract text content from A2A artifacts with robust type handling."""

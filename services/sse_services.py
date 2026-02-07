@@ -277,15 +277,17 @@ class SSEManager:
 
         Args:
             room_id: The room ID
-            status: One of "processing", "completed", "cancelled", "failed"
+            status: One of "processing", "completed", "cancelled", "canceled", "failed", "rejected"
             message_id: The user message ID being processed
             details: Optional details about the status
         """
         # Persist processing state to room for page refresh recovery
         # Set processing_message_id when processing starts, clear it when done
+        # Note: A2A uses "canceled" (American English) while internal code uses "cancelled"
+        # (British English). Both must be handled. "rejected" is also a terminal A2A state.
         if status == "processing" and message_id:
             await db_service.update_room_processing_status(room_id, message_id)
-        elif status in ("completed", "cancelled", "failed"):
+        elif status in ("completed", "cancelled", "canceled", "failed", "rejected"):
             await db_service.update_room_processing_status(room_id, None)
 
         # Send SSE event to connected clients
