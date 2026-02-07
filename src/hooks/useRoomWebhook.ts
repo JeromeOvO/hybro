@@ -52,7 +52,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     addLiveMessage,
     replaceLiveMessage,
     removeLiveMessage,
-    resetRoomState,
+    resetRoomLiveState,
   } = useRoomUiStore()
 
   const [loading, setLoading] = useState(true)
@@ -442,9 +442,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
   // Reset UI/live state when room changes
   useEffect(() => {
-    resetRoomState(roomId)
+    resetRoomLiveState(roomId)
     agentNameCache.current = {}
-  }, [roomId, resetRoomState])
+  }, [roomId, resetRoomLiveState])
 
   // Mirror query loading state to local loading flag for consumers
   useEffect(() => {
@@ -877,7 +877,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       console.error('Error in message workflow:', error)
 
       // Remove the optimistic message on error by resetting room state and refetching
-      resetRoomState(roomId)
+      resetRoomLiveState(roomId)
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 
@@ -899,7 +899,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = false
       // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomState, messagesQuery, setSending, setProcessing, getProcessingPlaceholderId])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomLiveState, messagesQuery, setSending, setProcessing, getProcessingPlaceholderId])
 
   // Cancel ongoing message processing
   const cancelProcessing = useCallback(async () => {

@@ -2,16 +2,16 @@ import type React from "react"
 import type { Metadata } from "next"
 import "@/app/globals.css"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { AppSidebar } from "@/components/app-sidebar"
-import { Header } from "@/components/header"
+import { ConsumerSidebar } from "@/components/consumer/consumer-sidebar"
+import { ConsumerHeader } from "@/components/consumer/consumer-header"
 import { BannerHost } from "@/components/ui/banner"
 
 export const metadata: Metadata = {
   title: "Hybro AI",
-  description: "An Open A2A Agent Network",
+  description: "Chat with AI agents",
 }
 
-export default function RootLayout({
+export default function ConsumerLayout({
   children,
 }: {
   children: React.ReactNode
@@ -20,12 +20,12 @@ export default function RootLayout({
     <div className="min-h-screen bg-background">
       <BannerHost />
       <SidebarProvider>
-          <AppSidebar />
-          <SidebarInset>
+        <ConsumerSidebar />
+        <SidebarInset>
           <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-          <Header />
+          <ConsumerHeader />
           <main className="flex flex-1 flex-col">
-              {children}
+            {children}
           </main>
         </SidebarInset>
       </SidebarProvider>

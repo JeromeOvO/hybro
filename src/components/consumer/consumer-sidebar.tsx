@@ -2,27 +2,32 @@
 
 import * as React from "react"
 import Image from "next/image"
-import { History, PanelLeftIcon } from "lucide-react"
+import Link from "next/link"
+import { History, PanelLeftIcon, ExternalLink } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
-import { NavMain } from "@/components/nav-main"
 import { NavAgent } from "@/components/nav-agent"
+import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
-import { NAV_AGENTS } from "@/lib/nav-items"
+import { CONSUMER_NAV } from "@/lib/consumer-nav"
+import { developerUrl } from "@/lib/urls"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { Room } from "@/lib/types/room"
-import { UpgradeButton } from "./upgrade-button"
+import { UpgradeButton } from "@/components/upgrade-button"
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar } = useSidebar()
   const [rooms, setRooms] = React.useState<Room[]>([])
@@ -122,12 +127,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <NavAgent navAgents={NAV_AGENTS} />
+        <NavAgent navAgents={CONSUMER_NAV} />
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>
         <DiscordButton />
         <UpgradeButton />
+
+        {/* Developer Portal link */}
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              size="default"
+              tooltip="Developer Portal"
+              className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+            >
+              <Link href={developerUrl("/")} prefetch={false}>
+                <ExternalLink className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
+                <span className="group-data-[collapsible=icon]:hidden">
+                  Developer Portal →
+                </span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+
         <NavUser />
       </SidebarFooter>
     </Sidebar>

@@ -4,7 +4,7 @@ import React from 'react';
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
 
-export const Header = () => {
+export const ConsumerHeader = () => {
   const [mounted, setMounted] = React.useState(false);
   const { isMobile } = useSidebar();
   
@@ -13,7 +13,6 @@ export const Header = () => {
   }, []);
 
   if (!mounted) {
-    // Return a simple header while loading to avoid hydration issues
     return (
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 md:hidden">
         <div className="flex h-14 items-center gap-4 px-4">
@@ -27,7 +26,6 @@ export const Header = () => {
     );
   }
   
-  // Only render the header on mobile devices
   if (!isMobile) {
     return null;
   }

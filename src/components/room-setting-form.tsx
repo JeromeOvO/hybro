@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useImperativeHandle, forwardRef, useEffect, useCallback } from "react"
+import React, { useState, useImperativeHandle, forwardRef, useEffect, useCallback, useRef } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -76,6 +76,11 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   submitButtonText,
 }, ref) => {
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
+
+  // Guard to ensure form is only initialized once per mount (dialog open).
+  // Prevents re-renders (e.g. from setUpdatingRoom) from overwriting user edits
+  // with stale initialData before the backend refetch completes.
+  const initializedRef = useRef(false)
   
   // Use appropriate schema based on requireRoomName prop
   const formSchema = requireRoomName ? formSchemaRequired : formSchemaOptional
@@ -89,9 +94,11 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     },
   })
 
-  // Initialize form with room data
+  // Initialize form with room data (runs once per mount / dialog open)
   useEffect(() => {
-    if (initialData && availableAgents.length > 0) {
+    if (initialData && availableAgents.length > 0 && !initializedRef.current) {
+      initializedRef.current = true
+
       // Set room name
       form.setValue('roomName', initialData.roomName)
       
@@ -146,6 +153,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   const resetForm = useCallback(() => {
     form.reset()
     setSelectedAgents({})
+    initializedRef.current = false
   }, [form])
 
   // Expose reset function to parent

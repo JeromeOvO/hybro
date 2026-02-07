@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
+import { useSearchParams } from "next/navigation"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
@@ -15,9 +16,16 @@ import {
     BarChart3,
     Sparkles,
     Users,
+    Settings,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import {
     Tooltip,
     TooltipContent,
@@ -25,12 +33,11 @@ import {
     TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
+import { useGroupManagement } from "@/hooks/useGroupManagement"
 import { cn, isWaitlistEnabled } from "@/lib/utils"
-import { listAgentGroups } from "@/lib/api/agent-group"
-import { getAllActiveAgents } from "@/lib/api/agent"
-import type { AgentGroup } from "@/lib/types/agent-group"
+import { getAgent } from "@/lib/api"
+import { RoomSettingForm } from "@/components/room-setting-form"
 import type { Agent } from "@/lib/types/agent"
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from "@/lib/types/agent-group"
 
 const quickStartTemplates = [
     { icon: FlaskConical, label: "Research", prompt: "Help me research " },
@@ -40,27 +47,71 @@ const quickStartTemplates = [
 ]
 
 export default function ChatPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-full">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        }>
+            <ChatPageContent />
+        </Suspense>
+    )
+}
+
+function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
+    const { openWaitlist } = useClerk()
+    const searchParams = useSearchParams()
     const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
-    const [selectedGroup, setSelectedGroup] = useState<string>(BUILTIN_GROUP_ALL_AGENTS)
-    const [isOverride, setIsOverride] = useState(false)  // Track if override is active
-    const [groups, setGroups] = useState<AgentGroup[]>([])
-    const [loadingGroups, setLoadingGroups] = useState(false)
-    const { openWaitlist } = useClerk()
-
-    // Group management modal state
-    const [groupManagementOpen, setGroupManagementOpen] = useState(false)
-    const [groupAction, setGroupAction] = useState<{ type: 'create' | 'edit' | 'delete', group?: AgentGroup } | null>(null)
-    const [availableAgents, setAvailableAgents] = useState<Agent[]>([])
-    const [loadingAgents, setLoadingAgents] = useState(false)
+    const [loadingAgent, setLoadingAgent] = useState(false)
+    const [dialogOpen, setDialogOpen] = useState(false)
 
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
         roomName: string
         selectedAgents: Agent[]
         debateMode: boolean
     } | null>(null)
+
+    // Pre-configure room when agentId is in URL params
+    const agentIdParam = searchParams.get("agentId")
+
+    const loadAgentForChat = useCallback(async (agentId: string) => {
+        try {
+            setLoadingAgent(true)
+            const response = await getAgent(agentId)
+            if (response.success && response.agent) {
+                const agent = response.agent
+                const chatAgent: Agent = {
+                    agent_id: agent.agent_id,
+                    agent_card: agent.agent_card,
+                    agent_status: agent.agent_status,
+                }
+                setPreConfiguredRoom({
+                    roomName: `Chat with ${agent.agent_card.name}`,
+                    selectedAgents: [chatAgent],
+                    debateMode: false,
+                })
+            } else {
+                console.error("Failed to load agent for chat:", response.error)
+                banner.error("Could not load agent", {
+                    description: "The agent may have been removed or is unavailable."
+                })
+            }
+        } catch (error) {
+            console.error("Failed to load agent for chat:", error)
+            banner.error("Could not load agent")
+        } finally {
+            setLoadingAgent(false)
+        }
+    }, [])
+
+    useEffect(() => {
+        if (agentIdParam) {
+            loadAgentForChat(agentIdParam)
+        }
+    }, [agentIdParam, loadAgentForChat])
 
     const {
         creating,
@@ -71,119 +122,33 @@ export default function ChatPage() {
         getToken
     })
 
-    // Load user's groups
-    useEffect(() => {
-        const loadGroups = async () => {
-            if (!user?.id) return
+    // Group management (extracted hook)
+    const gm = useGroupManagement({
+        userId: user?.id,
+        getToken,
+        isLoaded,
+        roomAgentCount: preConfiguredRoom?.selectedAgents.length || 0,
+    })
 
-            setLoadingGroups(true)
-            try {
-                const response = await listAgentGroups(user.id, getToken)
-                if (response.success && response.groups) {
-                    setGroups(response.groups)
-                }
-            } catch (error) {
-                console.error('Failed to load groups:', error)
-            } finally {
-                setLoadingGroups(false)
-            }
-        }
-
-        if (isLoaded && user?.id) {
-            loadGroups()
-        }
-    }, [isLoaded, user?.id, getToken])
-
-    // Load agents for group management modal and mention suggestions
-    const loadAvailableAgents = useCallback(async () => {
-        if (availableAgents.length > 0) return
-        setLoadingAgents(true)
-        try {
-            const response = await getAllActiveAgents()
-            if (response.success && response.agents) {
-                setAvailableAgents(response.agents)
-            }
-        } catch (error) {
-            console.error('Failed to load agents:', error)
-        } finally {
-            setLoadingAgents(false)
-        }
-    }, [availableAgents.length])
-
-    // Load agents on mount for mention suggestions
-    useEffect(() => {
-        if (isLoaded && user?.id && availableAgents.length === 0) {
-            loadAvailableAgents()
-        }
-    }, [isLoaded, user?.id, loadAvailableAgents, availableAgents.length])
-
-    // Agent list for mentions - always show all available agents regardless of selected scope
+    // Agent list for mentions
     const agentListForMentions = useMemo(() => {
-        return availableAgents.map(agent => ({
+        return gm.availableAgents.map(agent => ({
             id: agent.agent_id,
             name: agent.agent_card.name
         }))
-    }, [availableAgents])
+    }, [gm.availableAgents])
 
-    // Refresh groups after changes in modal
-    const handleGroupsChange = async () => {
-        if (!user?.id) return
-        try {
-            const response = await listAgentGroups(user.id, getToken)
-            if (response.success && response.groups) {
-                setGroups(response.groups)
-            }
-        } catch (error) {
-            console.error('Failed to refresh groups:', error)
+    // Memoize initialData for RoomSettingForm to avoid unstable references
+    const roomSettingsInitialData = useMemo(() => {
+        if (!preConfiguredRoom) return null
+        return {
+            roomName: preConfiguredRoom.roomName,
+            selectedAgents: Object.fromEntries(
+                preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
+            ),
+            debateMode: preConfiguredRoom.debateMode,
         }
-    }
-
-    // Group management entry points
-    const handleCreateGroup = () => {
-        loadAvailableAgents()
-        setGroupAction({ type: 'create' })
-        setGroupManagementOpen(true)
-    }
-
-    const handleEditGroup = (group: AgentGroup) => {
-        loadAvailableAgents()
-        setGroupAction({ type: 'edit', group })
-        setGroupManagementOpen(true)
-    }
-
-    const handleDeleteGroup = (group: AgentGroup) => {
-        loadAvailableAgents()
-        setGroupAction({ type: 'delete', group })
-        setGroupManagementOpen(true)
-    }
-
-    const handleGroupCreated = (group: AgentGroup) => {
-        setGroups(prev => {
-            const exists = prev.some(g => g.group_id === group.group_id)
-            return exists
-                ? prev.map(g => g.group_id === group.group_id ? group : g)
-                : [...prev, group]
-        })
-        setSelectedGroup(group.group_id)
-        setIsOverride(true)
-    }
-
-    // Handle group change (override)
-    const handleGroupChange = (groupId: string) => {
-        setSelectedGroup(groupId)
-        setIsOverride(true)
-    }
-
-    // Handle clear override - revert to default
-    const handleClearOverride = () => {
-        setIsOverride(false)
-        // Default: Room Team if pre-configured agents exist, otherwise All Agents
-        const defaultGroup = (preConfiguredRoom?.selectedAgents.length || 0) > 0
-            ? BUILTIN_GROUP_ROOM_TEAM
-            : BUILTIN_GROUP_ALL_AGENTS
-        setSelectedGroup(defaultGroup)
-    }
-
+    }, [preConfiguredRoom])
 
     const handleSubmit = async (value: string) => {
         if (!value.trim()) {
@@ -202,22 +167,18 @@ export default function ChatPage() {
         try {
             setHasError(false)
 
-            // Create room with pre-configured settings if available
             const options = {
                 ...(preConfiguredRoom ? {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
                     debateMode: preConfiguredRoom.debateMode
                 } : {}),
-                targetGroup: selectedGroup  // Always pass the selected group for the first message
+                targetGroup: gm.selectedGroup
             }
 
             const success = await createAndNavigate(value, options)
 
-            if (success) {
-                // RoomChatInput clears its own state after submission
-                setPreConfiguredRoom(null) // Clear pre-configured settings after successful creation
-            } else {
+            if (!success) {
                 throw new Error('Failed to create room')
             }
         } catch (error) {
@@ -235,9 +196,24 @@ export default function ChatPage() {
         setQuickStartValue("")
     }
 
-    const handleRetry = () => {
-        // Retry functionality - user needs to re-enter the message
-        setHasError(false)
+    const handleOpenRoomSettings = async () => {
+        if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
+            await gm.loadAvailableAgents()
+        }
+        setDialogOpen(true)
+    }
+
+    const handleRoomSettingsUpdate = async (
+        roomName: string,
+        selectedAgents: { [agentId: string]: Agent },
+        debateMode: boolean
+    ) => {
+        setPreConfiguredRoom({
+            roomName,
+            selectedAgents: Object.values(selectedAgents),
+            debateMode,
+        })
+        setDialogOpen(false)
     }
 
     if (!isLoaded) {
@@ -263,7 +239,7 @@ export default function ChatPage() {
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <Button
-                            onClick={handleRetry}
+                            onClick={() => setHasError(false)}
                             className="w-full"
                             disabled={creating}
                         >
@@ -295,19 +271,15 @@ export default function ChatPage() {
     return (
         <div className="flex flex-col h-full bg-background">
             {/* Fixed Header - Same position as room page */}
-            <header className="shrink-0 w-full max-w-4xl mx-auto px-4 sm:px-6">
-                <div className="flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
+            <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 px-4 sm:px-6 max-w-4xl mx-auto w-full">
                     <div className="flex items-center gap-3">
-                        {/* Pre-configured room indicator - Same style as room page */}
                         <div className="space-y-1">
                             {preConfiguredRoom?.roomName && (
                                 <h1 className="text-xl font-semibold">{preConfiguredRoom.roomName}</h1>
                             )}
 
-                            {/* Room team / Debate mode info */}
                             {preConfiguredRoom && (preConfiguredRoom.selectedAgents.length > 0 || preConfiguredRoom.debateMode) && (
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    {/* Show agent count if room has agents */}
                                     {preConfiguredRoom.selectedAgents.length > 0 && (
                                         <TooltipProvider>
                                             <Tooltip>
@@ -341,9 +313,55 @@ export default function ChatPage() {
                             )}
                         </div>
                     </div>
-                </div>
-            </header>
 
+                    <div className="flex items-center gap-2 self-start">
+                        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                            <div className="flex items-center gap-2">
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={handleOpenRoomSettings}
+                                                className="text-primary hover:text-primary hover:bg-primary/10"
+                                                aria-label="Room settings"
+                                                onMouseEnter={() => {
+                                                    if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
+                                                        gm.loadAvailableAgents()
+                                                    }
+                                                }}
+                                            >
+                                                <Settings className="h-5 w-5" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                            <p>Configure room settings</p>
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            </div>
+                            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
+                                <DialogHeader>
+                                    <DialogTitle>Room Settings</DialogTitle>
+                                </DialogHeader>
+                                <div className="mt-4">
+                                    <RoomSettingForm
+                                        onSubmit={handleRoomSettingsUpdate}
+                                        availableAgents={gm.availableAgents}
+                                        loadingAgents={gm.loadingAgents}
+                                        agentsError={gm.agentsError}
+                                        isSubmitting={false}
+                                        isEditing={false}
+                                        requireRoomName={false}
+                                        onRetryLoadAgents={gm.loadAvailableAgents}
+                                        initialData={roomSettingsInitialData}
+                                    />
+                                </div>
+                            </DialogContent>
+                        </Dialog>
+                    </div>
+            </header>
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-3xl">
                     {/* Header */}
@@ -366,16 +384,20 @@ export default function ChatPage() {
                             <span className="ml-2 icon-exclaim inline-block text-3xl skew-x-150 scale-150 rotate-6">!</span>
                         </h1>
                         <p className="text-muted-foreground">
-                            What would you like to work on today?
+                            {preConfiguredRoom?.selectedAgents.length === 1
+                                ? `Ask ${preConfiguredRoom.selectedAgents[0].agent_card.name} anything`
+                                : "What would you like to work on today?"}
                         </p>
                     </div>
 
                     {/* Creating state */}
-                    {creating && (
+                    {(creating || loadingAgent) && (
                         <div className="flex items-center justify-center mb-6">
                             <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                                <span className="text-sm">Finding the best agents for you...</span>
+                                <span className="text-sm">
+                                    {loadingAgent ? "Loading agent..." : "Finding the best agents for you..."}
+                                </span>
                             </div>
                         </div>
                     )}
@@ -387,16 +409,16 @@ export default function ChatPage() {
                             disableSend={creating}
                             agents={agentListForMentions}
                             showGroupSelector={true}
-                            groups={groups}
-                            loadingGroups={loadingGroups}
-                            selectedGroup={selectedGroup}
-                            onGroupChange={handleGroupChange}
+                            groups={gm.groups}
+                            loadingGroups={gm.loadingGroups}
+                            selectedGroup={gm.selectedGroup}
+                            onGroupChange={gm.handleGroupChange}
                             roomAgentCount={preConfiguredRoom?.selectedAgents.length || 0}
-                            onCreateGroup={handleCreateGroup}
-                            onEditGroup={handleEditGroup}
-                            onDeleteGroup={handleDeleteGroup}
-                            isOverride={isOverride}
-                            onClearOverride={handleClearOverride}
+                            onCreateGroup={gm.handleCreateGroup}
+                            onEditGroup={gm.handleEditGroup}
+                            onDeleteGroup={gm.handleDeleteGroup}
+                            isOverride={gm.isOverride}
+                            onClearOverride={gm.handleClearOverride}
                             externalValue={quickStartValue}
                             onExternalValueConsumed={handleClearQuickStart}
                         />
@@ -425,7 +447,9 @@ export default function ChatPage() {
                     <div className="mt-8 text-center">
                         <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                             <Sparkles className="h-3 w-3" />
-                            Just start typing — we&apos;ll find the best agents for your task
+                            {preConfiguredRoom?.selectedAgents.length === 1
+                                ? `Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`
+                                : "Just start typing \u2014 we\u2019ll find the best agents for your task"}
                         </p>
                     </div>
                 </div>
@@ -433,21 +457,21 @@ export default function ChatPage() {
 
             {/* Group Management Modal */}
             <GroupManagementModal
-                open={groupManagementOpen}
+                open={gm.groupManagementOpen}
                 onOpenChange={(open) => {
-                    setGroupManagementOpen(open)
+                    gm.setGroupManagementOpen(open)
                     if (!open) {
-                        setGroupAction(null)
+                        gm.setGroupAction(null)
                     }
                 }}
-                groups={groups}
-                onGroupsChange={handleGroupsChange}
-                onGroupCreated={handleGroupCreated}
-                availableAgents={availableAgents}
-                loadingAgents={loadingAgents}
+                groups={gm.groups}
+                onGroupsChange={gm.handleGroupsChange}
+                onGroupCreated={gm.handleGroupCreated}
+                availableAgents={gm.availableAgents}
+                loadingAgents={gm.loadingAgents}
                 userId={user?.id || ''}
                 getToken={getToken}
-                initialAction={groupAction || undefined}
+                initialAction={gm.groupAction || undefined}
             />
         </div>
     )

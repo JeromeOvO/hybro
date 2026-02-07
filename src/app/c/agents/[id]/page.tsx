@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   Bot,
   ExternalLink,
-  Trash2,
   CheckCircle2,
   XCircle,
   AlertCircle,
@@ -15,10 +14,7 @@ import {
   MessageSquare,
   Terminal,
   ArrowRightLeft,
-  Settings,
-  Save,
-  Globe,
-  Lock
+  MessageCirclePlus,
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
@@ -26,55 +22,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger
-} from "@/components/ui/alert-dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { banner } from "@/components/ui/banner"
-import { getAgent, deleteAgent, updateAgent } from "@/lib/api"
+import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
+import { developerUrl } from "@/lib/urls"
 
-export default function AgentProfilePage() {
+export default function ConsumerAgentProfilePage() {
   const params = useParams()
   const router = useRouter()
-  const { userId, getToken } = useAuth()
+  const { userId } = useAuth()
   const agentId = params.id as string
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [deleting, setDeleting] = useState(false)
-  const [saving, setSaving] = useState(false)
-  
-  // Rate limit settings state
-  const [enableUserLimit, setEnableUserLimit] = useState(false)
-  const [userLimitValue, setUserLimitValue] = useState<string>("")
-  const [enableSystemLimit, setEnableSystemLimit] = useState(false)
-  const [systemLimitValue, setSystemLimitValue] = useState<string>("")
-  
-  // Visibility state
-  const [isPublic, setIsPublic] = useState(true)
-
-  const getStatusColor = (status: Agent['agent_status']) => {
-    switch (status) {
-      case 'active':
-        return 'bg-green-500/10 text-green-600 hover:bg-green-500/20 border-green-500/20'
-      case 'inactive':
-        return 'bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 border-yellow-500/20'
-      case 'deleted':
-        return 'bg-red-500/10 text-red-600 hover:bg-red-500/20 border-red-500/20'
-      default:
-        return 'bg-gray-500/10 text-gray-600 hover:bg-gray-500/20 border-gray-500/20'
-    }
-  }
 
   const loadAgentDetail = useCallback(async () => {
     try {
@@ -83,24 +42,6 @@ export default function AgentProfilePage() {
 
       if (response.success && response.agent) {
         setAgentData(response)
-        // Initialize rate limit state from agent data
-        const agent = response.agent
-        if (agent.rate_limit_per_user_per_hour != null) {
-          setEnableUserLimit(true)
-          setUserLimitValue(agent.rate_limit_per_user_per_hour.toString())
-        } else {
-          setEnableUserLimit(false)
-          setUserLimitValue("")
-        }
-        if (agent.rate_limit_system_per_hour != null) {
-          setEnableSystemLimit(true)
-          setSystemLimitValue(agent.rate_limit_system_per_hour.toString())
-        } else {
-          setEnableSystemLimit(false)
-          setSystemLimitValue("")
-        }
-        // Initialize visibility state (default to true if not set)
-        setIsPublic(agent.is_public !== false)
       } else {
         const errorMessage = response.error || "Failed to load agent details"
         banner.error("Failed to load agent details", {
@@ -113,108 +54,6 @@ export default function AgentProfilePage() {
       setLoading(false)
     }
   }, [agentId])
-
-  const handleSaveRateLimits = async () => {
-    if (!agentData?.agent) return
-
-    try {
-      setSaving(true)
-      
-      // Validate that if toggle is enabled, a valid value is provided
-      if (enableUserLimit && !userLimitValue) {
-        banner.error("User rate limit required", {
-          description: "Please enter a value or disable the limit"
-        })
-        setSaving(false)
-        return
-      }
-      if (enableSystemLimit && !systemLimitValue) {
-        banner.error("System rate limit required", {
-          description: "Please enter a value or disable the limit"
-        })
-        setSaving(false)
-        return
-      }
-
-      // Parse values - null means unlimited
-      const userLimit = enableUserLimit && userLimitValue 
-        ? parseInt(userLimitValue, 10) 
-        : null
-      const systemLimit = enableSystemLimit && systemLimitValue 
-        ? parseInt(systemLimitValue, 10) 
-        : null
-
-      // Validate values must be >= 1
-      if (enableUserLimit && (isNaN(userLimit as number) || (userLimit as number) < 1)) {
-        banner.error("Invalid user rate limit", {
-          description: "Please enter a number greater than or equal to 1"
-        })
-        setSaving(false)
-        return
-      }
-      if (enableSystemLimit && (isNaN(systemLimit as number) || (systemLimit as number) < 1)) {
-        banner.error("Invalid system rate limit", {
-          description: "Please enter a number greater than or equal to 1"
-        })
-        setSaving(false)
-        return
-      }
-
-      const response = await updateAgent(
-        agentId,
-        {
-          rate_limit_per_user_per_hour: userLimit,
-          rate_limit_system_per_hour: systemLimit,
-          is_public: isPublic,
-        },
-        getToken
-      )
-
-      if (response.success) {
-        banner.success("Settings saved successfully")
-        // Reload agent data to reflect changes
-        await loadAgentDetail()
-      } else {
-        banner.error("Failed to save settings", {
-          description: response.error || "An unexpected error occurred"
-        })
-      }
-    } catch (error) {
-      banner.error("Failed to save settings", {
-        description: error instanceof Error ? error.message : "An unexpected error occurred"
-      })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleDeleteAgent = async () => {
-    if (!agentData?.agent) return
-
-    try {
-      setDeleting(true)
-      const response = await deleteAgent(
-        { agent_id: agentId },
-        getToken
-      )
-
-      if (response.success) {
-        banner.success("Agent deleted successfully")
-        router.push('/agent')
-      } else {
-        const errorMessage = response.error || "Failed to delete agent"
-        banner.error("Failed to delete agent", {
-          description: errorMessage
-        })
-      }
-    } catch (error) {
-      banner.error("Failed to delete agent", {
-        description: error instanceof Error ? error.message : "An unexpected error occurred"
-      })
-    } finally {
-      setDeleting(false)
-    }
-  }
 
   useEffect(() => {
     if (agentId) {
@@ -250,9 +89,9 @@ export default function AgentProfilePage() {
             </CardDescription>
           </CardHeader>
           <CardFooter className="flex justify-center">
-            <Button onClick={() => router.push('/agent')} variant="default">
+            <Button onClick={() => router.push('/agents')} variant="default">
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Registry
+              Back to Agents
             </Button>
           </CardFooter>
         </Card>
@@ -297,45 +136,28 @@ export default function AgentProfilePage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <Button
           variant="ghost"
-          onClick={() => router.push('/agent')}
+          onClick={() => router.push('/agents')}
           className="group pl-0 hover:pl-2 transition-all"
         >
           <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
-          Back to Registry
+          Back to Agents
         </Button>
         <div className="flex gap-2 w-full sm:w-auto">
+          {/* Chat with this agent CTA */}
+          <Button
+            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            onClick={() => router.push(`/chat?agentId=${agentId}`)}
+          >
+            <MessageCirclePlus className="h-4 w-4 mr-2" />
+            Chat with this agent
+          </Button>
           {isOwner && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={deleting}
-                  className="bg-red-600 text-white hover:bg-red-700"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  {deleting ? "Deleting..." : "Delete Agent"}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this agent?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete &quot;{agent.agent_card.name}&quot;. This
-                    action cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={handleDeleteAgent}
-                    className="bg-red-600 text-white hover:bg-red-700"
-                  >
-                    Delete Agent
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <Button variant="outline" size="sm" asChild>
+              <a href={developerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
+                Manage on Developer Portal
+                <ExternalLink className="h-4 w-4 ml-2" />
+              </a>
+            </Button>
           )}
         </div>
       </div>
@@ -363,7 +185,7 @@ export default function AgentProfilePage() {
                 <div className="text-sm text-muted-foreground font-medium flex items-center justify-center gap-2">
                   <span>v{agent.agent_card.version}</span>
                   <span className="text-border">•</span>
-                  <span>{agent.agent_card.provider?.organization || "Unknown Provider"}</span>
+                  <span>Built by {agent.agent_card.provider?.organization || "Unknown Provider"}</span>
                 </div>
               </div>
             </CardHeader>
@@ -375,12 +197,6 @@ export default function AgentProfilePage() {
               <Separator />
 
               <div className="space-y-3 text-sm">
-                <div className="flex justify-between items-center py-1">
-                  <span className="text-muted-foreground">Updated</span>
-                  <span className="font-medium">
-                    {new Date().toLocaleDateString()} {/* Using current date as placeholder */}
-                  </span>
-                </div>
                 {agent.agent_card.documentationUrl && (
                   <Button variant="outline" className="w-full mt-4" asChild>
                     <a href={agent.agent_card.documentationUrl} target="_blank" rel="noopener noreferrer">
@@ -407,26 +223,22 @@ export default function AgentProfilePage() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: "Streaming", value: agent.agent_card.capabilities.streaming },
-                    { label: "Extensions", value: agent.agent_card.capabilities.extensions },
-                    { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
-                    { label: "State History", value: agent.agent_card.capabilities.stateTransitionHistory },
-                  ]
-                    .filter((cap) => cap.value)
-                    .map((cap) => (
-                      <Badge key={cap.label} variant="secondary" className="px-3 py-1 font-normal bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100">
-                        {cap.label}
-                      </Badge>
-                    ))}
-                  {[
-                    { label: "Streaming", value: agent.agent_card.capabilities.streaming },
-                    { label: "Extensions", value: agent.agent_card.capabilities.extensions },
-                    { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
-                    { label: "State History", value: agent.agent_card.capabilities.stateTransitionHistory },
-                  ].every(c => !c.value) && (
-                      <span className="text-sm text-muted-foreground italic">No specific capabilities listed</span>
-                    )}
+                  {(() => {
+                    const capabilities = [
+                      { label: "Streaming", value: agent.agent_card.capabilities.streaming },
+                      { label: "Extensions", value: agent.agent_card.capabilities.extensions },
+                      { label: "Push Notifications", value: agent.agent_card.capabilities.pushNotifications },
+                      { label: "State History", value: agent.agent_card.capabilities.stateTransitionHistory },
+                    ]
+                    const enabledCaps = capabilities.filter(cap => cap.value)
+                    return enabledCaps.length > 0
+                      ? enabledCaps.map((cap) => (
+                          <Badge key={cap.label} variant="secondary" className="px-3 py-1 font-normal bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 hover:bg-blue-100">
+                            {cap.label}
+                          </Badge>
+                        ))
+                      : <span className="text-sm text-muted-foreground italic">No specific capabilities listed</span>
+                  })()}
                 </div>
               </CardContent>
             </Card>
@@ -470,7 +282,6 @@ export default function AgentProfilePage() {
                 <Cpu className="h-5 w-5 text-primary" />
                 Skills & Functions
               </CardTitle>
-
             </CardHeader>
             <CardContent>
               {agent.agent_card.skills.length === 0 ? (
@@ -572,141 +383,6 @@ export default function AgentProfilePage() {
               )}
             </CardContent>
           </Card>
-
-      {/* Agent Settings - Only visible to agent owner */}
-      {userId && agentData?.agent?.provider_id === userId && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Settings className="h-5 w-5" />
-              <CardTitle>Agent Settings</CardTitle>
-            </div>
-            <CardDescription>
-              Configure visibility and rate limits for your agent.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Visibility Toggle */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="visibility-toggle" className="text-base font-medium flex items-center gap-2">
-                    {isPublic ? <Globe className="h-4 w-4 text-green-500" /> : <Lock className="h-4 w-4 text-yellow-500" />}
-                    Visibility
-                  </Label>
-                  <p className="text-sm text-muted-foreground">
-                    {isPublic 
-                      ? "Public - Everyone can discover and use this agent"
-                      : "Private - Only you can see and use this agent"
-                    }
-                  </p>
-                </div>
-                <Switch
-                  id="visibility-toggle"
-                  checked={isPublic}
-                  onCheckedChange={setIsPublic}
-                />
-              </div>
-            </div>
-
-            <Separator />
-
-            {/* Per-User Rate Limit */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="user-limit-toggle" className="text-base font-medium">
-                    Per-User Limit
-                  </Label>
-                  <p className="text-sm text-muted-foreground">
-                    Maximum requests each user can make per hour
-                  </p>
-                </div>
-                <Switch
-                  id="user-limit-toggle"
-                  checked={enableUserLimit}
-                  onCheckedChange={(checked) => {
-                    setEnableUserLimit(checked)
-                    if (!checked) setUserLimitValue("")
-                  }}
-                />
-              </div>
-              {enableUserLimit && (
-                <div className="flex items-center gap-3 pl-4">
-                  <Input
-                    type="number"
-                    min="1"
-                    value={userLimitValue}
-                    onChange={(e) => setUserLimitValue(e.target.value)}
-                    placeholder="e.g., 10"
-                    className="w-32"
-                  />
-                  <span className="text-sm text-muted-foreground">requests per hour</span>
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
-            {/* System-Wide Rate Limit */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="system-limit-toggle" className="text-base font-medium">
-                    System-Wide Limit
-                  </Label>
-                  <p className="text-sm text-muted-foreground">
-                    Maximum total requests from all users per hour
-                  </p>
-                </div>
-                <Switch
-                  id="system-limit-toggle"
-                  checked={enableSystemLimit}
-                  onCheckedChange={(checked) => {
-                    setEnableSystemLimit(checked)
-                    if (!checked) setSystemLimitValue("")
-                  }}
-                />
-              </div>
-              {enableSystemLimit && (
-                <div className="flex items-center gap-3 pl-4">
-                  <Input
-                    type="number"
-                    min="1"
-                    value={systemLimitValue}
-                    onChange={(e) => setSystemLimitValue(e.target.value)}
-                    placeholder="e.g., 100"
-                    className="w-32"
-                  />
-                  <span className="text-sm text-muted-foreground">requests per hour</span>
-                </div>
-              )}
-            </div>
-
-          </CardContent>
-        </Card>
-      )}
-
-      {userId && agentData?.agent?.provider_id === userId && (
-        <div className="flex justify-center gap-20">
-          <Button 
-            className={getStatusColor('active')}
-            onClick={handleSaveRateLimits} 
-            disabled={saving}
-          >
-            <Save className="h-4 w-4 mr-2" />
-            {saving ? "Saving..." : "Save"}
-          </Button>
-          <Button 
-            className={getStatusColor('deleted')}
-            onClick={handleDeleteAgent}
-            disabled={deleting}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            {deleting ? "Deleting..." : "Delete"}
-          </Button>
-        </div>
-      )}
         </div>
       </div>
     </div>

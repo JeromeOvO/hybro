@@ -59,7 +59,7 @@ export function AgentCard({
 
   // Handle card click
   const handleCardClick = () => {
-    router.push(`/agent/profile/${agent.agent_id}`)
+    router.push(`/c/agents/${agent.agent_id}`)
   }
 
   return (

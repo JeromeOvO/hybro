@@ -156,7 +156,7 @@ export default function RegisterAgentPage() {
         
         // Delayed redirect
         setTimeout(() => {
-          router.push("/agent")
+          router.push("/agents")
         }, 1500)
       } else {
         banner.error("Registration failed", {
@@ -243,6 +243,19 @@ export default function RegisterAgentPage() {
               </>
             )}
           </Button>
+
+          <p className="text-xs text-muted-foreground">
+            New to A2A? Use{" "}
+            <a
+              href="https://github.com/hybroai/a2a-adapter"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-primary hover:underline"
+            >
+              a2a-adapter
+            </a>
+            {" "}to convert any agent from CrewAI, LangChain, LangGraph, n8n, or other frameworks.
+          </p>
         </CardContent>
       </Card>
 

@@ -3,6 +3,11 @@ import type { MessageData } from '@/components/room-messages'
 
 type RoomId = string
 
+interface PendingRoomData {
+  initialMessage: string
+  targetGroup?: string
+}
+
 interface RoomUiState {
   sending: boolean
   processing: boolean
@@ -11,6 +16,8 @@ interface RoomUiState {
   sseConnected: boolean
   sseError: string | null
   liveMessagesByRoom: Record<RoomId, MessageData[]>
+  /** Pending initial messages for rooms (replaces sessionStorage) */
+  pendingRoomData: Record<RoomId, PendingRoomData>
   setSending: (v: boolean) => void
   setProcessing: (v: boolean) => void
   setUpdatingRoom: (v: boolean) => void
@@ -20,11 +27,16 @@ interface RoomUiState {
   addLiveMessage: (roomId: RoomId, msg: MessageData) => void
   replaceLiveMessage: (roomId: RoomId, tempId: string, msg: MessageData) => void
   removeLiveMessage: (roomId: RoomId, messageId: string) => void
-  resetRoomState: (roomId: RoomId) => void
+  /** Reset live messages & SSE state for a room (does not touch pendingRoomData). */
+  resetRoomLiveState: (roomId: RoomId) => void
   resetAll: () => void
+  /** Store a pending initial message + target group for a room */
+  setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
+  /** Consume (read + delete) pending data for a room */
+  consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
 }
 
-export const useRoomUiStore = create<RoomUiState>((set) => ({
+export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   sending: false,
   processing: false,
   updatingRoom: false,
@@ -32,6 +44,7 @@ export const useRoomUiStore = create<RoomUiState>((set) => ({
   sseConnected: false,
   sseError: null,
   liveMessagesByRoom: {},
+  pendingRoomData: {},
   setSending: (v) => set({ sending: v }),
   setProcessing: (v) => set({ processing: v }),
   setUpdatingRoom: (v) => set({ updatingRoom: v }),
@@ -77,12 +90,13 @@ export const useRoomUiStore = create<RoomUiState>((set) => ({
         },
       }
     }),
-  resetRoomState: (roomId) =>
+  // Reset live messages & SSE state for a room.
+  resetRoomLiveState: (roomId) =>
     set((state) => {
-      const copy = { ...state.liveMessagesByRoom }
-      delete copy[roomId]
+      const liveCopy = { ...state.liveMessagesByRoom }
+      delete liveCopy[roomId]
       return {
-        liveMessagesByRoom: copy,
+        liveMessagesByRoom: liveCopy,
         sending: false,
         processing: false,
         updatingRoom: false,
@@ -93,6 +107,7 @@ export const useRoomUiStore = create<RoomUiState>((set) => ({
   resetAll: () =>
     set({
       liveMessagesByRoom: {},
+      pendingRoomData: {},
       sending: false,
       processing: false,
       updatingRoom: false,
@@ -100,5 +115,23 @@ export const useRoomUiStore = create<RoomUiState>((set) => ({
       sseError: null,
       sseEnabled: true,
     }),
+  setPendingRoomData: (roomId, data) =>
+    set((state) => ({
+      pendingRoomData: {
+        ...state.pendingRoomData,
+        [roomId]: data,
+      },
+    })),
+  consumePendingRoomData: (roomId) => {
+    const data = get().pendingRoomData[roomId] || null
+    if (data) {
+      set((state) => {
+        const copy = { ...state.pendingRoomData }
+        delete copy[roomId]
+        return { pendingRoomData: copy }
+      })
+    }
+    return data
+  },
 }))
 

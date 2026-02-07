@@ -115,6 +115,7 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 export function TaskStatusMessage({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   internalId,
   agentName,
   initialStatus,

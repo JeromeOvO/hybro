@@ -1,14 +1,14 @@
-'use client'
+"use client"
 
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { useRouter } from "next/navigation"
-import { useAuth } from '@clerk/nextjs'
-import { Plus, Search, RefreshCw, ChevronDown, Users, ThumbsUp } from 'lucide-react'
-import { AgentCard } from '@/components/agent-card'
-import { Button } from '@/components/ui/button'
+import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import { Search, RefreshCw, ChevronDown } from "lucide-react"
+import { AgentCard, StatsCards } from "@/components/agent-card"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+
+import { useAuth } from "@clerk/nextjs"
 import { banner } from "@/components/ui/banner"
-import { getAgentsByProviderId } from "@/lib/api"
+import { getAllAgents } from "@/lib/api"
 import type { Agent } from "@/lib/types"
 
 const STATUS_OPTIONS = [
@@ -69,52 +69,46 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
   }, [agents, searchTerm, statusFilter])
 }
 
-export default function Workspace() {
-  const router = useRouter()
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [loading, setLoading] = useState(true)
-  const [searchTerm, setSearchTerm] = useState("")
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+export default function ConsumerAgentsPage() {
   const { getToken } = useAuth()
+  const [allAgents, setAllAgents] = useState<Agent[]>([])
+  const [loadingAll, setLoadingAll] = useState(true)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [statusFilter, setStatusFilter] = useState<string>("all")
   const { isOpen: isDropdownOpen, setIsOpen: setIsDropdownOpen, ref: dropdownRef } = useDropdown()
 
-  const filteredAgents = useFilteredAgents(agents, searchTerm, statusFilter)
+  const filteredAgents = useFilteredAgents(allAgents, searchTerm, statusFilter)
 
-  // total agent counts of user
-  const agentCount = agents.length
-
-  // total likes the user received
-  const totalLikes = useMemo(() => {
-    return agents.reduce((sum, agent) => sum + (agent.like_count ?? 0), 0)
-  }, [agents])
-
-  const loadAgentsbyProvider = async () => {
+  const loadAllAgents = useCallback(async () => {
     try {
-      setLoading(true)
-      const response = await getAgentsByProviderId(getToken)
+      setLoadingAll(true)
+      const response = await getAllAgents(undefined, undefined, getToken)
 
       if (response.success && response.agents) {
-        setAgents(response.agents)
+        setAllAgents(response.agents)
       } else {
         banner.error(response.error || 'Failed to load agents')
       }
     } catch {
       banner.error('Failed to load agents')
     } finally {
-      setLoading(false)
+      setLoadingAll(false)
     }
-  }
+  }, [getToken])
 
+  // Load all agents on mount
   useEffect(() => {
-    loadAgentsbyProvider()
-  }, [])
+    loadAllAgents()
+  }, [loadAllAgents])
 
-  if (loading) {
+  if (loadingAll && allAgents.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[85vh]">
         <div className="flex flex-col items-center justify-center gap-4">
           <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-          <span className="text-base font-medium text-muted-foreground">Loading Workspace...</span>
+          <span className="text-base font-medium text-muted-foreground">
+            Loading Network...
+          </span>
         </div>
       </div>
     )
@@ -123,63 +117,18 @@ export default function Workspace() {
   return (
     <div className="px-4 sm:px-6 py-8">
       <div className="w-full max-w-4xl mx-auto space-y-6">
-
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Agent Workspace</h1>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
-              onClick={() => router.push('/agent/registry')}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Register Agent
-            </Button>
+            <h1 className="text-3xl font-bold">Explore Agents</h1>
+            <p className="text-muted-foreground mt-1">Discover and chat with AI agents on the HYBRO network</p>
           </div>
         </div>
 
-        {/* Stats Section */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Stats */}
+        <StatsCards agents={allAgents} />
 
-          {/* My Agents Count */}
-          <div className="rounded-lg border border-border/50 bg-background/80 p-5">
-            <div className="flex items-center gap-3">
-              <Users className="h-10 w-10 text-muted-foreground" />
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  My Agents
-                </div>
-                <div className="text-2xl font-semibold text-[hsl(var(--color-hybro-hy))]">
-                  {agentCount}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Total Likes */}
-          <div className="rounded-lg border border-border/50 bg-background/80 p-5">
-            <div className="flex items-center gap-3">
-              <ThumbsUp className="h-10 w-10 text-muted-foreground" />
-              <div>
-                <div className="text-sm text-muted-foreground">
-                  Total Likes
-                </div>
-                <div className="text-2xl font-semibold text-[hsl(var(--color-hybro-bro))]">
-                  {totalLikes}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Placeholder */}
-          <div className="rounded-lg border border-dashed border-border/50 bg-background/40 p-5 flex items-center justify-center text-sm text-muted-foreground">
-            Coming soon
-          </div>
-        </div>
-
-        {/* Search and Filter Section */}
+        {/* Search and Filter */}
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div className="flex flex-1 gap-4">
             <div className="relative flex-1">
@@ -219,10 +168,10 @@ export default function Workspace() {
           </div>
         </div>
 
-        {/* Results Count and Clear Filters */}
+        {/* Results Count */}
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">
-            Showing {filteredAgents.length} of {agents.length} agents
+            Showing {filteredAgents.length} of {allAgents.length} agents
           </span>
           {(searchTerm || statusFilter !== "all") && (
             <Button
@@ -238,48 +187,23 @@ export default function Workspace() {
           )}
         </div>
 
-        <div className="flex gap-4 mb-4">
-          {STATUS_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              className={`px-2 py-1 text-sm ${statusFilter === opt.value ? "font-semibold underline" : "text-gray-500"
-                }`}
-              onClick={() => setStatusFilter(opt.value)}
-            >
-              {opt.label}
-            </button>
+        {/* Agent Cards Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+          {filteredAgents.map((agent) => (
+            <AgentCard key={agent.agent_id} agent={agent} />
           ))}
         </div>
 
-
-        {/* Agent Cards Grid */}
-        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-          <div className="flex flex-1 gap-4">
-            <div className="relative flex-1">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-3">
-                {filteredAgents.map((agent) => (
-                  <AgentCard key={agent.agent_id} agent={agent} />
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Empty State */}
-        {filteredAgents.length === 0 && !loading && (
+        {filteredAgents.length === 0 && !loadingAll && (
           <div className="text-center py-12">
             <div className="text-muted-foreground mb-4">
-              {agents.length === 0
-                ? "No agents found. Register your first agent to get started."
+              {allAgents.length === 0
+                ? "No agents found on the network yet."
                 : "No agents found matching your criteria."
               }
             </div>
-            {agents.length === 0 ? (
-              <Button onClick={() => router.push('/agent/registry')}>
-                <Plus className="h-4 w-4 mr-2" />
-                Register Agent
-              </Button>
-            ) : (
+            {allAgents.length > 0 && (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -292,7 +216,6 @@ export default function Workspace() {
             )}
           </div>
         )}
-
       </div>
     </div>
   )
