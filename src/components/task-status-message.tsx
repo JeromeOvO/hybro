@@ -206,17 +206,14 @@ export function TaskStatusMessage({
   // Completed state
   if (status === "completed" && content) {
     return (
-      <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900 dark:to-emerald-900 border-green-300 dark:border-green-700">
-          <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-300" />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50/50 to-emerald-50/30 dark:from-green-950/50 dark:to-emerald-950/30 message-bubble text-green-600 dark:text-green-400">
+      <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex-1 rounded-xl p-4 shadow-sm border border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50/50 to-emerald-50/30 dark:from-green-950/50 dark:to-emerald-950/30 message-bubble text-green-600 dark:text-green-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-green-700 dark:text-green-300">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900 dark:to-emerald-900 border-green-300 dark:border-green-700">
+                <CheckCircle className="h-3 w-3 text-green-600 dark:text-green-300" />
+              </div>
+              <span className="text-xs font-semibold text-green-700 dark:text-green-300">
                 {agentName}
               </span>
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
@@ -243,17 +240,14 @@ export function TaskStatusMessage({
     }
     
     return (
-      <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-red-100 to-rose-100 dark:from-red-900 dark:to-rose-900 border-red-300 dark:border-red-700">
-          <XCircle className="h-4 w-4 text-red-600 dark:text-red-300" />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50/50 to-rose-50/30 dark:from-red-950/50 dark:to-rose-950/30 message-bubble text-red-600 dark:text-red-400">
+      <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex-1 rounded-xl p-4 shadow-sm border border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50/50 to-rose-50/30 dark:from-red-950/50 dark:to-rose-950/30 message-bubble text-red-600 dark:text-red-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-red-700 dark:text-red-300">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-red-100 to-rose-100 dark:from-red-900 dark:to-rose-900 border-red-300 dark:border-red-700">
+                <XCircle className="h-3 w-3 text-red-600 dark:text-red-300" />
+              </div>
+              <span className="text-xs font-semibold text-red-700 dark:text-red-300">
                 {agentName}
               </span>
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
@@ -275,17 +269,14 @@ export function TaskStatusMessage({
   // Input required state
   if (status === "input_required") {
     return (
-      <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-yellow-100 to-amber-100 dark:from-yellow-900 dark:to-amber-900 border-yellow-300 dark:border-yellow-700">
-          <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-300" />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-yellow-200 dark:border-yellow-800 bg-gradient-to-br from-yellow-50/50 to-amber-50/30 dark:from-yellow-950/50 dark:to-amber-950/30 message-bubble text-yellow-600 dark:text-yellow-400">
+      <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex-1 rounded-xl p-4 shadow-sm border border-yellow-200 dark:border-yellow-800 bg-gradient-to-br from-yellow-50/50 to-amber-50/30 dark:from-yellow-950/50 dark:to-amber-950/30 message-bubble text-yellow-600 dark:text-yellow-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-yellow-100 to-amber-100 dark:from-yellow-900 dark:to-amber-900 border-yellow-300 dark:border-yellow-700">
+                <AlertTriangle className="h-3 w-3 text-yellow-600 dark:text-yellow-300" />
+              </div>
+              <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-300">
                 {agentName}
               </span>
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
@@ -311,17 +302,14 @@ export function TaskStatusMessage({
   // Auth required state
   if (status === "auth_required") {
     return (
-      <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-orange-100 to-amber-100 dark:from-orange-900 dark:to-amber-900 border-orange-300 dark:border-orange-700">
-          <KeyRound className="h-4 w-4 text-orange-600 dark:text-orange-300" />
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/50 dark:to-amber-950/30 message-bubble text-orange-600 dark:text-orange-400">
+      <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex-1 rounded-xl p-4 shadow-sm border border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/50 dark:to-amber-950/30 message-bubble text-orange-600 dark:text-orange-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-orange-700 dark:text-orange-300">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-orange-100 to-amber-100 dark:from-orange-900 dark:to-amber-900 border-orange-300 dark:border-orange-700">
+                <KeyRound className="h-3 w-3 text-orange-600 dark:text-orange-300" />
+              </div>
+              <span className="text-xs font-semibold text-orange-700 dark:text-orange-300">
                 {agentName}
               </span>
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
@@ -347,18 +335,15 @@ export function TaskStatusMessage({
   const displayContent = taskContent ? truncateText(taskContent) : 'Processing your request'
   
   return (
-    <div className="flex gap-3 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-      {/* Avatar matching agent bubble style */}
-      <div className="w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900 dark:to-indigo-900 border-blue-300 dark:border-blue-700">
-        <Sparkles className="h-4 w-4 text-blue-600 dark:text-blue-300 animate-pulse" />
-      </div>
-
-      {/* Message content */}
-      <div className="flex-1 max-w-[calc(100%-3rem)] rounded-lg p-4 shadow-sm border border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 dark:from-blue-950/50 dark:to-indigo-950/30 message-bubble text-blue-600 dark:text-blue-300">
+    <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div className="flex-1 rounded-xl p-4 shadow-sm border border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 dark:from-blue-950/50 dark:to-indigo-950/30 message-bubble text-blue-600 dark:text-blue-300">
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
+            <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900 dark:to-indigo-900 border-blue-300 dark:border-blue-700">
+              <Sparkles className="h-3 w-3 text-blue-600 dark:text-blue-300 animate-pulse" />
+            </div>
+            <span className="text-xs font-semibold text-blue-700 dark:text-blue-300">
               {agentName}
             </span>
             <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
