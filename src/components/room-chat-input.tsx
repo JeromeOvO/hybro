@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send, Square, AtSign } from 'lucide-react'
+import { Send, Square, AtSign, Maximize2, Minimize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
 import type { AgentGroup } from '@/lib/types/agent-group'
@@ -87,6 +87,8 @@ export function RoomChatInput({
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0)
+  const [isEditorExpanded, setIsEditorExpanded] = useState(false)
+  const [isOverflowing, setIsOverflowing] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const suggestionsRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -345,9 +347,14 @@ export function RoomChatInput({
       setMentionQuery('')
       setSelectedAgentIndex(0)
     }
+
+    // Detect if editor content overflows the visible area
+    if (editorRef.current) {
+      setIsOverflowing(editorRef.current.scrollHeight > editorRef.current.clientHeight)
+    }
   }
 
-  // Force plain-text paste into the editor
+  // Paste plain text preserving newlines and whitespace
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
@@ -359,21 +366,45 @@ export function RoomChatInput({
     // Delete any selected content
     selection.deleteFromDocument()
 
-    // Insert the plain text
     const range = selection.getRangeAt(0)
-    const textNode = document.createTextNode(text)
-    range.insertNode(textNode)
 
-    // Move cursor to after the inserted text
-    range.setStartAfter(textNode)
-    range.collapse(true)
+    // Split by newlines and insert text nodes with <br> elements between them
+    const lines = text.split('\n')
+    let lastNode: Node | null = null
+
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        // Insert a <br> for each newline
+        const br = document.createElement('br')
+        range.insertNode(br)
+        range.setStartAfter(br)
+        range.collapse(true)
+        lastNode = br
+      }
+      if (line.length > 0) {
+        const textNode = document.createTextNode(line)
+        range.insertNode(textNode)
+        range.setStartAfter(textNode)
+        range.collapse(true)
+        lastNode = textNode
+      }
+    })
+
+    // Move cursor to after the last inserted node
+    if (lastNode) {
+      range.setStartAfter(lastNode)
+      range.collapse(true)
+    }
     selection.removeAllRanges()
     selection.addRange(range)
 
     handleInput()
-  }
 
-  // Insert mention at cursor
+    // Scroll editor so the cursor (bottom of content) is visible
+    if (editorRef.current) {
+      editorRef.current.scrollTop = editorRef.current.scrollHeight
+    }
+  }
   const insertMention = (agent: Agent) => {
     if (!editorRef.current) return
 
@@ -661,6 +692,21 @@ export function RoomChatInput({
       )}>
         {/* Inner container with actual border */}
         <div className="relative flex flex-col rounded-3xl bg-background/80 backdrop-blur-sm border border-transparent overflow-hidden">
+          {/* Expand/Collapse toggle - shown when content overflows or already expanded */}
+          {(isOverflowing || isEditorExpanded) && (
+            <button
+              type="button"
+              onClick={() => setIsEditorExpanded(prev => !prev)}
+              className="absolute top-2.5 right-3 z-10 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+              title={isEditorExpanded ? 'Collapse editor' : 'Expand editor'}
+            >
+              {isEditorExpanded ? (
+                <Minimize2 className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
           {/* Group Selector - Top section */}
           {showGroupSelector && (
             <div className="px-5 pt-3 pb-2">
@@ -693,9 +739,10 @@ export function RoomChatInput({
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
               className={cn(
-                "w-full min-h-[52px] max-h-[200px] overflow-y-auto resize-none",
+                "w-full overflow-y-auto resize-none",
                 "border-0 bg-transparent text-[15px] leading-7 text-foreground",
                 "focus:outline-none placeholder-editor",
+                isEditorExpanded ? "min-h-[200px] max-h-[60vh]" : "min-h-[28px] max-h-[200px]",
                 disabled && "opacity-40 cursor-not-allowed"
               )}
               data-placeholder="Type a message... Use @ to mention agents"
@@ -703,6 +750,7 @@ export function RoomChatInput({
               style={{
                 caretColor: 'hsl(var(--color-primary))',
                 wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
               }}
             />
           </div>
