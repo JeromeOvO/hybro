@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:is(.dark *));
+
 :root {
   /* Fonts */
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;

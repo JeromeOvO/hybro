@@ -42,7 +42,7 @@ export function NavUser() {
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className="flex items-center gap-2 px-2 py-1.5 hover:bg-white/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+            className="flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
@@ -90,7 +90,7 @@ export function NavUser() {
     <SidebarMenu>
       <SidebarMenuItem>
         <div
-          className="flex items-center gap-2 px-2 py-1.5 hover:bg-white/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
+          className="flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
           title={userEmail ? `${userName} (${userEmail})` : userName}
         >
           <UserButton
