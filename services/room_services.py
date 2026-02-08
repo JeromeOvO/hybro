@@ -1003,10 +1003,35 @@ class RoomServices:
             self.sse_manager.clear_cancellation(user_message_id)
             return False
 
-        # Parse user message with full agent details for better LLM assignment
-        parsed_result = await self.openai_service.parse_user_message_by_llm(
-            message_text, selected_agent_set, is_debate_mode, auto_assign_agents, agents
-        )
+        # Direct chat: single agent + no debate = skip LLM parsing entirely
+        direct_chat = not is_debate_mode and len(selected_agent_set) == 1
+
+        if direct_chat:
+            agent_id, agent_name = next(iter(selected_agent_set.items()))
+            parsed_result = {
+                "message_type": "DIRECT_CHAT",
+                "original_text": message_text,
+                "needs_decomposition": False,
+                "task_steps": [
+                    {
+                        "step_id": "step_1",
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
+                        "task_content": message_text,
+                        "dependencies": [],
+                    }
+                ],
+            }
+            logger.info("Direct chat mode: skipping LLM parsing for single agent")
+        else:
+            # Parse user message with full agent details for better LLM assignment
+            parsed_result = await self.openai_service.parse_user_message_by_llm(
+                message_text,
+                selected_agent_set,
+                is_debate_mode,
+                auto_assign_agents,
+                agents,
+            )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
 
@@ -1017,6 +1042,7 @@ class RoomServices:
         extend_info = {
             "allowed_agent_ids": list(selected_agent_set.keys()),
             "target_group": target_group,
+            "is_direct_chat": direct_chat,
         }
 
         agent_messages = await self._generate_agent_messages_based_on_parsed_result(
