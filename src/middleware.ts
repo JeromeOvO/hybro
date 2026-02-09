@@ -22,6 +22,16 @@ const DEV_HOSTS = ['developer.', 'dev.']
 /** Paths that should never be rewritten. */
 const SHARED_PATH_PREFIXES = ['/api/', '/_next/', '/sign-in', '/sign-up']
 
+/** Determine if running locally based on NEXT_PUBLIC_CONSUMER_URL */
+const IS_LOCAL = process.env.NEXT_PUBLIC_CONSUMER_URL?.includes('localhost')
+
+/** Authorized parties for Clerk - includes localhost in local dev */
+const AUTHORIZED_PARTIES = [
+  'https://hybro.ai',
+  'https://developer.hybro.ai',
+  ...(IS_LOCAL ? ['http://localhost:3000', 'http://dev.localhost:3000'] : []),
+]
+
 /** Static file extensions to skip. */
 const STATIC_EXT = /\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)$/
 
@@ -63,16 +73,16 @@ function handleSubdomainRewrite(request: NextRequest): NextResponse | null {
   return NextResponse.rewrite(rewritten)
 }
 
-export default clerkMiddleware(async (_auth, request) => {
-  // In production, configure authorizedParties for subdomain security:
-  // clerkMiddleware({ authorizedParties: ['https://hybro.ai', 'https://developer.hybro.ai'] }, ...)
-
-  const rewrite = handleSubdomainRewrite(request)
-  if (rewrite) return rewrite
-
-  // Let Clerk handle everything else (auth context, etc.)
-  return NextResponse.next()
-})
+export default clerkMiddleware(
+  async (_auth, request) => {
+    const rewrite = handleSubdomainRewrite(request)
+    if (rewrite) return rewrite
+    return NextResponse.next()
+  },
+  {
+    authorizedParties: AUTHORIZED_PARTIES,
+  }
+)
 
 export const config = {
   matcher: [
