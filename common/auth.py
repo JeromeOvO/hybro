@@ -10,6 +10,16 @@ from loguru import logger
 
 from config.settings import settings
 
+# Authorized parties (azp) for Clerk JWT verification
+# These are the origins that are allowed to use the Clerk tokens
+AUTHORIZED_PARTIES = [
+    "https://hybro.ai",
+    "https://developer.hybro.ai",
+    # Include localhost for development
+    "http://localhost:3000",
+    "http://dev.localhost:3000",
+]
+
 
 class ClerkUser:
     """Represents an authenticated Clerk user"""
@@ -39,8 +49,11 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
     try:
         # Use Clerk SDK to authenticate the request
         # The SDK handles JWKS fetching, caching, and JWT verification automatically
-        # Create authentication options with secret key
-        options = AuthenticateRequestOptions(secret_key=settings.clerk_secret_key)
+        # Create authentication options with secret key and authorized parties
+        options = AuthenticateRequestOptions(
+            secret_key=settings.clerk_secret_key,
+            authorized_parties=AUTHORIZED_PARTIES,
+        )
         request_state = authenticate_request(request, options)
 
         if not request_state.is_signed_in:
