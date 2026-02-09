@@ -476,6 +476,11 @@
   user-select: none;
 }
 
+a.room-mention {
+  cursor: pointer;
+  text-decoration: none;
+}
+
 .room-mention:hover {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(139, 92, 246, 0.3));
   border-color: rgba(59, 130, 246, 0.5);

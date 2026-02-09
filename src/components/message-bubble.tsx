@@ -1,13 +1,11 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { cn, formatIfJson } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
+import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import type { MessageData } from './room-messages'
 
 interface MessageBubbleProps {
@@ -19,125 +17,6 @@ interface MessageBubbleProps {
   isLatestAgent?: boolean
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
-}
-
-/**
- * Parse and render @mentions in content
- */
-function renderWithMentions(content: string): (string | React.JSX.Element)[] {
-  const parts: (string | React.JSX.Element)[] = []
-  let lastIndex = 0
-
-  // Regex to match <@agent_id|agent_name> format
-  const mentionRegex = /<@([^|]+)\|([^>]+)>/g
-  let match
-  let mentionIndex = 0
-
-  while ((match = mentionRegex.exec(content)) !== null) {
-    // Add text before the mention
-    if (match.index > lastIndex) {
-      parts.push(content.slice(lastIndex, match.index))
-    }
-
-    // Extract agent_id and agent_name
-    const agentId = match[1]
-    const agentName = match[2]
-
-    // Add the mention as a clickable link to agent profile
-    parts.push(
-      <a
-        key={`mention-${mentionIndex++}`}
-        href={`/c/agents/${agentId}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
-        data-id={agentId}
-        data-name={agentName}
-        title={`Agent: ${agentName}`}
-      >
-        @{agentName}
-      </a>
-    )
-
-    lastIndex = match.index + match[0].length
-  }
-
-  // Add remaining text
-  if (lastIndex < content.length) {
-    parts.push(content.slice(lastIndex))
-  }
-
-  return parts.length > 0 ? parts : [content]
-}
-
-/**
- * Render content with full markdown support
- */
-function MarkdownContent({ content }: { content: string }) {
-  // Wrap raw JSON in a fenced code block for proper rendering
-  const formatted = formatIfJson(content)
-  // Process mentions before markdown - convert to anchor tags with room-mention class
-  const processedContent = formatted.replace(
-    /<@([^|]+)\|([^>]+)>/g,
-    '<a class="room-mention" href="/c/agents/$1" target="_blank" rel="noopener noreferrer" data-id="$1" data-name="$2" title="Agent: $2">@$2</a>'
-  )
-
-  return (
-    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit [&_.room-mention]:mx-1">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{
-          span: ({ className, children, ...props }) => {
-            return <span className={className} {...props}>{children}</span>
-          },
-          a: ({ className, children, href, ...props }) => {
-            if (className === 'room-mention') {
-              return (
-                <a
-                  className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  {...props}
-                >
-                  {children}
-                </a>
-              )
-            }
-            return <a className={className} href={href} {...props}>{children}</a>
-          },
-          code: ({ className, children, ...props }) => {
-            const match = /language-(\w+)/.exec(className || '')
-            const isInline = !match
-            return isInline ? (
-              <code className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
-                {children}
-              </code>
-            ) : (
-              <pre className="bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              </pre>
-            )
-          },
-          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
-          li: ({ children }) => <li className="mb-1">{children}</li>,
-          h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-          h4: ({ children }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
-          h5: ({ children }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
-          h6: ({ children }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
-        }}
-      >
-        {processedContent}
-      </ReactMarkdown>
-    </div>
-  )
 }
 
 /**
@@ -158,7 +37,7 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
           </span>
         </div>
         <div className="text-sm leading-relaxed">
-          {renderWithMentions(displayContent)}
+          <LinkifiedContent content={displayContent} />
         </div>
       </div>
     </div>
