@@ -210,17 +210,23 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       content = ''
     }
 
-    // If message_text is empty but a task exists, derive content from task artifacts/status
+    // Always extract task error from task status if a task exists (independent of content).
+    // The error message lives in task.status.message.parts, which is separate from message_text.
     const messageTask = apiMessage.message_content?.message_task
-    if (!content && messageTask) {
+    if (messageTask) {
       const messageTaskTyped = messageTask as A2ATaskStatus['task']
-      const extractedContent = extractTaskContent(messageTaskTyped)
       const extractedError = extractTaskError(messageTaskTyped)
-      if (extractedContent) {
-        content = extractedContent
-      } else if (extractedError) {
-        content = extractedError
+      if (extractedError) {
         taskError = extractedError
+      }
+      // If message_text was empty, also try to derive display content from task artifacts
+      if (!content) {
+        const extractedContent = extractTaskContent(messageTaskTyped)
+        if (extractedContent) {
+          content = extractedContent
+        } else if (extractedError) {
+          content = extractedError
+        }
       }
     }
 
@@ -379,6 +385,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
           // Convert recent running tasks to type: 'task' so they render as TaskStatusMessage
           if (msg.type === 'agent' && recentNonTerminalTaskIds.has(msg.id)) {
+            return { ...msg, type: 'task' as const }
+          }
+
+          // Convert failed/rejected/canceled tasks to type: 'task' so they render as TaskStatusMessage
+          // (API returns these as type: 'agent' but they should show the red task status bubble)
+          if (msg.type === 'agent' && msg.task_status && ['failed', 'rejected', 'canceled'].includes(msg.task_status)) {
             return { ...msg, type: 'task' as const }
           }
 
