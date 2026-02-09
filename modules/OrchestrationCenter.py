@@ -2006,6 +2006,20 @@ CRITICAL INSTRUCTIONS:
                     f"OrchestrationCenter: Status update for message {current_message.model_dump()}: {state}"
                 )
 
+                # Extract human-readable status message from A2A TaskStatus.message
+                # (this is an optional agent-authored Message describing what it's doing)
+                a2a_status_message_text: str | None = None
+                if result.status.message:
+                    a2a_status_message_text = self._get_text_from_message(
+                        result.status.message
+                    )
+                    if a2a_status_message_text:
+                        logger.info(
+                            "OrchestrationCenter: Agent status message for %s: %s",
+                            current_message.message_id,
+                            a2a_status_message_text[:100],
+                        )
+
                 # Update task status in database
                 if (
                     current_message.message_content
@@ -2061,6 +2075,27 @@ CRITICAL INSTRUCTIONS:
                     )
                 # Forward status update to frontend via SSE
                 if send_sse:
+                    # For non-terminal states, send a task_update with the agent's
+                    # status message so the frontend can display dynamic progress
+                    # (e.g., "Searching databases...", "Generating response...")
+                    if a2a_status_message_text and state not in [
+                        TaskState.completed,
+                        TaskState.failed,
+                        TaskState.canceled,
+                        TaskState.rejected,
+                    ]:
+                        await self._send_task_update(
+                            room_id=room_id,
+                            message_id=current_message.message_id if task_info else None,
+                            status=state,
+                            agent_card=agent_card,
+                            agent_id=current_message.agent_id,
+                            created_at=created_at,
+                            status_message=a2a_status_message_text,
+                            step_number=step_number,
+                            total_steps=total_steps,
+                        )
+
                     await self.sse_manager.send_processing_status(
                         room_id,
                         state,
@@ -2545,13 +2580,18 @@ CRITICAL INSTRUCTIONS:
 
             # Process the agent message
             # Step info comes from the RoomAgentMessage (set during task decomposition)
+            # For direct chat (single agent, no debate), skip step progress UI
+            is_direct_chat = bool(
+                current_message.extend_info
+                and current_message.extend_info.get("is_direct_chat")
+            )
             result = await self._process_single_agent_message(
                 current_message,
                 room_id,
                 agent,
                 user_message_id,
-                step_number=current_message.step_number,
-                total_steps=current_message.total_steps,
+                step_number=None if is_direct_chat else current_message.step_number,
+                total_steps=None if is_direct_chat else current_message.total_steps,
             )
 
             if result.status == ProcessingStatus.FAILED:
@@ -2562,7 +2602,8 @@ CRITICAL INSTRUCTIONS:
             elif result.status == ProcessingStatus.PAUSED:
                 # Push notification task submitted - save continuation state
                 # First, queue up next messages so they're included in continuation
-                await self._queue_next_messages(current_message, message_queue, room_id)
+                if not is_direct_chat:
+                    await self._queue_next_messages(current_message, message_queue, room_id)
 
                 if result.message_id and len(message_queue) > 0:
                     await self._save_queue_continuation(
@@ -2596,8 +2637,9 @@ CRITICAL INSTRUCTIONS:
                     response_text=result.response_text,
                 )
 
-            # Queue up next messages in the chain
-            await self._queue_next_messages(current_message, message_queue, room_id)
+            # Queue up next messages in the chain (skip for direct chat)
+            if not is_direct_chat:
+                await self._queue_next_messages(current_message, message_queue, room_id)
 
         logger.info("OrchestrationCenter: Finished processing message queue")
         return True
