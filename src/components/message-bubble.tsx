@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatIfJson } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import type { MessageData } from './room-messages'
@@ -74,8 +74,10 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
  * Render content with full markdown support
  */
 function MarkdownContent({ content }: { content: string }) {
+  // Wrap raw JSON in a fenced code block for proper rendering
+  const formatted = formatIfJson(content)
   // Process mentions before markdown - convert to anchor tags with room-mention class
-  const processedContent = content.replace(
+  const processedContent = formatted.replace(
     /<@([^|]+)\|([^>]+)>/g,
     '<a class="room-mention" href="/c/agents/$1" target="_blank" rel="noopener noreferrer" data-id="$1" data-name="$2" title="Agent: $2">@$2</a>'
   )
@@ -227,7 +229,7 @@ export function AgentMessageBubble({
       {/* Message Content */}
       <div
         className={cn(
-          "flex-1 rounded-xl p-4 shadow-sm border message-bubble",
+          "flex-1 min-w-0 rounded-xl p-4 shadow-sm border message-bubble",
           colors.border,
           colors.bg
         )}
