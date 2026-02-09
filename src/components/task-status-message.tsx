@@ -16,6 +16,7 @@ import {
   ChevronUp
 } from 'lucide-react'
 import { type TaskState, isTerminalState } from '@/lib/types/sse'
+import { formatIfJson } from '@/lib/utils'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
 
 interface TaskStatusMessageProps {
@@ -54,7 +55,9 @@ function StepIndicator({
 }
 
 function MarkdownContent({ content }: { content: string }) {
-  const processedContent = content.replace(
+  // Wrap raw JSON in a fenced code block for proper rendering
+  const formatted = formatIfJson(content)
+  const processedContent = formatted.replace(
     /<@([^|]+)\|([^>]+)>/g,
     '<span class="room-mention" data-id="$1" data-name="$2" title="Agent: $2">@$2</span>'
   )
@@ -203,7 +206,6 @@ export function TaskStatusMessage({
   statusMessage: initialStatusMessage,
   stepNumber: initialStepNumber,
   totalSteps: initialTotalSteps,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   taskContent,
   taskCreatedAt,
   onComplete,
@@ -317,7 +319,7 @@ export function TaskStatusMessage({
     const isLong = content.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="flex-1 rounded-xl p-4 shadow-sm border border-emerald-200 dark:border-emerald-500/20 border-l-4 border-l-emerald-400 dark:border-l-emerald-500 bg-emerald-50 dark:bg-emerald-500/12 message-bubble text-emerald-600 dark:text-emerald-400">
+        <div className="flex-1 min-w-0 rounded-xl p-4 shadow-sm border border-emerald-200 dark:border-emerald-500/20 border-l-4 border-l-emerald-400 dark:border-l-emerald-500 bg-emerald-50 dark:bg-emerald-500/12 message-bubble text-emerald-600 dark:text-emerald-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <AgentLink
@@ -363,7 +365,7 @@ export function TaskStatusMessage({
     
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="flex-1 rounded-xl p-4 shadow-sm border border-red-200 dark:border-red-500/20 border-l-4 border-l-red-400 dark:border-l-red-500 bg-red-50 dark:bg-red-500/12 message-bubble text-red-600 dark:text-red-400">
+        <div className="flex-1 min-w-0 rounded-xl p-4 shadow-sm border border-red-200 dark:border-red-500/20 border-l-4 border-l-red-400 dark:border-l-red-500 bg-red-50 dark:bg-red-500/12 message-bubble text-red-600 dark:text-red-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <AgentLink
@@ -401,7 +403,7 @@ export function TaskStatusMessage({
     const isLong = inputContent.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="flex-1 rounded-xl p-4 shadow-sm border border-amber-200 dark:border-amber-500/20 border-l-4 border-l-amber-400 dark:border-l-amber-500 bg-amber-50 dark:bg-amber-500/12 message-bubble text-amber-700 dark:text-amber-400">
+        <div className="flex-1 min-w-0 rounded-xl p-4 shadow-sm border border-amber-200 dark:border-amber-500/20 border-l-4 border-l-amber-400 dark:border-l-amber-500 bg-amber-50 dark:bg-amber-500/12 message-bubble text-amber-700 dark:text-amber-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <AgentLink
@@ -443,7 +445,7 @@ export function TaskStatusMessage({
     const isLong = authContent.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-        <div className="flex-1 rounded-xl p-4 shadow-sm border border-amber-200 dark:border-amber-500/20 border-l-4 border-l-amber-400 dark:border-l-amber-500 bg-amber-50 dark:bg-amber-500/12 message-bubble text-amber-700 dark:text-amber-400">
+        <div className="flex-1 min-w-0 rounded-xl p-4 shadow-sm border border-amber-200 dark:border-amber-500/20 border-l-4 border-l-amber-400 dark:border-l-amber-500 bg-amber-50 dark:bg-amber-500/12 message-bubble text-amber-700 dark:text-amber-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <AgentLink
@@ -482,11 +484,11 @@ export function TaskStatusMessage({
   // Working/Submitted states (default - in progress)
   // Prioritize dynamic status_message from the agent (A2A TaskStatus.message),
   // fall back to a friendly generic message.
-  const primaryText = statusMessage || 'Working on your request...'
+  const primaryText = statusMessage || taskContent || 'Working on your request...'
   
   return (
     <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="flex-1 rounded-xl p-4 shadow-sm border border-blue-200 dark:border-blue-500/20 border-l-4 border-l-blue-400 dark:border-l-blue-500 bg-blue-50 dark:bg-blue-500/12 message-bubble text-blue-600 dark:text-blue-400">
+      <div className="flex-1 min-w-0 rounded-xl p-4 shadow-sm border border-blue-200 dark:border-blue-500/20 border-l-4 border-l-blue-400 dark:border-l-blue-500 bg-blue-50 dark:bg-blue-500/12 message-bubble text-blue-600 dark:text-blue-400">
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">

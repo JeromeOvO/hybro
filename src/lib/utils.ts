@@ -19,3 +19,24 @@ export function isWaitlistEnabled(): boolean {
 export function getInspectionTimeoutMs(): number {
   return parseInt(process.env.NEXT_PUBLIC_INSPECTION_TIMEOUT_MS || '300000');
 }
+
+/**
+ * Detect raw JSON content and wrap it in a fenced code block so
+ * ReactMarkdown renders it as a scrollable <pre> with syntax highlighting.
+ * Non-JSON content passes through untouched.
+ */
+export function formatIfJson(text: string): string {
+  const trimmed = text.trim()
+  if (
+    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```'
+    } catch {
+      // Not valid JSON, return as-is
+    }
+  }
+  return text
+}
