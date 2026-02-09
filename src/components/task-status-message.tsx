@@ -11,13 +11,16 @@ import {
   Clock, 
   AlertTriangle, 
   KeyRound,
-  Sparkles
+  Sparkles,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react'
 import { type TaskState, isTerminalState } from '@/lib/types/sse'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
 
 interface TaskStatusMessageProps {
   internalId: string
+  agentId?: string
   agentName: string
   initialStatus: TaskState
   content?: string | null
@@ -48,12 +51,6 @@ function StepIndicator({
       Step {stepNumber} / {totalSteps}
     </span>
   )
-}
-
-// Truncate text to fit UI, with ellipsis
-function truncateText(text: string, maxLength: number = 150): string {
-  if (!text || text.length <= maxLength) return text
-  return text.slice(0, maxLength).trim() + '...'
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -114,9 +111,91 @@ function MarkdownContent({ content }: { content: string }) {
   )
 }
 
+// Threshold for collapsible content (matching AgentMessageBubble)
+const LONG_CONTENT_THRESHOLD = 500
+
+/**
+ * Collapse/expand toggle button for long content
+ */
+function CollapseToggle({
+  isExpanded,
+  onToggle,
+  colorClass,
+  toggleRef,
+}: {
+  isExpanded: boolean
+  onToggle: () => void
+  colorClass: string
+  toggleRef?: React.RefObject<HTMLButtonElement | null>
+}) {
+  return (
+    <button
+      ref={toggleRef}
+      onClick={onToggle}
+      className={`flex items-center gap-1 text-xs mt-3 font-medium transition-colors ${colorClass} hover:opacity-80`}
+    >
+      {isExpanded ? (
+        <>
+          <ChevronUp className="h-3.5 w-3.5" />
+          Show less
+        </>
+      ) : (
+        <>
+          <ChevronDown className="h-3.5 w-3.5" />
+          Show more
+        </>
+      )}
+    </button>
+  )
+}
+
+/**
+ * Clickable agent avatar + name link (matches AgentMessageBubble pattern)
+ */
+function AgentLink({
+  agentId,
+  agentName,
+  avatarChildren,
+  avatarClassName,
+  nameClassName,
+}: {
+  agentId?: string
+  agentName: string
+  avatarChildren: React.ReactNode
+  avatarClassName: string
+  nameClassName: string
+}) {
+  const inner = (
+    <>
+      <div className={avatarClassName} title={agentName}>
+        {avatarChildren}
+      </div>
+      <span className={`text-xs font-semibold${agentId ? ' underline-offset-2 hover:underline' : ''} ${nameClassName}`}>
+        {agentName}
+      </span>
+    </>
+  )
+
+  if (agentId) {
+    return (
+      <a
+        href={`/c/agents/${agentId}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+      >
+        {inner}
+      </a>
+    )
+  }
+
+  return <div className="flex items-center gap-2">{inner}</div>
+}
+
 export function TaskStatusMessage({
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   internalId,
+  agentId,
   agentName,
   initialStatus,
   content: initialContent,
@@ -124,6 +203,7 @@ export function TaskStatusMessage({
   statusMessage: initialStatusMessage,
   stepNumber: initialStepNumber,
   totalSteps: initialTotalSteps,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   taskContent,
   taskCreatedAt,
   onComplete,
@@ -141,6 +221,10 @@ export function TaskStatusMessage({
     if (isTerminalState(initialStatus)) return 0
     return elapsedSeconds(taskCreatedAt)
   })
+
+  // Collapsible state for long content in terminal states
+  const [isExpanded, setIsExpanded] = useState(false)
+  const toggleButtonRef = useRef<HTMLButtonElement>(null)
   
   // Track if we've already processed this update (deduplication)
   const processedStates = useRef<Set<string>>(new Set())
@@ -203,19 +287,46 @@ export function TaskStatusMessage({
     return () => clearInterval(interval)
   }, [status])
 
+  // Toggle handler for collapse/expand with scroll stabilization
+  const handleToggle = useCallback(() => {
+    const next = !isExpanded
+    const buttonEl = toggleButtonRef.current
+    const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+    const prevBottom = buttonEl?.getBoundingClientRect().bottom
+
+    setIsExpanded(next)
+
+    // Keep collapse from jumping; let expand naturally push content downward.
+    if (buttonEl && container && !next && typeof prevBottom === 'number') {
+      container.dataset.programmaticScroll = 'true'
+      requestAnimationFrame(() => {
+        const newBottom = buttonEl.getBoundingClientRect().bottom
+        const delta = newBottom - prevBottom
+        if (delta !== 0) {
+          container.scrollTop += delta
+        }
+        requestAnimationFrame(() => {
+          container.dataset.programmaticScroll = 'false'
+        })
+      })
+    }
+  }, [isExpanded])
+
   // Completed state
   if (status === "completed" && content) {
+    const isLong = content.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex-1 rounded-xl p-4 shadow-sm border border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50/50 to-emerald-50/30 dark:from-green-950/50 dark:to-emerald-950/30 message-bubble text-green-600 dark:text-green-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900 dark:to-emerald-900 border-green-300 dark:border-green-700">
-                <CheckCircle className="h-3 w-3 text-green-600 dark:text-green-300" />
-              </div>
-              <span className="text-xs font-semibold text-green-700 dark:text-green-300">
-                {agentName}
-              </span>
+              <AgentLink
+                agentId={agentId}
+                agentName={agentName}
+                avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-green-100 to-emerald-100 dark:from-green-900 dark:to-emerald-900 border-green-300 dark:border-green-700"
+                avatarChildren={<CheckCircle className="h-3 w-3 text-green-600 dark:text-green-300" />}
+                nameClassName="text-green-700 dark:text-green-300"
+              />
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
             </div>
             <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -223,9 +334,17 @@ export function TaskStatusMessage({
               Completed in {formatElapsedTime(elapsed)}
             </span>
           </div>
-          <div className="text-green-800 dark:text-green-200">
+          <div className={`text-green-800 dark:text-green-200${!isExpanded && isLong ? ' line-clamp-4' : ''}`}>
             <MarkdownContent content={content} />
           </div>
+          {isLong && (
+            <CollapseToggle
+              isExpanded={isExpanded}
+              onToggle={handleToggle}
+              colorClass="text-green-600 dark:text-green-400"
+              toggleRef={toggleButtonRef}
+            />
+          )}
         </div>
       </div>
     )
@@ -238,18 +357,20 @@ export function TaskStatusMessage({
       rejected: "Task was rejected",
       canceled: "Task was canceled",
     }
+    const isLong = (error?.length || 0) > LONG_CONTENT_THRESHOLD
     
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex-1 rounded-xl p-4 shadow-sm border border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50/50 to-rose-50/30 dark:from-red-950/50 dark:to-rose-950/30 message-bubble text-red-600 dark:text-red-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-red-100 to-rose-100 dark:from-red-900 dark:to-rose-900 border-red-300 dark:border-red-700">
-                <XCircle className="h-3 w-3 text-red-600 dark:text-red-300" />
-              </div>
-              <span className="text-xs font-semibold text-red-700 dark:text-red-300">
-                {agentName}
-              </span>
+              <AgentLink
+                agentId={agentId}
+                agentName={agentName}
+                avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-red-100 to-rose-100 dark:from-red-900 dark:to-rose-900 border-red-300 dark:border-red-700"
+                avatarChildren={<XCircle className="h-3 w-3 text-red-600 dark:text-red-300" />}
+                nameClassName="text-red-700 dark:text-red-300"
+              />
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
             </div>
             <span className="text-xs text-red-600 dark:text-red-400">
@@ -257,9 +378,17 @@ export function TaskStatusMessage({
             </span>
           </div>
           {error && (
-            <div className="text-sm text-red-700 dark:text-red-300">
+            <div className={`text-sm text-red-700 dark:text-red-300${!isExpanded && isLong ? ' line-clamp-4' : ''}`}>
               <MarkdownContent content={error} />
             </div>
+          )}
+          {isLong && (
+            <CollapseToggle
+              isExpanded={isExpanded}
+              onToggle={handleToggle}
+              colorClass="text-red-600 dark:text-red-400"
+              toggleRef={toggleButtonRef}
+            />
           )}
         </div>
       </div>
@@ -268,28 +397,37 @@ export function TaskStatusMessage({
 
   // Input required state
   if (status === "input_required") {
+    const inputContent = statusMessage || "The agent needs additional information to continue."
+    const isLong = inputContent.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex-1 rounded-xl p-4 shadow-sm border border-yellow-200 dark:border-yellow-800 bg-gradient-to-br from-yellow-50/50 to-amber-50/30 dark:from-yellow-950/50 dark:to-amber-950/30 message-bubble text-yellow-600 dark:text-yellow-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-yellow-100 to-amber-100 dark:from-yellow-900 dark:to-amber-900 border-yellow-300 dark:border-yellow-700">
-                <AlertTriangle className="h-3 w-3 text-yellow-600 dark:text-yellow-300" />
-              </div>
-              <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-300">
-                {agentName}
-              </span>
+              <AgentLink
+                agentId={agentId}
+                agentName={agentName}
+                avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-yellow-100 to-amber-100 dark:from-yellow-900 dark:to-amber-900 border-yellow-300 dark:border-yellow-700"
+                avatarChildren={<AlertTriangle className="h-3 w-3 text-yellow-600 dark:text-yellow-300" />}
+                nameClassName="text-yellow-700 dark:text-yellow-300"
+              />
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
             </div>
             <span className="text-xs text-yellow-600 dark:text-yellow-400 font-medium">
               Input required
             </span>
           </div>
-          <div className="text-sm text-yellow-700 dark:text-yellow-300">
-            <MarkdownContent
-              content={statusMessage || "The agent needs additional information to continue."}
-            />
+          <div className={`text-sm text-yellow-700 dark:text-yellow-300${!isExpanded && isLong ? ' line-clamp-4' : ''}`}>
+            <MarkdownContent content={inputContent} />
           </div>
+          {isLong && (
+            <CollapseToggle
+              isExpanded={isExpanded}
+              onToggle={handleToggle}
+              colorClass="text-yellow-600 dark:text-yellow-400"
+              toggleRef={toggleButtonRef}
+            />
+          )}
           <p className="text-xs text-yellow-500 dark:text-yellow-400 mt-2 flex items-center gap-1">
             <Clock className="w-3 h-3" />
             {formatElapsedTime(elapsed)} elapsed
@@ -301,26 +439,37 @@ export function TaskStatusMessage({
 
   // Auth required state
   if (status === "auth_required") {
+    const authContent = statusMessage || "Please authenticate to continue."
+    const isLong = authContent.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex-1 rounded-xl p-4 shadow-sm border border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50/50 to-amber-50/30 dark:from-orange-950/50 dark:to-amber-950/30 message-bubble text-orange-600 dark:text-orange-400">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-orange-100 to-amber-100 dark:from-orange-900 dark:to-amber-900 border-orange-300 dark:border-orange-700">
-                <KeyRound className="h-3 w-3 text-orange-600 dark:text-orange-300" />
-              </div>
-              <span className="text-xs font-semibold text-orange-700 dark:text-orange-300">
-                {agentName}
-              </span>
+              <AgentLink
+                agentId={agentId}
+                agentName={agentName}
+                avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-orange-100 to-amber-100 dark:from-orange-900 dark:to-amber-900 border-orange-300 dark:border-orange-700"
+                avatarChildren={<KeyRound className="h-3 w-3 text-orange-600 dark:text-orange-300" />}
+                nameClassName="text-orange-700 dark:text-orange-300"
+              />
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
             </div>
             <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">
               Authentication required
             </span>
           </div>
-          <div className="text-sm text-orange-700 dark:text-orange-300">
-            <MarkdownContent content={statusMessage || "Please authenticate to continue."} />
+          <div className={`text-sm text-orange-700 dark:text-orange-300${!isExpanded && isLong ? ' line-clamp-4' : ''}`}>
+            <MarkdownContent content={authContent} />
           </div>
+          {isLong && (
+            <CollapseToggle
+              isExpanded={isExpanded}
+              onToggle={handleToggle}
+              colorClass="text-orange-600 dark:text-orange-400"
+              toggleRef={toggleButtonRef}
+            />
+          )}
           <p className="text-xs text-orange-500 dark:text-orange-400 mt-2 flex items-center gap-1">
             <Clock className="w-3 h-3" />
             {formatElapsedTime(elapsed)} elapsed
@@ -331,8 +480,9 @@ export function TaskStatusMessage({
   }
 
   // Working/Submitted states (default - in progress)
-  // Display task content if available, otherwise show generic message
-  const displayContent = taskContent ? truncateText(taskContent) : 'Processing your request'
+  // Prioritize dynamic status_message from the agent (A2A TaskStatus.message),
+  // fall back to a friendly generic message.
+  const primaryText = statusMessage || 'Working on your request...'
   
   return (
     <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -340,12 +490,13 @@ export function TaskStatusMessage({
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900 dark:to-indigo-900 border-blue-300 dark:border-blue-700">
-              <Sparkles className="h-3 w-3 text-blue-600 dark:text-blue-300 animate-pulse" />
-            </div>
-            <span className="text-xs font-semibold text-blue-700 dark:text-blue-300">
-              {agentName}
-            </span>
+            <AgentLink
+              agentId={agentId}
+              agentName={agentName}
+              avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900 dark:to-indigo-900 border-blue-300 dark:border-blue-700"
+              avatarChildren={<Sparkles className="h-3 w-3 text-blue-600 dark:text-blue-300 animate-pulse" />}
+              nameClassName="text-blue-700 dark:text-blue-300"
+            />
             <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
           </div>
           <span className="text-xs text-muted-foreground">
@@ -353,20 +504,14 @@ export function TaskStatusMessage({
           </span>
         </div>
 
-        {/* Task content */}
+        {/* Primary status */}
         <div className="space-y-2">
           <div className="flex items-start gap-2">
             <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
             <span className="text-sm text-blue-600 dark:text-blue-300">
-              {displayContent}
+              {primaryText}
             </span>
           </div>
-
-          {statusMessage && (
-            <div className="text-sm text-blue-600 dark:text-blue-300">
-              <MarkdownContent content={statusMessage} />
-            </div>
-          )}
           
           {/* Elapsed time */}
           <p className="text-xs text-blue-500 dark:text-blue-400 flex items-center gap-1">

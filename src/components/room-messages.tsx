@@ -222,6 +222,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                       <TaskStatusMessage
                         key={msg.id}
                         internalId={msg.id}
+                        agentId={msg.agent_id}
                         agentName={msg.sender_name}
                         initialStatus={(msg.task_status || 'working') as TaskState}
                         content={msg.content || null}
