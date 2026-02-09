@@ -1,9 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import { 
   Loader2, 
   CheckCircle, 
@@ -16,8 +13,8 @@ import {
   ChevronUp
 } from 'lucide-react'
 import { type TaskState, isTerminalState } from '@/lib/types/sse'
-import { formatIfJson } from '@/lib/utils'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
+import { MarkdownContent } from './markdown-content'
 
 interface TaskStatusMessageProps {
   internalId: string
@@ -51,66 +48,6 @@ function StepIndicator({
     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-current/10">
       Step {stepNumber} / {totalSteps}
     </span>
-  )
-}
-
-function MarkdownContent({ content }: { content: string }) {
-  // Wrap raw JSON in a fenced code block for proper rendering
-  const formatted = formatIfJson(content)
-  const processedContent = formatted.replace(
-    /<@([^|]+)\|([^>]+)>/g,
-    '<span class="room-mention" data-id="$1" data-name="$2" title="Agent: $2">@$2</span>'
-  )
-
-  return (
-    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit [&_.room-mention]:mx-1">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{
-          span: ({ className, children, ...props }) => {
-            if (className === 'room-mention') {
-              return (
-                <span
-                  className="room-mention mx-1"
-                  {...props}
-                >
-                  {children}
-                </span>
-              )
-            }
-            return <span className={className} {...props}>{children}</span>
-          },
-          code: ({ className, children, ...props }) => {
-            const match = /language-(\w+)/.exec(className || '')
-            const isInline = !match
-            return isInline ? (
-              <code className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono" {...props}>
-                {children}
-              </code>
-            ) : (
-              <pre className="bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              </pre>
-            )
-          },
-          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
-          li: ({ children }) => <li className="mb-1">{children}</li>,
-          h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-          h4: ({ children }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
-          h5: ({ children }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
-          h6: ({ children }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
-        }}
-      >
-        {processedContent}
-      </ReactMarkdown>
-    </div>
   )
 }
 
