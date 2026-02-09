@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatIfJson } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import type { MessageData } from './room-messages'
@@ -43,17 +43,20 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
     const agentId = match[1]
     const agentName = match[2]
 
-    // Add the mention as a styled span using room-mention class
+    // Add the mention as a clickable link to agent profile
     parts.push(
-      <span
+      <a
         key={`mention-${mentionIndex++}`}
-        className="room-mention mx-1"
+        href={`/c/agents/${agentId}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
         data-id={agentId}
         data-name={agentName}
         title={`Agent: ${agentName}`}
       >
         @{agentName}
-      </span>
+      </a>
     )
 
     lastIndex = match.index + match[0].length
@@ -71,10 +74,12 @@ function renderWithMentions(content: string): (string | React.JSX.Element)[] {
  * Render content with full markdown support
  */
 function MarkdownContent({ content }: { content: string }) {
-  // Process mentions before markdown - use room-mention class with spacing
-  const processedContent = content.replace(
+  // Wrap raw JSON in a fenced code block for proper rendering
+  const formatted = formatIfJson(content)
+  // Process mentions before markdown - convert to anchor tags with room-mention class
+  const processedContent = formatted.replace(
     /<@([^|]+)\|([^>]+)>/g,
-    '<span class="room-mention" data-id="$1" data-name="$2" title="Agent: $2">@$2</span>'
+    '<a class="room-mention" href="/c/agents/$1" target="_blank" rel="noopener noreferrer" data-id="$1" data-name="$2" title="Agent: $2">@$2</a>'
   )
 
   return (
@@ -84,17 +89,23 @@ function MarkdownContent({ content }: { content: string }) {
         rehypePlugins={[rehypeHighlight]}
         components={{
           span: ({ className, children, ...props }) => {
+            return <span className={className} {...props}>{children}</span>
+          },
+          a: ({ className, children, href, ...props }) => {
             if (className === 'room-mention') {
               return (
-                <span
-                  className="room-mention mx-1"
+                <a
+                  className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   {...props}
                 >
                   {children}
-                </span>
+                </a>
               )
             }
-            return <span className={className} {...props}>{children}</span>
+            return <a className={className} href={href} {...props}>{children}</a>
           },
           code: ({ className, children, ...props }) => {
             const match = /language-(\w+)/.exec(className || '')
@@ -130,28 +141,6 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 /**
- * Agent Avatar component
- */
-function AgentAvatar({ agentName, agentId }: { agentName: string; agentId: string }) {
-  const colors = getAgentColorClasses(agentId)
-  const initials = getAgentInitials(agentName)
-
-  return (
-    <div
-      className={cn(
-        "w-8 h-8 rounded-full flex items-center justify-center font-semibold border-2 shrink-0",
-        colors.bg,
-        colors.border,
-        colors.text
-      )}
-      title={agentName}
-    >
-      <span className="text-xs">{initials}</span>
-    </div>
-  )
-}
-
-/**
  * User message bubble - aligned to the right
  */
 export function UserMessageBubble({ message }: MessageBubbleProps) {
@@ -177,7 +166,7 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
 }
 
 /**
- * Agent message bubble - with avatar and optional expand/collapse for long messages
+ * Agent message bubble - with optional expand/collapse for long messages
  */
 export function AgentMessageBubble({
   message,
@@ -236,26 +225,38 @@ export function AgentMessageBubble({
   const contentColorClass = colors.content
 
   return (
-    <div className="flex gap-3 w-full">
-      {/* Agent Avatar */}
-      <AgentAvatar
-        agentName={message.sender_name}
-        agentId={message.agent_id || 'unknown'}
-      />
-
+    <div className="flex w-full">
       {/* Message Content */}
       <div
         className={cn(
-          "flex-1 max-w-[calc(100%-3rem)] rounded-xl p-4 shadow-sm border message-bubble",
+          "flex-1 min-w-0 rounded-xl p-4 shadow-sm border message-bubble",
           colors.border,
           colors.bg
         )}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
-          <span className={cn("text-xs font-semibold", textColorClass)}>
-            {message.sender_name}
-          </span>
+          <a
+            href={`/c/agents/${message.agent_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+          >
+            <div
+              className={cn(
+                "w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0",
+                colors.bg,
+                colors.border,
+                textColorClass
+              )}
+              title={message.sender_name}
+            >
+              <span className="text-[10px]">{getAgentInitials(message.sender_name)}</span>
+            </div>
+            <span className={cn("text-xs font-semibold underline-offset-2 hover:underline", textColorClass)}>
+              {message.sender_name}
+            </span>
+          </a>
           <span className="text-xs text-slate-500 dark:text-slate-400">
             {formatTimestamp(message.timestamp)}
           </span>

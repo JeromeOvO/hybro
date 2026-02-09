@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:is(.dark *));
+
 :root {
   /* Fonts */
   --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -263,34 +265,32 @@
   }
 }
 
-/* Glowing message bubbles */
+/* Clean message bubble shadows — neutral tones, no colored glow */
 .message-bubble {
   backdrop-filter: blur(12px);
   box-shadow:
-    0 4px 6px -1px rgb(0 0 0 / 0.08),
-    0 2px 4px -2px rgb(0 0 0 / 0.08);
-  transition: all 0.3s ease;
+    0 1px 3px rgb(0 0 0 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.04);
+  transition: all 0.2s ease;
 }
 
 .message-bubble:hover {
   box-shadow:
-    0 8px 25px -5px rgb(0 255 255 / 0.1),
-    0 4px 6px -2px rgb(0 0 0 / 0.05),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+    0 4px 12px rgb(0 0 0 / 0.08),
+    0 1px 3px rgb(0 0 0 / 0.06);
 }
 
 .dark .message-bubble {
   box-shadow:
-    0 4px 6px -1px rgb(0 0 0 / 0.25),
-    0 2px 4px -2px rgb(0 0 0 / 0.2);
+    0 1px 3px rgb(0 0 0 / 0.3),
+    0 1px 2px rgb(0 0 0 / 0.2);
 }
 
 .dark .message-bubble:hover {
   box-shadow:
-    0 8px 25px -5px rgb(0 255 255 / 0.3),
-    0 4px 6px -2px rgb(0 0 0 / 0.1),
-    inset 0 1px 0 0 rgba(0, 255, 255, 0.2),
-    0 0 0 1px rgba(0, 255, 255, 0.2);
+    0 4px 12px rgb(0 0 0 / 0.4),
+    0 1px 3px rgb(0 0 0 / 0.2),
+    0 0 0 1px hsl(var(--color-border));
 }
 
 /* Futuristic buttons */
@@ -429,30 +429,31 @@
   color: hsl(var(--color-icon-contact));
 }
 
-/* Glowing scrollbars */
+/* Subtle scrollbars matching active nav item tones */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
-  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, hsl(var(--color-primary)), hsl(var(--color-accent)));
-  border-radius: 4px;
-  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, hsl(var(--color-primary)), hsl(var(--color-accent)));
-  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+  background: hsl(var(--color-foreground) / 0.15);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
+  background: hsl(var(--color-foreground) / 0.25);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.15);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.25);
 }
 
 /* Room Chat Input & Message Mention Styles */
@@ -504,7 +505,7 @@
 
 /* Custom scrollbar for dropdowns */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -512,19 +513,18 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-border));
-  border-radius: 3px;
+  background: hsl(var(--color-foreground) / 0.12);
+  border-radius: 2px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-primary) / 0.5);
+  background: hsl(var(--color-foreground) / 0.2);
 }
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-border));
+  background: hsl(var(--color-foreground) / 0.12);
 }
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-primary) / 0.7);
-  box-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
+  background: hsl(var(--color-foreground) / 0.2);
 }

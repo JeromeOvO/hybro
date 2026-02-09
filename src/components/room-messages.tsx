@@ -191,25 +191,23 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
             <EmptyState />
           ) : (
             <>
-              {/* Controls - Sticky header */}
+              {/* Floating expand/collapse pill */}
               {allAgentIds.length > 0 && (
-                <div className="sticky top-0 bg-background/95 backdrop-blur-md py-3 z-10 mb-4 flex items-center justify-end border-b border-border/50">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={allExpanded ? collapseAll : expandAll}
-                      className="h-9 w-9 p-0 hover:bg-muted"
-                      title={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
-                      aria-label={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
-                    >
-                      {allExpanded ? (
-                        <ChevronsDownUp className="h-4 w-4" />
-                      ) : (
-                        <ChevronsUpDown className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
+                <div className="sticky top-2 z-10 flex justify-end pointer-events-none">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={allExpanded ? collapseAll : expandAll}
+                    className="h-8 w-8 p-0 pointer-events-auto rounded-full bg-muted/60 backdrop-blur-sm shadow-sm hover:bg-muted hover:shadow-md transition-all"
+                    title={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
+                    aria-label={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
+                  >
+                    {allExpanded ? (
+                      <ChevronsDownUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronsUpDown className="h-4 w-4" />
+                    )}
+                  </Button>
                 </div>
               )}
 
@@ -222,6 +220,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                       <TaskStatusMessage
                         key={msg.id}
                         internalId={msg.id}
+                        agentId={msg.agent_id}
                         agentName={msg.sender_name}
                         initialStatus={(msg.task_status || 'working') as TaskState}
                         content={msg.content || null}

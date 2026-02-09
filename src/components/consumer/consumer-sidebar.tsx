@@ -105,7 +105,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
           <button
             type="button"
             onClick={toggleSidebar}
-            className={`hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-white/10 dark:hover:bg-white/15 transition-all duration-150 ease-out leading-none group ${isCollapsed ? "hover:cursor-e-resize" : "hover:cursor-w-resize"
+            className={`hidden md:flex h-8 w-8 items-center justify-center rounded-md hover:bg-black/10 dark:hover:bg-white/15 transition-all duration-150 ease-out leading-none group ${isCollapsed ? "hover:cursor-e-resize" : "hover:cursor-w-resize"
               }`}
             aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
