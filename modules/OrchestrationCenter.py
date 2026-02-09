@@ -2184,11 +2184,22 @@ CRITICAL INSTRUCTIONS:
             f"total parts: {len(message_streaming_state.accumulated_parts)}, full text length: {len(message_streaming_state.full_response_text)}"
         )
 
-        # Update task status to completed in database
+        # Check if a terminal state was already set during streaming (e.g. the agent
+        # sent a status-update with failed/canceled/rejected).  If so, honour it
+        # instead of blindly overwriting with "completed".
+        already_terminal = (
+            current_message.message_content
+            and current_message.message_content.message_task
+            and current_message.message_content.message_task.status
+            and is_terminal_state(current_message.message_content.message_task.status.state)
+        )
+
+        # Update task status to completed in database (only if not already terminal)
         # This ensures the status is persisted for page reloads (SSE only notifies live clients)
         if (
             current_message.message_content
             and current_message.message_content.message_task
+            and not already_terminal
         ):
             current_message.message_content.message_task.status = TaskStatus(
                 state=TaskState.completed
@@ -2214,18 +2225,54 @@ CRITICAL INSTRUCTIONS:
                     f"OrchestrationCenter: Failed to update message status to completed: {update_response.error}"
                 )
 
-        # Send task_update with completed status
-        await self._send_task_update(
-            room_id=room_id,
-            message_id=current_message.message_id if task_info else None,
-            status="completed",
-            agent_card=agent_card,
-            agent_id=current_message.agent_id,
-            created_at=created_at,
-            content=message_streaming_state.full_response_text,
-            step_number=step_number,
-            total_steps=total_steps,
-        )
+        if already_terminal:
+            # A terminal state was already persisted during the streaming loop.
+            # Send the appropriate task_update SSE so the frontend reflects it.
+            final_state = current_message.message_content.message_task.status.state
+            final_state_value = final_state.value if hasattr(final_state, "value") else str(final_state)
+            final_error = None
+            if final_state_value in ("failed", "rejected", "canceled"):
+                # Extract error text from the status message set during streaming
+                if (
+                    current_message.message_content.message_task.status.message
+                    and current_message.message_content.message_task.status.message.parts
+                ):
+                    for part in current_message.message_content.message_task.status.message.parts:
+                        part_root = getattr(part, "root", part)
+                        if hasattr(part_root, "text"):
+                            final_error = part_root.text
+                            break
+                if not final_error:
+                    final_error = f"Task {final_state_value}"
+
+            await self._send_task_update(
+                room_id=room_id,
+                message_id=current_message.message_id if task_info else None,
+                status=final_state_value,
+                agent_card=agent_card,
+                agent_id=current_message.agent_id,
+                created_at=created_at,
+                content=message_streaming_state.full_response_text if final_state_value == "completed" else None,
+                error=final_error,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+
+            if final_state_value in ("failed", "rejected", "canceled"):
+                return ProcessingStatus.FAILED, message_streaming_state.full_response_text
+        else:
+            # Send task_update with completed status
+            await self._send_task_update(
+                room_id=room_id,
+                message_id=current_message.message_id if task_info else None,
+                status="completed",
+                agent_card=agent_card,
+                agent_id=current_message.agent_id,
+                created_at=created_at,
+                content=message_streaming_state.full_response_text,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
 
         return ProcessingStatus.SUCCESS, message_streaming_state.full_response_text
 
@@ -2949,15 +2996,56 @@ CRITICAL INSTRUCTIONS:
         full_response_text = ""
         paused_message_id = None
         if support_streaming:
-            status, full_response_text = await self._handle_streaming_response_for_room(
-                current_message,
-                agent.agent_card,
-                prepared_message,
-                room_id,
-                user_message_id,
-                step_number=step_number,
-                total_steps=total_steps,
-            )
+            try:
+                status, full_response_text = await self._handle_streaming_response_for_room(
+                    current_message,
+                    agent.agent_card,
+                    prepared_message,
+                    room_id,
+                    user_message_id,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
+            except Exception as exc:
+                logger.error(
+                    "OrchestrationCenter: Unhandled exception in streaming for message %s: %s",
+                    current_message.message_id,
+                    exc,
+                    exc_info=True,
+                )
+                # Mark the task as failed in DB so it doesn't stay in "working" forever
+                error_text = f"Agent streaming failed: {exc}"
+                if (
+                    current_message.message_content
+                    and current_message.message_content.message_task
+                ):
+                    current_message.message_content.message_task.status = TaskStatus(
+                        state=TaskState.failed,
+                        message=Message(
+                            role=Role.agent,
+                            parts=[TextPart(text=error_text)],
+                        ),
+                    )
+                    current_message.task_updated_at = utcnow()
+                    await self.room_services.update_agent_message_by_message_id(
+                        RoomCenterAgentMessageRequest(
+                            message_id=current_message.message_id,
+                            message=current_message,
+                        )
+                    )
+                # Notify frontend via SSE
+                await self._send_task_update(
+                    room_id=room_id,
+                    message_id=current_message.message_id,
+                    status="failed",
+                    agent_card=agent.agent_card,
+                    agent_id=current_message.agent_id,
+                    created_at=None,
+                    error=error_text,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
+                return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
                 return ProcessingResult(status, full_response_text)
         else:
