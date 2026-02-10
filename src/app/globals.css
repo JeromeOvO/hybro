@@ -232,13 +232,6 @@
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
-  /* Subtle grid pattern only in dark mode */
-  .dark body {
-    background-image:
-      linear-gradient(rgba(0, 255, 255, 0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 255, 255, 0.02) 1px, transparent 1px);
-    background-size: 60px 60px;
-  }
 }
 
 /* Futuristic enhancements */
@@ -429,7 +422,7 @@
   color: hsl(var(--color-icon-contact));
 }
 
-/* Subtle scrollbars matching active nav item tones */
+/* Auto-hiding scrollbars: hidden by default, visible on hover or while scrolling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -440,20 +433,57 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.15);
+  background: transparent;
   border-radius: 3px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.25);
-}
-
-.dark ::-webkit-scrollbar-thumb {
+/* Show scrollbar on hover over any scrollable container */
+*:hover::-webkit-scrollbar-thumb {
   background: hsl(var(--color-foreground) / 0.15);
 }
 
-.dark ::-webkit-scrollbar-thumb:hover {
+*:hover::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--color-foreground) / 0.25);
+}
+
+/* Show scrollbar while actively scrolling (JS-toggled class) */
+.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.15);
+}
+
+.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.25);
+}
+
+/* Dark mode */
+.dark *:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.15);
+}
+
+.dark *:hover::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.25);
+}
+
+.dark .is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.15);
+}
+
+.dark .is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.25);
+}
+
+/* Firefox: hidden by default, visible on hover */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: hsl(var(--color-foreground) / 0.15) transparent;
+}
+
+.is-scrolling {
+  scrollbar-color: hsl(var(--color-foreground) / 0.15) transparent;
 }
 
 /* Room Chat Input & Message Mention Styles */
@@ -508,7 +538,7 @@ a.room-mention {
   pointer-events: none;
 }
 
-/* Custom scrollbar for dropdowns */
+/* Custom scrollbar for dropdowns — auto-hiding */
 .custom-scrollbar::-webkit-scrollbar {
   width: 4px;
 }
@@ -518,18 +548,30 @@ a.room-mention {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
+  background: transparent;
   border-radius: 2px;
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.2);
-}
-
-.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+.custom-scrollbar:hover::-webkit-scrollbar-thumb {
   background: hsl(var(--color-foreground) / 0.12);
 }
 
-.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+.custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--color-foreground) / 0.2);
+}
+
+.custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.12);
+}
+
+.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.12);
+}
+
+.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.2);
+}
+
+.dark .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.12);
 }

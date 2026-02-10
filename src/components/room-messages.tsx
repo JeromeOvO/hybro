@@ -11,6 +11,7 @@ import { MessageBubble } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
 import { type TaskState, PROCESSING_STATUS } from '@/lib/types/sse'
 import { type MessageType, MESSAGE_TYPE } from '@/lib/types'
+import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 
 export interface MessageData {
   id: string
@@ -88,6 +89,9 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
   const previousMessageCountRef = useRef(messages.length)
+
+  // Auto-hide scrollbar when not scrolling
+  useAutoHideScroll(scrollContainerRef)
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
