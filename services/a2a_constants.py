@@ -1,8 +1,8 @@
 """
 A2A Task State Constants and Helpers
 
-This module defines constants and helper functions for working with A2A task states.
-It provides a single source of truth for task state categorization.
+This module defines constants and helper functions for working with A2A task states
+and SSE processing statuses. It provides a single source of truth for state categorization.
 """
 
 from enum import Enum
@@ -18,7 +18,10 @@ class TaskStateCategory(Enum):
     TERMINAL = "terminal"
 
 
-# Use A2A TaskState enum values for state sets
+# ---------------------------------------------------------------------------
+# A2A Task State groupings (values come from the a2a.types.TaskState enum)
+# ---------------------------------------------------------------------------
+
 PENDING_STATES = {TaskState.submitted, TaskState.working}
 INTERACTIVE_STATES = {TaskState.input_required, TaskState.auth_required}
 TERMINAL_STATES = {
@@ -28,8 +31,40 @@ TERMINAL_STATES = {
     TaskState.rejected,
 }
 
+# Terminal states that indicate failure (terminal minus completed)
+FAILURE_STATES = {TaskState.failed, TaskState.canceled, TaskState.rejected}
+
 # States that need monitoring/polling
 NON_TERMINAL_STATES = PENDING_STATES | INTERACTIVE_STATES
+
+
+# ---------------------------------------------------------------------------
+# SSE Processing Status constants (sent via send_processing_status)
+# ---------------------------------------------------------------------------
+
+class SSEProcessingStatus(str, Enum):
+    """Status values for the processing_status SSE event.
+
+    These are the values sent to the frontend via the 'processing_status' SSE event
+    to control the processing indicator (spinner) in the UI.
+    """
+
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    RATE_LIMITED = "rate_limited"
+    ERROR = "error"
+
+
+# Statuses that indicate processing is done (clear the spinner)
+PROCESSING_DONE_STATUSES = {
+    SSEProcessingStatus.COMPLETED,
+    SSEProcessingStatus.CANCELED,
+    SSEProcessingStatus.FAILED,
+    SSEProcessingStatus.REJECTED,
+}
 
 
 def get_state_category(state: TaskState) -> TaskStateCategory:
@@ -49,6 +84,11 @@ def is_terminal_state(state: TaskState) -> bool:
 def is_interactive_state(state: TaskState) -> bool:
     """Check if a task state requires user interaction."""
     return state in INTERACTIVE_STATES
+
+
+def is_failure_state(state: TaskState) -> bool:
+    """Check if a task state indicates failure (failed, canceled, or rejected)."""
+    return state in FAILURE_STATES
 
 
 def is_pending_state(state: TaskState) -> bool:

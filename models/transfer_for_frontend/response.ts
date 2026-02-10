@@ -422,7 +422,7 @@ export interface MetaTask {
   } | null;
   extend_info?: unknown;
 }
-export interface OrchestrationCenterResponse {
+export interface OrchestrationResponse {
   task_id?: string | null;
   room_id?: string | null;
   meta_task_ids?: string[] | null;

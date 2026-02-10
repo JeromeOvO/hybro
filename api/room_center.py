@@ -2,18 +2,17 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from common.auth import ClerkUser, get_current_user
 from models.request import (
-    OrchestrationCenterRequest,
+    OrchestrationRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
-from modules.OrchestrationCenter import OrchestrationCenter
+from modules.RoomMessageCenter import room_message_center
 from modules.RoomCenter import RoomCenter
 from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
-orchestration_center = OrchestrationCenter()  # Singleton for auto-processing
 
 
 async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
@@ -234,13 +233,13 @@ async def send_message(
     # Auto-trigger processing as background task if message was created successfully
     # This prevents orphaned messages when user refreshes before frontend calls processRoomUserMessage
     if room_center_response.success and room_center_response.message_id:
-        orchestration_request = OrchestrationCenterRequest(
+        orchestration_request = OrchestrationRequest(
             room_id=room_id,
             room_user_message_id=room_center_response.message_id,
             room_related_message_id="",
         )
         background_tasks.add_task(
-            orchestration_center.process_room_user_message, orchestration_request
+            room_message_center.process_room_user_message, orchestration_request
         )
 
     return room_center_response

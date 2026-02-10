@@ -18,9 +18,16 @@ from a2a.types import Artifact, Part, Task, TaskStatusUpdateEvent, TextPart
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from common.utils.logger import get_logger
+from common.utils.a2a_helpers import (
+    extract_error_message,
+    extract_status_message,
+    extract_text_from_artifacts,
+)
+from modules.RoomMessageCenter import room_message_center
 from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
 from services.database_service import db_service
 from services.sse_services import sse_manager
+from services.notification_service import notification_service
 
 logger = get_logger(__name__)
 
@@ -41,11 +48,8 @@ async def resume_queue_continuation(
         message_id: The message ID of the completed task
         task_result_text: The result text from the completed task
     """
-    # Import here to avoid circular imports
-    from api.orchestration_center import orchestration_center
-
     try:
-        resumed = await orchestration_center.resume_queue_from_continuation(
+        resumed = await room_message_center.resume_queue_from_continuation(
             message_id, task_result_text
         )
         if resumed:
@@ -83,14 +87,14 @@ async def notify_task_update(
         total_steps: Total number of steps in the workflow
     """
     state = task.status.state
+    state_value = state.value if hasattr(state, "value") else str(state)
 
-    # Check if we already notified for this state (prevents duplicates)
-    is_new_notification = await db_service.update_last_notified_state(
-        message_id, state.value if hasattr(state, "value") else str(state)
-    )
-    if not is_new_notification:
+    # Early idempotency check — skip all work for duplicate state notifications
+    is_new = await db_service.update_last_notified_state(message_id, state_value)
+    if not is_new:
         logger.debug(
-            f"Skipping duplicate notification for task {message_id} state {state}"
+            "Skipping duplicate notification for task %s state %s",
+            message_id, state_value,
         )
         return
 
@@ -99,8 +103,6 @@ async def notify_task_update(
     requires_input = False
     requires_auth = False
     status_message = None
-
-    state_value = state.value if hasattr(state, "value") else str(state)
 
     if state_value == "completed" and task.artifacts:
         content = extract_text_from_artifacts(task.artifacts)
@@ -141,7 +143,7 @@ async def notify_task_update(
 
     # Persist task updates into the room agent message (for refresh rendering)
     # Use retry logic to handle race condition where webhook arrives before
-    # OrchestrationCenter finishes persisting task tracking to the message
+    # RoomMessageCenter finishes persisting task tracking to the message
     room_agent_message = None
     for attempt in range(3):
         room_agent_message = await db_service.get_room_agent_message_by_message_id(
@@ -205,7 +207,7 @@ async def notify_task_update(
     if room_agent_message and room_agent_message.message_content:
         task_content = room_agent_message.message_content.message_text
 
-    await sse_manager.send_task_update(
+    await notification_service.send_task_update(
         room_id=room_id,
         message_id=message_id,
         status=state_value,
@@ -228,48 +230,8 @@ async def notify_task_update(
     # Clear room processing status when task reaches a terminal state via webhook.
     # This ensures the "Working... Processing your request..." bubble is dismissed
     # even when the task completes through the webhook path rather than streaming.
-    if state_value in ("completed", "failed", "canceled", "rejected"):
+    if is_terminal_state(state):
         await sse_manager.send_processing_status(room_id, state_value, message_id)
-
-
-def extract_text_from_artifacts(artifacts: list) -> str | None:
-    """Extract text content from A2A artifacts with robust type handling."""
-    texts = []
-    for artifact in artifacts:
-        if not artifact.parts:
-            continue
-        for part in artifact.parts:
-            # Handle different part type structures
-            text = None
-            if hasattr(part, "text") and part.text:
-                text = part.text
-            elif hasattr(part, "root"):
-                # Discriminated union wrapper
-                root = part.root
-                if hasattr(root, "text") and root.text:
-                    text = root.text
-            if text:
-                texts.append(text)
-    return "".join(texts) if texts else None
-
-
-def extract_error_message(task: Task) -> str | None:
-    """Extract error message from task status."""
-    if not task.status.message:
-        return None
-    if not task.status.message.parts:
-        return None
-    for part in task.status.message.parts:
-        if hasattr(part, "text") and part.text:
-            return part.text
-        if hasattr(part, "root") and hasattr(part.root, "text"):
-            return part.root.text
-    return None
-
-
-def extract_status_message(task: Task) -> str | None:
-    """Extract human-readable status message."""
-    return extract_error_message(task)  # Same extraction logic
 
 
 @router.post("/webhooks/a2a/{message_id}")

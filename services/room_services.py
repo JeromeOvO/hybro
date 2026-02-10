@@ -39,6 +39,7 @@ from models.room import (
     RoomMessage,
     RoomUserMessage,
 )
+from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_selection_service import agent_selection_service
 from services.agent_service import agent_service
@@ -998,7 +999,7 @@ class RoomServices:
                 user_message_id,
             )
             await self.sse_manager.send_processing_status(
-                room_id, "cancelled", user_message_id
+                room_id, SSEProcessingStatus.CANCELED, user_message_id
             )
             self.sse_manager.clear_cancellation(user_message_id)
             return False
@@ -1079,14 +1080,14 @@ class RoomServices:
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
             await self.sse_manager.send_processing_status(
-                request.room_id, "failed", user_message.message_id
+                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id
             )
             return memory_response
 
         room = await self.database_service.get_room_by_room_id(request.room_id)
         if not room:
             await self.sse_manager.send_processing_status(
-                request.room_id, "completed", user_message.message_id
+                request.room_id, SSEProcessingStatus.COMPLETED, user_message.message_id
             )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
@@ -1128,7 +1129,7 @@ class RoomServices:
         )
         if not parse_user_message_success:
             await self.sse_manager.send_processing_status(
-                request.room_id, "failed", user_message.message_id
+                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id
             )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
@@ -1181,7 +1182,7 @@ class RoomServices:
             room_id,
             message_id,
         )
-        await sse_manager.send_processing_status(room_id, "processing", message_id)
+        await sse_manager.send_processing_status(room_id, SSEProcessingStatus.PROCESSING, message_id)
 
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage
@@ -1223,7 +1224,7 @@ class RoomServices:
             room, user_message, mentions
         )
         await self.sse_manager.send_processing_status(
-            request.room_id, "completed", user_message.message_id
+            request.room_id, SSEProcessingStatus.COMPLETED, user_message.message_id
         )
         return mention_response
 
@@ -1380,7 +1381,7 @@ class RoomServices:
             )
 
         await self.sse_manager.send_processing_status(
-            request.room_id, "completed", user_message.message_id
+            request.room_id, SSEProcessingStatus.COMPLETED, user_message.message_id
         )
 
         return RoomCenterUserMessageResponse(
@@ -1432,7 +1433,7 @@ class RoomServices:
             f"RoomServices: Sending processing status to room {room_id} for message {message.message_id}"
         )
         await sse_manager.send_processing_status(
-            room_id, "processing", message.message_id
+            room_id, SSEProcessingStatus.PROCESSING, message.message_id
         )
 
         # Initialize or update room memory
@@ -1671,7 +1672,7 @@ class RoomServices:
             logger.warning(f"Failed to build context for agent message: {e}")
 
         # Return the prepared message without sending
-        # OrchestrationCenter will handle the actual sending with streaming support
+        # RoomMessageCenter will handle the actual sending with streaming support
         return RoomCenterAgentMessageResponse(
             message_id=message.message_id,
             message=message,
@@ -1777,12 +1778,6 @@ class RoomServices:
 
         # Sync task status for non-terminal tasks
         # This handles cases where SSE updates were missed or task state changed in background
-        terminal_states = [
-            TaskState.completed,
-            TaskState.failed,
-            TaskState.canceled,
-            TaskState.rejected,
-        ]
 
         for msg in messages:
             # Check if this is a task message with task tracking enabled
@@ -1794,7 +1789,7 @@ class RoomServices:
                 current_state = msg.message_content.message_task.status.state
 
                 # If currently working/submitted/etc. -> check for updates
-                if current_state not in terminal_states:
+                if not is_terminal_state(current_state):
                     try:
                         # Query the actual task (MetaTask)
                         task_res = await self.task_service.query_meta_task_by_task_id(
@@ -2071,7 +2066,7 @@ class RoomServices:
         # Add null check for process_response
         if message_data is None:
             logger.error(
-                "OrchestrationCenter: process_a2a_response returned None for agent message "
+                "RoomMessageCenter: process_a2a_response returned None for agent message "
             )
             return False
 
@@ -2085,7 +2080,7 @@ class RoomServices:
             )
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with task"
+                    "RoomMessageCenter: Failed to update agent message with task"
                 )
                 return False
             return True
@@ -2110,7 +2105,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with message: %s",
+                    "RoomMessageCenter: Failed to update agent message with message: %s",
                     update_response.error,
                 )
                 return False
@@ -2159,7 +2154,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with status update: %s",
+                    "RoomMessageCenter: Failed to update agent message with status update: %s",
                     update_response.error,
                 )
                 return False
@@ -2187,7 +2182,7 @@ class RoomServices:
 
             if not update_response.success:
                 logger.error(
-                    "OrchestrationCenter: Failed to update agent message with artifact update: %s",
+                    "RoomMessageCenter: Failed to update agent message with artifact update: %s",
                     update_response.error,
                 )
                 return False

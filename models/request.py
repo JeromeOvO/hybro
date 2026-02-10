@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import uuid4
 
 from a2a.types import AgentCard, Message, Task, TextPart
@@ -13,8 +13,10 @@ from models.task import BaseTask, MetaTask, TaskSession
 
 class PaginationParams(BaseModel):
     page: int | None = Field(default=1, ge=1, description="Page number (1-indexed)")
-    limit: int | None = Field(default=10, ge=1, le=100, description="Number of items per page")
-    
+    limit: int | None = Field(
+        default=10, ge=1, le=100, description="Number of items per page"
+    )
+
     @property
     def skip(self) -> int:
         if not self.page:
@@ -24,12 +26,13 @@ class PaginationParams(BaseModel):
 
 class FilterParams(BaseModel):
     # all nullable
-    filters: dict[str, Any] | None = Field(default_factory=dict, description="MongoDB filter conditions")
+    filters: dict[str, Any] | None = Field(
+        default_factory=dict, description="MongoDB filter conditions"
+    )
     sort_by: str | None = Field(default=None, description="Field to sort by")
-    sort_order: int | None = Field(default=-1, description="Sort order: 1 for ascending, -1 for descending")
-
-
-
+    sort_order: int | None = Field(
+        default=-1, description="Sort order: 1 for ascending, -1 for descending"
+    )
 
 
 class TaskRequest(BaseModel):
@@ -98,7 +101,7 @@ class InspectionCenterRequest(BaseModel):
     agent_url: str
 
 
-class OrchestrationCenterRequest(BaseModel):
+class OrchestrationRequest(BaseModel):
     task_id: str | None = None
     room_id: str | None = None
     room_user_message_id: str | None = None
@@ -144,8 +147,8 @@ class BaseAgent(BaseModel):
 class AgentCreate(BaseAgent):
     agent_id: str | None = Field(
         default_factory=lambda: str(uuid4()),
-        pattern=r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-        description="Must be a valid UUID string"
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        description="Must be a valid UUID string",
     )
     agent_url: str
     agent_card: AgentCard
@@ -171,6 +174,7 @@ class AgentPatch(BaseAgent):
 
 class AgentSettingsUpdateRequest(BaseModel):
     """Request model for updating agent settings (rate limits, status, visibility)."""
+
     rate_limit_per_user_per_hour: int | None = None
     rate_limit_system_per_hour: int | None = None
     agent_status: AgentStatus | None = None
@@ -200,6 +204,7 @@ class ChatRequest(BaseModel):
     user_input: str
     session_id: str | None = None
 
+
 class ChatMemoryRequest(BaseModel):
     user_name: str | None = None
     session_id: str | None = None
@@ -213,18 +218,20 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_name: str | None = None
     room_owner_id: str | None = None
     room_owner_name: str | None = None
-    room_agent_set: Dict[str, str] | None = None
+    room_agent_set: dict[str, str] | None = None
     room_created_at: datetime | None = None
     applied_from_group: str | None = None  # Group ID if agents applied from a group
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
-    requesting_user_id: str | None = None  # User making the request, for visibility validation
+    requesting_user_id: str | None = (
+        None  # User making the request, for visibility validation
+    )
 
 
 class RoomCenterUserMessageRequest(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
-    related_message_id: Optional[str] = None
+    related_message_id: str | None = None
     user_id: str | None = None
     user_name: str | None = None
     user_input: str | None = None
@@ -232,16 +239,18 @@ class RoomCenterUserMessageRequest(BaseModel):
     extend_info: dict[str, Any] | None = None
     message: RoomUserMessage | None = None
 
+
 class RoomCenterAgentMessageRequest(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
-    related_message_id: Optional[str] = None
+    related_message_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
     agent_message_content: Task | None = None
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomAgentMessage | None = None
+
 
 class RoomCenterMemoryRequest(BaseModel):
     room_id: str | None = None
@@ -250,8 +259,11 @@ class RoomCenterMemoryRequest(BaseModel):
     memory_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     memory: RoomMemory | None = None
-    room_agent_set: Dict[str, str] | None = None  # {agent_id: agent_name} for cleaning mentions
+    room_agent_set: dict[str, str] | None = (
+        None  # {agent_id: agent_name} for cleaning mentions
+    )
     user_id: str | None = None  # User ID for attribution in conversation history
+
 
 class RoomCenterRoomMessageRequest(BaseModel):
     room_id: str | None = None
