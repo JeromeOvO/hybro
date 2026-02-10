@@ -41,7 +41,7 @@ class RoomCoordinatorService:
         room_user_message_id: str,
     ) -> None:
         """
-        Entry point called after OrchestrationCenter processes all agent messages
+        Entry point called after RoomMessageCenter processes all agent messages
         for a specific room user message.
 
         Current behavior:

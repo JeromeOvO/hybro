@@ -44,11 +44,11 @@ class DebatationCenter:
     Service Dependencies:
     - AgentCenter: For agent discovery and selection
     - TaskCenter: For task context and requirements
-    - OrchestrationCenter: For task decomposition and coordination
+    - WorkflowCenter: For task decomposition and coordination
     - OpenAI Service: For debate summarization and consensus generation
 
     Usage:
-    This center is typically used by external clients, other centers (like OrchestrationCenter),
+    This center is typically used by external clients, other centers (like WorkflowCenter),
     and internal services that need to facilitate multi-agent discussions and consensus building.
     The center enables complex problem-solving through collaborative agent interactions.
     """

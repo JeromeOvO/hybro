@@ -20,8 +20,9 @@ from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
 from database.mongodb import get_db
-from models.request import OrchestrationCenterRequest
+from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
+from modules.RoomMessageCenter import room_message_center
 from services.a2a_constants import (
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
@@ -333,9 +334,7 @@ class StaleTaskChecker:
             return
 
         terminal_state_values = [s.value for s in TERMINAL_STATES]
-        threshold = utcnow() - timedelta(
-            minutes=self.processing_status_expiry_minutes
-        )
+        threshold = utcnow() - timedelta(minutes=self.processing_status_expiry_minutes)
 
         rooms_to_clear = []
 
@@ -420,8 +419,6 @@ class StaleTaskChecker:
         Recovery groups orphaned messages by their related_message_id (user message)
         and triggers processing for each unique user message.
         """
-        from modules.OrchestrationCenter import OrchestrationCenter
-
         orphaned_messages = await db_service.get_orphaned_agent_messages(
             self.orphan_threshold_minutes
         )
@@ -445,16 +442,13 @@ class StaleTaskChecker:
                     f"in room {msg.room_id}"
                 )
 
-        # Trigger processing for each unique user message
-        orchestration_center = OrchestrationCenter()
-
         for user_message_id, room_id in user_messages_to_process.items():
             try:
                 logger.info(
                     f"Recovering orphaned messages for user message {user_message_id} in room {room_id}"
                 )
 
-                request = OrchestrationCenterRequest(
+                request = OrchestrationRequest(
                     room_id=room_id,
                     room_user_message_id=user_message_id,
                     room_related_message_id="",
@@ -462,7 +456,7 @@ class StaleTaskChecker:
 
                 # Process in background to not block the checker
                 asyncio.create_task(
-                    self._process_orphaned_user_message(orchestration_center, request)
+                    self._process_orphaned_user_message(room_message_center, request)
                 )
 
             except Exception as e:
@@ -472,12 +466,12 @@ class StaleTaskChecker:
 
     async def _process_orphaned_user_message(
         self,
-        orchestration_center,
-        request: OrchestrationCenterRequest,
+        room_message_center,
+        request: OrchestrationRequest,
     ) -> None:
         """Process an orphaned user message in the background."""
         try:
-            result = await orchestration_center.process_room_user_message(request)
+            result = await room_message_center.process_room_user_message(request)
             if result.success:
                 logger.info(
                     f"Successfully recovered orphaned messages for user message {request.room_user_message_id}"

@@ -520,7 +520,7 @@ export interface MetaTask {
   } | null;
   extend_info?: unknown;
 }
-export interface OrchestrationCenterRequest {
+export interface OrchestrationRequest {
   task_id?: string | null;
   room_id?: string | null;
   room_user_message_id?: string | null;

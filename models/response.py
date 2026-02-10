@@ -76,7 +76,7 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
     status_code: int = 200
 
 
-class OrchestrationCenterResponse(BaseModel):
+class OrchestrationResponse(BaseModel):
     task_id: str | None = None
     room_id: str | None = None
     meta_task_ids: list[str] | None = None

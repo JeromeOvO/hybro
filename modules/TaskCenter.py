@@ -57,7 +57,7 @@ class TaskCenter:
     - OpenAIService: For AI-powered task operations
 
     Usage:
-    This center is typically used by external clients, other centers (like OrchestrationCenter),
+    This center is typically used by external clients, other centers (like WorkflowCenter),
     and internal services that need to manage task lifecycle and operations.
     The center ensures proper task management and data consistency across the system.
     """

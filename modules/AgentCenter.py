@@ -47,7 +47,7 @@ class AgentCenter:
     - A2AService: For agent card retrieval and A2A protocol communication
 
     Usage:
-    This center is typically used by external clients, other centers (like OrchestrationCenter),
+    This center is typically used by external clients, other centers (like WorkflowCenter),
     and internal services that need to interact with agents in the system.
     """
 
