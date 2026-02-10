@@ -29,7 +29,7 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.agent import Agent, AgentStatus
-from models.memory import MemoryContent, RoomMemory
+from models.memory import MemoryContent
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import RoomAgentMessage
@@ -83,6 +83,38 @@ class MessageStreamingState:
     message_added_to_history: bool = False
 
 
+@dataclass
+class ProcessingContext:
+    """Bundles the common parameters threaded through streaming/sync sub-handlers."""
+
+    room_id: str
+    current_message: RoomAgentMessage
+    agent_card: AgentCard
+    user_message_id: str
+    task_info: dict[str, Any] | None = None
+    created_at: str | None = None
+    step_number: int | None = None
+    total_steps: int | None = None
+    send_sse: bool = False
+
+    @property
+    def tracked_message_id(self) -> str | None:
+        """Return message_id only if task tracking was set up."""
+        return self.current_message.message_id if self.task_info else None
+
+
+def _state_str(state) -> str:
+    """Convert a TaskState enum (or string) to its string value."""
+    return state.value if hasattr(state, "value") else str(state)
+
+
+def _get_task(msg: RoomAgentMessage) -> Task | None:
+    """Safely access ``msg.message_content.message_task``, returning None on any miss."""
+    if msg.message_content and msg.message_content.message_task:
+        return msg.message_content.message_task
+    return None
+
+
 class RoomMessageCenter:
     """Room user message processing: agent communication,
     streaming/sync responses, queue management, and memory updates."""
@@ -98,6 +130,41 @@ class RoomMessageCenter:
         self.rate_limit_service = rate_limit_service
         self.task_service = task_service
         self.notification_service = notification_service
+
+    # ------------------------------------------------------------------
+    # Shared helpers (reduce repeated boilerplate)
+    # ------------------------------------------------------------------
+
+    async def _persist_message(self, message: RoomAgentMessage) -> bool:
+        """Persist a RoomAgentMessage to the database. Returns True on success."""
+        resp = await self.room_services.update_agent_message_by_message_id(
+            RoomCenterAgentMessageRequest(
+                message_id=message.message_id, message=message
+            )
+        )
+        if not resp.success:
+            logger.error(
+                "RoomMessageCenter: Failed to persist message %s: %s",
+                message.message_id,
+                resp.error,
+            )
+        return resp.success
+
+    async def _notify_task(self, ctx: ProcessingContext, status: str, **kwargs) -> None:
+        """Send a task update notification using common fields from *ctx*."""
+        await self.notification_service.send_task_update(
+            room_id=ctx.room_id,
+            message_id=ctx.tracked_message_id,
+            status=status,
+            agent_card=ctx.agent_card,
+            agent_id=ctx.current_message.agent_id,
+            created_at=ctx.created_at,
+            step_number=ctx.step_number,
+            total_steps=ctx.total_steps,
+            **kwargs,
+        )
+
+    # ------------------------------------------------------------------
 
     async def _setup_task_tracking(
         self,
@@ -243,7 +310,7 @@ class RoomMessageCenter:
                     continue
 
                 state = task.status.state
-                state_value = state.value if hasattr(state, "value") else str(state)
+                state_value = _state_str(state)
 
                 if is_terminal_state(state):
                     logger.info(
@@ -284,31 +351,7 @@ class RoomMessageCenter:
         step_number: int | None = None,
         total_steps: int | None = None,
     ) -> tuple[ProcessingStatus, str]:
-        """
-        Handle streaming responses from an agent for a room message.
-
-        This method:
-        1. Creates a task record for tracking (for consistent UX)
-        2. Sends task_submitted SSE before streaming starts
-        3. Streams responses from the agent in real-time
-        4. Processes each event type (message, task, status-update, artifact-update)
-        5. Updates the database as events arrive
-        6. Sends task_update SSE when streaming completes
-
-        Args:
-            current_message: The RoomAgentMessage being processed
-            agent_card: The agent's card information
-            prepared_message: The A2A message to send to the agent
-            room_id: The room ID for SSE events
-            user_message_id: The user message ID for cancellation checks
-            send_sse: Whether to send SSE notifications to frontend (default: False)
-            step_number: Current step number in the workflow (1-indexed)
-            total_steps: Total number of steps in the workflow
-
-        Returns:
-            Tuple of (status: ProcessingStatus, full_response_text: str)
-        """
-        # Step 1: Create task record and emit task_submitted SSE
+        """Handle streaming responses from an agent for a room message."""
         task_info = await self._setup_task_tracking(
             current_message,
             agent_card,
@@ -317,364 +360,192 @@ class RoomMessageCenter:
             step_number=step_number,
             total_steps=total_steps,
         )
-        # Use current_message.message_id for task updates (task_info["message_id"] is the same)
-        # Only send task updates if task_info was successfully created
-        created_at = task_info.get("created_at") if task_info else None
-
-        # Track streaming state across sub-handlers
-        message_streaming_state = MessageStreamingState()
+        ctx = ProcessingContext(
+            room_id=room_id,
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id=user_message_id,
+            task_info=task_info,
+            created_at=task_info.get("created_at") if task_info else None,
+            step_number=step_number,
+            total_steps=total_steps,
+            send_sse=send_sse,
+        )
+        streaming_state = MessageStreamingState()
 
         async for a2a_response in self.a2a_service.send_message_streaming(
             agent_card, prepared_message
         ):
-            # Check for cancellation during streaming
             if self.sse_manager.is_cancelled(user_message_id):
-                return await self._handle_streaming_cancellation(
-                    room_id,
-                    current_message,
-                    agent_card,
-                    user_message_id,
-                    task_info,
-                    created_at,
-                    step_number,
-                    total_steps,
-                    message_streaming_state.full_response_text,
-                )
+                return await self._handle_streaming_cancellation(ctx, streaming_state)
 
-            # Handle JSON-RPC errors
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
                 return await self._handle_streaming_error(
-                    a2a_response,
-                    room_id,
-                    current_message,
-                    agent_card,
-                    task_info,
-                    created_at,
-                    send_sse,
-                    step_number,
-                    total_steps,
-                    message_streaming_state.full_response_text,
+                    a2a_response, ctx, streaming_state
                 )
 
-            # Extract result from response
             result = a2a_response.root.result
-            data_kind = result.kind
-
-            match data_kind:
+            match result.kind:
                 case "message":
                     await self._handle_stream_message_chunk(
-                        result,
-                        current_message,
-                        message_streaming_state,
-                        room_id,
-                        send_sse,
+                        result, ctx, streaming_state
                     )
                 case "task":
-                    await self._handle_stream_task_event(result)
+                    self._handle_stream_task_event(result)
                 case "status-update":
                     await self._handle_stream_status_update(
-                        result,
-                        current_message,
-                        agent_card,
-                        message_streaming_state,
-                        room_id,
-                        task_info,
-                        created_at,
-                        send_sse,
-                        step_number,
-                        total_steps,
+                        result, ctx, streaming_state
                     )
                 case "artifact-update":
-                    await self._handle_stream_artifact_update(
-                        result,
-                        current_message,
-                        room_id,
-                        send_sse,
-                    )
+                    await self._handle_stream_artifact_update(result, ctx)
 
-        return await self._finalize_streaming(
-            current_message,
-            agent_card,
-            message_streaming_state,
-            room_id,
-            task_info,
-            created_at,
-            step_number,
-            total_steps,
-        )
+        return await self._finalize_streaming(ctx, streaming_state)
 
     # --- Streaming sub-handlers (Phase 2 decomposition) ---
 
     async def _handle_streaming_cancellation(
         self,
-        room_id: str,
-        current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        user_message_id: str,
-        task_info: dict | None,
-        created_at: str | None,
-        step_number: int | None,
-        total_steps: int | None,
-        full_response_text: str,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Handle cancellation during streaming."""
         logger.info(
-            "RoomMessageCenter: Streaming cancelled for message %s, stopping all processing",
-            user_message_id,
+            "RoomMessageCenter: Streaming cancelled for message %s", ctx.user_message_id
         )
-        await self.notification_service.send_task_update(
-            room_id=room_id,
-            message_id=current_message.message_id if task_info else None,
-            status="canceled",
-            agent_card=agent_card,
-            agent_id=current_message.agent_id,
-            created_at=created_at,
-            step_number=step_number,
-            total_steps=total_steps,
-        )
+        await self._notify_task(ctx, "canceled")
         await self.sse_manager.send_processing_status(
-            room_id, SSEProcessingStatus.CANCELED, user_message_id
+            ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
         )
-        self.sse_manager.clear_cancellation(user_message_id)
-        return ProcessingStatus.CANCELED, full_response_text
+        self.sse_manager.clear_cancellation(ctx.user_message_id)
+        return ProcessingStatus.CANCELED, streaming_state.full_response_text
 
     async def _handle_streaming_error(
         self,
         a2a_response,
-        room_id: str,
-        current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        task_info: dict | None,
-        created_at: str | None,
-        send_sse: bool,
-        step_number: int | None,
-        total_steps: int | None,
-        full_response_text: str,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Handle JSON-RPC error during streaming."""
         error_message = a2a_response.root.error.model_dump_json()
         logger.error("RoomMessageCenter: Agent error: %s", error_message)
-        await self.notification_service.send_task_update(
-            room_id=room_id,
-            message_id=current_message.message_id if task_info else None,
-            status="failed",
-            agent_card=agent_card,
-            agent_id=current_message.agent_id,
-            created_at=created_at,
-            error=error_message,
-            step_number=step_number,
-            total_steps=total_steps,
-        )
-        if send_sse:
-            await self.sse_manager.send_error(room_id, error_message)
-        return ProcessingStatus.FAILED, full_response_text
+        await self._notify_task(ctx, "failed", error=error_message)
+        if ctx.send_sse:
+            await self.sse_manager.send_error(ctx.room_id, error_message)
+        return ProcessingStatus.FAILED, streaming_state.full_response_text
 
     async def _handle_stream_message_chunk(
         self,
         result,
-        current_message: RoomAgentMessage,
-        message_streaming_state,
-        room_id: str,
-        send_sse: bool,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'message' event during streaming: accumulate parts, save to DB, send SSE tokens."""
         message_list = result.parts
+        streaming_state.accumulated_parts.extend(message_list)
 
-        message_streaming_state.accumulated_parts.extend(message_list)
-
-        if message_streaming_state.agent_message_id is None:
-            message_streaming_state.agent_message_id = result.message_id
+        if streaming_state.agent_message_id is None:
+            streaming_state.agent_message_id = result.message_id
 
         content = "".join(
             part.root.text if part.root and hasattr(part.root, "text") else ""
             for part in message_list
         )
-        message_streaming_state.full_response_text += content
+        streaming_state.full_response_text += content
 
-        logger.debug(
-            "RoomMessageCenter: Full accumulated message for %s: %s",
-            current_message.message_id,
-            message_streaming_state.full_response_text,
-        )
-
-        if (
-            current_message.message_content
-            and current_message.message_content.message_task
-        ):
-            if current_message.message_content.message_task.history is None:
-                current_message.message_content.message_task.history = []
+        task = _get_task(ctx.current_message)
+        if task:
+            if task.history is None:
+                task.history = []
 
             updated_message = Message(
                 kind="message",
                 role=result.role,
-                message_id=message_streaming_state.agent_message_id,
-                parts=message_streaming_state.accumulated_parts.copy(),
+                message_id=streaming_state.agent_message_id,
+                parts=streaming_state.accumulated_parts.copy(),
             )
 
-            if not message_streaming_state.message_added_to_history:
-                logger.debug(
-                    "RoomMessageCenter: First message chunk, appending to history"
-                )
-                current_message.message_content.message_task.history.append(
-                    updated_message
-                )
-                message_streaming_state.message_added_to_history = True
+            if not streaming_state.message_added_to_history:
+                task.history.append(updated_message)
+                streaming_state.message_added_to_history = True
             else:
-                logger.debug("RoomMessageCenter: Updating existing message in history")
-                for i, msg in enumerate(
-                    current_message.message_content.message_task.history
-                ):
+                for i, msg in enumerate(task.history):
                     if (
                         hasattr(msg, "message_id")
-                        and msg.message_id == message_streaming_state.agent_message_id
+                        and msg.message_id == streaming_state.agent_message_id
                     ):
-                        current_message.message_content.message_task.history[i] = (
-                            updated_message
-                        )
-                        logger.debug(
-                            "RoomMessageCenter: Replaced message at index %d with %d parts",
-                            i,
-                            len(message_streaming_state.accumulated_parts),
-                        )
+                        task.history[i] = updated_message
                         break
 
-            if current_message.message_content.message_task.history:
-                for idx, hist_msg in enumerate(
-                    current_message.message_content.message_task.history
-                ):
-                    part_count = (
-                        len(hist_msg.parts) if hasattr(hist_msg, "parts") else 0
-                    )
-                    logger.debug(
-                        "RoomMessageCenter: History[%d] has %d parts",
-                        idx,
-                        part_count,
-                    )
+            await self._persist_message(ctx.current_message)
 
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=current_message.message_id,
-                        message=current_message,
-                    )
-                )
-            )
-
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update agent message incrementally: %s",
-                    update_response.error,
-                )
-            else:
-                logger.debug(
-                    "RoomMessageCenter: Successfully saved message to database with %d total parts",
-                    len(message_streaming_state.accumulated_parts),
-                )
-
-        if send_sse:
+        if ctx.send_sse:
             await self.sse_manager.send_agent_token(
-                room_id,
-                current_message.message_id,
-                current_message.agent_id,
+                ctx.room_id,
+                ctx.current_message.message_id,
+                ctx.current_message.agent_id,
                 content,
             )
 
-    async def _handle_stream_task_event(self, result) -> None:
+    @staticmethod
+    def _handle_stream_task_event(result) -> None:
         """Handle a 'task' event during streaming (log only)."""
         status = result.status
         logger.debug(
-            "RoomMessageCenter: Task update for task %s: %s",
-            result,
-            status.state if status else "no status",
+            "RoomMessageCenter: Task event: %s", status.state if status else "no status"
         )
 
     async def _handle_stream_status_update(
         self,
         result,
-        current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        message_streaming_state,
-        room_id: str,
-        task_info: dict | None,
-        created_at: str | None,
-        send_sse: bool,
-        step_number: int | None,
-        total_steps: int | None,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'status-update' event during streaming."""
         state = result.status.state
         logger.info(
             "RoomMessageCenter: Status update for message %s: %s",
-            current_message.message_id,
+            ctx.current_message.message_id,
             state,
         )
 
         a2a_status_message_text: str | None = None
         if result.status.message:
             a2a_status_message_text = get_text_from_message(result.status.message)
-            if a2a_status_message_text:
-                logger.info(
-                    "RoomMessageCenter: Agent status message for %s: %s",
-                    current_message.message_id,
-                    a2a_status_message_text[:100],
-                )
 
-        if (
-            current_message.message_content
-            and current_message.message_content.message_task
-        ):
-            if current_message.message_content.message_task.status is None:
-                current_message.message_content.message_task.status = TaskStatus(
-                    state=TaskState.submitted
-                )
-            current_message.message_content.message_task.status.state = state
-
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=current_message.message_id,
-                        message=current_message,
-                    )
-                )
-            )
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update message status: %s",
-                    update_response.error,
-                )
+        task = _get_task(ctx.current_message)
+        if task:
+            if task.status is None:
+                task.status = TaskStatus(state=TaskState.submitted)
+            task.status.state = state
+            await self._persist_message(ctx.current_message)
 
         if state in TERMINAL_STATES:
             logger.info(
                 "RoomMessageCenter: Final status for message %s: %s",
-                current_message.message_id,
+                ctx.current_message.message_id,
                 state,
             )
-            task = await self.task_service.get_task_from_agent(
-                agent_card, result.task_id
+            fetched_task = await self.task_service.get_task_from_agent(
+                ctx.agent_card, result.task_id
             )
-            if task is not None:
-                message = get_message_from_task(task)
-                await self._handle_a2a_response_for_room(current_message, message)
+            if fetched_task is not None:
+                message = get_message_from_task(fetched_task)
+                await self._handle_a2a_response_for_room(ctx.current_message, message)
                 fetched_text = get_text_from_a2a_response(message)
                 if fetched_text:
                     if (
-                        message_streaming_state.full_response_text
-                        and fetched_text != message_streaming_state.full_response_text
+                        streaming_state.full_response_text
+                        and fetched_text != streaming_state.full_response_text
                     ):
                         logger.warning(
-                            "RoomMessageCenter: Fetched final text differs from accumulated "
-                            "streaming text for message %s (accumulated len=%d, fetched len=%d)",
-                            current_message.message_id,
-                            len(message_streaming_state.full_response_text),
-                            len(fetched_text),
+                            "RoomMessageCenter: Fetched final text differs from streaming text for %s",
+                            ctx.current_message.message_id,
                         )
-                    message_streaming_state.full_response_text = fetched_text
+                    streaming_state.full_response_text = fetched_text
                 else:
                     logger.warning(
-                        "RoomMessageCenter: Fetched task returned empty text for message %s, "
-                        "keeping accumulated streaming text (len=%d)",
-                        current_message.message_id,
-                        len(message_streaming_state.full_response_text),
+                        "RoomMessageCenter: Fetched task returned empty text for %s, keeping streaming text",
+                        ctx.current_message.message_id,
                     )
             else:
                 logger.error(
@@ -682,162 +553,94 @@ class RoomMessageCenter:
                     result.task_id,
                 )
 
-        if send_sse:
+        if ctx.send_sse:
             if a2a_status_message_text and state not in TERMINAL_STATES:
-                await self.notification_service.send_task_update(
-                    room_id=room_id,
-                    message_id=current_message.message_id if task_info else None,
-                    status=state,
-                    agent_card=agent_card,
-                    agent_id=current_message.agent_id,
-                    created_at=created_at,
+                await self._notify_task(
+                    ctx,
+                    state,
                     status_message=a2a_status_message_text,
-                    step_number=step_number,
-                    total_steps=total_steps,
                 )
             await self.sse_manager.send_processing_status(
-                room_id,
+                ctx.room_id,
                 state,
-                current_message.message_id,
-                details=f"Agent {current_message.agent_id} status: {state}",
+                ctx.current_message.message_id,
+                details=f"Agent {ctx.current_message.agent_id} status: {state}",
             )
 
     async def _handle_stream_artifact_update(
         self,
         result,
-        current_message: RoomAgentMessage,
-        room_id: str,
-        send_sse: bool,
+        ctx: ProcessingContext,
     ) -> None:
         """Handle an 'artifact-update' event during streaming."""
         artifact_result = getattr(result, "artifact", None)
-        append = result.append if hasattr(result, "append") else False
-        last_chunk = result.last_chunk if hasattr(result, "last_chunk") else False
+        append = getattr(result, "append", False)
+        last_chunk = getattr(result, "last_chunk", False)
 
-        if (
-            artifact_result
-            and current_message.message_content
-            and current_message.message_content.message_task
-        ):
-            logger.debug(
-                "RoomMessageCenter: Artifact update for message %s, append=%s, last_chunk=%s",
-                current_message.message_id,
-                append,
-                last_chunk,
+        task = _get_task(ctx.current_message)
+        if not artifact_result or not task:
+            return
+
+        if task.artifacts is None:
+            task.artifacts = []
+
+        artifact_id = getattr(artifact_result, "artifact_id", None)
+        if append and artifact_id:
+            existing = next(
+                (a for a in task.artifacts if a.artifact_id == artifact_id), None
             )
-
-            if current_message.message_content.message_task.artifacts is None:
-                current_message.message_content.message_task.artifacts = []
-            current_artifacts = current_message.message_content.message_task.artifacts
-
-            artifact_id = getattr(artifact_result, "artifact_id", None)
-            if append and artifact_id:
-                existing_artifact = next(
-                    (a for a in current_artifacts if a.artifact_id == artifact_id),
-                    None,
-                )
-                if existing_artifact:
-                    artifact_parts = getattr(artifact_result, "parts", None)
-                    if artifact_parts:
-                        existing_artifact.parts.extend(artifact_parts)
-                else:
-                    current_artifacts.append(artifact_result)
+            if existing:
+                artifact_parts = getattr(artifact_result, "parts", None)
+                if artifact_parts:
+                    existing.parts.extend(artifact_parts)
             else:
-                current_artifacts.append(artifact_result)
+                task.artifacts.append(artifact_result)
+        else:
+            task.artifacts.append(artifact_result)
 
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=current_message.message_id,
-                        message=current_message,
-                    )
-                )
+        await self._persist_message(ctx.current_message)
+
+        if ctx.send_sse:
+            await self.sse_manager.send_artifact_update(
+                ctx.room_id,
+                ctx.current_message.message_id,
+                ctx.current_message.agent_id,
+                artifact_result,
+                append=append,
+                last_chunk=last_chunk,
             )
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update message artifacts: %s",
-                    update_response.error,
-                )
-
-            if send_sse:
-                await self.sse_manager.send_artifact_update(
-                    room_id,
-                    current_message.message_id,
-                    current_message.agent_id,
-                    artifact_result,
-                    append=append,
-                    last_chunk=last_chunk,
-                )
 
     async def _finalize_streaming(
         self,
-        current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        message_streaming_state,
-        room_id: str,
-        task_info: dict | None,
-        created_at: str | None,
-        step_number: int | None,
-        total_steps: int | None,
+        ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
         logger.info(
-            "RoomMessageCenter: Streaming complete for message %s, "
-            "total parts: %d, full text length: %d",
-            current_message.message_id,
-            len(message_streaming_state.accumulated_parts),
-            len(message_streaming_state.full_response_text),
+            "RoomMessageCenter: Streaming complete for message %s, text length: %d",
+            ctx.current_message.message_id,
+            len(streaming_state.full_response_text),
         )
 
-        already_terminal = (
-            current_message.message_content
-            and current_message.message_content.message_task
-            and current_message.message_content.message_task.status
-            and is_terminal_state(
-                current_message.message_content.message_task.status.state
-            )
-        )
+        task = _get_task(ctx.current_message)
+        already_terminal = task and task.status and is_terminal_state(task.status.state)
 
-        if (
-            current_message.message_content
-            and current_message.message_content.message_task
-            and not already_terminal
-        ):
-            current_message.message_content.message_task.status = TaskStatus(
-                state=TaskState.completed
-            )
-            if message_streaming_state.full_response_text:
-                current_message.message_content.message_text = (
-                    message_streaming_state.full_response_text
+        if task and not already_terminal:
+            task.status = TaskStatus(state=TaskState.completed)
+            if streaming_state.full_response_text:
+                ctx.current_message.message_content.message_text = (
+                    streaming_state.full_response_text
                 )
-            current_message.task_updated_at = utcnow()
-
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=current_message.message_id,
-                        message=current_message,
-                    )
-                )
-            )
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update message status to completed: %s",
-                    update_response.error,
-                )
+            ctx.current_message.task_updated_at = utcnow()
+            await self._persist_message(ctx.current_message)
 
         if already_terminal:
-            final_state = current_message.message_content.message_task.status.state
-            final_state_value = (
-                final_state.value if hasattr(final_state, "value") else str(final_state)
-            )
+            final_state = task.status.state
+            final_state_value = _state_str(final_state)
             final_error = None
             if is_failure_state(final_state):
-                if (
-                    current_message.message_content.message_task.status.message
-                    and current_message.message_content.message_task.status.message.parts
-                ):
-                    for part in current_message.message_content.message_task.status.message.parts:
+                if task.status.message and task.status.message.parts:
+                    for part in task.status.message.parts:
                         part_root = getattr(part, "root", part)
                         if hasattr(part_root, "text"):
                             final_error = part_root.text
@@ -845,97 +648,45 @@ class RoomMessageCenter:
                 if not final_error:
                     final_error = f"Task {final_state_value}"
 
-            await self.notification_service.send_task_update(
-                room_id=room_id,
-                message_id=current_message.message_id if task_info else None,
-                status=final_state_value,
-                agent_card=agent_card,
-                agent_id=current_message.agent_id,
-                created_at=created_at,
-                content=message_streaming_state.full_response_text
+            await self._notify_task(
+                ctx,
+                final_state_value,
+                content=streaming_state.full_response_text
                 if final_state_value == "completed"
                 else None,
                 error=final_error,
-                step_number=step_number,
-                total_steps=total_steps,
             )
 
             if is_failure_state(final_state):
-                return (
-                    ProcessingStatus.FAILED,
-                    message_streaming_state.full_response_text,
-                )
+                return ProcessingStatus.FAILED, streaming_state.full_response_text
         else:
-            await self.notification_service.send_task_update(
-                room_id=room_id,
-                message_id=current_message.message_id if task_info else None,
-                status="completed",
-                agent_card=agent_card,
-                agent_id=current_message.agent_id,
-                created_at=created_at,
-                content=message_streaming_state.full_response_text,
-                step_number=step_number,
-                total_steps=total_steps,
+            await self._notify_task(
+                ctx,
+                "completed",
+                content=streaming_state.full_response_text,
             )
 
-        return ProcessingStatus.SUCCESS, message_streaming_state.full_response_text
+        return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
     async def _handle_a2a_response_for_room(
         self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
     ) -> bool:
-        # Add null check for process_response
         if message_data is None:
-            logger.error(
-                "RoomMessageCenter: process_a2a_response returned None for agent message "
-            )
+            logger.error("RoomMessageCenter: process_a2a_response returned None")
             return False
 
         if message_data.kind == "task":
             room_agent_message.message_content.message_task = message_data
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=room_agent_message.message_id,
-                        message=room_agent_message,
-                    )
-                )
-            )
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update agent message with task"
-                )
-                return False
-            return True
+            return await self._persist_message(room_agent_message)
 
-        elif message_data.kind == "message":
-            if (
-                room_agent_message.message_content
-                and room_agent_message.message_content.message_task
-            ):
-                if room_agent_message.message_content.message_task.history is None:
-                    room_agent_message.message_content.message_task.history = []
-                # append new message
-                room_agent_message.message_content.message_task.history.append(
-                    message_data
-                )
+        if message_data.kind == "message":
+            task = _get_task(room_agent_message)
+            if task:
+                if task.history is None:
+                    task.history = []
+                task.history.append(message_data)
+            return await self._persist_message(room_agent_message)
 
-            update_response = (
-                await self.room_services.update_agent_message_by_message_id(
-                    RoomCenterAgentMessageRequest(
-                        message_id=room_agent_message.message_id,
-                        message=room_agent_message,
-                    )
-                )
-            )
-
-            if not update_response.success:
-                logger.error(
-                    "RoomMessageCenter: Failed to update agent message with message: %s",
-                    update_response.error,
-                )
-                return False
-            return True
-        # Neither task nor message
         logger.error(
             "RoomMessageCenter: Unexpected data kind in A2A response: %s",
             message_data.kind,
@@ -1051,9 +802,8 @@ class RoomMessageCenter:
             room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
         )
 
-        # Update room memory with new content (fetch fresh from DB for logging)
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        await self._update_room_memory_after_processing(room_id, room_memory)
+        # Log room memory stats (debug/monitoring)
+        await self._log_room_memory_stats(room_id)
 
         return OrchestrationResponse(
             room_id=room_id, success=True, error=None, status_code=200
@@ -1393,11 +1143,7 @@ class RoomMessageCenter:
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
 
-                # Update room memory with new content (fetch fresh from DB for logging)
-                room_memory = await self.database_service.get_room_memory_by_room_id(
-                    room_id
-                )
-                await self._update_room_memory_after_processing(room_id, room_memory)
+                await self._log_room_memory_stats(room_id)
             else:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.ERROR, user_message_id
@@ -1407,28 +1153,24 @@ class RoomMessageCenter:
 
         return True
 
-    async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
-        """Assign an agent to the message by inferring from content, scoped to allowed IDs when provided.
+    async def _resolve_allowed_agent_ids(
+        self,
+        current_message: RoomAgentMessage,
+    ) -> list[str]:
+        """Resolve allowed agent IDs from extend_info, merging group members."""
+        if not isinstance(current_message.extend_info, dict):
+            return []
 
-        Only active agents will be assigned. If no active agents are found, returns None.
-        """
-        # Gather any scoped agent list from extend_info (mentions/room) and merge with group agents for future group mentions
-        allowed_agent_ids: list[str] = []
-        target_group = None
-        if isinstance(current_message.extend_info, dict):
-            allowed_agent_ids = (
-                current_message.extend_info.get("allowed_agent_ids") or []
-            )
-            target_group = current_message.extend_info.get("target_group")
+        allowed_agent_ids = current_message.extend_info.get("allowed_agent_ids") or []
+        target_group = current_message.extend_info.get("target_group")
 
-        # Normalize target_group into a list (support multiple groups)
+        # Normalize target_group into a list
         target_groups: list[str] = []
         if isinstance(target_group, list | tuple):
             target_groups = [str(g) for g in target_group]
         elif isinstance(target_group, str) and target_group:
             target_groups = [target_group]
 
-        # If target groups exist, merge their agents into the allowed list
         merged_ids = set(str(aid) for aid in allowed_agent_ids)
         for tg in target_groups:
             if tg in ["all_agents", "room_team"]:
@@ -1437,101 +1179,73 @@ class RoomMessageCenter:
                 group = await self.database_service.get_agent_group_by_id(tg)
                 if group and group.agents:
                     merged_ids |= set(str(aid) for aid in group.agents)
-                    logger.info(
-                        "RoomMessageCenter: Merged %d agents from group %s (total allowed=%d) for message %s",
-                        len(group.agents),
-                        tg,
-                        len(merged_ids),
-                        current_message.message_id,
-                    )
             except Exception as e:
                 logger.error(
-                    "RoomMessageCenter: Failed to load agents for group %s: %s",
-                    tg,
-                    e,
+                    "RoomMessageCenter: Failed to load agents for group %s: %s", tg, e
                 )
 
-        allowed_agent_ids = list(merged_ids)
+        return list(merged_ids)
 
-        # Safely extract text content from message for logging and agent inference
-        content = ""
-        user_input = ""
+    @staticmethod
+    def _extract_user_input(current_message: RoomAgentMessage) -> str:
+        """Extract the user's text input from the message's first history entry."""
         try:
+            task = _get_task(current_message)
             if (
-                current_message.message_content
-                and current_message.message_content.message_task
-                and current_message.message_content.message_task.history
-                and len(current_message.message_content.message_task.history) > 0
-                and current_message.message_content.message_task.history[0].parts
-                and len(current_message.message_content.message_task.history[0].parts)
-                > 0
+                task
+                and task.history
+                and len(task.history) > 0
+                and task.history[0].parts
+                and len(task.history[0].parts) > 0
             ):
-                parts = current_message.message_content.message_task.history[0].parts
-                content = "".join(
-                    part.root.text if part.root and hasattr(part.root, "text") else ""
-                    for part in parts
-                )
-                first_part = parts[0]
+                first_part = task.history[0].parts[0]
                 if first_part.root and hasattr(first_part.root, "text"):
-                    user_input = first_part.root.text or ""
+                    return first_part.root.text or ""
         except (IndexError, AttributeError) as e:
             logger.warning(
                 "RoomMessageCenter: Failed to extract content from message %s: %s",
                 current_message.message_id,
                 e,
             )
+        return ""
+
+    async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
+        """Assign an agent to the message by inferring from content.
+
+        Only active agents will be assigned. If no active agents are found, returns None.
+        """
+        allowed_agent_ids = await self._resolve_allowed_agent_ids(current_message)
+        user_input = self._extract_user_input(current_message)
 
         if not user_input:
             logger.error(
-                "RoomMessageCenter: No user input found in message %s, cannot infer agent",
+                "RoomMessageCenter: No user input in message %s, cannot infer agent",
                 current_message.message_id,
             )
             return None
 
         logger.info(
-            "RoomMessageCenter: Inferring agent for message %s from content (length: %d chars) scoped_ids=%d target_group=%s",
+            "RoomMessageCenter: Inferring agent for message %s (input length: %d, scoped_ids=%d)",
             current_message.message_id,
-            len(content),
+            len(user_input),
             len(allowed_agent_ids),
-            target_group,
         )
 
-        # Query similar agents - this already filters for active agents by default
         matched_agents = await self.database_service.query_similar_agents(
             user_input,
             allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
-            active_only=True,  # Only get active agents
+            active_only=True,
         )
 
-        if len(matched_agents) == 0:
+        if not matched_agents:
             logger.error(
-                "RoomMessageCenter: No active agent found for message %s (allowed_ids=%d)",
-                current_message.message_id,
-                len(allowed_agent_ids),
-            )
-            return None
-
-        # Find the first active agent (double-check status as safety)
-        agent = None
-        for candidate in matched_agents:
-            if candidate.agent_status == AgentStatus.active:
-                agent = candidate
-                break
-            else:
-                logger.warning(
-                    "RoomMessageCenter: Skipping inactive agent %s (status=%s) for message %s",
-                    candidate.agent_id,
-                    candidate.agent_status,
-                    current_message.message_id,
-                )
-
-        if agent is None:
-            logger.error(
-                "RoomMessageCenter: No active agent available for message %s after filtering",
+                "RoomMessageCenter: No active agent found for message %s",
                 current_message.message_id,
             )
             return None
 
+        # query_similar_agents already filters active_only=True; take the first match
+        agent = matched_agents[0]
         current_message.agent_id = agent.agent_id
 
         update_success = (
@@ -1549,7 +1263,7 @@ class RoomMessageCenter:
             return None
 
         logger.info(
-            "RoomMessageCenter: Successfully assigned active agent %s to message %s",
+            "RoomMessageCenter: Assigned agent %s to message %s",
             agent.agent_id,
             current_message.message_id,
         )
@@ -1630,27 +1344,18 @@ class RoomMessageCenter:
                     exc,
                     exc_info=True,
                 )
-                # Mark the task as failed in DB so it doesn't stay in "working" forever
                 error_text = f"Agent streaming failed: {exc}"
-                if (
-                    current_message.message_content
-                    and current_message.message_content.message_task
-                ):
-                    current_message.message_content.message_task.status = TaskStatus(
+                task = _get_task(current_message)
+                if task:
+                    task.status = TaskStatus(
                         state=TaskState.failed,
                         message=Message(
-                            role=Role.agent,
-                            parts=[TextPart(text=error_text)],
+                            role=Role.agent, parts=[TextPart(text=error_text)]
                         ),
                     )
                     current_message.task_updated_at = utcnow()
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=current_message.message_id,
-                            message=current_message,
-                        )
-                    )
-                # Notify frontend via SSE
+                    await self._persist_message(current_message)
+                # Notify frontend via SSE (always send, regardless of task_info)
                 await self.notification_service.send_task_update(
                     room_id=room_id,
                     message_id=current_message.message_id,
@@ -1713,11 +1418,6 @@ class RoomMessageCenter:
         if current_message is None:
             return ProcessingResult(ProcessingStatus.FAILED, full_response_text)
 
-        # Note: We no longer send agent_response here since task_update already
-        # delivers the content with message_id for consistent frontend tracking.
-        # The task_update event is sent at the end of streaming (line ~1954) or
-        # sync response (line ~2852) with status="completed".
-
         return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
     # ------------------------------------------------------------------
@@ -1742,6 +1442,7 @@ class RoomMessageCenter:
         # raw_response is a SendMessageResponse
         if isinstance(raw_response.root, JSONRPCErrorResponse):
             from services.a2a_service import A2AServiceError
+
             raise A2AServiceError(str(raw_response.root.error.message))
 
         result = raw_response.root.result
@@ -1762,7 +1463,7 @@ class RoomMessageCenter:
 
         if result.kind == "task":
             state = result.status.state
-            state_value = state.value if hasattr(state, "value") else str(state)
+            state_value = _state_str(state)
             return {
                 "type": "task",
                 "message_id": message_id,
@@ -1784,18 +1485,9 @@ class RoomMessageCenter:
     ) -> tuple[bool, str | None, str | None]:
         """Handle synchronous (non-streaming) response from an agent.
 
-        All agents now use task tracking for consistent UX (task status bubbles)
-        and SSE reconnection support.
-
         Returns:
-            Tuple of (success, response_text, message_id):
-                - success: Whether the operation succeeded
-                - response_text: The response text (None for async tasks)
-                - message_id: The message ID if this is a push notification task
-                  that requires queue pausing (None otherwise). This is used
-                  in webhook URLs for task tracking.
+            Tuple of (success, response_text, paused_message_id).
         """
-        # Step 1: Create task record and emit task_submitted SSE
         task_info = await self._setup_task_tracking(
             current_message,
             agent_card,
@@ -1806,16 +1498,23 @@ class RoomMessageCenter:
         )
         if not task_info:
             logger.warning(
-                "RoomMessageCenter: task tracking setup failed for message %s "
-                "(agent: %s) — continuing without tracking (degraded mode)",
+                "RoomMessageCenter: task tracking setup failed for message %s — degraded mode",
                 current_message.message_id,
-                agent_card.name,
             )
 
-        created_at = task_info.get("created_at") if task_info else None
+        ctx = ProcessingContext(
+            room_id=room_id,
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id=current_message.message_id,
+            task_info=task_info,
+            created_at=task_info.get("created_at") if task_info else None,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
         message_id = current_message.message_id
 
-        # Step 3: Call the agent (this blocks until response)
+        # Call the agent (this blocks until response)
         try:
             if task_info:
                 response = await self.a2a_service.send_message_to_tracked_agent(
@@ -1826,7 +1525,6 @@ class RoomMessageCenter:
                     context_id=task_info["context_id"],
                 )
             else:
-                # Fallback: send without tracking (no push notifications / DB updates)
                 raw_response = await self.a2a_service.send_message_sync(
                     agent_card=agent_card,
                     message=prepared_message,
@@ -1834,172 +1532,93 @@ class RoomMessageCenter:
                 response = self._parse_sync_fallback_response(raw_response, message_id)
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
-            # Send task_update with failed status
             if task_info:
-                await self.notification_service.send_task_update(
-                    room_id=room_id,
-                    message_id=message_id,
-                    status="failed",
-                    agent_card=agent_card,
-                    agent_id=current_message.agent_id,
-                    created_at=created_at,
-                    error=str(exc),
-                    step_number=step_number,
-                    total_steps=total_steps,
-                )
+                await self._notify_task(ctx, "failed", error=str(exc))
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
-        # Note: Task data is already updated in the database by send_message_to_tracked_agent
-        # via update_task_on_message. We don't need to call _handle_a2a_response_for_room here
-        # as it could potentially overwrite the updated task with stale data from current_message.
-
-        # Step 5: Handle "message" response (fast path - agent returned immediately)
+        # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
-
-            # Update task status to completed in database
-            # This ensures the status is persisted for page reloads (SSE only notifies live clients)
-            if (
-                current_message.message_content
-                and current_message.message_content.message_task
-            ):
-                current_message.message_content.message_task.status = TaskStatus(
-                    state=TaskState.completed
-                )
-                # Also update message_text with the response content for display
+            task = _get_task(current_message)
+            if task:
+                task.status = TaskStatus(state=TaskState.completed)
                 if full_response_text:
                     current_message.message_content.message_text = full_response_text
-                # Update task_updated_at for staleness detection on page reload
                 current_message.task_updated_at = utcnow()
+                await self._persist_message(current_message)
 
-                update_response = (
-                    await self.room_services.update_agent_message_by_message_id(
-                        RoomCenterAgentMessageRequest(
-                            message_id=current_message.message_id,
-                            message=current_message,
-                        )
-                    )
-                )
-                if not update_response.success:
-                    logger.error(
-                        "RoomMessageCenter: Failed to update sync message status to completed: %s",
-                        update_response.error,
-                    )
-
-            # Send task_update with completed status
             if task_info:
-                await self.notification_service.send_task_update(
-                    room_id=room_id,
-                    message_id=message_id,
-                    status="completed",
-                    agent_card=agent_card,
-                    agent_id=current_message.agent_id,
-                    created_at=created_at,
-                    content=full_response_text,
-                    step_number=step_number,
-                    total_steps=total_steps,
-                )
-
+                await self._notify_task(ctx, "completed", content=full_response_text)
             return True, full_response_text, None
 
-        # Step 6: Handle "task" response (async path - agent is still working)
+        # Handle "task" response (async path)
         if response.get("type") == "task":
             status = response.get("status") or "working"
-
-            # Send task_update with current status (may be working, input_required, etc.)
             if task_info:
-                await self.notification_service.send_task_update(
-                    room_id=room_id,
-                    message_id=message_id,
-                    status=status,
-                    agent_card=agent_card,
-                    agent_id=current_message.agent_id,
-                    created_at=created_at,
+                await self._notify_task(
+                    ctx,
+                    status,
                     requires_input=response.get("requires_input", False),
                     requires_auth=response.get("requires_auth", False),
                     status_message=response.get("message"),
-                    step_number=step_number,
-                    total_steps=total_steps,
                 )
 
-            # Only pause queue for push notification agents
-            # Non-push agents complete synchronously, no need to pause
             if self.a2a_service.has_push_notification_capability(agent_card):
                 return True, None, message_id
+
+            # Non-push agent: poll for completion
+            agent_task_id = response.get("task_id")
+            if not agent_task_id:
+                logger.warning(
+                    "RoomMessageCenter: Non-push agent task response without task_id"
+                )
+                return True, None, None
+
+            logger.info(
+                "RoomMessageCenter: Polling non-push agent task %s", agent_task_id
+            )
+            completed_task = await self._poll_task_until_complete(
+                agent_card=agent_card,
+                task_id=agent_task_id,
+                message_id=message_id,
+                timeout_seconds=120,
+            )
+
+            if completed_task:
+                state = completed_task.status.state
+                state_value = _state_str(state)
+
+                if task_info:
+                    await self.database_service.update_task_on_message(
+                        message_id, completed_task.model_dump(mode="json")
+                    )
+
+                final_content = None
+                final_error = None
+                if state == TaskState.completed and completed_task.artifacts:
+                    final_content = extract_text_from_artifacts(
+                        completed_task.artifacts
+                    )
+                elif is_failure_state(state):
+                    final_error = (
+                        extract_error_message(completed_task) or f"Task {state_value}"
+                    )
+
+                if task_info:
+                    await self._notify_task(
+                        ctx,
+                        state_value,
+                        content=final_content,
+                        error=final_error,
+                    )
+                return True, final_content, None
             else:
-                # Non-push agent returned a task response - poll for completion
-                # These agents don't support webhooks, so we need to poll
-                agent_task_id = response.get("task_id")
-                if not agent_task_id:
-                    logger.warning(
-                        "RoomMessageCenter: Non-push agent returned task response "
-                        "without task_id, cannot poll for completion"
-                    )
-                    return True, None, None
-
-                logger.info(
-                    "RoomMessageCenter: Non-push agent returned task response, "
-                    "polling for completion (task_id: %s)",
-                    agent_task_id,
+                logger.warning(
+                    "RoomMessageCenter: Polling timed out for task %s",
+                    message_id,
                 )
-
-                # Poll until task completes (with 2 minute timeout)
-                completed_task = await self._poll_task_until_complete(
-                    agent_card=agent_card,
-                    task_id=agent_task_id,
-                    message_id=message_id,
-                    timeout_seconds=120,
-                )
-
-                if completed_task:
-                    state = completed_task.status.state
-                    state_value = state.value if hasattr(state, "value") else str(state)
-
-                    # Update database with final task state
-                    if task_info:
-                        await self.database_service.update_task_on_message(
-                            message_id, completed_task.model_dump(mode="json")
-                        )
-
-                    # Extract content or error based on final state
-                    final_content = None
-                    final_error = None
-
-                    if state == TaskState.completed and completed_task.artifacts:
-                        final_content = extract_text_from_artifacts(
-                            completed_task.artifacts
-                        )
-                    elif is_failure_state(state):
-                        final_error = extract_error_message(completed_task)
-                        if not final_error:
-                            final_error = f"Task {state_value}"
-
-                    # Send final task_update SSE
-                    if task_info:
-                        await self.notification_service.send_task_update(
-                            room_id=room_id,
-                            message_id=message_id,
-                            status=state_value,
-                            agent_card=agent_card,
-                            agent_id=current_message.agent_id,
-                            created_at=created_at,
-                            content=final_content,
-                            error=final_error,
-                            step_number=step_number,
-                            total_steps=total_steps,
-                        )
-
-                    # Return the content for storing in conversation history
-                    return True, final_content, None
-                else:
-                    # Polling timed out - task will be handled by stale task checker
-                    logger.warning(
-                        "RoomMessageCenter: Polling timed out for task %s, "
-                        "will be handled by stale task checker",
-                        message_id,
-                    )
-                    return True, None, None
+                return True, None, None
 
         logger.error("Unexpected response type from task tracking: %s", response)
         return False, "", None
@@ -2067,39 +1686,19 @@ class RoomMessageCenter:
                 # Non-debate mode: queue message directly without debate prompt injection
                 message_queue.append(next_message)
 
-    async def _update_room_memory_after_processing(
-        self,
-        room_id: str,
-        room_memory: RoomMemory,
-    ) -> None:
-        """
-        Post-processing hook after all agent messages are processed.
-
-        Note: With the new ChatGPT/Claude-style context management, agent responses
-        are stored incrementally in conversation history via add_agent_response_to_memory()
-        during _process_agent_message_queue(). This method is kept for:
-        1. Logging/debugging
-        2. Future enhancements (e.g., periodic LLM summarization of long conversations)
-        """
-
-        # Get current context stats for logging
+    async def _log_room_memory_stats(self, room_id: str) -> None:
+        """Log room memory stats after processing (debug/monitoring only)."""
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         if room_memory and room_memory.memory_content:
             stats = get_context_stats(room_memory.memory_content)
             logger.info(
-                "RoomMessageCenter: Room %s memory updated - %d turns in history, "
-                "summary=%s, total_chars=%d",
+                "RoomMessageCenter: Room %s memory - %d turns, summary=%s, chars=%d",
                 room_id,
                 stats.get("history_turns", 0),
                 "yes" if stats.get("has_summary") else "no",
                 stats.get("total_chars", 0),
             )
-        else:
-            logger.info(
-                "RoomMessageCenter: Room %s - no memory content to update",
-                room_id,
-            )
 
 
-# Module-level singleton — all callers should import this instance
-# rather than creating their own RoomMessageCenter().
+# Module-level singleton
 room_message_center = RoomMessageCenter()
