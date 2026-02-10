@@ -45,45 +45,31 @@ class WorkflowCenter:
         self.database_service = db_service
         self.sse_manager = sse_manager
 
+    def _success_response(self, task_id: str, **kwargs) -> OrchestrationResponse:
+        """Shorthand for a successful OrchestrationResponse."""
+        return OrchestrationResponse(
+            task_id=task_id, success=True, error=None, status_code=200, **kwargs
+        )
+
+    def _error_response(
+        self, task_id: str, error: str, status_code: int = 500
+    ) -> OrchestrationResponse:
+        """Shorthand for a failed OrchestrationResponse."""
+        return OrchestrationResponse(
+            task_id=task_id, success=False, error=error, status_code=status_code
+        )
+
     async def decompose_task(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Decompose a complex root task into structured subtasks using AI.
+        """Decompose a root task into structured MetaTask subtasks using AI.
 
-        This method orchestrates the complete task decomposition process:
-        1. Retrieves the base task and validates its existence
-        2. Checks for existing meta tasks and deletes them if found (for re-decomposition)
-        3. Uses OpenAI to analyze and decompose the task into execution steps
-        4. Creates structured MetaTasks for each execution step
-        5. Assigns proper execution order and dependencies
-        6. Returns comprehensive orchestration results
-
-        The decomposition process includes:
-        - Task goal analysis and understanding
-        - Existing meta tasks cleanup (if any)
-        - AI-powered step generation and planning
-        - MetaTask creation with detailed descriptions
-        - Execution order assignment and validation
-        - Error handling and quality assurance
-
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The ID of the root task to decompose
-                - decomposition_parameters: Optional parameters for decomposition
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The original root task ID
-                - success: Boolean indicating success/failure
-                - meta_task_ids: List of created MetaTask IDs
-                - status_code: HTTP status code
-                - error: Error message if applicable
+        Retrieves the base task, cleans up any existing meta tasks, uses OpenAI
+        to generate execution steps, and creates MetaTasks with dependencies.
 
         Raises:
-            TaskIdRequiredError: If task_id is missing
-            TaskNotFoundError: If the specified task is not found
-            DecompositionError: If AI decomposition fails
+            TaskIdRequiredError: If task_id is missing.
+            TaskNotFoundError: If the specified task is not found.
         """
         root_task_id = request.task_id
         if root_task_id is None:
@@ -107,124 +93,29 @@ class WorkflowCenter:
         )
 
         if not chat_context_response.success:
-            return OrchestrationResponse(
-                task_id=root_task_id,
-                success=False,
-                error="Failed to get chat context",
-                status_code=500,
+            return self._error_response(
+                root_task_id, "Failed to get chat context"
             )
 
-        # Check for existing meta tasks and delete them if found
-        existing_meta_tasks_result = (
-            await self.task_service.query_meta_tasks_by_parent_task_id(
-                TaskCenterRequest(parent_task_id=root_task_id)
-            )
-        )
-
-        if existing_meta_tasks_result.success and existing_meta_tasks_result.meta_tasks:
-            logger.info(
-                "WorkflowCenter: Found %s existing meta tasks for base task %s, "
-                "deleting them...",
-                len(existing_meta_tasks_result.meta_tasks),
+        # Clean up any existing meta tasks before re-decomposition
+        failed_deletions = await self._delete_existing_meta_tasks(root_task_id)
+        if failed_deletions:
+            return self._error_response(
                 root_task_id,
-            )
-
-            # Delete existing meta tasks
-            deleted_count = 0
-            failed_deletions = []
-
-            for meta_task in existing_meta_tasks_result.meta_tasks:
-                try:
-                    delete_response = (
-                        await self.task_service.delete_meta_task_by_task_id(
-                            TaskCenterRequest(task_id=meta_task.task_id)
-                        )
-                    )
-
-                    if delete_response.success:
-                        deleted_count += 1
-                        logger.info(
-                            "WorkflowCenter: Deleted existing meta task %s",
-                            meta_task.task_id,
-                        )
-                    else:
-                        failed_deletions.append(meta_task.task_id)
-                        logger.error(
-                            "WorkflowCenter: Failed to delete meta task %s: %s",
-                            meta_task.task_id,
-                            delete_response.error,
-                        )
-
-                except Exception as e:
-                    failed_deletions.append(meta_task.task_id)
-                    logger.error(
-                        "WorkflowCenter: Exception while deleting meta task %s: %s",
-                        meta_task.task_id,
-                        str(e),
-                    )
-
-            logger.info(
-                "WorkflowCenter: Successfully deleted %s existing meta tasks",
-                deleted_count,
-            )
-
-            if failed_deletions:
-                logger.warning(
-                    "WorkflowCenter: Failed to delete %s meta tasks: %s",
-                    len(failed_deletions),
-                    failed_deletions,
-                )
-
-        else:
-            logger.info(
-                "WorkflowCenter: No existing meta tasks found for base task %s, "
-                "proceeding with new decomposition",
-                root_task_id,
+                f"Failed to clean up {len(failed_deletions)} existing meta tasks before re-decomposition",
             )
 
         # Extract task goal/description from BaseTask
-        if (
-            base_task.task.history
-            and len(base_task.task.history) > 0
-            and len(base_task.task.history[0].parts) > 0
-        ):
-            first_part = base_task.task.history[0].parts[0].root
-            task_description = (
-                first_part.text
-                if first_part.kind == "text"
-                else "No text content available"
-            )
-        else:
-            task_description = "No task description available"
+        task_description = self._get_first_text_from_task(base_task)
 
-        similar_agents = await self.database_service.query_similar_agents(
-            task_description, count=5, active_only=True
+        best_agent = await self._select_best_agent_for_decomposition(
+            task_description
         )
-
-        if not similar_agents:
-            logger.error(
-                "WorkflowCenter: No active agents found for task decomposition"
+        if best_agent is None:
+            return self._error_response(
+                root_task_id,
+                "No active agents available for task decomposition",
             )
-            return OrchestrationResponse(
-                task_id=root_task_id,
-                success=False,
-                error="No active agents available for task decomposition",
-                status_code=500,
-            )
-
-        best_agent_id = await self.openai_service.select_best_agent_for_task(
-            task_description, similar_agents
-        )
-
-        best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
-
-        # Verify the selected agent is active, fallback to first similar agent if not
-        if best_agent is None or best_agent.agent_status != AgentStatus.active:
-            logger.warning(
-                "WorkflowCenter: Selected agent %s is not active, falling back to first active agent",
-                best_agent_id,
-            )
-            best_agent = similar_agents[0]  # Already filtered for active agents
 
         # Proceed with task decomposition
         decompose_task_response = await self.openai_service.decompose_task(
@@ -242,11 +133,9 @@ class WorkflowCenter:
 
             if "execution_steps" not in response_data:
                 logger.error("Invalid response format: missing execution_steps")
-                return OrchestrationResponse(
-                    task_id=root_task_id,
-                    success=False,
-                    error="Invalid response format from OpenAI service",
-                    status_code=500,
+                return self._error_response(
+                    root_task_id,
+                    "Invalid response format from OpenAI service",
                 )
 
             first_step = response_data["execution_steps"][0]
@@ -255,11 +144,9 @@ class WorkflowCenter:
                 or first_step.get("step_description")
                 == "Error occurred during task decomposition"
             ):
-                return OrchestrationResponse(
-                    task_id=root_task_id,
-                    success=False,
-                    error="Failed to decompose task, please try again",
-                    status_code=500,
+                return self._error_response(
+                    root_task_id,
+                    "Failed to decompose task, please try again",
                 )
 
             # Store created meta tasks to establish dependencies
@@ -340,43 +227,27 @@ class WorkflowCenter:
 
         except json.JSONDecodeError as e:
             logger.error("Failed to parse OpenAI response as JSON: %s", e)
-            return OrchestrationResponse(
-                task_id=root_task_id,
-                success=False,
-                error=f"Invalid JSON response from OpenAI service: {str(e)}",
-                status_code=500,
+            return self._error_response(
+                root_task_id,
+                f"Invalid JSON response from OpenAI service: {str(e)}",
             )
         except Exception as e:
             logger.error("Error creating meta tasks: %s", e)
-            return OrchestrationResponse(
-                task_id=root_task_id,
-                success=False,
-                error=f"Failed to create meta tasks: {str(e)}",
-                status_code=500,
+            return self._error_response(
+                root_task_id,
+                f"Failed to create meta tasks: {str(e)}",
             )
 
     async def assign_agents_metatasks_by_parent_task_id(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Assign agents to all meta tasks under a specific parent task (BaseTask).
+        """Assign agents to all meta tasks under a parent task.
 
-        This method performs batch agent assignment:
-        1. Retrieves all MetaTasks under the specified parent task
-        2. For each MetaTask, calls assign_agent_to_meta_task to assign the most suitable agent
-        3. Tracks assignment results and provides comprehensive feedback
+        Iterates over all MetaTasks for the given parent, calls
+        assign_agent_to_meta_task for each, and returns batch results.
 
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The parent task ID (BaseTask ID) to find meta tasks for
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The parent task ID
-                - meta_task_ids: List of all meta task IDs that were processed
-                - success: Boolean indicating overall success/failure
-                - error: Error message if applicable
-                - status_code: HTTP status code
+        Raises:
+            TaskIdRequiredError: If task_id is missing.
         """
         parent_task_id = request.task_id
         if parent_task_id is None:
@@ -388,11 +259,8 @@ class WorkflowCenter:
         )
 
         if not query_result.success:
-            return OrchestrationResponse(
-                task_id=parent_task_id,
-                success=False,
-                error="Failed to query meta tasks",
-                status_code=500,
+            return self._error_response(
+                parent_task_id, "Failed to query meta tasks"
             )
 
         meta_tasks = query_result.meta_tasks
@@ -448,81 +316,25 @@ class WorkflowCenter:
                 )
 
         # Determine overall success
-        total_meta_tasks = len(meta_tasks)
-        successful_assignments = len(assigned_meta_task_ids)
-
-        if successful_assignments == total_meta_tasks:
-            # All assignments successful
-            return OrchestrationResponse(
-                task_id=parent_task_id,
-                meta_task_ids=assigned_meta_task_ids,
-                success=True,
-                error=None,
-                status_code=200,
-            )
-        elif successful_assignments > 0:
-            # Partial success
-            error_summary = (
-                f"Partial success: {successful_assignments}/{total_meta_tasks} meta tasks assigned."
-                f"Failed assignments: {failed_assignments}"
-            )
-            return OrchestrationResponse(
-                task_id=parent_task_id,
-                meta_task_ids=assigned_meta_task_ids,
-                success=False,
-                error=error_summary,
-                status_code=207,  # Multi-Status
-            )
-        else:
-            # Complete failure
-            error_summary = (
-                f"All assignments failed. Failed assignments: {failed_assignments}"
-            )
-            return OrchestrationResponse(
-                task_id=parent_task_id,
-                meta_task_ids=[],
-                success=False,
-                error=error_summary,
-                status_code=500,
-            )
+        return self._build_batch_response(
+            parent_task_id,
+            assigned_meta_task_ids,
+            failed_assignments,
+            len(meta_tasks),
+            "assigned",
+        )
 
     async def assign_agent_to_meta_task(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Assign the most suitable agent to a specific MetaTask.
+        """Assign the most suitable agent to a specific MetaTask.
 
-        This method performs intelligent agent assignment:
-        1. Retrieves the MetaTask and validates its current state
-        2. Uses semantic similarity to find the best matching agent
-        3. Validates agent availability and capability
-        4. Assigns the agent to the MetaTask
-        5. Updates the MetaTask with agent assignment
-
-        The assignment process includes:
-        - MetaTask validation and state checking
-        - Agent capability analysis and matching
-        - Semantic similarity calculation
-        - Assignment validation and confirmation
-        - Error handling and fallback mechanisms
-
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The MetaTask ID to assign an agent to
-                - assignment_parameters: Optional assignment preferences
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The MetaTask ID
-                - success: Boolean indicating success/failure
-                - assigned_agent_id: The ID of the assigned agent
-                - status_code: HTTP status code
-                - error: Error message if applicable
+        Uses semantic similarity to find candidate agents, selects the best
+        one via OpenAI, and updates the MetaTask with the assignment.
 
         Raises:
-            TaskIdRequiredError: If task_id is missing
-            TaskNotFoundError: If the MetaTask is not found
-            AgentNotAssignedError: If agent assignment fails
+            TaskIdRequiredError: If task_id is missing.
+            TaskNotFoundError: If the MetaTask is not found.
         """
         meta_task_id = request.task_id
 
@@ -545,11 +357,8 @@ class WorkflowCenter:
             agents_matched_response.agents is None
             or len(agents_matched_response.agents) == 0
         ):
-            return OrchestrationResponse(
-                task_id=meta_task_id,
-                success=False,
-                error="No active agent matched",
-                status_code=200,
+            return self._error_response(
+                meta_task_id, "No active agent matched", status_code=200
             )
 
         # Filter for active agents only (safety check - db_service should already filter)
@@ -564,11 +373,8 @@ class WorkflowCenter:
                 "WorkflowCenter: No active agents available for meta task %s",
                 meta_task_id,
             )
-            return OrchestrationResponse(
-                task_id=meta_task_id,
-                success=False,
-                error="No active agent available",
-                status_code=200,
+            return self._error_response(
+                meta_task_id, "No active agent available", status_code=200
             )
 
         best_agent_id = await self.openai_service.select_best_agent_for_task(
@@ -592,44 +398,25 @@ class WorkflowCenter:
         )
 
         if update_response.success:
-            return OrchestrationResponse(
-                task_id=meta_task_id,
-                success=True,
-                error=None,
-                agent_id=best_agent_id,
-                status_code=200,
+            return self._success_response(
+                meta_task_id, agent_id=best_agent_id
             )
         else:
-            return OrchestrationResponse(
-                task_id=meta_task_id,
-                success=False,
-                error="Failed to update meta task",
-                status_code=500,
+            return self._error_response(
+                meta_task_id, "Failed to update meta task"
             )
 
     async def run_workflow(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Run a workflow of meta tasks.
+        """Execute all meta tasks under a base task sequentially.
 
-        This method executes all meta tasks under a base task in sequence:
-        1. Retrieves the base task and validates its existence
-        2. Gets all meta tasks under the base task (using base_task_id as parent_task_id)
-        3. Executes each meta task sequentially using process_meta_task
-        4. Returns only after all meta tasks have been processed
+        Sorts meta tasks by execution_order, passes dependency context between
+        steps, supports cancellation, and returns batch results.
 
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The base task ID (used as parent_task_id for meta tasks)
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The base task ID
-                - meta_task_ids: List of all meta task IDs that were processed
-                - success: Boolean indicating overall success/failure
-                - error: Error message if applicable
-                - status_code: HTTP status code
+        Raises:
+            TaskIdRequiredError: If task_id is missing.
+            TaskNotFoundError: If the base task is not found.
         """
         base_task_id = request.task_id
         if base_task_id is None:
@@ -656,11 +443,8 @@ class WorkflowCenter:
                 "WorkflowCenter: Failed to query meta tasks for base task %s",
                 base_task_id,
             )
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                success=False,
-                error="Failed to query meta tasks",
-                status_code=500,
+            return self._error_response(
+                base_task_id, "Failed to query meta tasks"
             )
 
         meta_tasks = meta_tasks_result.meta_tasks
@@ -801,93 +585,43 @@ class WorkflowCenter:
         )
 
         if successful_executions == total_meta_tasks:
-            # All executions successful
             logger.info(
                 "WorkflowCenter: All meta tasks executed successfully for base task %s",
                 base_task_id,
             )
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                meta_task_ids=processed_meta_task_ids,
-                success=True,
-                error=None,
-                status_code=200,
-            )
         elif successful_executions > 0:
-            # Partial success
-            error_summary = (
-                f"Partial success: {successful_executions}/{total_meta_tasks} meta tasks executed. "
-                f"Failed executions: {failed_executions}"
-            )
             logger.warning(
-                "WorkflowCenter: Partial workflow execution for base task %s: %s",
+                "WorkflowCenter: Partial workflow execution for base task %s",
                 base_task_id,
-                error_summary,
-            )
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                meta_task_ids=processed_meta_task_ids,
-                success=False,
-                error=error_summary,
-                status_code=207,  # Multi-Status
             )
         else:
-            # Complete failure
-            error_summary = (
-                f"All executions failed. Failed executions: {failed_executions}"
-            )
             logger.error(
-                "WorkflowCenter: Complete workflow failure for base task %s: %s",
+                "WorkflowCenter: Complete workflow failure for base task %s",
                 base_task_id,
-                error_summary,
             )
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                meta_task_ids=[],
-                success=False,
-                error=error_summary,
-                status_code=500,
-            )
+
+        return self._build_batch_response(
+            base_task_id,
+            processed_meta_task_ids,
+            failed_executions,
+            total_meta_tasks,
+            "executed",
+        )
 
     async def process_meta_task(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Execute a MetaTask by sending it to the assigned agent.
+        """Execute a MetaTask by sending it to the assigned agent via A2A.
 
-        This method orchestrates the MetaTask execution process:
-        1. Validates the MetaTask and its agent assignment
-        2. Prepares the task message for the agent
-        3. Sends the task to the assigned agent via A2A protocol
-        4. Processes the agent's response and updates task state
-        5. Handles task completion and result collection
-
-        The execution process includes:
-        - Task validation and state checking
-        - Agent communication setup and message preparation
-        - A2A protocol message exchange
-        - Response processing and task state updates
-        - Error handling and recovery mechanisms
-
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The MetaTask ID to process
-                - execution_parameters: Optional execution preferences
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The MetaTask ID
-                - success: Boolean indicating success/failure
-                - task_state: Current state of the MetaTask
-                - agent_response: Response from the assigned agent
-                - status_code: HTTP status code
-                - error: Error message if applicable
+        Validates the meta task and agent, sends the task message, processes
+        the agent response (task/message/status-update/artifact-update), and
+        updates the meta task accordingly.
 
         Raises:
-            TaskIdRequiredError: If task_id is missing
-            TaskNotFoundError: If the MetaTask is not found
-            AgentNotAssignedError: If no agent is assigned
-            AgentNotFoundError: If the assigned agent is not available
+            TaskIdRequiredError: If task_id is missing.
+            TaskNotFoundError: If the MetaTask is not found.
+            AgentNotAssignedError: If no agent is assigned.
+            AgentNotFoundError: If the assigned agent is not available.
         """
         meta_task_id = request.task_id
 
@@ -933,11 +667,9 @@ class WorkflowCenter:
                     "WorkflowCenter: send_message_to_agent returned None for meta task %s",
                     meta_task_id,
                 )
-                return OrchestrationResponse(
-                    task_id=meta_task_id,
-                    success=False,
-                    error="Failed to send message to agent - no response received",
-                    status_code=500,
+                return self._error_response(
+                    meta_task_id,
+                    "Failed to send message to agent - no response received",
                 )
 
             process_response = await self.a2a_service.process_a2a_response(
@@ -951,11 +683,9 @@ class WorkflowCenter:
                     "WorkflowCenter: process_a2a_response returned None for meta task %s",
                     meta_task_id,
                 )
-                return OrchestrationResponse(
-                    task_id=meta_task_id,
-                    success=False,
-                    error="Failed to process agent response - no valid response data",
-                    status_code=500,
+                return self._error_response(
+                    meta_task_id,
+                    "Failed to process agent response - no valid response data",
                 )
 
             if process_response.kind == "task":
@@ -963,17 +693,9 @@ class WorkflowCenter:
                 update_response = await self.task_service.update_meta_task_by_task_id(
                     TaskCenterRequest(task_id=meta_task_id, meta_task=meta_task)
                 )
-                if update_response.success:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id, success=True, error=None, status_code=200
-                    )
-                else:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id,
-                        success=False,
-                        error="Failed to update meta task",
-                        status_code=500,
-                    )
+                return self._meta_task_update_response(
+                    meta_task_id, update_response, "Failed to update meta task"
+                )
 
             elif process_response.kind == "message":
                 if meta_task.task:
@@ -984,17 +706,9 @@ class WorkflowCenter:
                 update_response = await self.task_service.update_task_of_meta_task(
                     TaskCenterRequest(task_id=meta_task_id, task=meta_task.task)
                 )
-                if update_response.success:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id, success=True, error=None, status_code=200
-                    )
-                else:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id,
-                        success=False,
-                        error="Failed to update task",
-                        status_code=500,
-                    )
+                return self._meta_task_update_response(
+                    meta_task_id, update_response, "Failed to update task"
+                )
 
             elif process_response.kind == "status-update":
                 # Handle status update responses - update task status and potentially add message
@@ -1020,17 +734,11 @@ class WorkflowCenter:
                     TaskCenterRequest(task_id=meta_task_id, task=meta_task.task)
                 )
 
-                if update_response.success:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id, success=True, error=None, status_code=200
-                    )
-                else:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id,
-                        success=False,
-                        error="Failed to update task with status update",
-                        status_code=500,
-                    )
+                return self._meta_task_update_response(
+                    meta_task_id,
+                    update_response,
+                    "Failed to update task with status update",
+                )
 
             elif process_response.kind == "artifact-update":
                 # Handle artifact update responses - add artifacts to task
@@ -1043,17 +751,11 @@ class WorkflowCenter:
                     TaskCenterRequest(task_id=meta_task_id, task=meta_task.task)
                 )
 
-                if update_response.success:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id, success=True, error=None, status_code=200
-                    )
-                else:
-                    return OrchestrationResponse(
-                        task_id=meta_task_id,
-                        success=False,
-                        error="Failed to update task with artifact",
-                        status_code=500,
-                    )
+                return self._meta_task_update_response(
+                    meta_task_id,
+                    update_response,
+                    "Failed to update task with artifact",
+                )
 
             # Handle case where process_response doesn't have expected kind
             else:
@@ -1062,21 +764,190 @@ class WorkflowCenter:
                     getattr(process_response, "kind", "unknown"),
                     meta_task_id,
                 )
-                return OrchestrationResponse(
-                    task_id=meta_task_id,
-                    success=False,
-                    error=(
-                        f"Unexpected response type from agent: "
-                        f"{getattr(process_response, 'kind', 'unknown')}"
-                    ),
-                    status_code=500,
+                return self._error_response(
+                    meta_task_id,
+                    f"Unexpected response type from agent: "
+                    f"{getattr(process_response, 'kind', 'unknown')}",
                 )
 
         except Exception as e:
             logger.error("process_meta_task: error: %s", e)
+            return self._error_response(meta_task_id, str(e))
+
+    def _meta_task_update_response(
+        self, meta_task_id: str, update_response, error_msg: str
+    ) -> OrchestrationResponse:
+        """Build an OrchestrationResponse from a task-service update result."""
+        if update_response.success:
+            return self._success_response(meta_task_id)
+        return self._error_response(meta_task_id, error_msg)
+
+    def _build_batch_response(
+        self,
+        task_id: str,
+        success_ids: list[str],
+        failed_items: list[dict],
+        total: int,
+        operation_name: str,
+    ) -> OrchestrationResponse:
+        """Build a 3-way (all success / partial / all failed) batch response."""
+        if len(success_ids) == total:
             return OrchestrationResponse(
-                task_id=meta_task_id, success=False, error=str(e), status_code=500
+                task_id=task_id,
+                meta_task_ids=success_ids,
+                success=True,
+                error=None,
+                status_code=200,
             )
+        elif len(success_ids) > 0:
+            error_summary = (
+                f"Partial success: {len(success_ids)}/{total} meta tasks {operation_name}. "
+                f"Failed: {failed_items}"
+            )
+            return OrchestrationResponse(
+                task_id=task_id,
+                meta_task_ids=success_ids,
+                success=False,
+                error=error_summary,
+                status_code=207,
+            )
+        else:
+            error_summary = (
+                f"All {operation_name} failed. Failed: {failed_items}"
+            )
+            return OrchestrationResponse(
+                task_id=task_id,
+                meta_task_ids=[],
+                success=False,
+                error=error_summary,
+                status_code=500,
+            )
+
+    def _get_first_text_from_task(
+        self, base_task, fallback: str = "No task description available"
+    ) -> str:
+        """Extract the first text content from a base task's history."""
+        if (
+            base_task.task
+            and base_task.task.history
+            and len(base_task.task.history) > 0
+            and base_task.task.history[0].parts
+            and len(base_task.task.history[0].parts) > 0
+        ):
+            first_part = base_task.task.history[0].parts[0].root
+            if first_part.kind == "text":
+                return first_part.text
+        return fallback
+
+    async def _delete_existing_meta_tasks(self, parent_task_id: str) -> list[str]:
+        """Delete existing meta tasks under a parent task.
+
+        Returns a list of task IDs that failed to delete (empty means all succeeded).
+        """
+        existing_meta_tasks_result = (
+            await self.task_service.query_meta_tasks_by_parent_task_id(
+                TaskCenterRequest(parent_task_id=parent_task_id)
+            )
+        )
+
+        if (
+            not existing_meta_tasks_result.success
+            or not existing_meta_tasks_result.meta_tasks
+        ):
+            logger.info(
+                "WorkflowCenter: No existing meta tasks found for base task %s, "
+                "proceeding with new decomposition",
+                parent_task_id,
+            )
+            return []
+
+        logger.info(
+            "WorkflowCenter: Found %s existing meta tasks for base task %s, "
+            "deleting them...",
+            len(existing_meta_tasks_result.meta_tasks),
+            parent_task_id,
+        )
+
+        deleted_count = 0
+        failed_deletions = []
+
+        for meta_task in existing_meta_tasks_result.meta_tasks:
+            try:
+                delete_response = (
+                    await self.task_service.delete_meta_task_by_task_id(
+                        TaskCenterRequest(task_id=meta_task.task_id)
+                    )
+                )
+
+                if delete_response.success:
+                    deleted_count += 1
+                    logger.info(
+                        "WorkflowCenter: Deleted existing meta task %s",
+                        meta_task.task_id,
+                    )
+                else:
+                    failed_deletions.append(meta_task.task_id)
+                    logger.error(
+                        "WorkflowCenter: Failed to delete meta task %s: %s",
+                        meta_task.task_id,
+                        delete_response.error,
+                    )
+
+            except Exception as e:
+                failed_deletions.append(meta_task.task_id)
+                logger.error(
+                    "WorkflowCenter: Exception while deleting meta task %s: %s",
+                    meta_task.task_id,
+                    str(e),
+                )
+
+        logger.info(
+            "WorkflowCenter: Successfully deleted %s existing meta tasks",
+            deleted_count,
+        )
+
+        if failed_deletions:
+            logger.warning(
+                "WorkflowCenter: Failed to delete %s meta tasks: %s",
+                len(failed_deletions),
+                failed_deletions,
+            )
+
+        return failed_deletions
+
+    async def _select_best_agent_for_decomposition(self, task_description: str):
+        """Find the best active agent for task decomposition.
+
+        Queries similar agents, uses OpenAI to pick the best one, and falls
+        back to the first active agent if the selection is invalid.
+
+        Returns the selected agent, or None if no active agents are available.
+        """
+        similar_agents = await self.database_service.query_similar_agents(
+            task_description, count=5, active_only=True
+        )
+
+        if not similar_agents:
+            logger.error(
+                "WorkflowCenter: No active agents found for task decomposition"
+            )
+            return None
+
+        best_agent_id = await self.openai_service.select_best_agent_for_task(
+            task_description, similar_agents
+        )
+
+        best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
+
+        # Verify the selected agent is active, fallback to first similar agent if not
+        if best_agent is None or best_agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "WorkflowCenter: Selected agent %s is not active, falling back to first active agent",
+                best_agent_id,
+            )
+            best_agent = similar_agents[0]  # Already filtered for active agents
+
+        return best_agent
 
     async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
         """Extract the result from a completed meta task for context passing.
@@ -1181,41 +1052,14 @@ CRITICAL INSTRUCTIONS:
     async def summarize_meta_task_for_base_task(
         self, request: OrchestrationRequest
     ) -> OrchestrationResponse:
-        """
-        Synthesize results from multiple MetaTasks into a comprehensive final answer.
+        """Synthesize results from MetaTasks into a final answer for the base task.
 
-        This method orchestrates the result synthesis process:
-        1. Collects all MetaTask results and their execution histories
-        2. Analyzes the original base task goal and requirements
-        3. Synthesizes diverse agent responses into a coherent answer
-        4. Generates a comprehensive final response
-        5. Updates the base task with the final result
-
-        The synthesis process includes:
-        - Result collection and validation
-        - Goal analysis and requirement understanding
-        - Multi-agent response synthesis
-        - Final answer generation and formatting
-        - Quality assurance and validation
-
-        Args:
-            request: OrchestrationRequest containing:
-                - task_id: The base task ID to synthesize results for
-                - synthesis_parameters: Optional synthesis preferences
-
-        Returns:
-            OrchestrationResponse containing:
-                - task_id: The base task ID
-                - success: Boolean indicating success/failure
-                - final_answer: The synthesized comprehensive answer
-                - synthesis_summary: Summary of the synthesis process
-                - status_code: HTTP status code
-                - error: Error message if applicable
+        Collects all MetaTask results, uses OpenAI to synthesize a coherent
+        response, updates chat context, and marks the base task as completed.
 
         Raises:
-            TaskIdRequiredError: If task_id is missing
-            TaskNotFoundError: If the base task is not found
-            SynthesisError: If result synthesis fails
+            TaskIdRequiredError: If task_id is missing.
+            TaskNotFoundError: If the base task is not found.
         """
 
         base_task_id = request.task_id
@@ -1236,11 +1080,8 @@ CRITICAL INSTRUCTIONS:
         meta_tasks = query_result.meta_tasks
 
         if meta_tasks is None or len(meta_tasks) == 0:
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                success=False,
-                error="No meta tasks found",
-                status_code=200,
+            return self._error_response(
+                base_task_id, "No meta tasks found", status_code=200
             )
 
         meta_task_summaries = []
@@ -1275,20 +1116,7 @@ CRITICAL INSTRUCTIONS:
             meta_task.task_description or "No description" for meta_task in meta_tasks
         ]
 
-        if (
-            base_task.task
-            and base_task.task.history
-            and len(base_task.task.history) > 0
-            and base_task.task.history[0].parts
-            and len(base_task.task.history[0].parts) > 0
-        ):
-            first_part = base_task.task.history[0].parts[0].root
-            if first_part.kind == "text":
-                first_message_text = first_part.text
-            else:
-                first_message_text = "No text description available"
-        else:
-            first_message_text = "No task description available"
+        first_message_text = self._get_first_text_from_task(base_task)
 
         summary_response = await self.openai_service.summarize_meta_task_for_base_task(
             first_message_text, meta_task_summaries, meta_task_descriptions
@@ -1308,11 +1136,8 @@ CRITICAL INSTRUCTIONS:
         )
 
         if not chat_context_response.success:
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                success=False,
-                error="Failed to update chat context",
-                status_code=500,
+            return self._error_response(
+                base_task_id, "Failed to update chat context"
             )
 
         if base_task.task.history is None:
@@ -1332,15 +1157,10 @@ CRITICAL INSTRUCTIONS:
         )
 
         if update_response.success:
-            return OrchestrationResponse(
-                task_id=base_task_id, success=True, error=None, status_code=200
-            )
+            return self._success_response(base_task_id)
         else:
-            return OrchestrationResponse(
-                task_id=base_task_id,
-                success=False,
-                error="Failed to update base task",
-                status_code=500,
+            return self._error_response(
+                base_task_id, "Failed to update base task"
             )
 
 

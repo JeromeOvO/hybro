@@ -62,6 +62,15 @@ class ProcessingStatus(Enum):
     PAUSED = "paused"  # Queue paused waiting for push notification task
 
 
+class QueueResult(str, Enum):
+    """Result of processing the agent message queue."""
+
+    COMPLETED = "completed"  # All agents finished
+    FAILED = "failed"  # An agent failed
+    PAUSED = "paused"  # Queue paused; webhook will resume
+    CANCELED = "canceled"  # User canceled or rate-limited
+
+
 @dataclass
 class ProcessingResult:
     """Result of message processing with optional metadata."""
@@ -776,20 +785,29 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
-        success = await self._process_agent_message_queue(
+        queue_result = await self._process_agent_message_queue(
             message_queue,
             room_id,
             room_user_message_id,
             request_user_id=user_id,
         )
 
-        if not success:
+        if queue_result == QueueResult.FAILED:
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
                 status_code=500,
             )
 
+        if queue_result == QueueResult.PAUSED:
+            # Queue paused for push notification — do NOT trigger summary or
+            # COMPLETED yet. The webhook handler will resume and trigger
+            # summary when the agent finishes.
+            return OrchestrationResponse(
+                room_id=room_id, success=True, error=None, status_code=200
+            )
+
+        # QueueResult.COMPLETED or CANCELED — proceed with summary + completion.
         # Let the local room coordinator perform any post-processing logic
         # such as generating debate summaries. Coordination failures should
         # not break the main message processing flow.
@@ -835,7 +853,7 @@ class RoomMessageCenter:
         room_id: str,
         user_message_id: str,
         request_user_id: str | None = None,
-    ) -> bool:
+    ) -> QueueResult:
         """
         Process all messages in the queue sequentially.
 
@@ -846,7 +864,8 @@ class RoomMessageCenter:
             request_user_id: The ID of the user making the request (for rate limiting)
 
         Returns:
-            True if processing completed successfully (or was paused for continuation)
+            QueueResult indicating whether the queue completed, failed, was
+            paused (waiting for a webhook), or was canceled.
         """
         logger.info(
             "RoomMessageCenter: Starting to process message queue with %d messages",
@@ -872,7 +891,7 @@ class RoomMessageCenter:
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
                 self.sse_manager.clear_cancellation(user_message_id)
-                return True  # Return success to avoid error status
+                return QueueResult.CANCELED
 
             # Assign agent if not already assigned
             if current_message.agent_id is None:
@@ -882,7 +901,7 @@ class RoomMessageCenter:
                         "RoomMessageCenter: Failed to assign agent for message %s",
                         current_message.message_id,
                     )
-                    return False
+                    return QueueResult.FAILED
             else:
                 # Agent already assigned, fetch it and verify it's active
                 agent = await self.database_service.get_agent_by_agent_id(
@@ -894,7 +913,7 @@ class RoomMessageCenter:
                         current_message.agent_id,
                         current_message.message_id,
                     )
-                    return False
+                    return QueueResult.FAILED
 
                 # Check if the assigned agent is still active
                 if agent.agent_status != AgentStatus.active:
@@ -912,7 +931,7 @@ class RoomMessageCenter:
                             "RoomMessageCenter: Failed to re-assign agent for message %s after inactive agent",
                             current_message.message_id,
                         )
-                        return False
+                        return QueueResult.FAILED
 
             # Check rate limits before processing (only if user_id is available)
             if request_user_id:
@@ -945,8 +964,8 @@ class RoomMessageCenter:
                     await self.sse_manager.send_processing_status(
                         room_id, SSEProcessingStatus.RATE_LIMITED, user_message_id
                     )
-                    # Return True: rate limiting is expected behavior, not a server error
-                    return True
+                    # Rate limiting is expected behavior, not a server error
+                    return QueueResult.CANCELED
 
             # Process the agent message
             # Step info comes from the RoomAgentMessage (set during task decomposition)
@@ -965,10 +984,10 @@ class RoomMessageCenter:
             )
 
             if result.status == ProcessingStatus.FAILED:
-                return False
+                return QueueResult.FAILED
             elif result.status == ProcessingStatus.CANCELED:
                 # Graceful cancellation - don't treat as error
-                return True
+                return QueueResult.CANCELED
             elif result.status == ProcessingStatus.PAUSED:
                 # Push notification task submitted - save continuation state
                 # First, queue up next messages so they're included in continuation
@@ -977,7 +996,7 @@ class RoomMessageCenter:
                         current_message, message_queue, room_id
                     )
 
-                if result.message_id and len(message_queue) > 0:
+                if result.message_id:
                     await self._save_queue_continuation(
                         message_id=result.message_id,
                         message_queue=message_queue,
@@ -991,7 +1010,7 @@ class RoomMessageCenter:
                         result.message_id,
                         len(message_queue),
                     )
-                return True  # Successfully paused, webhook will resume
+                return QueueResult.PAUSED  # Successfully paused, webhook will resume
 
             # Record the request for rate limiting (only if user_id is available)
             if request_user_id:
@@ -1014,7 +1033,7 @@ class RoomMessageCenter:
                 await self._queue_next_messages(current_message, message_queue, room_id)
 
         logger.info("RoomMessageCenter: Finished processing message queue")
-        return True
+        return QueueResult.COMPLETED
 
     async def _save_queue_continuation(
         self,
@@ -1124,33 +1143,36 @@ class RoomMessageCenter:
 
         # Resume processing the remaining queue
         if len(remaining_queue) > 0:
-            success = await self._process_agent_message_queue(
+            queue_result = await self._process_agent_message_queue(
                 remaining_queue,
                 room_id,
                 user_message_id,
                 request_user_id,
             )
 
-            if success:
-                # Let the local room coordinator perform any post-processing logic
-                # such as generating debate summaries. Coordination failures should
-                # not break the main message processing flow.
-                await self.room_coordinator_service.on_room_user_message_completed(
-                    room_id, user_message_id
-                )
-
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.COMPLETED, user_message_id
-                )
-
-                await self._log_room_memory_stats(room_id)
-            else:
+            if queue_result == QueueResult.PAUSED:
+                # Another agent paused mid-resumed-queue — webhook will resume again
+                return True
+            if queue_result == QueueResult.FAILED:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.ERROR, user_message_id
                 )
+                return False
+            # COMPLETED or CANCELED — fall through to summary
 
-            return success
+        # Trigger summary + completion (covers both empty-queue and
+        # completed-queue cases).  An empty remaining_queue means the
+        # paused agent was the last one — its result was already added
+        # to memory above, so the summary can now include it.
+        await self.room_coordinator_service.on_room_user_message_completed(
+            room_id, user_message_id
+        )
 
+        await self.sse_manager.send_processing_status(
+            room_id, SSEProcessingStatus.COMPLETED, user_message_id
+        )
+
+        await self._log_room_memory_stats(room_id)
         return True
 
     async def _resolve_allowed_agent_ids(
