@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
@@ -8,98 +8,50 @@ from modules.WorkflowCenter import workflow_center
 router = APIRouter()
 
 
-@router.post("/orchestrationCenter/decomposeTask")
-async def decompose_task(request: Request):
+async def _get_task_request(request: Request) -> OrchestrationRequest:
+    """Parse and validate task_id from the request body, returning an OrchestrationRequest."""
     request_data = await request.json()
     task_id = request_data.get("task_id")
-
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
+    return OrchestrationRequest(task_id=task_id)
 
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = await workflow_center.decompose_task(orchestration_request)
 
-    return orchestration_response
+TaskRequestDep = Depends(_get_task_request)
+
+
+@router.post("/orchestrationCenter/decomposeTask")
+async def decompose_task(req: OrchestrationRequest = TaskRequestDep):
+    return await workflow_center.decompose_task(req)
 
 
 @router.post("/orchestrationCenter/assignAgentsToMetaTasks")
-async def assign_agents_to_meta_tasks_by_parent_task_id(request: Request):
-    request_data = await request.json()
-    task_id = request_data.get("task_id")
-
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = (
-        await workflow_center.assign_agents_metatasks_by_parent_task_id(
-            orchestration_request
-        )
-    )
-
-    return orchestration_response
+async def assign_agents_to_meta_tasks_by_parent_task_id(
+    req: OrchestrationRequest = TaskRequestDep,
+):
+    return await workflow_center.assign_agents_metatasks_by_parent_task_id(req)
 
 
 @router.post("/orchestrationCenter/assignAgentToMetaTask")
-async def assign_agent_to_meta_task(request: Request):
-    request_data = await request.json()
-    task_id = request_data.get("task_id")
-
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = await workflow_center.assign_agent_to_meta_task(
-        orchestration_request
-    )
-
-    return orchestration_response
+async def assign_agent_to_meta_task(req: OrchestrationRequest = TaskRequestDep):
+    return await workflow_center.assign_agent_to_meta_task(req)
 
 
 @router.post("/orchestrationCenter/runWorkflow")
-async def run_workflow(request: Request):
-    request_data = await request.json()
-    task_id = request_data.get("task_id")
-
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = await workflow_center.run_workflow(orchestration_request)
-
-    return orchestration_response
+async def run_workflow(req: OrchestrationRequest = TaskRequestDep):
+    return await workflow_center.run_workflow(req)
 
 
 @router.post("/orchestrationCenter/retryMetaTask")
-async def retry_meta_task(request: Request):
-    request_data = await request.json()
-    task_id = request_data.get("task_id")
-
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = await workflow_center.process_meta_task(
-        orchestration_request
-    )
-
-    return orchestration_response
+async def retry_meta_task(req: OrchestrationRequest = TaskRequestDep):
+    return await workflow_center.process_meta_task(req)
 
 
 @router.post("/orchestrationCenter/summarizeMetaTaskForBaseTask")
-async def summarize_meta_task_for_base_task(request: Request):
-    request_data = await request.json()
-    task_id = request_data.get("task_id")
-
-    if not task_id:
-        raise HTTPException(status_code=400, detail="task_id is required")
-
-    orchestration_request = OrchestrationRequest(task_id=task_id)
-    orchestration_response = await workflow_center.summarize_meta_task_for_base_task(
-        orchestration_request
-    )
-
-    return orchestration_response
+async def summarize_meta_task_for_base_task(
+    req: OrchestrationRequest = TaskRequestDep,
+):
+    return await workflow_center.summarize_meta_task_for_base_task(req)
 
 
 @router.post("/orchestrationCenter/processRoomUserMessage")
