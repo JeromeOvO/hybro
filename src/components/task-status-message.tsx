@@ -12,7 +12,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react'
-import { type TaskState, isTerminalState } from '@/lib/types/sse'
+import { type TaskState, isTerminalState, isFailureState, PROCESSING_STATUS } from '@/lib/types/sse'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { MarkdownContent } from './markdown-content'
 
@@ -252,7 +252,7 @@ export function TaskStatusMessage({
   }, [isExpanded])
 
   // Completed state
-  if (status === "completed" && content) {
+  if (status === PROCESSING_STATUS.COMPLETED && content) {
     const isLong = content.length > LONG_CONTENT_THRESHOLD
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -290,7 +290,7 @@ export function TaskStatusMessage({
   }
 
   // Failed/Rejected/Canceled states
-  if (status === "failed" || status === "rejected" || status === "canceled") {
+  if (isFailureState(status)) {
     const titles: Record<string, string> = {
       failed: "Task failed",
       rejected: "Task was rejected",

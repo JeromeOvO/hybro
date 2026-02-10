@@ -7,6 +7,7 @@ import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import type { MessageData } from './room-messages'
+import { MESSAGE_TYPE } from '@/lib/types'
 
 interface MessageBubbleProps {
   message: MessageData
@@ -215,7 +216,7 @@ export function MessageBubble({
   isUserExpanded = false,
   onUserToggle,
 }: MessageBubbleProps) {
-  if (message.type === 'user') {
+  if (message.type === MESSAGE_TYPE.USER) {
     return <UserMessageBubble message={message} />
   }
   return (

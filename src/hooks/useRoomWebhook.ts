@@ -18,7 +18,9 @@ import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
 import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
-import type { SSEMessage, TaskState } from '@/lib/types/sse'
+import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
+import { isTerminalState, PROCESSING_STATUS, isProcessingDone } from '@/lib/types/sse'
+import { MESSAGE_TYPE } from '@/lib/types'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { normalizeTimestampOrNow, isStale } from '@/lib/time'
@@ -325,7 +327,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         // - Recent non-terminal tasks: show as TaskStatusMessage (type: 'task')
         // - Stale non-terminal tasks (older than threshold): convert to failed with timeout error
         // - Other incomplete tasks: hide them (shouldn't exist in normal operation)
-        const terminalStates = ['completed', 'failed', 'canceled', 'rejected']
 
         // Threshold for considering a non-terminal task as "stale" (10 minutes)
         // This matches the backend's stale_check_minutes setting
@@ -337,7 +338,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         const recentNonTerminalTaskIds = new Set<string>()
 
         converted.forEach(msg => {
-          if (msg.type === 'agent' && msg.task_status && !terminalStates.includes(msg.task_status)) {
+          if (msg.type === MESSAGE_TYPE.AGENT && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
             // Use task_updated_at for staleness check (preferred), fall back to message timestamp
             // task_updated_at is refreshed by the backend whenever the agent reports progress
             // or when the stale task checker polls and confirms the task is still working
@@ -360,11 +361,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         // Filter and transform messages
         const processed = converted.filter(msg => {
           // Always keep user messages
-          if (msg.type === 'user') return true
+          if (msg.type === MESSAGE_TYPE.USER) return true
 
           // For agent messages, check task status
           const hasContent = msg.content && msg.content.trim().length > 0
-          const isTerminal = !msg.task_status || terminalStates.includes(msg.task_status)
+          const isTerminal = !msg.task_status || isTerminalState(msg.task_status as TaskState)
           const isRecentTask = recentNonTerminalTaskIds.has(msg.id)
           const isStaleTask = staleTaskIds.has(msg.id)
 
@@ -376,7 +377,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           if (staleTaskIds.has(msg.id)) {
             return {
               ...msg,
-              type: 'task' as const, // Use task type for better UI (Red task bubble)
+              type: MESSAGE_TYPE.TASK, // Use task type for better UI (Red task bubble)
               task_status: 'failed',
               task_error: 'Task timed out - no updates received within the expected timeframe',
               content: msg.content || 'Task failed due to timeout'
@@ -384,14 +385,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           }
 
           // Convert recent running tasks to type: 'task' so they render as TaskStatusMessage
-          if (msg.type === 'agent' && recentNonTerminalTaskIds.has(msg.id)) {
-            return { ...msg, type: 'task' as const }
+          if (msg.type === MESSAGE_TYPE.AGENT && recentNonTerminalTaskIds.has(msg.id)) {
+            return { ...msg, type: MESSAGE_TYPE.TASK }
           }
 
           // Convert failed/rejected/canceled tasks to type: 'task' so they render as TaskStatusMessage
           // (API returns these as type: 'agent' but they should show the red task status bubble)
-          if (msg.type === 'agent' && msg.task_status && ['failed', 'rejected', 'canceled'].includes(msg.task_status)) {
-            return { ...msg, type: 'task' as const }
+          if (msg.type === MESSAGE_TYPE.AGENT && msg.task_status && ['failed', 'rejected', 'canceled'].includes(msg.task_status)) {
+            return { ...msg, type: MESSAGE_TYPE.TASK }
           }
 
           return msg
@@ -476,7 +477,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Check if any task messages already exist in the loaded messages
       // If tasks exist, the placeholder should not be shown (tasks have already started)
       const loadedMessages = messagesQuery.data || []
-      const hasTaskMessages = loadedMessages.some(m => m.type === 'task')
+      const hasTaskMessages = loadedMessages.some(m => m.type === MESSAGE_TYPE.TASK)
       
       if (hasTaskMessages) {
         console.log('🔄 Skipping placeholder - tasks already exist')
@@ -492,7 +493,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         // Add the processing placeholder
         const processingPlaceholder: MessageData = {
           id: placeholderId,
-          type: 'task',
+          type: MESSAGE_TYPE.TASK,
           content: '',
           sender_name: 'HYBRO AI',
           timestamp: new Date().toISOString(),
@@ -516,7 +517,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (sseMessage.data?.content) {
           const newMessage: MessageData = {
             id: sseMessage.data.message_id || `sse-${Date.now()}`,
-            type: 'user',
+            type: MESSAGE_TYPE.USER,
             content: sseMessage.data.content,
             sender_name: sseMessage.data.user_id || 'User',
             timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
@@ -533,7 +534,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           const agentName = await getAgentName(sseMessage.data.agent_id)
           const newMessage: MessageData = {
             id: sseMessage.data.message_id || `sse-agent-${Date.now()}`,
-            type: 'agent',
+            type: MESSAGE_TYPE.AGENT,
             content: sseMessage.data.content,
             sender_name: agentName,
             timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
@@ -548,9 +549,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (sseMessage.data?.status) {
           const status = sseMessage.data.status
 
-          if (status === 'processing') {
+          if (status === PROCESSING_STATUS.PROCESSING) {
             setProcessing(true)
-          } else if (status === 'completed' || status === 'cancelled' || status === 'failed' || status === 'rate_limited') {
+          } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
             setProcessing(false)
             // Remove processing placeholder if it's still showing
             removeLiveMessage(roomId, getProcessingPlaceholderId())
@@ -559,11 +560,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               currentProcessingMessageId.current = null
             }
             // Show appropriate notification
-            if (status === 'cancelled') {
+            if (status === PROCESSING_STATUS.CANCELED) {
               banner.info('Processing stopped by user')
-            } else if (status === 'failed') {
+            } else if (status === PROCESSING_STATUS.FAILED) {
               banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
-            } else if (status === 'rate_limited') {
+            } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
               // Rate limit error is handled separately via 'error' event with more details
               console.log('Rate limit reached, processing stopped')
             }
@@ -611,7 +612,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
           const taskMessage: MessageData = {
             id: messageId,
-            type: 'task',
+            type: MESSAGE_TYPE.TASK,
             content: '', // Will be filled when task completes
             sender_name: resolvedAgentName || 'Agent',
             timestamp: normalizeTimestampOrNow(taskTimestamp),
@@ -669,7 +670,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           // Find and update the task message
           const updatedTaskMessage: MessageData = {
             id: messageId,
-            type: 'task',
+            type: MESSAGE_TYPE.TASK,
             content: sseMessage.data.content || '',
             sender_name: resolvedAgentName || 'Agent',
             timestamp: normalizeTimestampOrNow(taskTimestamp),
@@ -689,8 +690,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           replaceLiveMessage(roomId, messageId, updatedTaskMessage)
 
           // If task is terminal, stop processing indicator
-          const terminalStates = ['completed', 'failed', 'canceled', 'rejected']
-          if (terminalStates.includes(status)) {
+          if (isTerminalState(status)) {
             setProcessing(false)
 
             // Show appropriate notification
@@ -821,7 +821,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     const processingPlaceholderId = getProcessingPlaceholderId()
     const processingPlaceholder: MessageData = {
       id: processingPlaceholderId,
-      type: 'task',
+      type: MESSAGE_TYPE.TASK,
       content: '',
       sender_name: 'HYBRO AI',
       timestamp: new Date(Date.now() + 1).toISOString(), // Slightly after user message for ordering
@@ -926,7 +926,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       await cancelMessage(messageId, getToken)
 
       // Note: Don't clear currentProcessingMessageId or setProcessing here
-      // The SSE 'cancelled' status event will handle state cleanup
+      // The SSE 'canceled' status event will handle state cleanup
       return true
     } catch (error) {
       console.error('Error cancelling message:', error)

@@ -17,7 +17,7 @@ export function UpgradeButton() {
       <SidebarMenuItem>
         <SidebarMenuButton
           size="default"
-          onClick={() => router.push("/price")}
+          onClick={() => router.push("/pricing")}
           tooltip="Upgrade"
           className="
             group-data-[collapsible=icon]:justify-center

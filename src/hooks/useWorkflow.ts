@@ -10,7 +10,7 @@ import {
 } from '@/lib/api'
 import { getAllAgents } from '@/lib/api'
 import { banner } from "@/components/ui/banner"
-import type { MetaTask, Agent, OrchestrationCenterResponse, AgentCenterResponse, BaseTask } from '@/lib/types'
+import type { MetaTask, Agent, OrchestrationResponse, AgentCenterResponse, BaseTask } from '@/lib/types'
 import type { WorkflowStage } from '@/components/workflow-message'
 
 interface UseWorkflowProps {
@@ -80,7 +80,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
     setIsLoading(true)
     try {
       console.log('Decomposing task:', baseTaskId)
-      const response: OrchestrationCenterResponse = await decomposeTask({ task_id: baseTaskId })
+      const response: OrchestrationResponse = await decomposeTask({ task_id: baseTaskId })
       
       if (response.success) {
         // Load meta tasks after decomposition
@@ -102,7 +102,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
   const handleAssignAgents = useCallback(async () => {
     setIsLoading(true)
     try {
-      const response: OrchestrationCenterResponse = await assignAgentsToMetaTasks({ 
+      const response: OrchestrationResponse = await assignAgentsToMetaTasks({ 
         task_id: baseTaskId 
       })
       
@@ -126,7 +126,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
     const handleSummarizeResults = useCallback(async () => {
         setIsLoading(true)
         try {
-          const response: OrchestrationCenterResponse = await summarizeMetaTaskForBaseTask({ 
+          const response: OrchestrationResponse = await summarizeMetaTaskForBaseTask({ 
             task_id: baseTaskId 
           })
           
@@ -156,7 +156,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
   const handleRunWorkflow = useCallback(async () => {
     setIsLoading(true)
     try {
-      const response: OrchestrationCenterResponse = await runWorkflow({
+      const response: OrchestrationResponse = await runWorkflow({
         task_id: baseTaskId
       })
 
@@ -232,7 +232,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
   const handleRetryMetaTask = useCallback(async (metaTaskId: string) => {
     setIsLoading(true)
     try {
-      const response: OrchestrationCenterResponse = await retryMetaTask({ 
+      const response: OrchestrationResponse = await retryMetaTask({ 
         task_id: metaTaskId 
       })
       

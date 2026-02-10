@@ -9,7 +9,7 @@ export interface SSEMessage {
     agent_id?: string
     content?: string
     related_message_id?: string
-    status?: string // "processing", "completed", "cancelled", "failed", "rate_limited"
+    status?: string // "processing", "completed", "canceled", "failed", "rate_limited"
     details?: string
     // Error-specific fields
     error?: string
@@ -61,8 +61,15 @@ export const INTERACTIVE_STATES: TaskState[] = ["input_required", "auth_required
 // States that indicate task is done
 export const TERMINAL_STATES: TaskState[] = ["completed", "failed", "canceled", "rejected"]
 
+// States that indicate task ended unsuccessfully
+export const FAILURE_STATES: TaskState[] = ["failed", "rejected", "canceled"]
+
 export function isTerminalState(state: TaskState): boolean {
   return TERMINAL_STATES.includes(state)
+}
+
+export function isFailureState(state: TaskState): boolean {
+  return FAILURE_STATES.includes(state)
 }
 
 export function isInteractiveState(state: TaskState): boolean {
@@ -100,4 +107,32 @@ export interface TaskUpdateEvent {
     agent_id?: string
     task_content?: string     // The task description being processed
   }
+}
+
+// --- Internal Processing Status (SSE processing_status events) ---
+
+export type ProcessingStatus =
+  | "processing"
+  | "completed"
+  | "canceled"
+  | "failed"
+  | "rejected"
+  | "rate_limited"
+
+export const PROCESSING_STATUS = {
+  PROCESSING: "processing",
+  COMPLETED: "completed",
+  CANCELED: "canceled",
+  FAILED: "failed",
+  REJECTED: "rejected",
+  RATE_LIMITED: "rate_limited",
+} as const
+
+// Statuses that mean processing is done (clear spinner)
+export const PROCESSING_DONE_STATUSES: ProcessingStatus[] = [
+  "completed", "canceled", "failed", "rejected"
+]
+
+export function isProcessingDone(status: ProcessingStatus): boolean {
+  return PROCESSING_DONE_STATUSES.includes(status)
 }

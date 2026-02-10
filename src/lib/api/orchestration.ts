@@ -1,5 +1,5 @@
 // Orchestration-related API functions
-import type { OrchestrationCenterResponse } from '@/lib/types'
+import type { OrchestrationResponse } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
 import { apiPost } from '../api-client'
@@ -10,11 +10,11 @@ const API_BASE_URL = getApiUrl('orchestrationCenter')
 export async function decomposeTask(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling decomposeTask with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/decomposeTask`,
       data,
       getToken
@@ -30,11 +30,11 @@ export async function decomposeTask(
 export async function assignAgentsToMetaTasks(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling assignAgentsToMetaTasks with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/assignAgentsToMetaTasks`,
       data,
       getToken
@@ -50,11 +50,11 @@ export async function assignAgentsToMetaTasks(
 export async function assignAgentToMetaTask(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling assignAgentToMetaTask with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/assignAgentToMetaTask`,
       data,
       getToken
@@ -70,11 +70,11 @@ export async function assignAgentToMetaTask(
 export async function runWorkflow(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling runWorkflow with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/runWorkflow`,
       data,
       getToken
@@ -90,11 +90,11 @@ export async function runWorkflow(
 export async function retryMetaTask(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling retryMetaTask with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/retryMetaTask`,
       data,
       getToken
@@ -110,11 +110,11 @@ export async function retryMetaTask(
 export async function summarizeMetaTaskForBaseTask(
   data: { task_id: string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling summarizeMetaTaskForBaseTask with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/summarizeMetaTaskForBaseTask`,
       data,
       getToken
@@ -130,11 +130,11 @@ export async function summarizeMetaTaskForBaseTask(
 export async function processRoomUserMessage(
   data: { room_id: string, room_user_message_id: string, room_related_message_id : string },
   getToken?: () => Promise<string | null>
-): Promise<OrchestrationCenterResponse> {
+): Promise<OrchestrationResponse> {
   console.log('Calling processRoomUserMessage with data:', data)
   
   try {
-    const result = await apiPost<OrchestrationCenterResponse>(
+    const result = await apiPost<OrchestrationResponse>(
       `${API_BASE_URL}/processRoomUserMessage`,
       data,
       getToken
