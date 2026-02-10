@@ -44,7 +44,7 @@ export type {
   InspectionCenterResponse,
   TaskCenterResponse,
   InsepectionCenterConnectionValidationResponse,
-  OrchestrationCenterResponse,
+  OrchestrationResponse,
   TaskResponse,
   UserResponse,
   ChatMemoryResponse,
@@ -52,6 +52,15 @@ export type {
 
 export * from './error'
 export * from './health'
+
+// Room message type discriminator (user message, agent response, or A2A task)
+export type MessageType = "user" | "agent" | "task"
+
+export const MESSAGE_TYPE = {
+  USER: "user",
+  AGENT: "agent",
+  TASK: "task",
+} as const
 
 // Message data for UI components
 export interface MessageData {

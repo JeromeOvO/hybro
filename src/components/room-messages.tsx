@@ -9,11 +9,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { MessageBubble } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
-import type { TaskState } from '@/lib/types/sse'
+import { type TaskState, PROCESSING_STATUS } from '@/lib/types/sse'
+import { type MessageType, MESSAGE_TYPE } from '@/lib/types'
 
 export interface MessageData {
   id: string
-  type: 'user' | 'agent' | 'task'
+  type: MessageType
   content: string
   sender_name: string
   timestamp: string
@@ -70,11 +71,11 @@ function LoadingState() {
 }
 
 function shouldRenderTaskAsAgent(message: MessageData): boolean {
-  return message.type === 'task' && message.task_status === 'completed' && !!message.content
+  return message.type === MESSAGE_TYPE.TASK && message.task_status === PROCESSING_STATUS.COMPLETED && !!message.content
 }
 
 function toAgentMessage(message: MessageData): MessageData {
-  return message.type === 'agent' ? message : { ...message, type: 'agent' }
+  return message.type === MESSAGE_TYPE.AGENT ? message : { ...message, type: MESSAGE_TYPE.AGENT }
 }
 
 interface RoomMessagesProps {
@@ -93,7 +94,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   const prevLatestAgentIdRef = useRef<string | null>(null)
 
   const allAgentIds = useMemo(
-    () => messages.filter(m => m.type === 'agent' || shouldRenderTaskAsAgent(m)).map(m => m.id),
+    () => messages.filter(m => m.type === MESSAGE_TYPE.AGENT || shouldRenderTaskAsAgent(m)).map(m => m.id),
     [messages]
   )
 
@@ -104,7 +105,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
 
   const lastAgentMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].type === 'agent' || shouldRenderTaskAsAgent(messages[i])) {
+      if (messages[i].type === MESSAGE_TYPE.AGENT || shouldRenderTaskAsAgent(messages[i])) {
         return messages[i].id
       }
     }
@@ -164,7 +165,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
   // Auto scroll when new messages arrive
   useEffect(() => {
     const messageCountIncreased = messages.length > previousMessageCountRef.current
-    const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === 'user'
+    const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === MESSAGE_TYPE.USER
     
     if (messageCountIncreased && (lastMessageIsUser || shouldAutoScroll)) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
@@ -215,7 +216,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
               <div className="space-y-4">
                 {messages.map(msg => {
                   // Render task messages with TaskStatusMessage component
-                  if (msg.type === 'task' && !shouldRenderTaskAsAgent(msg)) {
+                  if (msg.type === MESSAGE_TYPE.TASK && !shouldRenderTaskAsAgent(msg)) {
                     return (
                       <TaskStatusMessage
                         key={msg.id}
@@ -237,7 +238,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                   return (
                     <MessageBubble
                       key={msg.id}
-                      message={msg.type === 'user' ? msg : toAgentMessage(msg)}
+                      message={msg.type === MESSAGE_TYPE.USER ? msg : toAgentMessage(msg)}
                       defaultExpanded={msg.id === lastAgentMessageId}
                       collapseSignal={collapseSignal}
                       autoCollapseVersion={autoCollapseVersion}
