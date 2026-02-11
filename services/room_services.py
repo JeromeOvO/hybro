@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import timedelta
 from uuid import uuid4
 
 from a2a.types import (
@@ -15,7 +16,7 @@ from a2a.types import (
 
 from common.utils.context_utils import build_context_for_agent
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 from models.memory import MemoryContent
 from models.request import (
     AgentCenterRequest,
@@ -1090,7 +1091,8 @@ class RoomServices:
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
             await self.sse_manager.send_processing_status(
-                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id
+                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
+                details="Failed to initialize room memory",
             )
             return memory_response
 
@@ -1139,7 +1141,8 @@ class RoomServices:
         )
         if not parse_user_message_success:
             await self.sse_manager.send_processing_status(
-                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id
+                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
+                details="Failed to parse user message",
             )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
@@ -1788,57 +1791,133 @@ class RoomServices:
 
         # Sync task status for non-terminal tasks
         # This handles cases where SSE updates were missed or task state changed in background
+        # Also auto-fails stale tasks that have no recovery path (e.g., server restarted mid-task)
+
+        STALE_TASK_THRESHOLD = timedelta(minutes=10)
+
+        def _is_task_stale(msg: RoomAgentMessage) -> bool:
+            """Check if a task's last update is older than the staleness threshold."""
+            ts = msg.task_updated_at or msg.task_created_at
+            if ts is None:
+                return True  # No timestamp at all => treat as stale
+            return (utcnow() - ensure_utc(ts)) > STALE_TASK_THRESHOLD
+
+        def _mark_msg_as_failed(msg: RoomAgentMessage, error_text: str) -> None:
+            """Set the task on a message to failed state in-place."""
+            task = msg.message_content.message_task if msg.message_content else None
+            if task:
+                task.status = TaskStatus(
+                    state=TaskState.failed,
+                    message=Message(
+                        message_id=uuid4().hex,
+                        role=Role.agent,
+                        parts=[TextPart(text=error_text)],
+                    ),
+                )
+            msg.task_updated_at = utcnow()
 
         for msg in messages:
-            # Check if this is a task message with task tracking enabled
-            if (
+            if not (
                 msg.message_content
                 and msg.message_content.message_task
-                and msg.has_task_tracking
             ):
-                current_state = msg.message_content.message_task.status.state
+                continue
 
-                # If currently working/submitted/etc. -> check for updates
-                if not is_terminal_state(current_state):
+            current_state = msg.message_content.message_task.status.state
+            if is_terminal_state(current_state):
+                continue
+
+            # --- Case 1: Task WITHOUT task tracking (streaming-only) ---
+            # These tasks have no webhook/polling recovery path.
+            # If the server restarted mid-stream, the task is stuck forever.
+            # Auto-fail if stale.
+            if not msg.has_task_tracking:
+                if _is_task_stale(msg):
+                    logger.info(
+                        "Auto-failing stale non-tracked task for msg %s (state: %s)",
+                        msg.message_id,
+                        current_state,
+                    )
+                    _mark_msg_as_failed(
+                        msg,
+                        "Task did not complete — the connection was lost, "
+                        "possibly due to a server restart.",
+                    )
                     try:
-                        # Query the actual task (MetaTask)
-                        task_res = await self.task_service.query_meta_task_by_task_id(
-                            TaskCenterRequest(task_id=msg.message_id)
+                        await self.database_service.update_room_agent_message_by_message_id(
+                            msg.message_id, msg
                         )
-
-                        if (
-                            task_res.success
-                            and task_res.meta_task
-                            and task_res.meta_task.task
-                        ):
-                            real_task = task_res.meta_task.task
-                            real_state = real_task.status.state
-
-                            # If status mismatch, update the message
-                            if real_state != current_state:
-                                logger.info(
-                                    f"Syncing stale task status for msg {msg.message_id}: {current_state} -> {real_state}"
-                                )
-
-                                # Update fields
-                                msg.message_content.message_task = real_task
-                                msg.task_updated_at = utcnow()  # Mark as updated
-
-                                # Also update task_content if available (it might have changed during execution)
-                                if task_res.meta_task.task_description:
-                                    # Don't overwrite if it was manually set to something else, but here we assume sync
-                                    # Actually, task_content in msg is specific to message display
-                                    pass
-
-                                # Persist to DB to fix the record permanently
-                                await self.database_service.update_room_agent_message_by_message_id(
-                                    msg.message_id, msg
-                                )
                     except Exception as e:
-                        # Log but don't fail the request
                         logger.warning(
-                            f"Failed to sync task status for message {msg.message_id}: {e}"
+                            "Failed to persist auto-fail for non-tracked message %s: %s",
+                            msg.message_id,
+                            e,
                         )
+                continue
+
+            # --- Case 2: Task WITH task tracking ---
+            # Try syncing with the MetaTask record first.
+            synced = False
+            try:
+                task_res = await self.task_service.query_meta_task_by_task_id(
+                    TaskCenterRequest(task_id=msg.message_id)
+                )
+
+                if (
+                    task_res.success
+                    and task_res.meta_task
+                    and task_res.meta_task.task
+                ):
+                    real_task = task_res.meta_task.task
+                    real_state = real_task.status.state
+
+                    # If status mismatch, update the message
+                    if real_state != current_state:
+                        logger.info(
+                            "Syncing stale task status for msg %s: %s -> %s",
+                            msg.message_id,
+                            current_state,
+                            real_state,
+                        )
+                        msg.message_content.message_task = real_task
+                        msg.task_updated_at = utcnow()
+                        await self.database_service.update_room_agent_message_by_message_id(
+                            msg.message_id, msg
+                        )
+                        synced = True
+            except Exception as e:
+                logger.warning(
+                    "Failed to sync task status for message %s: %s",
+                    msg.message_id,
+                    e,
+                )
+
+            # If MetaTask sync didn't resolve it and the task is stale, auto-fail.
+            # This catches the case where both the message and MetaTask are stuck
+            # at "working" (e.g., server restarted and the remote agent is also gone).
+            if not synced and _is_task_stale(msg):
+                logger.info(
+                    "Auto-failing stale tracked task for msg %s "
+                    "(state: %s, MetaTask sync found no update)",
+                    msg.message_id,
+                    current_state,
+                )
+                _mark_msg_as_failed(
+                    msg,
+                    "Task did not complete — no progress was received within "
+                    "the expected timeframe. This may have been caused by "
+                    "a server restart or agent failure.",
+                )
+                try:
+                    await self.database_service.update_room_agent_message_by_message_id(
+                        msg.message_id, msg
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to persist auto-fail for tracked message %s: %s",
+                        msg.message_id,
+                        e,
+                    )
 
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
