@@ -899,6 +899,10 @@ class RoomServices:
             logger.warning("No task steps in parsed result")
             return agent_messages
 
+        # In direct chat the single step's task_content is the raw user message,
+        # which shouldn't be echoed in the task status bubble.
+        is_direct_chat = parsed_result.get("message_type") == "DIRECT_CHAT"
+
         # Calculate total steps for progress tracking
         total_steps = len(task_steps)
 
@@ -947,6 +951,12 @@ class RoomServices:
                 step_number=step_index,
                 total_steps=total_steps,
             )
+
+            # In direct chat the task_content equals the user's original message,
+            # which would be redundantly echoed in the task status bubble.
+            # Clear it so the frontend shows a generic "Working on your request…" instead.
+            if is_direct_chat:
+                agent_message.task_content = None
 
             agent_messages.append(agent_message)
 
