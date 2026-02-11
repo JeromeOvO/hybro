@@ -1,12 +1,14 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 from a2a.types import AgentCard, Task
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from common.utils.time import utcnow
 from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey
@@ -894,10 +896,6 @@ class MongoDB:
         """
         Get room agent messages with tasks that haven't been updated recently.
         """
-        from datetime import timedelta
-
-        from common.utils.time import utcnow
-
         threshold = utcnow() - timedelta(minutes=stale_minutes)
         cursor = self.room_agent_messages_collection.find(
             {
@@ -917,10 +915,6 @@ class MongoDB:
         """
         Get room agent messages with tasks that have been non-terminal for too long.
         """
-        from datetime import timedelta
-
-        from common.utils.time import utcnow
-
         threshold = utcnow() - timedelta(hours=max_age_hours)
         cursor = self.room_agent_messages_collection.find(
             {
@@ -929,6 +923,30 @@ class MongoDB:
                 },
                 "task_created_at": {"$lt": threshold},
                 "has_task_tracking": True,
+            }
+        )
+        results = await cursor.to_list(length=None)
+        return [_ensure_task_validation(RoomAgentMessage(**msg)) for msg in results]
+
+    async def get_non_tracked_stale_task_messages(
+        self, max_age_hours: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get non-tracked room agent messages with tasks stuck in non-terminal state.
+
+        These are tasks where has_task_tracking is False (never started processing
+        via the A2A tracked path) but have a task status set (not orphaned).
+        Typically these are queued pipeline steps that were never picked up due to
+        a server restart or processing failure.
+        """
+        threshold = utcnow() - timedelta(hours=max_age_hours)
+        cursor = self.room_agent_messages_collection.find(
+            {
+                "message_content.message_task.status.state": {
+                    "$in": non_terminal_states
+                },
+                "message_created_at": {"$lt": threshold},
+                "has_task_tracking": {"$ne": True},
             }
         )
         results = await cursor.to_list(length=None)
@@ -947,10 +965,6 @@ class MongoDB:
 
         This catches messages orphaned when user refreshes before processRoomUserMessage runs.
         """
-        from datetime import timedelta
-
-        from common.utils.time import utcnow
-
         threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
         cursor = self.room_agent_messages_collection.find(
             {
@@ -1048,8 +1062,6 @@ class MongoDB:
         """
         Update task_updated_at timestamp without changing other fields.
         """
-        from common.utils.time import utcnow
-
         result = await self.room_agent_messages_collection.update_one(
             {"message_id": message_id, "has_task_tracking": True},
             {"$set": {"task_updated_at": utcnow()}},
@@ -1062,8 +1074,6 @@ class MongoDB:
         """
         Save queue continuation state on a room agent message.
         """
-        from common.utils.time import utcnow
-
         result = await self.room_agent_messages_collection.update_one(
             {"message_id": message_id},
             {
@@ -1094,8 +1104,6 @@ class MongoDB:
         """
         Get and atomically clear continuation state from a room agent message.
         """
-        from common.utils.time import utcnow
-
         doc = await self.room_agent_messages_collection.find_one_and_update(
             {
                 "message_id": message_id,
@@ -1222,8 +1230,6 @@ class MongoDB:
         Update an agent group by its ID
         """
         # Add updated_at timestamp
-        from common.utils.time import utcnow
-
         updates["updated_at"] = utcnow()
 
         result = await self.agent_groups_collection.update_one(
@@ -1251,8 +1257,6 @@ class MongoDB:
         Returns:
             bool: True if cancellation was recorded successfully
         """
-        from common.utils.time import utcnow
-
         doc = {
             "message_id": message_id,
             "user_id": user_id,
@@ -1368,8 +1372,6 @@ class MongoDB:
         Returns:
             bool: True if update was successful
         """
-        from common.utils.time import utcnow
-
         result = await self.api_keys_collection.update_one(
             {"key_hash": key_hash},
             {

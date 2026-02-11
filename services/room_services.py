@@ -1828,11 +1828,16 @@ class RoomServices:
                 continue
 
             # --- Case 1: Task WITHOUT task tracking (streaming-only) ---
-            # These tasks have no webhook/polling recovery path.
-            # If the server restarted mid-stream, the task is stuck forever.
-            # Auto-fail if stale.
+            # Only auto-fail non-tracked tasks in "working" state, which means
+            # the streaming connection died mid-stream (e.g., server restart).
+            #
+            # Non-tracked tasks in "submitted" state are NOT touched here —
+            # they are likely queued pipeline steps waiting for earlier steps
+            # to complete.  Genuinely orphaned submitted tasks are cleaned up
+            # by the background StaleTaskChecker instead, which avoids
+            # killing active pipeline steps on every message fetch.
             if not msg.has_task_tracking:
-                if _is_task_stale(msg):
+                if current_state == TaskState.working and _is_task_stale(msg):
                     logger.info(
                         "Auto-failing stale non-tracked task for msg %s (state: %s)",
                         msg.message_id,
