@@ -49,7 +49,7 @@ export function MarkdownContent({
   const processedContent = processMentions(formatted)
 
   return (
-    <div className="prose prose-sm max-w-none leading-relaxed prose-p:text-inherit prose-headings:text-inherit prose-li:text-inherit prose-strong:text-inherit prose-em:text-inherit prose-a:no-underline prose-a:text-inherit prose-a:font-normal">
+    <div className="min-w-0 text-sm leading-relaxed text-inherit">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
@@ -59,7 +59,7 @@ export function MarkdownContent({
             if (isAgentMentionHref(href)) {
               return (
                 <a
-                  className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
+                  className="prose room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
                   href={href}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -93,7 +93,7 @@ export function MarkdownContent({
                 {children}
               </code>
             ) : (
-              <pre className="bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
+              <pre className="max-w-full bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
                 <code className={className} {...props}>
                   {children}
                 </code>
@@ -111,6 +111,27 @@ export function MarkdownContent({
           h4: ({ children }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
           h5: ({ children }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
           h6: ({ children }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
+          // --- Tables: horizontally scrollable within the bubble ---
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-2">
+              <table className="min-w-full border-collapse text-sm">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-slate-100 dark:bg-slate-800">{children}</thead>
+          ),
+          th: ({ children }) => (
+            <th className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-left text-xs font-semibold">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs">
+              {children}
+            </td>
+          ),
         }}
       >
         {processedContent}

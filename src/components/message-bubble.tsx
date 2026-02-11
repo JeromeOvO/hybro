@@ -109,7 +109,7 @@ export function AgentMessageBubble({
       {/* Message Content */}
       <div
         className={cn(
-          "flex-1 min-w-0 rounded-xl p-4 shadow-sm border message-bubble",
+          "flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border message-bubble",
           colors.border,
           colors.bg
         )}

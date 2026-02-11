@@ -244,7 +244,7 @@
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 3.5s ease-in-out infinite;
+  animation: shimmer-sweep 5s ease-in-out infinite;
 }
 
 .dark .shimmer-text {
@@ -260,7 +260,7 @@
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 3.5s ease-in-out infinite;
+  animation: shimmer-sweep 5s ease-in-out infinite;
 }
 
 @layer base {
@@ -307,6 +307,14 @@
     0 1px 3px rgb(0 0 0 / 0.06),
     0 1px 2px rgb(0 0 0 / 0.04);
   transition: all 0.2s ease;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Tables inside bubbles: keep words intact, scroll horizontally instead */
+.message-bubble table {
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .message-bubble:hover {
