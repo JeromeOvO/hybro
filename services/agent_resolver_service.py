@@ -126,6 +126,24 @@ class AgentResolverService:
             A :class:`ResolveResult` containing the chosen agent or a
             human-readable ``failure_reason`` when no agent is available.
         """
+        # Server-side enforcement: sanitize allowed IDs before Pinecone query.
+        # Ensures only active + visible (public or owned by user) agents are
+        # included, regardless of what the caller passes.
+        allowed_agent_ids = await self._sanitize_allowed_ids(
+            allowed_agent_ids, user_id
+        )
+
+        # Caller scoped to specific agents but none survived sanitization.
+        if allowed_agent_ids is not None and len(allowed_agent_ids) == 0:
+            return ResolveResult(
+                agent=None,
+                tried_agents=[],
+                failure_reason=(
+                    "None of the specified agents are currently available "
+                    "(they may be inactive or not accessible to you)."
+                ),
+            )
+
         # Step 1 – vector similarity search (already filters active_only)
         candidates = await self.database_service.query_similar_agents(
             query_text,
@@ -157,6 +175,63 @@ class AgentResolverService:
             tried_agents=[top.agent_card.name],
             failure_reason=None,
         )
+
+    # ------------------------------------------------------------------
+    # Allowed-ID sanitization
+    # ------------------------------------------------------------------
+
+    async def _sanitize_allowed_ids(
+        self,
+        allowed_agent_ids: list[str] | None,
+        user_id: str | None,
+    ) -> list[str] | None:
+        """Server-side filter: keep only active + visible agent IDs.
+
+        Ensures ``allowed_agent_ids`` only contains agents that are:
+
+        * **Active** (``agent_status == 'active'``)
+        * **Visible** to *user_id* — either public (``is_public`` is True or
+          missing) or private but owned by *user_id*
+          (``provider_id == user_id``).
+
+        Returns:
+            ``None`` when no scoping was requested (input was ``None``).
+            A (possibly empty) list of sanitized IDs otherwise.  An empty
+            list signals that the caller scoped to agents but none survived,
+            so ``resolve()`` should fail fast rather than fall back to an
+            unrestricted search.
+        """
+        if allowed_agent_ids is None:
+            return None  # No scoping requested — keep it that way
+
+        if not allowed_agent_ids:
+            return []  # Caller passed empty list — stays empty
+
+        query = {
+            "$and": [
+                {"agent_id": {"$in": [str(aid) for aid in allowed_agent_ids]}},
+                {"agent_status": AgentStatus.active.value},
+            ]
+        }
+        # Uses the public method which internally applies visibility filter
+        agents = await self.database_service.get_agents_with_conditions_visible(
+            user_id=user_id,
+            query=query,
+        )
+
+        sanitized = [a.agent_id for a in agents]
+
+        if len(sanitized) < len(allowed_agent_ids):
+            dropped = set(str(aid) for aid in allowed_agent_ids) - set(sanitized)
+            logger.info(
+                "AgentResolver: Sanitized allowed_agent_ids — dropped %d IDs "
+                "(inactive or not visible to user %s): %s",
+                len(dropped),
+                user_id,
+                dropped,
+            )
+
+        return sanitized
 
     # ------------------------------------------------------------------
     # LLM reordering

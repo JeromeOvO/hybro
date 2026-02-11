@@ -110,7 +110,7 @@ class WorkflowCenter:
         task_description = self._get_first_text_from_task(base_task)
 
         best_agent = await self._select_best_agent_for_decomposition(
-            task_description
+            task_description, user_id=request.user_id
         )
         if best_agent is None:
             return self._error_response(
@@ -283,7 +283,9 @@ class WorkflowCenter:
             try:
                 # Call assign_agent_to_meta_task for each meta task
                 assignment_response = await self.assign_agent_to_meta_task(
-                    OrchestrationRequest(task_id=meta_task.task_id)
+                    OrchestrationRequest(
+                        task_id=meta_task.task_id, user_id=request.user_id
+                    )
                 )
 
                 if assignment_response.success:
@@ -354,6 +356,7 @@ class WorkflowCenter:
             meta_task.task_description,
             count=3,
             use_llm_selection=True,
+            user_id=request.user_id,
         )
 
         if result.agent is None:
@@ -501,7 +504,9 @@ class WorkflowCenter:
 
                 # Process meta task - wait for completion before proceeding
                 process_response = await self.process_meta_task(
-                    OrchestrationRequest(task_id=meta_task.task_id)
+                    OrchestrationRequest(
+                        task_id=meta_task.task_id, user_id=request.user_id
+                    )
                 )
 
                 if process_response.success:
@@ -892,7 +897,9 @@ class WorkflowCenter:
 
         return failed_deletions
 
-    async def _select_best_agent_for_decomposition(self, task_description: str):
+    async def _select_best_agent_for_decomposition(
+        self, task_description: str, user_id: str | None = None
+    ):
         """Find the best accessible agent for task decomposition.
 
         Uses the AgentResolverService to query similar agents, rank them via
@@ -904,6 +911,7 @@ class WorkflowCenter:
             task_description,
             count=5,
             use_llm_selection=True,
+            user_id=user_id,
         )
 
         if result.agent is None:

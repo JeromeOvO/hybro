@@ -809,11 +809,15 @@ class RoomMessageCenter:
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
-        # Get user_id from the user message for rate limiting
+        # Get user_id from the user message for rate limiting.
+        # Fall back to the request-level user_id (from auth) if the stored
+        # message is missing or has no user_id.
         user_message = await self.database_service.get_room_user_message_by_message_id(
             room_user_message_id
         )
-        user_id = user_message.user_id if user_message else None
+        user_id = (
+            (user_message.user_id if user_message else None) or request.user_id
+        )
 
         # Query agent messages to process
         query_response = (
@@ -1374,6 +1378,7 @@ class RoomMessageCenter:
         result = await self.agent_resolver.resolve(
             user_input,
             allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
+            user_id=current_message.user_id,
         )
 
         if result.agent is None:
