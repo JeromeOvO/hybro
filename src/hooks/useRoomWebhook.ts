@@ -476,9 +476,20 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     if (room.processing_message_id) {
       console.log('🔄 Restoring processing placeholder for message:', room.processing_message_id)
       
+      // Check if the triggering user message is stale (> 2 min).
+      // The placeholder only covers the brief parsing phase before real task
+      // bubbles arrive, so if it's been more than 2 minutes the backend likely
+      // crashed or restarted before creating any tasks.
+      const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
+      const loadedMessages = messagesQuery.data || []
+      const triggerMessage = loadedMessages.find(m => m.id === room.processing_message_id)
+      if (triggerMessage && isStale(triggerMessage.timestamp, PLACEHOLDER_STALE_MS)) {
+        console.log('🔄 Skipping placeholder - processing message is stale (>2min)')
+        return
+      }
+
       // Check if any task messages already exist in the loaded messages
       // If tasks exist, the placeholder should not be shown (tasks have already started)
-      const loadedMessages = messagesQuery.data || []
       const hasTaskMessages = loadedMessages.some(m => m.type === MESSAGE_TYPE.TASK)
       
       if (hasTaskMessages) {
