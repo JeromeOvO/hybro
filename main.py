@@ -88,6 +88,9 @@ async def lifespan(app: FastAPI):
         await mongodb.create_task_tracking_indexes()
         # Start stale task checker background job
         await stale_task_checker.start()
+        # Run cleanup immediately on startup to recover tasks orphaned by a
+        # previous server restart, instead of waiting for the first interval.
+        await stale_task_checker.check_stale_tasks()
         logger.info(
             "A2A long-running tasks support initialized (using room_agent_messages)"
         )
