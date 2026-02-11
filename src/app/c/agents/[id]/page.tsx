@@ -15,6 +15,7 @@ import {
   Terminal,
   ArrowRightLeft,
   MessageCirclePlus,
+  ShieldCheck,
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,7 @@ import { banner } from "@/components/ui/banner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 import { developerUrl } from "@/lib/urls"
+import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
 
 export default function ConsumerAgentProfilePage() {
   const params = useParams()
@@ -36,6 +38,11 @@ export default function ConsumerAgentProfilePage() {
   const [loading, setLoading] = useState(true)
 
   const loadAgentDetail = useCallback(async () => {
+    // System agents are built-in — skip API call
+    if (isSystemAgent(agentId)) {
+      setLoading(false)
+      return
+    }
     try {
       setLoading(true)
       const response = await getAgent(agentId)
@@ -76,6 +83,54 @@ export default function ConsumerAgentProfilePage() {
   }
 
   if (!agentData?.success || !agentData.agent) {
+    // ---------- System agent: show a lightweight static profile ----------
+    if (isSystemAgent(agentId)) {
+      const info = SYSTEM_AGENTS[agentId]
+      return (
+        <div className="container max-w-3xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in duration-500">
+          <Button
+            variant="ghost"
+            onClick={() => router.push('/agents')}
+            className="group pl-0 hover:pl-2 transition-all"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
+            Back to Agents
+          </Button>
+
+          <Card className="overflow-hidden border-primary/10 shadow-lg">
+            <CardHeader className="text-center space-y-4 pt-10 pb-6">
+              <div className="mx-auto">
+                <Avatar className="h-24 w-24 border-4 border-background shadow-xl mx-auto">
+                  <AvatarFallback className="bg-primary/5 text-primary">
+                    <ShieldCheck className="h-10 w-10" />
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+              <div className="space-y-2">
+                <CardTitle className="text-2xl font-bold">{info.name}</CardTitle>
+                <Badge variant="secondary" className="gap-1.5">
+                  <ShieldCheck className="h-3 w-3" />
+                  Built-in System Agent
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="text-center pb-10 max-w-lg mx-auto space-y-4">
+              <p className="text-muted-foreground leading-relaxed">
+                {info.description}
+              </p>
+              <Separator />
+              <p className="text-sm text-muted-foreground">
+                This is a built-in agent managed by Hybro. It does not have a
+                configurable profile, skills, or capabilities — it activates
+                automatically when a room has multiple agent responses.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )
+    }
+
+    // ---------- Real agent not found ----------
     return (
       <div className="flex items-center justify-center min-h-[85vh]">
         <Card className="w-full max-w-md border-dashed">

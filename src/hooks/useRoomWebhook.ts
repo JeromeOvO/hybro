@@ -24,12 +24,7 @@ import { MESSAGE_TYPE } from '@/lib/types'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { normalizeTimestampOrNow, isStale } from '@/lib/time'
-
-// Special system agent display names (module scoped for stable reference)
-const SYSTEM_AGENT_NAMES: Record<string, string> = {
-  'debate_summary': 'Debate Coordinator',
-  'non_debate_summary': 'Summary Agent',
-}
+import { SYSTEM_AGENTS } from '@/lib/system-agents'
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -105,8 +100,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Get agent name by agent ID with caching
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
     // Check for system agents first
-    if (SYSTEM_AGENT_NAMES[agentId]) {
-      return SYSTEM_AGENT_NAMES[agentId]
+    if (SYSTEM_AGENTS[agentId]) {
+      return SYSTEM_AGENTS[agentId].name
     }
 
     // Use cache if available

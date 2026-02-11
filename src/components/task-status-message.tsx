@@ -447,7 +447,7 @@ export function TaskStatusMessage({
         <div className="space-y-2">
           <div className="flex items-start gap-2">
             <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-            <span className="text-sm text-blue-600 dark:text-blue-400">
+            <span className="text-sm text-blue-600 dark:text-blue-400 shimmer-text">
               {primaryText}
             </span>
           </div>

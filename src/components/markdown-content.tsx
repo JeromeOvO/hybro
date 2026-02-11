@@ -148,6 +148,7 @@ export function LinkifiedContent({ content }: { content: string }) {
       // @mention match
       const agentId = match[1]
       const agentName = match[2]
+
       parts.push(
         <a
           key={`link-${keyIndex++}`}
