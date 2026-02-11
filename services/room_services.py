@@ -14,7 +14,11 @@ from a2a.types import (
     TextPart,
 )
 
-from common.utils.context_utils import build_context_for_agent
+from common.utils.context_utils import (
+    build_context_for_agent,
+    build_minimal_context,
+    migrate_legacy_memory,
+)
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from models.memory import MemoryContent
@@ -990,6 +994,7 @@ class RoomServices:
         auto_assign_agents: bool = False,
         target_group: str | None = None,
         agents: list | None = None,
+        conversation_context: str | None = None,
     ) -> bool:
         """
         Parse user message
@@ -1043,6 +1048,7 @@ class RoomServices:
                 is_debate_mode,
                 auto_assign_agents,
                 agents,
+                conversation_context=conversation_context,
             )
 
         logger.info(f"LLM Parsed result: {parsed_result}")
@@ -1128,6 +1134,23 @@ class RoomServices:
                 request, user_message, target_group
             )
 
+        # Fetch conversation context for the decomposer LLM so it can
+        # distinguish simple follow-ups from genuinely complex tasks.
+        conversation_context = None
+        if len(selected_agent_set) > 1:
+            room_memory = await self.database_service.get_room_memory_by_room_id(
+                request.room_id
+            )
+            if room_memory and room_memory.memory_content:
+                room_memory.memory_content = migrate_legacy_memory(
+                    room_memory.memory_content
+                )
+                conversation_context = build_minimal_context(
+                    room_memory.memory_content,
+                    current_task=message_text,
+                    max_turns=5,
+                )
+
         parse_user_message_success = await self.parse_user_message(
             request.room_id,
             user_message.message_id,
@@ -1138,6 +1161,7 @@ class RoomServices:
             auto_assign_agents=auto_assign,
             target_group=target_group,
             agents=agents,
+            conversation_context=conversation_context,
         )
         if not parse_user_message_success:
             await self.sse_manager.send_processing_status(
