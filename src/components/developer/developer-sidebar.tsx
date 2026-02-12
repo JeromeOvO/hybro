@@ -3,8 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { Bot, PanelLeftIcon, ExternalLink } from "lucide-react"
-import { useUser, useAuth } from "@clerk/nextjs"
+import { Bot, PanelLeftIcon, SquareArrowOutUpRight } from "lucide-react"
 
 import { NavAgent } from "@/components/nav-agent"
 import { NavMain } from "@/components/nav-main"
@@ -23,44 +22,11 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { getAgentsByProviderId } from "@/lib/api"
-import type { Agent } from "@/lib/types"
+import { useMyAgents } from "@/hooks/useMyAgents"
 
 export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const { user, isLoaded, isSignedIn } = useUser()
-  const { getToken } = useAuth()
   const { state, toggleSidebar } = useSidebar()
-  const [myAgents, setMyAgents] = React.useState<Agent[]>([])
-  const [isLoadingAgents, setIsLoadingAgents] = React.useState(false)
-
-  // Get user's agents list
-  const loadAgents = React.useCallback(async () => {
-    if (!isLoaded || !isSignedIn || !user?.id) return
-
-    try {
-      setIsLoadingAgents(true)
-      const response = await getAgentsByProviderId(getToken)
-
-      if (response.success && response.agents) {
-        setMyAgents(response.agents)
-      } else {
-        console.error('Failed to load agents:', response.error)
-        setMyAgents([])
-      }
-    } catch (error) {
-      console.error('Error loading agents:', error)
-      setMyAgents([])
-    } finally {
-      setIsLoadingAgents(false)
-    }
-  }, [isLoaded, isSignedIn, user?.id, getToken])
-
-  // Load agents when user login status changes
-  React.useEffect(() => {
-    if (isLoaded && isSignedIn && user?.id) {
-      loadAgents()
-    }
-  }, [isLoaded, isSignedIn, user?.id, loadAgents])
+  const { agents: myAgents, isLoading: isLoadingAgents } = useMyAgents()
 
   // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
@@ -139,7 +105,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
               className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             >
               <Link href={consumerUrl("/chat")} prefetch={false}>
-                <ExternalLink className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
+                <SquareArrowOutUpRight className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
                 <span className="group-data-[collapsible=icon]:hidden">
                   Try Agents →
                 </span>

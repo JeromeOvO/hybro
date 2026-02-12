@@ -5,21 +5,17 @@ import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   Bot,
-  ExternalLink,
+  SquareArrowOutUpRight,
   Trash2,
   CheckCircle2,
   XCircle,
   AlertCircle,
-  Settings,
   Save,
-  Globe,
-  Lock,
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import {
   AlertDialog,
@@ -32,32 +28,33 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger
 } from "@/components/ui/alert-dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { banner } from "@/components/ui/banner"
 import { getAgent, deleteAgent, updateAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 import { consumerUrl } from "@/lib/urls"
+import { AgentSettingsCard, validateAgentSettings, settingsToUpdatePayload } from "@/components/developer/agent-settings-card"
+import type { AgentSettingsValues } from "@/components/developer/agent-settings-card"
+import { useMyAgents } from "@/hooks/useMyAgents"
 
 export default function DeveloperAgentManagePage() {
   const params = useParams()
   const router = useRouter()
   const { userId, getToken } = useAuth()
   const agentId = params.id as string
+  const { invalidate: refreshMyAgents } = useMyAgents()
   const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(false)
   const [saving, setSaving] = useState(false)
   
-  // Rate limit settings state
-  const [enableUserLimit, setEnableUserLimit] = useState(false)
-  const [userLimitValue, setUserLimitValue] = useState<string>("")
-  const [enableSystemLimit, setEnableSystemLimit] = useState(false)
-  const [systemLimitValue, setSystemLimitValue] = useState<string>("")
-  
-  // Visibility state
-  const [isPublic, setIsPublic] = useState(true)
+  // Agent settings state (managed by AgentSettingsCard)
+  const [settingsValues, setSettingsValues] = useState<AgentSettingsValues>({
+    isPublic: true,
+    enableUserLimit: false,
+    userLimitValue: "",
+    enableSystemLimit: false,
+    systemLimitValue: "",
+  })
 
   const getStatusColor = (status: Agent['agent_status']) => {
     switch (status) {
@@ -80,21 +77,17 @@ export default function DeveloperAgentManagePage() {
       if (response.success && response.agent) {
         setAgentData(response)
         const agent = response.agent
-        if (agent.rate_limit_per_user_per_hour != null) {
-          setEnableUserLimit(true)
-          setUserLimitValue(agent.rate_limit_per_user_per_hour.toString())
-        } else {
-          setEnableUserLimit(false)
-          setUserLimitValue("")
-        }
-        if (agent.rate_limit_system_per_hour != null) {
-          setEnableSystemLimit(true)
-          setSystemLimitValue(agent.rate_limit_system_per_hour.toString())
-        } else {
-          setEnableSystemLimit(false)
-          setSystemLimitValue("")
-        }
-        setIsPublic(agent.is_public !== false)
+        setSettingsValues({
+          isPublic: agent.is_public !== false,
+          enableUserLimit: agent.rate_limit_per_user_per_hour != null,
+          userLimitValue: agent.rate_limit_per_user_per_hour != null
+            ? agent.rate_limit_per_user_per_hour.toString()
+            : "",
+          enableSystemLimit: agent.rate_limit_system_per_hour != null,
+          systemLimitValue: agent.rate_limit_system_per_hour != null
+            ? agent.rate_limit_system_per_hour.toString()
+            : "",
+        })
       } else {
         const errorMessage = response.error || "Failed to load agent details"
         banner.error("Failed to load agent details", {
@@ -114,55 +107,22 @@ export default function DeveloperAgentManagePage() {
     try {
       setSaving(true)
       
-      if (enableUserLimit && !userLimitValue) {
-        banner.error("User rate limit required", {
-          description: "Please enter a value or disable the limit"
-        })
-        setSaving(false)
-        return
-      }
-      if (enableSystemLimit && !systemLimitValue) {
-        banner.error("System rate limit required", {
-          description: "Please enter a value or disable the limit"
-        })
-        setSaving(false)
-        return
-      }
-
-      const userLimit = enableUserLimit && userLimitValue 
-        ? parseInt(userLimitValue, 10) 
-        : null
-      const systemLimit = enableSystemLimit && systemLimitValue 
-        ? parseInt(systemLimitValue, 10) 
-        : null
-
-      if (enableUserLimit && (isNaN(userLimit as number) || (userLimit as number) < 1)) {
-        banner.error("Invalid user rate limit", {
-          description: "Please enter a number greater than or equal to 1"
-        })
-        setSaving(false)
-        return
-      }
-      if (enableSystemLimit && (isNaN(systemLimit as number) || (systemLimit as number) < 1)) {
-        banner.error("Invalid system rate limit", {
-          description: "Please enter a number greater than or equal to 1"
-        })
+      const validationError = validateAgentSettings(settingsValues)
+      if (validationError) {
+        banner.error("Invalid settings", { description: validationError })
         setSaving(false)
         return
       }
 
       const response = await updateAgent(
         agentId,
-        {
-          rate_limit_per_user_per_hour: userLimit,
-          rate_limit_system_per_hour: systemLimit,
-          is_public: isPublic,
-        },
+        settingsToUpdatePayload(settingsValues),
         getToken
       )
 
       if (response.success) {
         banner.success("Settings saved successfully")
+        refreshMyAgents()
         await loadAgentDetail()
       } else {
         banner.error("Failed to save settings", {
@@ -190,6 +150,7 @@ export default function DeveloperAgentManagePage() {
 
       if (response.success) {
         banner.success("Agent deleted successfully")
+        refreshMyAgents()
         router.push('/agents')
       } else {
         const errorMessage = response.error || "Failed to delete agent"
@@ -297,7 +258,7 @@ export default function DeveloperAgentManagePage() {
           <Button variant="outline" size="sm" asChild>
             <a href={consumerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
               View as User
-              <ExternalLink className="h-4 w-4 ml-2" />
+              <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
             </a>
           </Button>
         </div>
@@ -331,115 +292,10 @@ export default function DeveloperAgentManagePage() {
         {/* Settings - Only visible to agent owner */}
         {isOwner && (
           <>
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Settings className="h-5 w-5" />
-                  <CardTitle>Agent Settings</CardTitle>
-                </div>
-                <CardDescription>
-                  Configure visibility and rate limits for your agent.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Visibility Toggle */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="visibility-toggle" className="text-base font-medium flex items-center gap-2">
-                        {isPublic ? <Globe className="h-4 w-4 text-green-500" /> : <Lock className="h-4 w-4 text-yellow-500" />}
-                        Visibility
-                      </Label>
-                      <p className="text-sm text-muted-foreground">
-                        {isPublic 
-                          ? "Public - Everyone can discover and use this agent"
-                          : "Private - Only you can see and use this agent"
-                        }
-                      </p>
-                    </div>
-                    <Switch
-                      id="visibility-toggle"
-                      checked={isPublic}
-                      onCheckedChange={setIsPublic}
-                    />
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Per-User Rate Limit */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="user-limit-toggle" className="text-base font-medium">
-                        Per-User Limit
-                      </Label>
-                      <p className="text-sm text-muted-foreground">
-                        Maximum requests each user can make per hour
-                      </p>
-                    </div>
-                    <Switch
-                      id="user-limit-toggle"
-                      checked={enableUserLimit}
-                      onCheckedChange={(checked) => {
-                        setEnableUserLimit(checked)
-                        if (!checked) setUserLimitValue("")
-                      }}
-                    />
-                  </div>
-                  {enableUserLimit && (
-                    <div className="flex items-center gap-3 pl-4">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={userLimitValue}
-                        onChange={(e) => setUserLimitValue(e.target.value)}
-                        placeholder="e.g., 10"
-                        className="w-32"
-                      />
-                      <span className="text-sm text-muted-foreground">requests per hour</span>
-                    </div>
-                  )}
-                </div>
-
-                <Separator />
-
-                {/* System-Wide Rate Limit */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="system-limit-toggle" className="text-base font-medium">
-                        System-Wide Limit
-                      </Label>
-                      <p className="text-sm text-muted-foreground">
-                        Maximum total requests from all users per hour
-                      </p>
-                    </div>
-                    <Switch
-                      id="system-limit-toggle"
-                      checked={enableSystemLimit}
-                      onCheckedChange={(checked) => {
-                        setEnableSystemLimit(checked)
-                        if (!checked) setSystemLimitValue("")
-                      }}
-                    />
-                  </div>
-                  {enableSystemLimit && (
-                    <div className="flex items-center gap-3 pl-4">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={systemLimitValue}
-                        onChange={(e) => setSystemLimitValue(e.target.value)}
-                        placeholder="e.g., 100"
-                        className="w-32"
-                      />
-                      <span className="text-sm text-muted-foreground">requests per hour</span>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            <AgentSettingsCard
+              values={settingsValues}
+              onChange={setSettingsValues}
+            />
 
             {/* Save & Delete Actions */}
             <div className="flex items-center justify-between">

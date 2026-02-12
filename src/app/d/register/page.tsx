@@ -1,34 +1,51 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Bot, CheckCircle, Loader2, ExternalLink, Shield, ShieldCheck, ShieldX } from "lucide-react"
+import { Bot, CheckCircle, Loader2, CloudDownload, Lightbulb, Shield, ShieldCheck, ShieldX, FileSearch, XCircle, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
 import { banner } from "@/components/ui/banner"
-import { getAgentCardFromUrl, registerAgent, inspectA2AConnection } from "@/lib/api"
+import { getAgentCardFromUrl, registerAgent, updateAgent, inspectAgentCard, inspectA2AConnection } from "@/lib/api"
 import { ApiError } from "@/lib/api-client"
 import type { 
-  InspectionCenterResponse, 
+  AgentCenterResponse,
   AgentCenterRequest,
+  InspectionCenterResponse,
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
 import { useUser, useClerk} from "@clerk/nextjs"
 import { isWaitlistEnabled } from "@/lib/utils"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { AgentSettingsCard, validateAgentSettings, settingsToUpdatePayload } from "@/components/developer/agent-settings-card"
+import type { AgentSettingsValues } from "@/components/developer/agent-settings-card"
+import { useMyAgents } from "@/hooks/useMyAgents"
 
 export default function RegisterAgentPage() {
   const router = useRouter()
   const { user, isLoaded } = useUser()
+  const { invalidate: refreshMyAgents } = useMyAgents()
   const [url, setUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [inspecting, setInspecting] = useState(false)
+  const [inspectingCard, setInspectingCard] = useState(false)
   const [registering, setRegistering] = useState(false)
-  const [agentData, setAgentData] = useState<InspectionCenterResponse | null>(null)
+  const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
+  const [cardInspectionData, setCardInspectionData] = useState<InspectionCenterResponse | null>(null)
   const [inspectionData, setInspectionData] = useState<InsepectionCenterConnectionValidationResponse | null>(null)
   const [urlError, setUrlError] = useState("")
   const { openWaitlist } = useClerk()
+  const [inspectionOpen, setInspectionOpen] = useState(true)
+  const [settingsValues, setSettingsValues] = useState<AgentSettingsValues>({
+    isPublic: true,
+    enableUserLimit: false,
+    userLimitValue: "",
+    enableSystemLimit: false,
+    systemLimitValue: "",
+  })
   const validateUrl = (inputUrl: string): boolean => {
     try {
       const urlObj = new URL(inputUrl)
@@ -50,6 +67,52 @@ export default function RegisterAgentPage() {
     }
   }
 
+  // Track whether we should auto-inspect after loading
+  const shouldAutoInspect = useRef(false)
+
+  // Scroll refs
+  const agentCardRef = useRef<HTMLDivElement>(null)
+  const registerSectionRef = useRef<HTMLDivElement>(null)
+
+  // Auto-trigger inspection when agentData is set and auto-inspect is requested
+  useEffect(() => {
+    if (agentData?.agent_card && shouldAutoInspect.current) {
+      shouldAutoInspect.current = false
+      inspectCard()
+      inspectConnection()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentData])
+
+  // Scroll to agent card when agent data loads
+  useEffect(() => {
+    if (agentData?.agent_card) {
+      setTimeout(() => {
+        agentCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 100)
+    }
+  }, [agentData])
+
+  // Derived: both inspections completed and passed
+  const allInspectionsPassed = 
+    cardInspectionData?.status_code === 200 && inspectionData?.status_code === 200
+
+  // Auto-collapse inspection results when both pass
+  useEffect(() => {
+    if (allInspectionsPassed) {
+      setInspectionOpen(false)
+    }
+  }, [allInspectionsPassed])
+
+  // Scroll to register section when inspections complete
+  useEffect(() => {
+    if (allInspectionsPassed) {
+      setTimeout(() => {
+        registerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 200)
+    }
+  }, [allInspectionsPassed])
+
   // Load Agent information
   const loadAgent = async () => {
     if (!url || !validateUrl(url)) {
@@ -59,12 +122,15 @@ export default function RegisterAgentPage() {
 
     setLoading(true)
     setAgentData(null)
-    setInspectionData(null) // Reset inspection data when loading new agent
+    setCardInspectionData(null) // Reset card inspection data when loading new agent
+    setInspectionData(null) // Reset connection inspection data when loading new agent
+    setInspectionOpen(true) // Re-expand when loading new agent
 
     try {
       const response = await getAgentCardFromUrl({ agent_url: url })
       
       if (response.agent_card) {
+        shouldAutoInspect.current = true
         setAgentData(response)
       } else {
         banner.error("Failed to load agent", {
@@ -77,6 +143,34 @@ export default function RegisterAgentPage() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Inspect Agent Card
+  const inspectCard = async () => {
+    if (!url || !validateUrl(url)) {
+      banner.error("Please enter a valid URL")
+      return
+    }
+
+    setInspectingCard(true)
+    setCardInspectionData(null)
+
+    try {
+      const response = await inspectAgentCard({ agent_url: url })
+      setCardInspectionData(response)
+      
+      if (response.status_code === 200) {
+        banner.success("Agent card inspection completed successfully!")
+      } else {
+        banner.warning("Agent card inspection found issues")
+      }
+    } catch (error) {
+      banner.error("Failed to inspect agent card", {
+        description: error instanceof Error ? error.message : "Network error occurred"
+      })
+    } finally {
+      setInspectingCard(false)
     }
   }
 
@@ -120,6 +214,13 @@ export default function RegisterAgentPage() {
       banner.error("Please complete connection inspection first")
       return
     }
+
+    // Validate settings before registering
+    const validationError = validateAgentSettings(settingsValues)
+    if (validationError) {
+      banner.error("Invalid settings", { description: validationError })
+      return
+    }
     
     // Do nothing while Clerk is still loading to avoid unexpected waitlist popup
     if(!isLoaded){
@@ -150,10 +251,30 @@ export default function RegisterAgentPage() {
       const response = await registerAgent(registerRequest)
       
       if (response.success) {
+        // Apply agent settings after successful registration
+        const agentId = response.agent_id
+        if (agentId) {
+          try {
+            await updateAgent(agentId, settingsToUpdatePayload(settingsValues))
+          } catch {
+            // Settings update failed but registration succeeded - warn the user
+            banner.warning("Agent registered but settings could not be saved", {
+              description: "You can update settings from the agent management page."
+            })
+            refreshMyAgents()
+            setTimeout(() => {
+              router.push("/agents")
+            }, 1500)
+            return
+          }
+        }
+
         banner.success("Agent registered successfully!", {
           description: "Redirecting to agents page..."
         })
         
+        refreshMyAgents()
+
         // Delayed redirect
         setTimeout(() => {
           router.push("/agents")
@@ -219,6 +340,11 @@ export default function RegisterAgentPage() {
               placeholder="https://<your-agent-url>:<port-number>"
               value={url}
               onChange={handleUrlChange}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && url && !urlError && !loading) {
+                  loadAgent()
+                }
+              }}
               className={urlError ? "border-destructive" : ""}
             />
             {urlError && (
@@ -229,7 +355,12 @@ export default function RegisterAgentPage() {
           <Button 
             onClick={loadAgent}
             disabled={loading || !url || !!urlError}
-            className="w-full sm:w-auto"
+            className={`w-full sm:w-auto ${
+              agentData?.agent_card
+                ? ""
+                : "bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            }`}
+            variant={agentData?.agent_card ? "outline" : "default"}
           >
             {loading ? (
               <>
@@ -238,31 +369,36 @@ export default function RegisterAgentPage() {
               </>
             ) : (
               <>
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Load Agent
+                <CloudDownload className="h-4 w-4 mr-2" />
+                {agentData?.agent_card ? "Reload Agent" : "Load Agent"}
               </>
             )}
           </Button>
 
-          <p className="text-xs text-muted-foreground">
-            New to A2A? Use{" "}
-            <a
-              href="https://github.com/hybroai/a2a-adapter"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-medium text-primary hover:underline"
-            >
-              a2a-adapter
-            </a>
-            {" "}to convert any agent from CrewAI, LangChain, LangGraph, n8n, or other frameworks.
-          </p>
+          {!agentData?.agent_card && (
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
+            <Lightbulb className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              <span className="font-medium">Tip:</span> New to A2A? Use{" "}
+              <a
+                href="https://github.com/hybroai/a2a-adapter"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+              >
+                a2a-adapter
+              </a>
+              {" "}to convert any agent from CrewAI, LangChain, LangGraph, n8n, or other frameworks.
+            </p>
+          </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Agent Card information display */}
       {agentData?.agent_card && (
         <>
-          <Card>
+          <Card ref={agentCardRef}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Bot className="h-5 w-5" />
@@ -399,128 +535,180 @@ export default function RegisterAgentPage() {
             </CardContent>
           </Card>
 
-          {/* Connection Inspection Button */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                Connection Inspection
-              </CardTitle>
-              <CardDescription>
-                Validate the A2A connection before registering the agent
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button 
-                onClick={inspectConnection}
-                disabled={inspecting}
-                className="w-full sm:w-auto"
-                variant="outline"
-              >
-                {inspecting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Inspecting Connection...
-                  </>
-                ) : (
-                  <>
-                    <Shield className="h-4 w-4 mr-2" />
-                    Inspect A2A Connection
-                  </>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
+          {/* Inspection - Unified Collapsible */}
+          <Collapsible open={inspectionOpen} onOpenChange={setInspectionOpen}>
+            <Card>
+              <CollapsibleTrigger asChild>
+                <CardHeader className="cursor-pointer select-none">
+                  <CardTitle className="flex items-center gap-2">
+                    {(inspectingCard || inspecting) ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    ) : allInspectionsPassed ? (
+                      <ShieldCheck className="h-5 w-5 text-green-500" />
+                    ) : (cardInspectionData && cardInspectionData.status_code !== 200) || (inspectionData && inspectionData.status_code !== 200) ? (
+                      <ShieldX className="h-5 w-5 text-red-500" />
+                    ) : (
+                      <Shield className="h-5 w-5" />
+                    )}
+                    Inspection
+                    {allInspectionsPassed && (
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        className="ml-auto pointer-events-none text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950"
+                      >
+                        All Passed
+                      </Button>
+                    )}
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${inspectionOpen ? "rotate-180" : ""} ${allInspectionsPassed ? "" : "ml-auto"}`} />
+                  </CardTitle>
+                  <CardDescription>
+                    {allInspectionsPassed
+                      ? "Agent card and A2A connection validated successfully"
+                      : (inspectingCard || inspecting)
+                        ? "Running inspections..."
+                        : "Validate agent card structure and A2A connection"
+                    }
+                  </CardDescription>
+                </CardHeader>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent className="space-y-6">
+                  {/* Agent Card Inspection */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold flex items-center gap-2">
+                        <FileSearch className="h-4 w-4" />
+                        Agent Card Validation
+                        {cardInspectionData && (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            className={`pointer-events-none text-xs h-6 ${cardInspectionData.status_code === 200
+                              ? "text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950" 
+                              : "text-red-600 border-red-300 bg-red-50 dark:text-red-400 dark:border-red-700 dark:bg-red-950"
+                            }`}
+                          >
+                            {cardInspectionData.status_code === 200 ? "Passed" : "Failed"}
+                          </Button>
+                        )}
+                      </h4>
+                      <Button 
+                        onClick={(e) => { e.stopPropagation(); inspectCard(); }}
+                        disabled={inspectingCard}
+                        variant="outline"
+                        size="sm"
+                      >
+                        {inspectingCard ? (
+                          <>
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Inspecting...
+                          </>
+                        ) : (
+                          <>
+                            <FileSearch className="h-3 w-3 mr-1" />
+                            {cardInspectionData ? "Re-inspect" : "Inspect"}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {cardInspectionData && cardInspectionData.result && cardInspectionData.result.length > 0 && (
+                      <div className="space-y-1.5 pl-6">
+                        {cardInspectionData.result.map((result, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            {cardInspectionData.status_code === 200 ? (
+                              <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                            )}
+                            <span className="text-sm text-muted-foreground">{result}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <Separator />
+
+                  {/* A2A Connection Inspection */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold flex items-center gap-2">
+                        <Shield className="h-4 w-4" />
+                        A2A Connection
+                        {inspectionData && (
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            className={`pointer-events-none text-xs h-6 ${inspectionData.status_code === 200
+                              ? "text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950" 
+                              : "text-red-600 border-red-300 bg-red-50 dark:text-red-400 dark:border-red-700 dark:bg-red-950"
+                            }`}
+                          >
+                            {inspectionData.status_code === 200 ? "Passed" : "Failed"}
+                          </Button>
+                        )}
+                      </h4>
+                      <Button 
+                        onClick={(e) => { e.stopPropagation(); inspectConnection(); }}
+                        disabled={inspecting}
+                        variant="outline"
+                        size="sm"
+                      >
+                        {inspecting ? (
+                          <>
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Inspecting...
+                          </>
+                        ) : (
+                          <>
+                            <Shield className="h-3 w-3 mr-1" />
+                            {inspectionData ? "Re-inspect" : "Inspect"}
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    {inspectionData && inspectionData.result && inspectionData.result.length > 0 && (
+                      <div className="space-y-1.5 pl-6">
+                        {inspectionData.result.map((result, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            {inspectionData.status_code === 200 ? (
+                              <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                            ) : (
+                              <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                            )}
+                            <span className="text-sm text-muted-foreground">{result}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
         </>
       )}
 
-      {/* Connection Inspection Results */}
-      {inspectionData && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {inspectionData.status_code === 200 ? (
-                <ShieldCheck className="h-5 w-5 text-green-500" />
-              ) : (
-                <ShieldX className="h-5 w-5 text-red-500" />
-              )}
-              Connection Inspection Results
-            </CardTitle>
-            <CardDescription>
-              {inspectionData.status_code === 200 
-                ? "Connection validation passed" 
-                : "Connection validation failed"
-              }
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">Status:</Label>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  className={inspectionData.status_code === 200
-                    ? "text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900" 
-                    : "text-red-600 border-red-300 bg-red-50 hover:bg-red-100 dark:text-red-400 dark:border-red-700 dark:bg-red-950 dark:hover:bg-red-900"
-                  }
-                >
-                  {inspectionData.status_code === 200 ? "Valid" : "Invalid"}
-                </Button>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">Agent URL:</Label>
-                <p className="text-sm text-muted-foreground">{inspectionData.agent_url}</p>
-              </div>
-
-              {inspectionData.result && inspectionData.result.length > 0 && (
-                <div>
-                  <Label className="text-sm font-medium">Validation Results:</Label>
-                  <div className="space-y-2 mt-2">
-                    {inspectionData.result.map((result, index) => (
-                      <div key={index} className="flex items-center gap-2">
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                        <span className="text-sm">{result}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+      {/* Agent Settings - Show after inspection passes */}
+      {inspectionData?.status_code === 200 && (
+        <div ref={registerSectionRef}>
+        <AgentSettingsCard
+          values={settingsValues}
+          onChange={setSettingsValues}
+        />
+        </div>
       )}
 
-      {/* Agent Inspection (existing inspection results) */}
-      {agentData?.result && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Agent Inspection</CardTitle>
-            <CardDescription>
-              Validation results for the agent
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {agentData.result.map((result, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm">{result}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Register button */}
-      {agentData?.agent_card && (
+      {/* Register button - only show after successful inspection */}
+      {agentData?.agent_card && inspectionData?.status_code === 200 && (
         <div className="flex justify-end">
           <Button 
             onClick={registerAgentHandler}
-            variant="outline"
-            disabled={registering || !inspectionData || inspectionData.status_code !== 200}
+            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            disabled={registering}
             size="lg"
           >
             {registering ? (

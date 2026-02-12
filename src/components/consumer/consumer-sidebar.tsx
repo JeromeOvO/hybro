@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { History, PanelLeftIcon, ExternalLink } from "lucide-react"
+import { History, PanelLeftIcon, SquareArrowOutUpRight } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavAgent } from "@/components/nav-agent"
@@ -144,7 +144,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
               className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
             >
               <Link href={developerUrl("/")} prefetch={false}>
-                <ExternalLink className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
+                <SquareArrowOutUpRight className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
                 <span className="group-data-[collapsible=icon]:hidden">
                   Developer Portal →
                 </span>
