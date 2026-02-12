@@ -107,6 +107,7 @@ class OrchestrationRequest(BaseModel):
     room_user_message_id: str | None = None
     room_agent_message_id: str | None = None
     room_related_message_id: str | None = None
+    user_id: str | None = None
 
 
 class DebatationCenterRequest(BaseModel):

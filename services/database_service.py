@@ -1001,6 +1001,20 @@ class DatabaseService:
             logger.error(f"Failed to get orphaned agent messages: {str(e)}")
             return []
 
+    async def get_non_tracked_stale_task_messages(
+        self, max_age_hours: int, non_terminal_states: list[str]
+    ) -> list[RoomAgentMessage]:
+        """
+        Get non-tracked room agent messages stuck in non-terminal state for too long.
+        """
+        try:
+            return await self.mongo.get_non_tracked_stale_task_messages(
+                max_age_hours, non_terminal_states
+            )
+        except Exception as e:
+            logger.error(f"Failed to get non-tracked stale task messages: {str(e)}")
+            return []
+
     async def get_task_messages_for_room(
         self, room_id: str, limit: int = 50
     ) -> list[RoomAgentMessage]:

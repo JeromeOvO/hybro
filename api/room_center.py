@@ -237,6 +237,7 @@ async def send_message(
             room_id=room_id,
             room_user_message_id=room_center_response.message_id,
             room_related_message_id="",
+            user_id=user.user_id,
         )
         background_tasks.add_task(
             room_message_center.process_room_user_message, orchestration_request

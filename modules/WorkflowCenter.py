@@ -6,7 +6,6 @@ from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
 
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.logger import get_logger
-from models.agent import AgentStatus
 from models.error import (
     AgentNotAssignedError,
     AgentNotFoundError,
@@ -22,6 +21,7 @@ from models.request import (
 from models.response import OrchestrationResponse
 from models.task import MetaTask, TaskDefaultValue
 from services.a2a_service import a2a_service
+from services.agent_resolver_service import agent_resolver_service
 from services.agent_service import agent_service
 from services.database_service import db_service
 from services.memory_service import chat_memory_service
@@ -44,6 +44,7 @@ class WorkflowCenter:
         self.chat_memory_service = chat_memory_service
         self.database_service = db_service
         self.sse_manager = sse_manager
+        self.agent_resolver = agent_resolver_service
 
     def _success_response(self, task_id: str, **kwargs) -> OrchestrationResponse:
         """Shorthand for a successful OrchestrationResponse."""
@@ -109,7 +110,7 @@ class WorkflowCenter:
         task_description = self._get_first_text_from_task(base_task)
 
         best_agent = await self._select_best_agent_for_decomposition(
-            task_description
+            task_description, user_id=request.user_id
         )
         if best_agent is None:
             return self._error_response(
@@ -282,7 +283,9 @@ class WorkflowCenter:
             try:
                 # Call assign_agent_to_meta_task for each meta task
                 assignment_response = await self.assign_agent_to_meta_task(
-                    OrchestrationRequest(task_id=meta_task.task_id)
+                    OrchestrationRequest(
+                        task_id=meta_task.task_id, user_id=request.user_id
+                    )
                 )
 
                 if assignment_response.success:
@@ -329,8 +332,8 @@ class WorkflowCenter:
     ) -> OrchestrationResponse:
         """Assign the most suitable agent to a specific MetaTask.
 
-        Uses semantic similarity to find candidate agents, selects the best
-        one via OpenAI, and updates the MetaTask with the assignment.
+        Uses the AgentResolverService to find the best accessible agent
+        via vector similarity, LLM selection, and real-time health probing.
 
         Raises:
             TaskIdRequiredError: If task_id is missing.
@@ -349,49 +352,26 @@ class WorkflowCenter:
         if meta_task is None:
             raise TaskNotFoundError()
 
-        agents_matched_response = await self.agent_service.query_similar_agents(
-            AgentCenterRequest(query_text=meta_task.task_description, agent_count=3)
+        result = await self.agent_resolver.resolve(
+            meta_task.task_description,
+            count=3,
+            use_llm_selection=True,
+            user_id=request.user_id,
         )
 
-        if (
-            agents_matched_response.agents is None
-            or len(agents_matched_response.agents) == 0
-        ):
-            return self._error_response(
-                meta_task_id, "No active agent matched", status_code=200
-            )
-
-        # Filter for active agents only (safety check - db_service should already filter)
-        active_agents = [
-            agent
-            for agent in agents_matched_response.agents
-            if agent.agent_status == AgentStatus.active
-        ]
-
-        if not active_agents:
+        if result.agent is None:
             logger.warning(
-                "WorkflowCenter: No active agents available for meta task %s",
+                "WorkflowCenter: No accessible agent for meta task %s: %s",
                 meta_task_id,
+                result.failure_reason,
             )
             return self._error_response(
-                meta_task_id, "No active agent available", status_code=200
+                meta_task_id,
+                result.failure_reason or "No accessible agent available",
+                status_code=200,
             )
 
-        best_agent_id = await self.openai_service.select_best_agent_for_task(
-            meta_task.task_description, active_agents
-        )
-
-        # Verify the selected agent is in our active list, fallback if not
-        best_agent = next(
-            (a for a in active_agents if a.agent_id == best_agent_id), None
-        )
-        if best_agent is None or best_agent.agent_status != AgentStatus.active:
-            logger.warning(
-                "WorkflowCenter: Selected agent %s is not active, using first active agent",
-                best_agent_id,
-            )
-            best_agent_id = active_agents[0].agent_id
-
+        best_agent_id = result.agent.agent_id
         meta_task.agent_id = best_agent_id
         update_response = await self.task_service.update_meta_task_by_task_id(
             TaskCenterRequest(task_id=meta_task_id, meta_task=meta_task)
@@ -524,7 +504,9 @@ class WorkflowCenter:
 
                 # Process meta task - wait for completion before proceeding
                 process_response = await self.process_meta_task(
-                    OrchestrationRequest(task_id=meta_task.task_id)
+                    OrchestrationRequest(
+                        task_id=meta_task.task_id, user_id=request.user_id
+                    )
                 )
 
                 if process_response.success:
@@ -915,39 +897,31 @@ class WorkflowCenter:
 
         return failed_deletions
 
-    async def _select_best_agent_for_decomposition(self, task_description: str):
-        """Find the best active agent for task decomposition.
+    async def _select_best_agent_for_decomposition(
+        self, task_description: str, user_id: str | None = None
+    ):
+        """Find the best accessible agent for task decomposition.
 
-        Queries similar agents, uses OpenAI to pick the best one, and falls
-        back to the first active agent if the selection is invalid.
+        Uses the AgentResolverService to query similar agents, rank them via
+        LLM, and verify real-time accessibility.
 
-        Returns the selected agent, or None if no active agents are available.
+        Returns the selected agent, or None if no accessible agents are available.
         """
-        similar_agents = await self.database_service.query_similar_agents(
-            task_description, count=5, active_only=True
+        result = await self.agent_resolver.resolve(
+            task_description,
+            count=5,
+            use_llm_selection=True,
+            user_id=user_id,
         )
 
-        if not similar_agents:
+        if result.agent is None:
             logger.error(
-                "WorkflowCenter: No active agents found for task decomposition"
+                "WorkflowCenter: No accessible agent found for task decomposition: %s",
+                result.failure_reason,
             )
             return None
 
-        best_agent_id = await self.openai_service.select_best_agent_for_task(
-            task_description, similar_agents
-        )
-
-        best_agent = await self.database_service.get_agent_by_agent_id(best_agent_id)
-
-        # Verify the selected agent is active, fallback to first similar agent if not
-        if best_agent is None or best_agent.agent_status != AgentStatus.active:
-            logger.warning(
-                "WorkflowCenter: Selected agent %s is not active, falling back to first active agent",
-                best_agent_id,
-            )
-            best_agent = similar_agents[0]  # Already filtered for active agents
-
-        return best_agent
+        return result.agent
 
     async def _extract_task_result(self, meta_task_id: str) -> dict[str, Any]:
         """Extract the result from a completed meta task for context passing.

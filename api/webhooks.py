@@ -202,10 +202,10 @@ async def notify_task_update(
                 room_agent_message.message_id,
             )
 
-    # Extract task_content from the room agent message for frontend display
-    task_content = None
-    if room_agent_message and room_agent_message.message_content:
-        task_content = room_agent_message.message_content.message_text
+    # Use the explicit task_content field for frontend display.
+    # For direct chat this is None (avoids echoing the user's message);
+    # for workflow steps it carries a meaningful task description.
+    task_content = room_agent_message.task_content if room_agent_message else None
 
     await notification_service.send_task_update(
         room_id=room_id,

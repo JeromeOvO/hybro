@@ -1,5 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
+from common.auth import ClerkUser, get_current_user
 from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 from modules.RoomMessageCenter import room_message_center
@@ -8,13 +9,20 @@ from modules.WorkflowCenter import workflow_center
 router = APIRouter()
 
 
-async def _get_task_request(request: Request) -> OrchestrationRequest:
-    """Parse and validate task_id from the request body, returning an OrchestrationRequest."""
+async def _get_task_request(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+) -> OrchestrationRequest:
+    """Parse and validate task_id from the request body, returning an OrchestrationRequest.
+
+    The authenticated user's ID is attached so downstream services can
+    apply visibility filtering (e.g. private-agent access checks).
+    """
     request_data = await request.json()
     task_id = request_data.get("task_id")
     if not task_id:
         raise HTTPException(status_code=400, detail="task_id is required")
-    return OrchestrationRequest(task_id=task_id)
+    return OrchestrationRequest(task_id=task_id, user_id=user.user_id)
 
 
 TaskRequestDep = Depends(_get_task_request)
@@ -56,7 +64,9 @@ async def summarize_meta_task_for_base_task(
 
 @router.post("/orchestrationCenter/processRoomUserMessage")
 async def process_room_user_message(
-    request: Request, background_tasks: BackgroundTasks
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user: ClerkUser = Depends(get_current_user),
 ):
     """
     Process a room user message asynchronously.
@@ -87,6 +97,7 @@ async def process_room_user_message(
         room_id=room_id,
         room_user_message_id=room_user_message_id,
         room_related_message_id=room_related_message_id,
+        user_id=user.user_id,
     )
 
     # Queue the actual processing as a background task.

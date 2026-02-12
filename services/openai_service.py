@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 from a2a.types import Role
 from dotenv import load_dotenv
@@ -943,6 +944,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
         agents: list[Agent] = None,
+        conversation_context: str | None = None,
     ) -> dict:
         """
         Parse user message using LLM with intelligent task decomposition.
@@ -1088,7 +1090,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
         # Build different prompts based on auto_assign_agents mode
         if auto_assign_agents and selected_agent_set:
             # AUTO MODE: Automatically assign best agents from pool
-            system_prompt = f"""You are an expert task analyzer and decomposer for multi-agent collaboration systems.
+            system_prompt = f"""You are an expert task analyzer and router for multi-agent collaboration systems.
                 Your job is to analyze user messages, decide if decomposition is needed, then assign the most appropriate agents.
 
                 AVAILABLE AGENTS:
@@ -1096,17 +1098,25 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
                 PROCESS:
                 1. ANALYZE TASK COMPLEXITY
-                - Simple task: Single action, can be completed in one step
-                - Complex task: Multiple logical steps, dependencies between actions
+                - Simple task: Single action, question, greeting, follow-up, or anything completable in one step
+                - Complex task: Multiple DISTINCT deliverables requiring different expertise or sequential phases
+
+                IMPORTANT: Most messages are SIMPLE. Examples of SIMPLE (1 step, NO decomposition):
+                - Questions: "What's the weather?", "Everyone knows the date today?", "How does X work?"
+                - Follow-ups: "Can you explain that more?", "What about Y?"
+                - Greetings: "Hello", "Hi everyone"
+                - Single requests: "Write me a poem", "Summarize this article", "Calculate 2+2"
+                - Conversational messages referencing prior context
+                When in doubt, do NOT decompose.
                 
                 2. DECIDE DECOMPOSITION
-                - If simple: Keep as single step
+                - If simple: Keep as single step (this is the common case)
                 - If complex: Break into logical sub-tasks with clear dependencies
                 
                 3. ASSIGN AGENTS (AUTO MODE)
                 - You MUST assign an agent from the available pool to EACH step
                 - Choose the most appropriate agent based on their description, capabilities, skills, and the task content
-                - DIVERSIFY agent assignment: Different steps should ideally use different agents based on their specializations
+                - If decomposed, prefer matching agent specialization to step content. Do NOT create extra steps just to use more agents.
                 - Match agent capabilities and skills to task requirements - read each agent's description carefully
                 - If only one agent is available, assign that agent to all steps
                 - If task mentions a specific agent with <@...>, prioritize that agent for relevant steps
@@ -1146,7 +1156,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 - Break by logical phases (prepare → execute → review)
                 - Break by functional areas (data → analysis → visualization)
                 - Break by sequential dependencies (A must complete before B)
-                - Keep steps granular but not too fine (3-7 steps optimal)
+                - 1 step is ideal for simple tasks; only use 3-7 steps for genuinely complex multi-part work
                 - Each step should be independently executable and produce concrete output
 
                 DEPENDENCY RULES:
@@ -1234,7 +1244,7 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
                 - Break by logical phases (prepare → execute → review)
                 - Break by functional areas (data → analysis → visualization)
                 - Break by sequential dependencies (A must complete before B)
-                - Keep steps granular but not too fine (3-7 steps optimal)
+                - 1 step is ideal for simple tasks; only use 3-7 steps for genuinely complex multi-part work
                 - Each step should be independently executable and produce concrete output
 
                 DEPENDENCY RULES:
@@ -1251,19 +1261,26 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
 
                 Output valid JSON only, no explanation."""
 
-        user_prompt = f"""Analyze this task and create execution plan:
+        # Build conversation context section if available
+        context_section = ""
+        if conversation_context:
+            context_section = f"""
+                Recent conversation history:
+                {conversation_context}
+                """
 
+        user_prompt = f"""Analyze this message and decide how to route it:
+
+                Current date/time: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
+                {context_section}
                 Available agents in room:
                 {agent_list if agent_list else "None"}
 
                 User message:
                 "{message_text}"
 
-                Steps:
-                1. Is this a simple or complex task?
-                2. Should it be decomposed? Why or why not?
-                3. What are the logical steps (if decomposed)?
-                4. Which agents should handle each step?
+                Decide: Is this a simple message (question, greeting, follow-up, single request)
+                or a complex multi-step task that genuinely requires decomposition into separate steps?
 
                 Output JSON with your analysis."""
 
@@ -1276,7 +1293,6 @@ OUTPUT: Return a comprehensive, well-organized memory summary that captures the 
             response = await self.client.chat.completions.create(
                 model=os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini",
                 messages=messages,
-                # temperature=0.3,
                 response_format={"type": "json_object"},
             )
 

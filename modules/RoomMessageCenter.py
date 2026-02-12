@@ -3,6 +3,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from a2a.types import (
     AgentCard,
@@ -40,6 +41,7 @@ from services.a2a_constants import (
     is_terminal_state,
 )
 from services.a2a_service import a2a_service
+from services.agent_resolver_service import agent_resolver_service
 from services.database_service import db_service
 from services.debate_service import debate_service
 from services.memory_service import room_memory_service
@@ -139,6 +141,10 @@ class RoomMessageCenter:
         self.rate_limit_service = rate_limit_service
         self.task_service = task_service
         self.notification_service = notification_service
+        self.agent_resolver = agent_resolver_service
+        # Transient state set by _assign_agent so callers can relay
+        # the human-readable reason to the frontend via SSE.
+        self._last_resolve_failure: str | None = None
 
     # ------------------------------------------------------------------
     # Shared helpers (reduce repeated boilerplate)
@@ -173,6 +179,47 @@ class RoomMessageCenter:
             **kwargs,
         )
 
+    async def _fail_task_and_notify(
+        self,
+        *,
+        room_id: str,
+        message: RoomAgentMessage,
+        error_text: str,
+        agent_id: str | None,
+        agent_card: AgentCard | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> None:
+        """Persist a failed TaskStatus on *message* and send the failure notification.
+
+        *step_number* / *total_steps* default to the values stored on *message*
+        when not supplied explicitly.  *agent_card* is forwarded to the
+        notification service so it can resolve the agent display-name.
+        """
+        task = _get_task(message)
+        if task:
+            task.status = TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    message_id=uuid4().hex,
+                    role=Role.agent,
+                    parts=[TextPart(text=error_text)],
+                ),
+            )
+            message.task_updated_at = utcnow()
+            await self._persist_message(message)
+        await self.notification_service.send_task_update(
+            room_id=room_id,
+            message_id=message.message_id,
+            status=TaskState.failed,
+            error=error_text,
+            agent_id=agent_id,
+            agent_card=agent_card,
+            step_number=step_number if step_number is not None else message.step_number,
+            total_steps=total_steps if total_steps is not None else message.total_steps,
+            task_content=message.task_content,
+        )
+
     # ------------------------------------------------------------------
 
     async def _setup_task_tracking(
@@ -205,10 +252,10 @@ class RoomMessageCenter:
             )
             created_at = task_info.get("created_at")
 
-            # Extract task content from the message for frontend display
-            task_content = None
-            if current_message.message_content:
-                task_content = current_message.message_content.message_text
+            # Use the explicit task_content field for frontend display.
+            # For direct chat this is None (avoids echoing the user's message);
+            # for workflow steps it carries a meaningful task description.
+            task_content = current_message.task_content
 
             logger.info(
                 "RoomMessageCenter: Sending task_submitted SSE for step %s/%s, task_content: %s",
@@ -235,6 +282,48 @@ class RoomMessageCenter:
         except Exception as exc:
             logger.warning("Failed to setup task tracking: %s", exc)
             return None
+
+    async def _setup_tracking_context(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        prepared_message: Message,
+        room_id: str,
+        user_message_id: str,
+        *,
+        send_sse: bool = False,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> tuple[dict[str, Any] | None, ProcessingContext]:
+        """Set up task tracking and build a ProcessingContext in one step.
+
+        Combines ``_setup_task_tracking`` with ``ProcessingContext`` construction
+        to avoid duplicating this boilerplate across streaming and sync paths.
+
+        Returns:
+            A (task_info, ctx) tuple.  *task_info* may be ``None`` when tracking
+            setup fails (degraded mode).
+        """
+        task_info = await self._setup_task_tracking(
+            current_message,
+            agent_card,
+            prepared_message,
+            room_id,
+            step_number=step_number,
+            total_steps=total_steps,
+        )
+        ctx = ProcessingContext(
+            room_id=room_id,
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id=user_message_id,
+            task_info=task_info,
+            created_at=task_info.get("created_at") if task_info else None,
+            step_number=step_number,
+            total_steps=total_steps,
+            send_sse=send_sse,
+        )
+        return task_info, ctx
 
     async def _poll_task_until_complete(
         self,
@@ -361,24 +450,15 @@ class RoomMessageCenter:
         total_steps: int | None = None,
     ) -> tuple[ProcessingStatus, str]:
         """Handle streaming responses from an agent for a room message."""
-        task_info = await self._setup_task_tracking(
+        _task_info, ctx = await self._setup_tracking_context(
             current_message,
             agent_card,
             prepared_message,
             room_id,
-            step_number=step_number,
-            total_steps=total_steps,
-        )
-        ctx = ProcessingContext(
-            room_id=room_id,
-            current_message=current_message,
-            agent_card=agent_card,
-            user_message_id=user_message_id,
-            task_info=task_info,
-            created_at=task_info.get("created_at") if task_info else None,
-            step_number=step_number,
-            total_steps=total_steps,
+            user_message_id,
             send_sse=send_sse,
+            step_number=step_number,
+            total_steps=total_steps,
         )
         streaming_state = MessageStreamingState()
 
@@ -569,12 +649,6 @@ class RoomMessageCenter:
                     state,
                     status_message=a2a_status_message_text,
                 )
-            await self.sse_manager.send_processing_status(
-                ctx.room_id,
-                state,
-                ctx.current_message.message_id,
-                details=f"Agent {ctx.current_message.agent_id} status: {state}",
-            )
 
     async def _handle_stream_artifact_update(
         self,
@@ -735,11 +809,15 @@ class RoomMessageCenter:
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
-        # Get user_id from the user message for rate limiting
+        # Get user_id from the user message for rate limiting.
+        # Fall back to the request-level user_id (from auth) if the stored
+        # message is missing or has no user_id.
         user_message = await self.database_service.get_room_user_message_by_message_id(
             room_user_message_id
         )
-        user_id = user_message.user_id if user_message else None
+        user_id = (
+            (user_message.user_id if user_message else None) or request.user_id
+        )
 
         # Query agent messages to process
         query_response = (
@@ -793,6 +871,12 @@ class RoomMessageCenter:
         )
 
         if queue_result == QueueResult.FAILED:
+            await self.sse_manager.send_processing_status(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Failed to process agent messages",
+            )
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
@@ -901,6 +985,27 @@ class RoomMessageCenter:
                         "RoomMessageCenter: Failed to assign agent for message %s",
                         current_message.message_id,
                     )
+                    error_text = (
+                        self._last_resolve_failure
+                        or "No available agent could be found for your request."
+                    )
+                    # Try to identify the intended agent from allowed_agent_ids
+                    intended_agent_id = None
+                    if isinstance(current_message.extend_info, dict):
+                        allowed = (
+                            current_message.extend_info.get("allowed_agent_ids") or []
+                        )
+                        if len(allowed) == 1:
+                            intended_agent_id = allowed[0]
+                    # Persist the intended agent_id so the frontend can show the right name
+                    if intended_agent_id:
+                        current_message.agent_id = intended_agent_id
+                    await self._fail_task_and_notify(
+                        room_id=room_id,
+                        message=current_message,
+                        error_text=error_text,
+                        agent_id=intended_agent_id,
+                    )
                     return QueueResult.FAILED
             else:
                 # Agent already assigned, fetch it and verify it's active
@@ -923,6 +1028,8 @@ class RoomMessageCenter:
                         agent.agent_status,
                         current_message.message_id,
                     )
+                    # Save original agent_id before clearing for the error notification
+                    original_agent_id = current_message.agent_id
                     # Clear the agent_id and re-assign
                     current_message.agent_id = None
                     agent = await self._assign_agent(current_message)
@@ -930,6 +1037,18 @@ class RoomMessageCenter:
                         logger.error(
                             "RoomMessageCenter: Failed to re-assign agent for message %s after inactive agent",
                             current_message.message_id,
+                        )
+                        error_text = (
+                            self._last_resolve_failure
+                            or "The assigned agent is no longer available and no alternative agent could be found."
+                        )
+                        # Restore original agent_id so the frontend can show the right name
+                        current_message.agent_id = original_agent_id
+                        await self._fail_task_and_notify(
+                            room_id=room_id,
+                            message=current_message,
+                            error_text=error_text,
+                            agent_id=original_agent_id,
                         )
                         return QueueResult.FAILED
 
@@ -1234,7 +1353,9 @@ class RoomMessageCenter:
     async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
         """Assign an agent to the message by inferring from content.
 
-        Only active agents will be assigned. If no active agents are found, returns None.
+        Uses the AgentResolverService to find the best accessible agent from
+        the allowed agent list.  Returns None (with ``last_resolve_failure``
+        set) when no agent is available.
         """
         allowed_agent_ids = await self._resolve_allowed_agent_ids(current_message)
         user_input = self._extract_user_input(current_message)
@@ -1244,6 +1365,7 @@ class RoomMessageCenter:
                 "RoomMessageCenter: No user input in message %s, cannot infer agent",
                 current_message.message_id,
             )
+            self._last_resolve_failure = "Unable to determine what to ask an agent — the message appears to be empty."
             return None
 
         logger.info(
@@ -1253,21 +1375,22 @@ class RoomMessageCenter:
             len(allowed_agent_ids),
         )
 
-        matched_agents = await self.database_service.query_similar_agents(
+        result = await self.agent_resolver.resolve(
             user_input,
             allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
-            active_only=True,
+            user_id=current_message.user_id,
         )
 
-        if not matched_agents:
+        if result.agent is None:
             logger.error(
-                "RoomMessageCenter: No active agent found for message %s",
+                "RoomMessageCenter: No accessible agent for message %s: %s",
                 current_message.message_id,
+                result.failure_reason,
             )
+            self._last_resolve_failure = result.failure_reason
             return None
 
-        # query_similar_agents already filters active_only=True; take the first match
-        agent = matched_agents[0]
+        agent = result.agent
         current_message.agent_id = agent.agent_id
 
         update_success = (
@@ -1282,6 +1405,9 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Failed to update agent assignment for message %s",
                 current_message.message_id,
             )
+            self._last_resolve_failure = (
+                "Internal error: failed to persist agent assignment."
+            )
             return None
 
         logger.info(
@@ -1289,6 +1415,7 @@ class RoomMessageCenter:
             agent.agent_id,
             current_message.message_id,
         )
+        self._last_resolve_failure = None
         return agent
 
     async def _process_single_agent_message(
@@ -1366,26 +1493,12 @@ class RoomMessageCenter:
                     exc,
                     exc_info=True,
                 )
-                error_text = f"Agent streaming failed: {exc}"
-                task = _get_task(current_message)
-                if task:
-                    task.status = TaskStatus(
-                        state=TaskState.failed,
-                        message=Message(
-                            role=Role.agent, parts=[TextPart(text=error_text)]
-                        ),
-                    )
-                    current_message.task_updated_at = utcnow()
-                    await self._persist_message(current_message)
-                # Notify frontend via SSE (always send, regardless of task_info)
-                await self.notification_service.send_task_update(
+                await self._fail_task_and_notify(
                     room_id=room_id,
-                    message_id=current_message.message_id,
-                    status="failed",
-                    agent_card=agent.agent_card,
+                    message=current_message,
+                    error_text=f"Agent streaming failed: {exc}",
                     agent_id=current_message.agent_id,
-                    created_at=None,
-                    error=error_text,
+                    agent_card=agent.agent_card,
                     step_number=step_number,
                     total_steps=total_steps,
                 )
@@ -1510,11 +1623,12 @@ class RoomMessageCenter:
         Returns:
             Tuple of (success, response_text, paused_message_id).
         """
-        task_info = await self._setup_task_tracking(
+        task_info, ctx = await self._setup_tracking_context(
             current_message,
             agent_card,
             prepared_message,
             room_id,
+            current_message.message_id,
             step_number=step_number,
             total_steps=total_steps,
         )
@@ -1524,16 +1638,6 @@ class RoomMessageCenter:
                 current_message.message_id,
             )
 
-        ctx = ProcessingContext(
-            room_id=room_id,
-            current_message=current_message,
-            agent_card=agent_card,
-            user_message_id=current_message.message_id,
-            task_info=task_info,
-            created_at=task_info.get("created_at") if task_info else None,
-            step_number=step_number,
-            total_steps=total_steps,
-        )
         message_id = current_message.message_id
 
         # Call the agent (this blocks until response)

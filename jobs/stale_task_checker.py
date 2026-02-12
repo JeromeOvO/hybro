@@ -144,6 +144,30 @@ class StaleTaskChecker:
         # 4. Clean up stuck room processing status
         await self._cleanup_stuck_processing_status()
 
+        # 5. Auto-fail non-tracked tasks stuck in submitted/working state too long.
+        #    These are typically queued pipeline steps that were never picked up
+        #    (e.g., server restarted before the pipeline got to them and orphan
+        #    recovery didn't re-trigger them).  We use the same expiry threshold
+        #    as tracked tasks to be consistent.
+        #    We intentionally exclude interactive states (input_required,
+        #    auth_required) since non-tracked tasks should never reach those.
+        non_tracked_state_values = [TaskState.submitted.value, TaskState.working.value]
+        non_tracked_stale = await db_service.get_non_tracked_stale_task_messages(
+            self.task_expiry_hours, non_tracked_state_values
+        )
+        if non_tracked_stale:
+            logger.info(
+                f"Found {len(non_tracked_stale)} non-tracked stale tasks to auto-fail"
+            )
+        for msg in non_tracked_stale:
+            try:
+                await self._auto_fail_non_tracked_task(msg)
+            except Exception as e:
+                logger.error(
+                    f"Failed to auto-fail non-tracked task {msg.message_id}: {e}",
+                    exc_info=True,
+                )
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -269,6 +293,43 @@ class StaleTaskChecker:
             msg=msg,
             error=f"Task expired after {self.task_expiry_hours} hours without completion. "
             "The agent may be unresponsive.",
+        )
+
+    async def _auto_fail_non_tracked_task(
+        self,
+        msg: RoomAgentMessage,
+    ) -> None:
+        """Auto-fail a non-tracked task that has been stuck in non-terminal state too long.
+
+        These are typically queued pipeline steps that were created but never
+        picked up for processing (e.g., server restarted before the pipeline
+        reached them, and orphan recovery did not re-trigger them).
+        """
+        message_id = msg.message_id
+        created_at = msg.message_created_at
+        age_hours = (
+            (utcnow() - ensure_utc(created_at)).total_seconds() / 3600
+            if created_at
+            else 0
+        )
+
+        current_state = (
+            msg.message_content.message_task.status.state
+            if msg.message_content and msg.message_content.message_task
+            else "unknown"
+        )
+
+        logger.warning(
+            f"Auto-failing non-tracked task for message {message_id} "
+            f"(state: {current_state}, age: {age_hours:.1f}h, "
+            f"threshold: {self.task_expiry_hours}h)"
+        )
+
+        await self._mark_task_failed(
+            message_id=message_id,
+            msg=msg,
+            error="Task was never processed — it may have been orphaned "
+            "due to a server restart or processing failure.",
         )
 
     async def _mark_task_failed(
