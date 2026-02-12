@@ -7,6 +7,7 @@ import {
   ChevronsUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { MessageBubble } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
 import { type TaskState, PROCESSING_STATUS } from '@/lib/types/sse'
@@ -199,20 +200,26 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
               {/* Floating expand/collapse pill */}
               {allAgentIds.length > 0 && (
                 <div className="sticky top-2 z-10 flex justify-end pointer-events-none">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={allExpanded ? collapseAll : expandAll}
-                    className="h-8 w-8 p-0 pointer-events-auto rounded-full bg-muted/60 backdrop-blur-sm shadow-sm hover:bg-muted hover:shadow-md transition-all"
-                    title={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
-                    aria-label={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
-                  >
-                    {allExpanded ? (
-                      <ChevronsDownUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronsUpDown className="h-4 w-4" />
-                    )}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={allExpanded ? collapseAll : expandAll}
+                        className="h-8 w-8 p-0 pointer-events-auto rounded-full bg-muted/60 backdrop-blur-sm shadow-sm hover:bg-muted hover:shadow-md transition-all"
+                        aria-label={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
+                      >
+                        {allExpanded ? (
+                          <ChevronsDownUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronsUpDown className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{allExpanded ? 'Collapse all messages' : 'Expand all messages'}</p>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               )}
 

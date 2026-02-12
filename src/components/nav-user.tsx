@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import { UserPlus } from "lucide-react"
 import { useUser, UserButton, useClerk } from "@clerk/nextjs"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -7,30 +8,31 @@ import { isWaitlistEnabled } from "@/lib/utils"
 
 import {
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 
 export function NavUser() {
   const { user, isLoaded } = useUser()
   const { openWaitlist } = useClerk()
+  const [hydrated, setHydrated] = useState(false)
 
-  // Show loading state while user data is being fetched
-  if (!isLoaded) {
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
+
+  if (!hydrated || !isLoaded) {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            size="lg"
-            disabled
-            className="group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+          <div
+            className="flex items-center gap-2 px-2 py-1.5 rounded-md group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
           >
             <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
-            <div className="grid flex-1 text-left text-sm leading-tight">
+            <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
               <div className="h-4 w-20 bg-muted animate-pulse rounded" />
               <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
             </div>
-          </SidebarMenuButton>
+          </div>
         </SidebarMenuItem>
       </SidebarMenu>
     )

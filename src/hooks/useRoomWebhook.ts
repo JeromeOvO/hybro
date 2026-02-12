@@ -7,7 +7,6 @@ import {
   updateRoomName,
   updateRoomExtendInfo
 } from '@/lib/api/room'
-import { processRoomUserMessage } from '@/lib/api/orchestration'
 import { cancelMessage } from '@/lib/api/sse'
 import type { A2ATaskStatus } from '@/lib/api/a2a-tasks'
 import { extractTaskContent, extractTaskError } from '@/lib/api/a2a-tasks'
@@ -24,12 +23,7 @@ import { MESSAGE_TYPE } from '@/lib/types'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { normalizeTimestampOrNow, isStale } from '@/lib/time'
-
-// Special system agent display names (module scoped for stable reference)
-const SYSTEM_AGENT_NAMES: Record<string, string> = {
-  'debate_summary': 'Debate Coordinator',
-  'non_debate_summary': 'Summary Agent',
-}
+import { SYSTEM_AGENTS } from '@/lib/system-agents'
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -71,6 +65,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Track current processing message ID for cancellation
   const currentProcessingMessageId = useRef<string | null>(null)
 
+  // Tracks whether the processing placeholder has been dismissed by SSE
+  const placeholderDismissedRef = useRef(false)
+
   // Processing placeholder ID - used to show "Processing your request" before first task arrives
   const getProcessingPlaceholderId = useCallback(() => `processing-placeholder-${roomId}`, [roomId])
 
@@ -82,6 +79,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     retry: 0,  // Avoid retry loops on abort/cancel
+    enabled: !!userId,  // Don't fetch until user is authenticated
     queryFn: async ({ signal }): Promise<Agent[]> => {
       console.log('🤖 Loading global active agents catalog')
       try {
@@ -105,8 +103,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Get agent name by agent ID with caching
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
     // Check for system agents first
-    if (SYSTEM_AGENT_NAMES[agentId]) {
-      return SYSTEM_AGENT_NAMES[agentId]
+    if (SYSTEM_AGENTS[agentId]) {
+      return SYSTEM_AGENTS[agentId].name
     }
 
     // Use cache if available
@@ -457,6 +455,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   useEffect(() => {
     resetRoomLiveState(roomId)
     agentNameCache.current = {}
+    placeholderDismissedRef.current = false
   }, [roomId, resetRoomLiveState])
 
   // Mirror query loading state to local loading flag for consumers
@@ -465,18 +464,32 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   }, [queryLoading])
 
   // Restore processing placeholder on page load if room has an active processing_message_id
-  // This ensures the "Processing your request..." bubble persists across page refreshes
   useEffect(() => {
     // Only run when room data is loaded and not currently loading
     if (!room || queryLoading) return
+
+    // Once SSE has dismissed the placeholder (via task_submitted or processing_status done),
+    // never re-add it — the restore effect is only for page-load recovery.
+    if (placeholderDismissedRef.current) return
     
     // Check if room has an active processing state
     if (room.processing_message_id) {
       console.log('🔄 Restoring processing placeholder for message:', room.processing_message_id)
       
+      // Check if the triggering user message is stale (> 2 min).
+      // The placeholder only covers the brief parsing phase before real task
+      // bubbles arrive, so if it's been more than 2 minutes the backend likely
+      // crashed or restarted before creating any tasks.
+      const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
+      const loadedMessages = messagesQuery.data || []
+      const triggerMessage = loadedMessages.find(m => m.id === room.processing_message_id)
+      if (triggerMessage && isStale(triggerMessage.timestamp, PLACEHOLDER_STALE_MS)) {
+        console.log('🔄 Skipping placeholder - processing message is stale (>2min)')
+        return
+      }
+
       // Check if any task messages already exist in the loaded messages
       // If tasks exist, the placeholder should not be shown (tasks have already started)
-      const loadedMessages = messagesQuery.data || []
       const hasTaskMessages = loadedMessages.some(m => m.type === MESSAGE_TYPE.TASK)
       
       if (hasTaskMessages) {
@@ -555,6 +568,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             setProcessing(false)
             // Remove processing placeholder if it's still showing
             removeLiveMessage(roomId, getProcessingPlaceholderId())
+            placeholderDismissedRef.current = true
             // Only clear ref if this event is for the message we're tracking
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
               currentProcessingMessageId.current = null
@@ -600,6 +614,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         console.log('📋 Task submitted via SSE:', sseMessage.data)
         // Remove the generic processing placeholder when first real task arrives
         removeLiveMessage(roomId, getProcessingPlaceholderId())
+        placeholderDismissedRef.current = true
 
         // Add a task message to the UI
         if (sseMessage.data?.message_id) {
@@ -855,26 +870,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Store message ID for potential cancellation
       currentProcessingMessageId.current = messageId
 
-      // Step 3: Trigger background processing; agent responses will arrive via SSE
-      // NOTE: The backend now auto-triggers processing when sendMessage completes.
-      // This call is kept for backward compatibility but is no longer critical.
-      // If it fails, the backend will still process the message.
+      // Step 3: Processing is auto-triggered by backend when sendMessage completes.
+      // Agent responses will arrive via SSE.
       setSending(false)  // Parsing done - stop showing spinner
       setProcessing(true)  // Now show Stop button (cancellation works from here)
 
-      // Fire-and-forget: processRoomUserMessage is now auto-triggered by backend
-      // We still call it for redundancy, but don't fail on error
-      processRoomUserMessage({
-        room_id: roomId,
-        room_user_message_id: messageId,
-        room_related_message_id: ""
-      }).catch(error => {
-        // Log but don't fail - backend auto-triggers processing now
-        console.log('📡 processRoomUserMessage returned error (backend auto-processes anyway):', error)
-      })
-
-      // Processing continues in background - SSE will send "completed" status when done
-      // Keep processing=true until SSE delivers the completion status
       console.log('📡 Message queued for processing, waiting for agent responses via SSE...')
 
       // If SSE is not connected, we need to poll or refresh manually

@@ -24,7 +24,7 @@ export default function ConsumerLayout({
         <SidebarInset>
           <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
           <ConsumerHeader />
-          <main className="flex flex-1 flex-col">
+          <main className="flex flex-1 flex-col min-w-0">
             {children}
           </main>
         </SidebarInset>
