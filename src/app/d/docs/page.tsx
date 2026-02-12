@@ -7,7 +7,7 @@ import { VideoEmbed } from "@/components/video-embed"
 import { FrameworkBadges } from "@/components/framework-badges"
 import {
   Github,
-  ExternalLink,
+  SquareArrowOutUpRight,
   Copy,
   Check,
   ArrowRight,
@@ -131,7 +131,7 @@ export default function DevelopersPage() {
             <Button variant="outline" asChild>
               <a href="https://github.com/hybroai/a2a-adapter#readme" target="_blank" rel="noopener noreferrer">
                 Documentation
-                <ExternalLink className="ml-2 h-4 w-4" />
+                <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
             <Button variant="outline" asChild>
@@ -161,7 +161,7 @@ export default function DevelopersPage() {
               className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
             >
               Watch full video on YouTube
-              <ExternalLink className="h-3.5 w-3.5" />
+              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
             </a>
           </div>
         </section>
@@ -360,7 +360,7 @@ export default function DevelopersPage() {
                 <div className="text-sm font-medium">a2a-adapter</div>
                 <div className="text-xs text-muted-foreground">Open source A2A protocol adapter SDK</div>
               </div>
-              <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground ml-auto" />
             </a>
             <a
               href="https://github.com/hybroai/a2a-agent-inspector"
@@ -373,7 +373,7 @@ export default function DevelopersPage() {
                 <div className="text-sm font-medium">A2A Agent Inspector</div>
                 <div className="text-xs text-muted-foreground">Test and verify A2A compliance</div>
               </div>
-              <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground ml-auto" />
             </a>
             <a
               href="https://youtu.be/ZUQrnlBSsLg"
@@ -388,7 +388,7 @@ export default function DevelopersPage() {
                 <div className="text-sm font-medium">Demo Video</div>
                 <div className="text-xs text-muted-foreground">Full walkthrough on YouTube</div>
               </div>
-              <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground ml-auto" />
             </a>
             <a
               href="https://discord.gg/hybro"
@@ -403,7 +403,7 @@ export default function DevelopersPage() {
                 <div className="text-sm font-medium">Discord Community</div>
                 <div className="text-xs text-muted-foreground">Get help and connect with developers</div>
               </div>
-              <ExternalLink className="h-4 w-4 text-muted-foreground ml-auto" />
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground ml-auto" />
             </a>
             <a
               href="mailto:info@hybro.ai"

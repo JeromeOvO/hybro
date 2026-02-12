@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { useUser, useClerk } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, Code2, ExternalLink, MessageCirclePlus } from "lucide-react"
+import { ArrowRight, Code2, SquareArrowOutUpRight, MessageCirclePlus } from "lucide-react"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { VideoEmbed } from "@/components/video-embed"
 import { developerUrl } from "@/lib/urls"
@@ -86,7 +86,7 @@ export default function ConsumerLandingPage() {
               <Button size="lg" variant="outline" asChild className="w-full max-w-[220px]">
                 <a href={developerUrl("/")}>
                   Developer Portal
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
                 </a>
               </Button>
             </div>
@@ -115,7 +115,7 @@ export default function ConsumerLandingPage() {
               className="text-sm text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1"
             >
               Watch on YouTube
-              <ExternalLink className="h-3.5 w-3.5" />
+              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
             </a>
           </div>
         </section>

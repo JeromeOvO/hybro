@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import {
   ArrowLeft,
   Bot,
-  ExternalLink,
+  SquareArrowOutUpRight,
   CheckCircle2,
   XCircle,
   AlertCircle,
@@ -23,6 +23,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { banner } from "@/components/ui/banner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
@@ -87,7 +93,8 @@ export default function ConsumerAgentProfilePage() {
     if (isSystemAgent(agentId)) {
       const info = SYSTEM_AGENTS[agentId]
       return (
-        <div className="container max-w-3xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in duration-500">
+        <div className="px-4 sm:px-6 py-8 animate-in fade-in duration-500">
+          <div className="w-full max-w-4xl mx-auto space-y-8">
           <Button
             variant="ghost"
             onClick={() => router.push('/agents')}
@@ -126,6 +133,7 @@ export default function ConsumerAgentProfilePage() {
               </p>
             </CardContent>
           </Card>
+          </div>
         </div>
       )
     }
@@ -186,7 +194,8 @@ export default function ConsumerAgentProfilePage() {
   }
 
   return (
-    <div className="container max-w-7xl mx-auto p-4 md:p-8 space-y-8 animate-in fade-in duration-500">
+    <div className="px-4 sm:px-6 py-8 animate-in fade-in duration-500">
+      <div className="w-full max-w-4xl mx-auto space-y-8">
       {/* Navigation & Actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <Button
@@ -197,24 +206,21 @@ export default function ConsumerAgentProfilePage() {
           <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
           Back to Agents
         </Button>
-        <div className="flex gap-2 w-full sm:w-auto">
-          {/* Chat with this agent CTA */}
-          <Button
-            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
-            onClick={() => router.push(`/chat?agentId=${agentId}`)}
-          >
-            <MessageCirclePlus className="h-4 w-4 mr-2" />
-            Chat with this agent
-          </Button>
-          {isOwner && (
-            <Button variant="outline" size="sm" asChild>
-              <a href={developerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
-                Manage on Developer Portal
-                <ExternalLink className="h-4 w-4 ml-2" />
-              </a>
-            </Button>
-          )}
-        </div>
+        {isOwner && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" asChild>
+                  <a href={developerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
+                    Manage
+                    <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Manage on Developer Portal</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -255,13 +261,22 @@ export default function ConsumerAgentProfilePage() {
                 {agent.agent_card.documentationUrl && (
                   <Button variant="outline" className="w-full mt-4" asChild>
                     <a href={agent.agent_card.documentationUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="h-4 w-4 mr-2" />
+                      <SquareArrowOutUpRight className="h-4 w-4 mr-2" />
                       View Documentation
                     </a>
                   </Button>
                 )}
               </div>
             </CardContent>
+            <CardFooter className="pt-0 pb-6 px-6">
+              <Button
+                className="w-full bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+                onClick={() => router.push(`/chat?agentId=${agentId}`)}
+              >
+                <MessageCirclePlus className="h-4 w-4 mr-2" />
+                Chat with this agent
+              </Button>
+            </CardFooter>
           </Card>
         </div>
 
@@ -440,6 +455,7 @@ export default function ConsumerAgentProfilePage() {
           </Card>
         </div>
       </div>
+    </div>
     </div>
   )
 }

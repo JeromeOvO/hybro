@@ -1,10 +1,16 @@
 "use client"
 
 import { useState, useEffect, useMemo, useCallback } from "react"
-import { Plus, RefreshCw, Search, ExternalLink } from "lucide-react"
+import { Plus, RefreshCw, Search, Settings, SquareArrowOutUpRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@clerk/nextjs"
 import { banner } from "@/components/ui/banner"
@@ -115,13 +121,14 @@ export default function DeveloperAgentsPage() {
         {/* Agents Table */}
         {filteredAgents.length > 0 ? (
           <div className="rounded-lg border border-border/50 overflow-hidden">
-            <table className="w-full">
+            <table className="w-full table-fixed">
               <thead>
                 <tr className="bg-muted/50 border-b border-border/50">
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3">Agent</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3">Status</th>
-                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3 hidden sm:table-cell">Provider</th>
-                  <th className="text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 py-3">Actions</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 sm:px-4 py-3 w-[35%]">Agent</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 sm:px-4 py-3 w-[15%]">Status</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 sm:px-4 py-3 hidden sm:table-cell w-[25%]">Provider</th>
+                  <th className="text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 sm:px-4 py-3 w-[12%]">Manage</th>
+                  <th className="text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider px-3 sm:px-4 py-3 w-[13%]">View</th>
                 </tr>
               </thead>
               <tbody>
@@ -131,13 +138,13 @@ export default function DeveloperAgentsPage() {
                     className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
                     onClick={() => router.push(`/agents/${agent.agent_id}`)}
                   >
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{agent.agent_card.name}</div>
-                      <div className="text-xs text-muted-foreground truncate max-w-[300px]">
+                    <td className="px-3 sm:px-4 py-3 min-w-0">
+                      <div className="font-medium truncate">{agent.agent_card.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">
                         {agent.agent_card.description}
                       </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 sm:px-4 py-3">
                       <Badge
                         variant="outline"
                         className={
@@ -149,34 +156,50 @@ export default function DeveloperAgentsPage() {
                         {agent.agent_status}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 hidden sm:table-cell">
-                      <span className="text-sm text-muted-foreground">
+                    <td className="px-3 sm:px-4 py-3 hidden sm:table-cell">
+                      <span className="text-sm text-muted-foreground truncate block">
                         {agent.agent_card.provider?.organization || 'Unknown'}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            router.push(`/agents/${agent.agent_id}`)
-                          }}
-                        >
-                          Manage
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          asChild
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <a href={consumerUrl(`/agents/${agent.agent_id}`)} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        </Button>
-                      </div>
+                    <td className="px-3 sm:px-4 py-3 text-center">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                router.push(`/agents/${agent.agent_id}`)
+                              }}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Manage</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </td>
+                    <td className="px-3 sm:px-4 py-3 text-center">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              asChild
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <a href={consumerUrl(`/agents/${agent.agent_id}`)} target="_blank" rel="noopener noreferrer">
+                                <SquareArrowOutUpRight className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View as User</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </td>
                   </tr>
                 ))}

@@ -3,7 +3,6 @@ import type {
   AgentCenterRequest, 
   AgentCenterResponse,
   InspectionCenterRequest,
-  InspectionCenterResponse,
 } from '@/lib/types'
 
 import { getApiUrl } from '../utils'
@@ -72,8 +71,8 @@ export async function deleteAgent(
 // Get agent card from URL - PUBLIC
 export async function getAgentCardFromUrl(
   request: InspectionCenterRequest
-): Promise<InspectionCenterResponse> {
-  return apiPost<InspectionCenterResponse>(
+): Promise<AgentCenterResponse> {
+  return apiPost<AgentCenterResponse>(
     `${API_BASE_URL}/getAgentCardFromUrl`,
     request
   )
