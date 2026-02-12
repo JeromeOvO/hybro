@@ -225,6 +225,7 @@ class HITLEventType(str, Enum):
     INPUT_RECEIVED  = "hitl_input_received"
     INPUT_EXPIRED   = "hitl_input_expired"
     INPUT_CANCELED  = "hitl_input_canceled"
+    ERROR           = "hitl_error"
 
 
 class HITLPromptType(str, Enum):
@@ -461,7 +462,31 @@ class HITLService:
         if request.status != HITLStatus.PENDING:
             raise HTTPException(409, f"Request already {request.status}")
 
-        # 2. Mark as responded
+        # 2. Route based on source — status stays PENDING until routing succeeds
+        #    so that the user can retry if the downstream call fails.
+        try:
+            if request.source == "agent":
+                await self._handle_agent_response(request, user_input)
+            elif request.source == "supervisor":
+                await self._handle_supervisor_response(request, user_input)
+        except Exception as exc:
+            logger.error(
+                "HITL routing failed for request %s: %s",
+                request_id, exc, exc_info=True,
+            )
+            # Emit error SSE so the frontend can surface a retry prompt
+            await self.sse_manager.send_hitl_event(
+                room_id=room_id,
+                event_type=HITLEventType.ERROR,
+                request=request,
+                error=str(exc),
+            )
+            raise HTTPException(
+                502,
+                f"Failed to deliver response to {request.source}: {exc}",
+            )
+
+        # 3. Mark as responded only after routing succeeds
         await self.database_service.update_hitl_request(
             request_id,
             status=HITLStatus.RESPONDED,
@@ -469,18 +494,12 @@ class HITLService:
             responded_at=utcnow(),
         )
 
-        # 3. Emit status update SSE
+        # 4. Emit status update SSE
         await self.sse_manager.send_hitl_event(
             room_id=room_id,
             event_type=HITLEventType.INPUT_RECEIVED,
             request=request,
         )
-
-        # 4. Route based on source
-        if request.source == "agent":
-            await self._handle_agent_response(request, user_input)
-        elif request.source == "supervisor":
-            await self._handle_supervisor_response(request, user_input)
 
         return {"status": "ok", "request_id": request_id}
 
@@ -517,10 +536,20 @@ class HITLService:
         """Get all pending HITL requests for a room (for SSE reconnect catch-up)."""
         return await self.database_service.get_pending_hitl_requests(room_id)
 
-    async def cancel_request(self, request_id: str) -> None:
-        """Cancel a pending HITL request."""
+    async def cancel_request(self, request_id: str, room_id: str | None = None) -> None:
+        """Cancel a pending HITL request.
+
+        Args:
+            request_id: The HITL request to cancel.
+            room_id: If provided, validates the request belongs to this room
+                     (required when called from user-facing endpoints).
+        """
         request = await self.database_service.get_hitl_request(request_id)
-        if request and request.status == HITLStatus.PENDING:
+        if not request:
+            raise HTTPException(404, "HITL request not found")
+        if room_id is not None and request.room_id != room_id:
+            raise HTTPException(403, "Room mismatch")
+        if request.status == HITLStatus.PENDING:
             await self.database_service.update_hitl_request(
                 request_id, status=HITLStatus.CANCELED
             )
@@ -554,16 +583,29 @@ async def reply_to_task(
     Uses the same task_id and context_id to continue the conversation
     rather than starting a new task.
     """
+    from services.database_service import db_service
+
     # 1. Load the existing RoomAgentMessage for webhook config
     msg = await self.database_service.get_room_agent_message_by_message_id(message_id)
     agent_url = msg.agent_url
 
-    # 2. Reconstruct push notification config (reuse same webhook URL/token)
+    # 2. Generate a NEW webhook token for the reply.
+    #    The original plaintext token was never stored (only its hash),
+    #    so we cannot reuse it.  We must mint a fresh token, update the
+    #    stored hash, and send the new plaintext to the agent.  When the
+    #    agent calls back with this token our webhook handler will hash
+    #    it and match against the newly stored hash.
+    webhook_token = db_service.generate_webhook_token()
+    webhook_token_hash = db_service.hash_webhook_token(webhook_token)
+    await db_service.update_task_tracking_on_message(
+        message_id, webhook_token_hash=webhook_token_hash,
+    )
+
     webhook_url = settings.WEBHOOK_BASE_URL
     push_config = PushNotificationConfig(
         id=message_id,
         url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
-        token=msg.webhook_token_hash,  # Already stored
+        token=webhook_token,  # Plaintext token — agent sends this back in the callback
     )
 
     # 3. Build message with EXISTING task_id and context_id
@@ -696,29 +738,36 @@ if review.action == "ask_user":
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from api.room_center import verify_room_ownership
+from common.auth import ClerkUser, get_current_user
+
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
 
 @router.post("/respond")
 async def respond_to_hitl_request(
     room_id: str,
     body: HITLResponseRequest,
-    user_id: str = Depends(get_current_user),
+    user: ClerkUser = Depends(get_current_user),
 ):
     """User responds to an HITL prompt."""
+    await verify_room_ownership(room_id, user)
+
     result = await hitl_service.handle_response(
         room_id=room_id,
         request_id=body.request_id,
         user_input=body.user_input,
-        user_id=user_id,
+        user_id=user.user_id,
     )
     return result
 
 @router.get("/pending")
 async def get_pending_hitl_requests(
     room_id: str,
-    user_id: str = Depends(get_current_user),
+    user: ClerkUser = Depends(get_current_user),
 ):
     """Get pending HITL requests for a room (SSE reconnect catch-up)."""
+    await verify_room_ownership(room_id, user)
+
     requests = await hitl_service.get_pending_requests(room_id)
     return {"requests": [r.model_dump(mode="json") for r in requests]}
 
@@ -726,10 +775,12 @@ async def get_pending_hitl_requests(
 async def cancel_hitl_request(
     room_id: str,
     request_id: str,
-    user_id: str = Depends(get_current_user),
+    user: ClerkUser = Depends(get_current_user),
 ):
     """Cancel a pending HITL request."""
-    await hitl_service.cancel_request(request_id)
+    await verify_room_ownership(room_id, user)
+
+    await hitl_service.cancel_request(request_id, room_id=room_id)
     return {"status": "canceled"}
 ```
 
@@ -1041,7 +1092,7 @@ The A2A protocol supports continuing a task via `task_id` + `context_id`, but `a
 
 **Mitigation:** The `reply_to_task` method is fully specified in section 6.2. Key implementation details:
 - Set `message.task_id` and `message.context_id` (never done today)
-- Re-include `PushNotificationConfig` with the same webhook URL
+- Generate a **new** plaintext webhook token, update the stored hash in MongoDB, and include the new plaintext token in `PushNotificationConfig` (the original plaintext token is never stored — only its hash — so it cannot be reused)
 - Reuse the existing `message_id` so the webhook handler maps to the correct `RoomAgentMessage`
 
 ### Risk 6: Processing Indicator Conflicts with HITL
@@ -1107,6 +1158,23 @@ async def request_input(self, ...):
 #    expires_in_hours=1.0 per round, not 24h
 ```
 
+### Risk 9: IDOR — Missing Room Ownership Check on HITL Endpoints
+
+**Severity: HIGH**
+
+All HITL endpoints are scoped by `room_id` in the URL path. Without an ownership check, any authenticated user who can guess or enumerate a room ID can read pending HITL prompts, submit responses, or cancel requests belonging to another user's room. This is a classic Insecure Direct Object Reference (IDOR) vulnerability.
+
+**Mitigations:**
+
+Every HITL endpoint must call `verify_room_ownership(room_id, user)` — the same guard used by all `room_center.py` endpoints — before performing any business logic. This fetches the room from MongoDB, confirms it exists (404 if not), and verifies `room.room_owner_id == user.user_id` (403 if not). See Section 7.3 for the corrected endpoint code.
+
+```python
+# Applied to all three HITL endpoints: /respond, /pending, /cancel
+await verify_room_ownership(room_id, user)
+```
+
+Additionally, the `user` parameter must be typed as `ClerkUser` (not `str`) to match `get_current_user`'s actual return type and to enable the ownership comparison.
+
 ### Risk Summary
 
 | # | Risk | Severity | Status |
@@ -1119,6 +1187,7 @@ async def request_input(self, ...):
 | 6 | Processing indicator overlap | MEDIUM | Mitigated: New `awaiting_input` status |
 | 7 | Cancel doesn't reach paused HITL | MEDIUM | Mitigated: Cancel handler clears HITL |
 | 8 | External agent HITL misbehavior | LOW-MEDIUM | Mitigated: Max rounds + per-round timeout |
+| 9 | IDOR on HITL endpoints (no room ownership check) | HIGH | Mitigated: `verify_room_ownership()` on all HITL endpoints |
 
 ---
 
