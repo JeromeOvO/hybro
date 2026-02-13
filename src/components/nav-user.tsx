@@ -5,6 +5,7 @@ import { UserPlus } from "lucide-react"
 import { useUser, UserButton, useClerk } from "@clerk/nextjs"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { isWaitlistEnabled } from "@/lib/utils"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 import {
   SidebarMenu,
@@ -25,10 +26,10 @@ export function NavUser() {
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
+            className={`flex items-center gap-2 px-2 py-1.5 rounded-md ${SIDEBAR_ICON_BUTTON}`}
           >
             <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
-            <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+            <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
               <div className="h-4 w-20 bg-muted animate-pulse rounded" />
               <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
             </div>
@@ -44,7 +45,7 @@ export function NavUser() {
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className="flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+            className={`flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
             title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
@@ -65,7 +66,7 @@ export function NavUser() {
               >
                 <UserPlus className="h-4 w-4 text-white" />
               </div>
-              <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+              <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
                 <span
                   className="truncate font-medium bg-gradient-to-r 
                             from-[hsl(var(--color-hybro-hy))] 
@@ -76,7 +77,7 @@ export function NavUser() {
                 </span>
               </div>
             </div>
-            <div className="group-data-[collapsible=icon]:hidden">
+            <div className={SIDEBAR_ICON_HIDDEN}>
               <ThemeToggle />
             </div>
           </div>
@@ -92,7 +93,7 @@ export function NavUser() {
     <SidebarMenu>
       <SidebarMenuItem>
         <div
-          className="flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:!h-12 group-data-[collapsible=icon]:!w-full"
+          className={`flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
           title={userEmail ? `${userName} (${userEmail})` : userName}
         >
           <UserButton
@@ -107,11 +108,11 @@ export function NavUser() {
             }}
             showName={false}
           />
-          <div className="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+          <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
             <span className="truncate font-medium">{userName}</span>
             <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
           </div>
-          <div className="group-data-[collapsible=icon]:hidden">
+          <div className={SIDEBAR_ICON_HIDDEN}>
             <ThemeToggle />
           </div>
         </div>

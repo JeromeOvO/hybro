@@ -20,6 +20,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function NavMain({
   items,
@@ -75,8 +76,7 @@ export function NavMain({
                       size="default"
                       className={cn(
                         "transition-all duration-200 ease-out",
-                        "group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0",
-                        "group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!",
+                        SIDEBAR_ICON_BUTTON,
                         // History section header doesn't need hover highlight
                         item.title !== "History" && "hover:bg-black/10 dark:hover:bg-white/15",
                         "active:scale-[0.98]",
@@ -86,7 +86,7 @@ export function NavMain({
                       {item.icon && (
                         <div className={cn(
                           "relative flex items-center justify-center",
-                          "group-data-[collapsible=icon]:mx-auto"
+                          SIDEBAR_ICON_CENTER
                         )}>
                           <item.icon className={cn(
                             getIconClass(item.title),
@@ -98,11 +98,11 @@ export function NavMain({
                           )}
                         </div>
                       )}
-                      <span className="group-data-[collapsible=icon]:hidden truncate">
+                      <span className={`${SIDEBAR_ICON_HIDDEN} truncate`}>
                         {item.title}
                       </span>
                       {item.isLoading ? (
-                        <RefreshCw className="ml-auto h-4 w-4 animate-spin icon-action group-data-[collapsible=icon]:hidden" />
+                        <RefreshCw className={`ml-auto h-4 w-4 animate-spin icon-action ${SIDEBAR_ICON_HIDDEN}`} />
                       ) : (
                         <ChevronRight className={cn(
                           "ml-auto h-4 w-4 shrink-0 icon-neutral",
@@ -110,7 +110,7 @@ export function NavMain({
                           "group-hover/menu-item:opacity-100 group-data-[state=open]/collapsible:opacity-100",
                           "transition-transform duration-300 ease-out",
                           "group-data-[state=open]/collapsible:rotate-90",
-                          "group-data-[collapsible=icon]:hidden"
+                          SIDEBAR_ICON_HIDDEN
                         )} />
                       )}
                     </SidebarMenuButton>
@@ -139,12 +139,12 @@ export function NavMain({
                         >
                             {subItem.url !== "#" ? (
                               <Link href={subItem.url} prefetch={false} scroll={false}>
-                                <span className="group-data-[collapsible=icon]:hidden truncate">
+                                <span className={`${SIDEBAR_ICON_HIDDEN} truncate`}>
                                   {subItem.title}
                                 </span>
                               </Link>
                             ) : (
-                              <span className="text-muted-foreground group-data-[collapsible=icon]:hidden truncate">
+                              <span className={`text-muted-foreground ${SIDEBAR_ICON_HIDDEN} truncate`}>
                                 {subItem.title}
                               </span>
                             )}

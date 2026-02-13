@@ -6,6 +6,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { DiscordIcon } from "@/components/icons"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function DiscordButton() {
   const handleDiscordClick = () => {
@@ -19,10 +20,10 @@ export function DiscordButton() {
           size="default"
           onClick={handleDiscordClick}
           tooltip="Join Community"
-          className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+          className={SIDEBAR_ICON_BUTTON}
         >
-          <DiscordIcon className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
-          <span className="group-data-[collapsible=icon]:hidden">
+          <DiscordIcon className={`h-4 w-4 ${SIDEBAR_ICON_CENTER}`} />
+          <span className={SIDEBAR_ICON_HIDDEN}>
             Join Community
           </span>
         </SidebarMenuButton>
