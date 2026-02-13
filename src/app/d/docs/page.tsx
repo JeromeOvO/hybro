@@ -69,46 +69,133 @@ function CodeBlock({ code, language = "python" }: { code: string; language?: str
   )
 }
 
-const QUICK_START_CODE = `from a2a_adapter import A2AServer
-from your_agent import YourAgent
+const OPENCLAW_EXAMPLE = `from a2a_adapter import load_a2a_agent, serve_agent
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
-# Wrap your existing agent
-agent = YourAgent()
-server = A2AServer(agent=agent)
+adapter = await load_a2a_agent({
+    "adapter": "openclaw",
+    "thinking": "low",
+})
 
-# Start the A2A-compatible server
-server.start()`
-
-const CREWAI_EXAMPLE = `from a2a_adapter import A2AServer
-from crewai import Agent, Task, Crew
-
-# Define your CrewAI agent
-researcher = Agent(
-    role="Research Analyst",
-    goal="Find and analyze information",
-    backstory="Expert researcher with analytical skills",
-    verbose=True,
+agent_card = AgentCard(
+    name="OpenClaw Agent",
+    description="AI agent powered by OpenClaw",
+    url="http://localhost:9008",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=False, pushNotifications=True),
+    skills=[AgentSkill(id="general", name="General Assistant",
+                       description="Help with any task", tags=["general"])],
 )
 
-# Wrap with a2a-adapter
-server = A2AServer(agent=researcher)
-server.start(port=8080)`
+serve_agent(agent_card=agent_card, adapter=adapter, port=9008)`
 
-const LANGGRAPH_EXAMPLE = `from a2a_adapter import A2AServer
-from langgraph.graph import StateGraph
+const N8N_EXAMPLE = `from a2a_adapter import load_a2a_agent, serve_agent
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
-# Define your LangGraph workflow
-graph = StateGraph(...)
-graph.add_node("agent", agent_node)
-graph.add_edge("agent", END)
-app = graph.compile()
+adapter = await load_a2a_agent({
+    "adapter": "n8n",
+    "webhook_url": "http://localhost:5678/webhook/my-webhook",
+})
 
-# Wrap with a2a-adapter
-server = A2AServer(agent=app)
-server.start(port=8080)`
+agent_card = AgentCard(
+    name="n8n Agent",
+    description="Agent powered by an n8n workflow",
+    url="http://localhost:9000",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=False),
+    skills=[AgentSkill(id="workflow", name="Workflow",
+                       description="Execute n8n workflow", tags=["automation"])],
+)
+
+serve_agent(agent_card=agent_card, adapter=adapter, port=9000)`
+
+const CREWAI_EXAMPLE = `from crewai import Agent, Crew, Process
+from a2a_adapter import load_a2a_agent, serve_agent
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+
+crew = Crew(
+    agents=[Agent(role="Researcher", goal="Find information",
+                  backstory="Expert researcher", verbose=True)],
+    tasks=[], process=Process.sequential,
+)
+
+adapter = await load_a2a_agent({
+    "adapter": "crewai",
+    "crew": crew,
+})
+
+agent_card = AgentCard(
+    name="Research Crew",
+    description="Research crew powered by CrewAI",
+    url="http://localhost:8001",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=False),
+    skills=[AgentSkill(id="research", name="Research",
+                       description="Conduct research", tags=["research"])],
+)
+
+serve_agent(agent_card=agent_card, adapter=adapter, port=8001)`
+
+const LANGCHAIN_EXAMPLE = `from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from a2a_adapter import load_a2a_agent, serve_agent
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+
+chain = ChatPromptTemplate.from_messages([
+    ("system", "You are a helpful assistant."),
+    ("user", "{input}"),
+]) | ChatOpenAI(model="gpt-4o-mini", streaming=True)
+
+adapter = await load_a2a_agent({
+    "adapter": "langchain",
+    "runnable": chain,
+    "input_key": "input",
+})
+
+agent_card = AgentCard(
+    name="LangChain Agent",
+    description="Chat agent powered by LangChain",
+    url="http://localhost:8002",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=True),
+    skills=[AgentSkill(id="chat", name="Chat",
+                       description="Conversational assistant", tags=["chat"])],
+)
+
+serve_agent(agent_card=agent_card, adapter=adapter, port=8002)`
+
+const LANGGRAPH_EXAMPLE = `from langgraph.graph import StateGraph, END
+from a2a_adapter import load_a2a_agent, serve_agent
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+
+# Build your LangGraph workflow
+workflow = StateGraph(AgentState)
+workflow.add_node("process", process_node)
+workflow.set_entry_point("process")
+workflow.add_edge("process", END)
+graph = workflow.compile()
+
+adapter = await load_a2a_agent({
+    "adapter": "langgraph",
+    "graph": graph,
+    "input_key": "messages",
+    "output_key": "response",
+})
+
+agent_card = AgentCard(
+    name="LangGraph Agent",
+    description="Workflow agent powered by LangGraph",
+    url="http://localhost:9002",
+    version="1.0.0",
+    capabilities=AgentCapabilities(streaming=True),
+    skills=[AgentSkill(id="workflow", name="Workflow",
+                       description="Stateful workflow agent", tags=["workflow"])],
+)
+
+serve_agent(agent_card=agent_card, adapter=adapter, port=9002)`
 
 export default function DevelopersPage() {
-  const [activeTab, setActiveTab] = useState<"quickstart" | "crewai" | "langgraph">("quickstart")
+  const [activeTab, setActiveTab] = useState<"openclaw" | "n8n" | "crewai" | "langchain" | "langgraph">("openclaw")
 
   return (
     <div className="min-h-screen bg-background">
@@ -218,52 +305,57 @@ export default function DevelopersPage() {
 
           {/* Tab buttons */}
           <div className="flex gap-1 mb-4 p-1 bg-muted/50 rounded-lg w-fit">
-            <button
-              onClick={() => setActiveTab("quickstart")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "quickstart"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Quick Start
-            </button>
-            <button
-              onClick={() => setActiveTab("crewai")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "crewai"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              CrewAI
-            </button>
-            <button
-              onClick={() => setActiveTab("langgraph")}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "langgraph"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              LangGraph
-            </button>
+            {([
+              ["openclaw", "OpenClaw"],
+              ["n8n", "n8n"],
+              ["crewai", "CrewAI"],
+              ["langchain", "LangChain"],
+              ["langgraph", "LangGraph"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  activeTab === id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {activeTab === "quickstart" && (
+          {activeTab === "openclaw" && (
             <div>
               <p className="text-sm text-muted-foreground mb-4">
-                The simplest way to make any agent A2A-compatible:
+                Expose an OpenClaw agent as an A2A-compatible server:
               </p>
-              <CodeBlock code={QUICK_START_CODE} />
+              <CodeBlock code={OPENCLAW_EXAMPLE} />
+            </div>
+          )}
+          {activeTab === "n8n" && (
+            <div>
+              <p className="text-sm text-muted-foreground mb-4">
+                Wrap an n8n workflow webhook and expose it as an A2A-compatible server:
+              </p>
+              <CodeBlock code={N8N_EXAMPLE} />
             </div>
           )}
           {activeTab === "crewai" && (
             <div>
               <p className="text-sm text-muted-foreground mb-4">
-                Wrap a CrewAI agent and expose it as an A2A-compatible server:
+                Wrap a CrewAI crew and expose it as an A2A-compatible server:
               </p>
               <CodeBlock code={CREWAI_EXAMPLE} />
+            </div>
+          )}
+          {activeTab === "langchain" && (
+            <div>
+              <p className="text-sm text-muted-foreground mb-4">
+                Wrap a LangChain chain and expose it as an A2A-compatible server:
+              </p>
+              <CodeBlock code={LANGCHAIN_EXAMPLE} />
             </div>
           )}
           {activeTab === "langgraph" && (

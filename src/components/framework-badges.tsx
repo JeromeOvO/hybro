@@ -11,11 +11,11 @@ import {
 } from "@/components/ui/tooltip"
 
 const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode }[] = [
+  { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" /> },
+  { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" /> },
   { name: "CrewAI", description: "Multi-agent orchestration", color: "text-orange-500 dark:text-orange-400", icon: <CrewAIIcon className="h-10 w-10" /> },
   { name: "LangChain", description: "LLM application framework", color: "text-emerald-500 dark:text-emerald-400", icon: <LangChainIcon className="h-10 w-10" /> },
   { name: "LangGraph", description: "Stateful agent workflows", color: "text-blue-500 dark:text-blue-400", icon: <LangGraphIcon className="h-10 w-10" /> },
-  { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" /> },
-  { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" /> },
   { name: "More ...", description: "Any agent that can receive input and return output", color: "text-muted-foreground", icon: <Plus className="h-10 w-10 text-muted-foreground" /> },
 ]
 
