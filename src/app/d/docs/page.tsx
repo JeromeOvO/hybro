@@ -209,10 +209,7 @@ export default function DevelopersPage() {
         {/* Supported Frameworks */}
         <section className="section-divider">
           <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Supported Frameworks</h2>
-          <FrameworkBadges showDescriptions />
-          <p className="text-sm text-muted-foreground mt-4">
-            + any agent that can receive input and return output
-          </p>
+          <FrameworkBadges />
         </section>
 
         {/* Code Examples with Tabs */}
