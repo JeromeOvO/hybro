@@ -620,44 +620,6 @@ a.room-mention {
   pointer-events: none;
 }
 
-/* Custom scrollbar for dropdowns — auto-hiding */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 2px;
-}
-
-.custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.2);
-}
-
-.custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.2);
-}
-
-.dark .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
 /* Tooltip */
 [data-slot="tooltip-content"] {
   border: 1px solid hsl(var(--color-border) / 0.5);
@@ -761,6 +723,19 @@ a.room-mention {
   padding-top: 3rem;
   padding-bottom: 3rem;
   border-top: 1px solid hsl(var(--color-border) / 0.5);
+}
+
+/* Active tab — visible in both light and dark modes */
+.tab-active {
+  background-color: rgb(255 255 255 / 0.9);
+  color: hsl(var(--color-foreground));
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+.dark .tab-active {
+  background-color: rgb(255 255 255 / 0.15);
+  color: hsl(var(--color-foreground));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
 }
 
 /* Card with hover lift effect */
