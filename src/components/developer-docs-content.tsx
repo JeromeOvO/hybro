@@ -1,6 +1,8 @@
 "use client"
 
 import { useState } from "react"
+import ReactMarkdown from "react-markdown"
+import rehypeHighlight from "rehype-highlight"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { VideoEmbed } from "@/components/video-embed"
@@ -56,15 +58,19 @@ function CopyButton({ text, className = "" }: { text: string; className?: string
 }
 
 function CodeBlock({ code, language = "python" }: { code: string; language?: string }) {
+  const markdown = `\`\`\`${language}\n${code}\n\`\`\``
+
   return (
     <div className="rounded-lg border border-border/50 hover:border-border bg-muted/30 overflow-hidden transition-colors duration-200">
       <div className="flex items-center justify-between px-4 py-2 bg-muted/50 border-b border-border/50">
         <span className="text-xs text-muted-foreground font-mono">{language}</span>
         <CopyButton text={code} />
       </div>
-      <pre className="p-4 text-sm font-mono overflow-x-auto">
-        <code>{code}</code>
-      </pre>
+      <div className="p-4 text-sm font-mono overflow-x-auto [&_pre]:m-0 [&_pre]:p-0 [&_pre]:bg-transparent [&_code]:bg-transparent">
+        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
+          {markdown}
+        </ReactMarkdown>
+      </div>
     </div>
   )
 }
