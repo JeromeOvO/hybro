@@ -175,7 +175,7 @@ export default function DeveloperAgentManagePage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <div className="flex flex-col items-center justify-center gap-4">
           <div className="relative">
             <div className="h-12 w-12 rounded-full border-4 border-primary/20 animate-spin border-t-primary" />
@@ -189,7 +189,7 @@ export default function DeveloperAgentManagePage() {
 
   if (!agentData?.success || !agentData.agent) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <Card className="w-full max-w-md border-dashed">
           <CardHeader className="text-center">
             <div className="mx-auto bg-muted rounded-full p-3 w-fit mb-4">
@@ -218,14 +218,14 @@ export default function DeveloperAgentManagePage() {
     switch (status) {
       case 'active':
         return (
-          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="outline" className="badge-success gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <CheckCircle2 className="w-3.5 h-3.5 fill-current opacity-80" />
             Active
           </Badge>
         )
       case 'inactive':
         return (
-          <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="outline" className="badge-inactive gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <AlertCircle className="w-3.5 h-3.5 fill-current opacity-80" />
             Inactive
           </Badge>
@@ -243,8 +243,8 @@ export default function DeveloperAgentManagePage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-8">
-      <div className="w-full max-w-4xl mx-auto space-y-8">
+    <div className="page-container">
+      <div className="page-content space-y-8">
         {/* Navigation */}
         <div className="flex items-center justify-between">
           <Button
@@ -255,7 +255,7 @@ export default function DeveloperAgentManagePage() {
             <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
             Back to My Agents
           </Button>
-          <Button variant="outline" size="sm" asChild>
+          <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
             <a href={consumerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
               View as User
               <SquareArrowOutUpRight className="h-4 w-4 ml-2" />

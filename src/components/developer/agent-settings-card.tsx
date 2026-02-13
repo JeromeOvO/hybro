@@ -1,6 +1,6 @@
 "use client"
 
-import { Settings, Globe, Lock } from "lucide-react"
+import { Settings, Globe, Lock, User, Gauge } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -68,7 +68,8 @@ export function AgentSettingsCard({ values, onChange }: AgentSettingsCardProps) 
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label htmlFor="user-limit-toggle" className="text-base font-medium">
+              <Label htmlFor="user-limit-toggle" className="text-base font-medium flex items-center gap-2">
+                <User className={`h-4 w-4 ${enableUserLimit ? "text-blue-500" : "text-muted-foreground"}`} />
                 Per-User Limit
               </Label>
               <p className="text-sm text-muted-foreground">
@@ -107,7 +108,8 @@ export function AgentSettingsCard({ values, onChange }: AgentSettingsCardProps) 
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label htmlFor="system-limit-toggle" className="text-base font-medium">
+              <Label htmlFor="system-limit-toggle" className="text-base font-medium flex items-center gap-2">
+                <Gauge className={`h-4 w-4 ${enableSystemLimit ? "text-orange-500" : "text-muted-foreground"}`} />
                 System-Wide Limit
               </Label>
               <p className="text-sm text-muted-foreground">

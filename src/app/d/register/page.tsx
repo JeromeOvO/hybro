@@ -304,7 +304,7 @@ export default function RegisterAgentPage() {
   // Show loading state when loading
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <div className="flex flex-col items-center justify-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <span className="text-base font-medium text-muted-foreground">Loading Agent...</span>
@@ -314,8 +314,8 @@ export default function RegisterAgentPage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-8">
-      <div className="w-full max-w-4xl mx-auto space-y-6">
+    <div className="page-container">
+      <div className="page-content space-y-6">
       {/* Page title */}
       <div className="flex items-center justify-between">
         <div>
@@ -358,7 +358,7 @@ export default function RegisterAgentPage() {
             className={`w-full sm:w-auto ${
               agentData?.agent_card
                 ? ""
-                : "bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+                : "btn-brand-gradient"
             }`}
             variant={agentData?.agent_card ? "outline" : "default"}
           >
@@ -427,8 +427,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.streaming 
-                      ? "text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900" 
-                      : "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70"
+                      ? "badge-success-interactive" 
+                      : "badge-muted"
                     }
                   >
                     {agentData.agent_card.capabilities.streaming ? "Supported" : "Not Supported"}
@@ -440,8 +440,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.extensions 
-                      ? "text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900" 
-                      : "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70"
+                      ? "badge-success-interactive" 
+                      : "badge-muted"
                     }
                   >
                     {agentData.agent_card.capabilities.extensions ? "Supported" : "Not Supported"}
@@ -453,8 +453,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.pushNotifications 
-                      ? "text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900" 
-                      : "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70"
+                      ? "badge-success-interactive" 
+                      : "badge-muted"
                     }
                   >
                     {agentData.agent_card.capabilities.pushNotifications ? "Supported" : "Not Supported"}
@@ -466,8 +466,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.stateTransitionHistory 
-                      ? "text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900" 
-                      : "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70"
+                      ? "badge-success-interactive" 
+                      : "badge-muted"
                     }
                   >
                     {agentData.agent_card.capabilities.stateTransitionHistory ? "Supported" : "Not Supported"}
@@ -493,7 +493,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
+                      className="badge-success-interactive"
                     >
                       {skill.name}
                     </Button>
@@ -509,7 +509,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
+                      className="badge-success-interactive"
                     >
                       {mode}
                     </Button>
@@ -525,7 +525,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="text-green-600 border-green-300 bg-green-50 hover:bg-green-100 dark:text-green-400 dark:border-green-700 dark:bg-green-950 dark:hover:bg-green-900"
+                      className="badge-success-interactive"
                     >
                       {mode}
                     </Button>
@@ -555,7 +555,7 @@ export default function RegisterAgentPage() {
                       <Button 
                         variant="outline" 
                         size="sm"
-                        className="ml-auto pointer-events-none text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950"
+                        className="ml-auto pointer-events-none badge-success-interactive"
                       >
                         All Passed
                       </Button>
@@ -585,8 +585,8 @@ export default function RegisterAgentPage() {
                             variant="outline" 
                             size="sm"
                             className={`pointer-events-none text-xs h-6 ${cardInspectionData.status_code === 200
-                              ? "text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950" 
-                              : "text-red-600 border-red-300 bg-red-50 dark:text-red-400 dark:border-red-700 dark:bg-red-950"
+                              ? "badge-success-interactive" 
+                              : "badge-error"
                             }`}
                           >
                             {cardInspectionData.status_code === 200 ? "Passed" : "Failed"}
@@ -642,8 +642,8 @@ export default function RegisterAgentPage() {
                             variant="outline" 
                             size="sm"
                             className={`pointer-events-none text-xs h-6 ${inspectionData.status_code === 200
-                              ? "text-green-600 border-green-300 bg-green-50 dark:text-green-400 dark:border-green-700 dark:bg-green-950" 
-                              : "text-red-600 border-red-300 bg-red-50 dark:text-red-400 dark:border-red-700 dark:bg-red-950"
+                              ? "badge-success-interactive" 
+                              : "badge-error"
                             }`}
                           >
                             {inspectionData.status_code === 200 ? "Passed" : "Failed"}
@@ -707,7 +707,7 @@ export default function RegisterAgentPage() {
         <div className="flex justify-end">
           <Button 
             onClick={registerAgentHandler}
-            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            className="btn-brand-gradient"
             disabled={registering}
             size="lg"
           >

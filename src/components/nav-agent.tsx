@@ -10,6 +10,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import type { NavAgentItem } from "@/lib/nav-items"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function NavAgent({
   navAgents,
@@ -31,13 +32,13 @@ export function NavAgent({
                 isActive={isActive}
                 size="default"
                 tooltip={item.name}
-                className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+                className={SIDEBAR_ICON_BUTTON}
               >
                 <Link href={item.url} prefetch={false} scroll={false}>
                   <item.icon
-                    className={`${item.colorClass ?? "icon-navigation"} group-data-[collapsible=icon]:mx-auto`}
+                    className={`${item.colorClass ?? "icon-navigation"} ${SIDEBAR_ICON_CENTER}`}
                   />
-                  <span className="leading-7 group-data-[collapsible=icon]:hidden">
+                  <span className={`leading-7 ${SIDEBAR_ICON_HIDDEN}`}>
                     {item.name}
                   </span>
                 </Link>
@@ -48,4 +49,4 @@ export function NavAgent({
       </SidebarMenu>
     </SidebarGroup>
   )
-} 
+}

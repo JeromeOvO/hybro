@@ -369,7 +369,7 @@ function ChatPageContent() {
                         <h1 className="text-4xl font-bold mb-2">
                             <span
                                 className={cn(
-                                    "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mr-2",
+                                    "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))] mr-2",
                                 )}
                             >
                                 HY

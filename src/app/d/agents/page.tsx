@@ -56,7 +56,7 @@ export default function DeveloperAgentsPage() {
 
   if (loading && myAgents.length === 0) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <div className="flex flex-col items-center justify-center gap-4">
           <RefreshCw className="h-8 w-8 animate-spin text-primary" />
           <span className="text-base font-medium text-muted-foreground">
@@ -68,8 +68,8 @@ export default function DeveloperAgentsPage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-8">
-      <div className="w-full max-w-4xl mx-auto space-y-6">
+    <div className="page-container">
+      <div className="page-content space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -77,7 +77,7 @@ export default function DeveloperAgentsPage() {
             <p className="text-muted-foreground mt-1">Manage your registered agents</p>
           </div>
           <Button
-            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            className="btn-brand-gradient"
             onClick={() => router.push('/register')}
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -149,8 +149,8 @@ export default function DeveloperAgentsPage() {
                         variant="outline"
                         className={
                           agent.agent_status === 'active'
-                            ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800'
-                            : 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700'
+                            ? 'badge-success'
+                            : 'badge-inactive'
                         }
                       >
                         {agent.agent_status}

@@ -76,7 +76,7 @@ export default function ConsumerAgentProfilePage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <div className="flex flex-col items-center justify-center gap-4">
           <div className="relative">
             <div className="h-12 w-12 rounded-full border-4 border-primary/20 animate-spin border-t-primary" />
@@ -93,8 +93,8 @@ export default function ConsumerAgentProfilePage() {
     if (isSystemAgent(agentId)) {
       const info = SYSTEM_AGENTS[agentId]
       return (
-        <div className="px-4 sm:px-6 py-8 animate-in fade-in duration-500">
-          <div className="w-full max-w-4xl mx-auto space-y-8">
+        <div className="page-container animate-in fade-in duration-500">
+          <div className="page-content space-y-8">
           <Button
             variant="ghost"
             onClick={() => router.push('/agents')}
@@ -140,7 +140,7 @@ export default function ConsumerAgentProfilePage() {
 
     // ---------- Real agent not found ----------
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <Card className="w-full max-w-md border-dashed">
           <CardHeader className="text-center">
             <div className="mx-auto bg-muted rounded-full p-3 w-fit mb-4">
@@ -169,14 +169,14 @@ export default function ConsumerAgentProfilePage() {
     switch (status) {
       case 'active':
         return (
-          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="outline" className="badge-success gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <CheckCircle2 className="w-3.5 h-3.5 fill-current opacity-80" />
             Active
           </Badge>
         )
       case 'inactive':
         return (
-          <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700 gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="outline" className="badge-inactive gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <AlertCircle className="w-3.5 h-3.5 fill-current opacity-80" />
             Inactive
           </Badge>
@@ -194,8 +194,8 @@ export default function ConsumerAgentProfilePage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-8 animate-in fade-in duration-500">
-      <div className="w-full max-w-4xl mx-auto space-y-8">
+    <div className="page-container animate-in fade-in duration-500">
+      <div className="page-content space-y-8">
       {/* Navigation & Actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <Button
@@ -210,7 +210,7 @@ export default function ConsumerAgentProfilePage() {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" asChild>
+                <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
                   <a href={developerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
                     Manage
                     <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
@@ -270,7 +270,7 @@ export default function ConsumerAgentProfilePage() {
             </CardContent>
             <CardFooter className="pt-0 pb-6 px-6">
               <Button
-                className="w-full bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+                className="w-full btn-brand-gradient"
                 onClick={() => router.push(`/chat?agentId=${agentId}`)}
               >
                 <MessageCirclePlus className="h-4 w-4 mr-2" />

@@ -13,6 +13,7 @@ import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import { CONSUMER_NAV } from "@/lib/consumer-nav"
 import { developerUrl } from "@/lib/urls"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 import {
   Sidebar,
   SidebarContent,
@@ -101,7 +102,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         <div className="flex h-12 items-center gap-2 px-2">
-          <Logo className="flex-1 group-data-[collapsible=icon]:hidden" />
+          <Logo className={`flex-1 ${SIDEBAR_ICON_HIDDEN}`} />
           <button
             type="button"
             onClick={toggleSidebar}
@@ -141,11 +142,11 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
               asChild
               size="default"
               tooltip="Developer Portal"
-              className="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:h-12! group-data-[collapsible=icon]:w-full!"
+              className={SIDEBAR_ICON_BUTTON}
             >
               <Link href={developerUrl("/")} prefetch={false}>
-                <SquareArrowOutUpRight className="h-4 w-4 group-data-[collapsible=icon]:mx-auto" />
-                <span className="group-data-[collapsible=icon]:hidden">
+                <SquareArrowOutUpRight className={`h-4 w-4 ${SIDEBAR_ICON_CENTER}`} />
+                <span className={SIDEBAR_ICON_HIDDEN}>
                   Developer Portal →
                 </span>
               </Link>

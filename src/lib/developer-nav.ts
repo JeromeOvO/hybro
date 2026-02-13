@@ -23,7 +23,7 @@ export const DEVELOPER_NAV: NavAgentItem[] = [
     name: "Inspector",
     url: "/inspector",
     icon: Shield,
-    colorClass: "icon-navigation",
+    colorClass: "icon-warning",
   },
   {
     name: "Docs & SDK",
