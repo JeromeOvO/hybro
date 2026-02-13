@@ -10,12 +10,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode }[] = [
-  { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" /> },
-  { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" /> },
-  { name: "CrewAI", description: "Multi-agent orchestration", color: "text-orange-500 dark:text-orange-400", icon: <CrewAIIcon className="h-10 w-10" /> },
-  { name: "LangChain", description: "LLM application framework", color: "text-emerald-500 dark:text-emerald-400", icon: <LangChainIcon className="h-10 w-10" /> },
-  { name: "LangGraph", description: "Stateful agent workflows", color: "text-blue-500 dark:text-blue-400", icon: <LangGraphIcon className="h-10 w-10" /> },
+const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode; url?: string }[] = [
+  { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" />, url: "https://openclaw.ai/" },
+  { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" />, url: "https://n8n.io/" },
+  { name: "CrewAI", description: "Multi-agent orchestration", color: "text-orange-500 dark:text-orange-400", icon: <CrewAIIcon className="h-10 w-10" />, url: "https://www.crewai.com/" },
+  { name: "LangChain", description: "LLM application framework", color: "text-emerald-500 dark:text-emerald-400", icon: <LangChainIcon className="h-10 w-10" />, url: "https://www.langchain.com/" },
+  { name: "LangGraph", description: "Stateful agent workflows", color: "text-blue-500 dark:text-blue-400", icon: <LangGraphIcon className="h-10 w-10" />, url: "https://www.langchain.com/langgraph" },
   { name: "More ...", description: "Any agent that can receive input and return output", color: "text-muted-foreground", icon: <Plus className="h-10 w-10 text-muted-foreground" /> },
 ]
 
@@ -55,31 +55,46 @@ export function FrameworkBadges({ compact = false, className = "" }: FrameworkBa
   return (
     <TooltipProvider delayDuration={0}>
       <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 ${className}`}>
-        {FRAMEWORKS.map((fw) => (
-          <Tooltip key={fw.name}>
-            <TooltipTrigger asChild>
-              <div
-                className="rounded-lg border border-border/50 bg-muted/30 px-6 py-5 text-center hover:bg-muted/50 transition-colors flex items-center justify-center cursor-default"
-              >
-                {fw.icon ? (
-                  <div className="flex flex-col items-center gap-2">
-                    {fw.icon}
-                    <div className={`font-medium text-sm ${fw.color}`}>{fw.name}</div>
-                  </div>
+        {FRAMEWORKS.map((fw) => {
+          const tileContent = fw.icon ? (
+            <div className="flex flex-col items-center gap-2">
+              {fw.icon}
+              <div className={`font-medium text-sm ${fw.color}`}>{fw.name}</div>
+            </div>
+          ) : (
+            <div>
+              <div className={`font-medium text-sm ${fw.color}`}>{fw.name}</div>
+            </div>
+          )
+
+          const tileClass = "rounded-lg border border-border/50 bg-muted/30 px-6 py-5 text-center hover:bg-muted/50 transition-colors flex items-center justify-center card-lift"
+
+          return (
+            <Tooltip key={fw.name}>
+              <TooltipTrigger asChild>
+                {fw.url ? (
+                  <a
+                    href={fw.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={tileClass}
+                  >
+                    {tileContent}
+                  </a>
                 ) : (
-                  <div>
-                    <div className={`font-medium text-sm ${fw.color}`}>{fw.name}</div>
+                  <div className={`${tileClass} cursor-default`}>
+                    {tileContent}
                   </div>
                 )}
-              </div>
-            </TooltipTrigger>
-            {fw.description && (
-              <TooltipContent>
-                <p>{fw.description}</p>
-              </TooltipContent>
-            )}
-          </Tooltip>
-        ))}
+              </TooltipTrigger>
+              {fw.description && (
+                <TooltipContent>
+                  <p>{fw.description}</p>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          )
+        })}
       </div>
     </TooltipProvider>
   )
