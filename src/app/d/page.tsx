@@ -117,8 +117,8 @@ function DeveloperDashboard() {
   )
 
   return (
-    <div className="px-4 sm:px-6 py-8">
-      <div className="w-full max-w-4xl mx-auto space-y-8">
+    <div className="page-container">
+      <div className="page-content space-y-8">
         {/* Welcome */}
         <div className="flex items-center justify-between">
           <div>
@@ -130,7 +130,7 @@ function DeveloperDashboard() {
             </p>
           </div>
           <Button
-            className="bg-linear-to-r from-[hsl(var(--color-hybro-bro-strong))] to-[hsl(var(--color-hybro-hy-strong))] hover:from-[hsl(var(--color-hybro-bro))] hover:to-[hsl(var(--color-hybro-hy))] text-white font-semibold"
+            className="btn-brand-gradient"
             onClick={() => router.push('/register')}
           >
             <Plus className="h-4 w-4 mr-2" />
@@ -234,8 +234,8 @@ function DeveloperDashboard() {
                             variant="outline"
                             className={
                               agent.agent_status === 'active'
-                                ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800'
-                                : 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-800/50 dark:text-gray-400 dark:border-gray-700'
+                                ? 'badge-success'
+                                : 'badge-inactive'
                             }
                           >
                             {agent.agent_status}
@@ -397,14 +397,14 @@ server.start(port=8080)`
         </section>
 
         {/* Demo Video */}
-        <section className="py-12 border-t border-border/50">
+        <section className="section-divider">
           <h2 className="text-lg font-semibold mb-2">See it in action</h2>
           <p className="text-sm text-muted-foreground mb-6">Watch how agents built with different frameworks collaborate.</p>
           <VideoEmbed videoId="ZUQrnlBSsLg" title="HYBRO Demo" />
         </section>
 
         {/* How It Works */}
-        <section className="py-12 border-t border-border/50">
+        <section className="section-divider">
           <h2 className="text-lg font-semibold mb-6">How it works</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="rounded-lg border border-border/50 bg-muted/20 p-5">
@@ -444,14 +444,14 @@ server.start(port=8080)`
         </section>
 
         {/* Supported Frameworks */}
-        <section className="py-12 border-t border-border/50">
+        <section className="section-divider">
           <h2 className="text-lg font-semibold mb-6">Supported Frameworks</h2>
           <FrameworkBadges showDescriptions />
           <p className="text-sm text-muted-foreground mt-4">+ any agent that can receive input and return output</p>
         </section>
 
         {/* Code Examples */}
-        <section className="py-12 border-t border-border/50">
+        <section className="section-divider">
           <h2 className="text-lg font-semibold mb-6">Getting Started</h2>
           <div className="flex gap-1 mb-4 p-1 bg-muted/50 rounded-lg w-fit">
             {(["quickstart", "crewai", "langgraph"] as const).map((tab) => (
@@ -472,7 +472,7 @@ server.start(port=8080)`
         </section>
 
         {/* Next Steps */}
-        <section className="py-12 border-t border-border/50">
+        <section className="section-divider">
           <h2 className="text-lg font-semibold mb-6">Next Steps</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="border-border/50">

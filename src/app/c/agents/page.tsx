@@ -103,7 +103,7 @@ export default function ConsumerAgentsPage() {
 
   if (loadingAll && allAgents.length === 0) {
     return (
-      <div className="flex items-center justify-center min-h-[85vh]">
+      <div className="page-loading">
         <div className="flex flex-col items-center justify-center gap-4">
           <RefreshCw className="h-8 w-8 animate-spin text-primary" />
           <span className="text-base font-medium text-muted-foreground">
@@ -115,8 +115,8 @@ export default function ConsumerAgentsPage() {
   }
 
   return (
-    <div className="px-4 sm:px-6 py-8">
-      <div className="w-full max-w-4xl mx-auto space-y-6">
+    <div className="page-container">
+      <div className="page-content space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

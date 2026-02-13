@@ -336,6 +336,38 @@
     0 0 0 1px hsl(var(--color-border));
 }
 
+/* Brand gradient button — primary CTA with Hybro gradient */
+.btn-brand-gradient {
+  background: linear-gradient(to right, hsl(var(--color-hybro-bro-strong)), hsl(var(--color-hybro-hy-strong)));
+  color: white;
+  font-weight: 600;
+}
+
+.btn-brand-gradient:hover {
+  background: linear-gradient(to right, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)));
+}
+
+/* Brand-tinted outline button — secondary action with brand presence */
+.btn-brand-tint {
+  border-color: hsl(var(--color-hybro-hy) / 0.3);
+  background-color: hsl(var(--color-hybro-hy) / 0.08);
+  color: hsl(var(--color-hybro-hy));
+}
+
+.btn-brand-tint:hover {
+  background-color: hsl(var(--color-hybro-hy) / 0.15);
+}
+
+.dark .btn-brand-tint {
+  border-color: hsl(var(--color-hybro-hy) / 0.4);
+  background-color: hsl(var(--color-hybro-hy) / 0.12);
+  color: hsl(var(--color-hybro-hy));
+}
+
+.dark .btn-brand-tint:hover {
+  background-color: hsl(var(--color-hybro-hy) / 0.22);
+}
+
 /* Futuristic buttons */
 .btn-futuristic {
   position: relative;
@@ -624,4 +656,118 @@ a.room-mention {
 
 .dark .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
   background: hsl(var(--color-foreground) / 0.12);
+}
+
+/* Tooltip */
+[data-slot="tooltip-content"] {
+  border: 1px solid hsl(var(--color-border) / 0.5);
+}
+
+/* ── Reusable badge colors ── */
+
+/* Green badge – status "active", "passed", "supported" (non-interactive) */
+.badge-success {
+  background-color: rgb(240 253 244);
+  color: rgb(21 128 61);
+  border-color: rgb(187 247 208);
+}
+.dark .badge-success {
+  background-color: rgb(20 83 45 / 0.3);
+  color: rgb(134 239 172);
+  border-color: rgb(22 101 52);
+}
+
+/* Green badge with hover – interactive capability pills */
+.badge-success-interactive {
+  background-color: rgb(240 253 244);
+  color: rgb(22 163 74);
+  border-color: rgb(134 239 172);
+}
+.badge-success-interactive:hover {
+  background-color: rgb(220 252 231);
+}
+.dark .badge-success-interactive {
+  background-color: rgb(4 47 46);
+  color: rgb(74 222 128);
+  border-color: rgb(21 128 61);
+}
+.dark .badge-success-interactive:hover {
+  background-color: rgb(20 83 45);
+}
+
+/* Red badge – "failed", "error" */
+.badge-error {
+  background-color: rgb(254 242 242);
+  color: rgb(220 38 38);
+  border-color: rgb(252 165 165);
+}
+.dark .badge-error {
+  background-color: rgb(69 10 10);
+  color: rgb(248 113 113);
+  border-color: rgb(185 28 28);
+}
+
+/* Gray badge – "inactive" status */
+.badge-inactive {
+  background-color: rgb(249 250 251);
+  color: rgb(55 65 81);
+  border-color: rgb(229 231 235);
+}
+.dark .badge-inactive {
+  background-color: rgb(31 41 55 / 0.5);
+  color: rgb(156 163 175);
+  border-color: rgb(55 65 81);
+}
+
+/* Muted badge – "not supported" capability */
+.badge-muted {
+  color: hsl(var(--color-muted-foreground));
+  border-color: hsl(var(--color-muted));
+  background-color: hsl(var(--color-muted) / 0.5);
+}
+.badge-muted:hover {
+  background-color: hsl(var(--color-muted) / 0.7);
+}
+
+/* ── Page layout ── */
+
+.page-container {
+  padding: 2rem 1rem;
+}
+@media (min-width: 640px) {
+  .page-container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+.page-content {
+  width: 100%;
+  max-width: 56rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Full-page centered loading */
+.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 85vh;
+}
+
+/* Section divider (border-top + vertical padding) */
+.section-divider {
+  padding-top: 3rem;
+  padding-bottom: 3rem;
+  border-top: 1px solid hsl(var(--color-border) / 0.5);
+}
+
+/* Card with hover lift effect */
+.card-lift {
+  transition: all 0.2s ease;
+}
+.card-lift:hover {
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  transform: translateY(-2px);
 }

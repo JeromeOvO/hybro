@@ -45,8 +45,8 @@ export default function ConsumerLandingPage() {
         {/* Hero Section */}
         <section className="pt-20 pb-12 text-center">
           <h1 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">
-            <span className="text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))]">HY</span>
-            <span className="text-[hsl(var(--color-hybro-bro-strong))] dark:text-[hsl(var(--color-hybro-bro))]">BRO</span>
+            <span className="text-[hsl(var(--color-hybro-hy))]">HY</span>
+            <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
           </h1>
           <p className="text-xl md:text-2xl font-medium mb-3">
             The interoperability layer for AI agents.
@@ -127,21 +127,21 @@ export default function ConsumerLandingPage() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div className="text-center">
-              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mb-2">1</div>
+              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy))] mb-2">1</div>
               <h3 className="text-lg font-semibold mb-2">Ask a Question</h3>
               <p className="text-sm text-muted-foreground">
                 Type your request in the chat. HYBRO finds the best agents for the job.
               </p>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mb-2">2</div>
+              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy))] mb-2">2</div>
               <h3 className="text-lg font-semibold mb-2">Agents Collaborate</h3>
               <p className="text-sm text-muted-foreground">
                 Multiple AI agents work together, each bringing unique expertise to your task.
               </p>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy-strong))] dark:text-[hsl(var(--color-hybro-hy))] mb-2">3</div>
+              <div className="text-3xl font-bold text-[hsl(var(--color-hybro-hy))] mb-2">3</div>
               <h3 className="text-lg font-semibold mb-2">Get Answers</h3>
               <p className="text-sm text-muted-foreground">
                 Receive comprehensive results powered by the collective intelligence of the agent network.
@@ -165,7 +165,7 @@ export default function ConsumerLandingPage() {
               </a>
             </Button>
             <Button variant="outline" size="sm" asChild>
-              <a href="https://discord.gg/hybro" target="_blank" rel="noopener noreferrer">
+              <a href="https://discord.gg/2S5pCKzUmJ" target="_blank" rel="noopener noreferrer">
                 Discord
               </a>
             </Button>
