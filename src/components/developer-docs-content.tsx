@@ -385,7 +385,7 @@ export function DeveloperDocsContent() {
                 </p>
                 <Button variant="outline" size="sm" className="w-full" asChild>
                   <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer">
-                    <Shield className="mr-2 h-4 w-4" />
+                    <Shield className="mr-2 h-4 w-4 text-amber-500 dark:text-amber-400" />
                     Launch Inspector
                   </a>
                 </Button>
@@ -454,7 +454,7 @@ export function DeveloperDocsContent() {
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
-              <Shield className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <Shield className="h-5 w-5 text-amber-500 dark:text-amber-400 group-hover:text-amber-600 dark:group-hover:text-amber-300 transition-colors" />
               <span className="text-sm font-medium">A2A Agent Inspector</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
