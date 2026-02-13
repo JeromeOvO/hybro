@@ -620,44 +620,6 @@ a.room-mention {
   pointer-events: none;
 }
 
-/* Custom scrollbar for dropdowns — auto-hiding */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 2px;
-}
-
-.custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.2);
-}
-
-.custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
-.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.2);
-}
-
-.dark .custom-scrollbar.is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.12);
-}
-
 /* Tooltip */
 [data-slot="tooltip-content"] {
   border: 1px solid hsl(var(--color-border) / 0.5);
