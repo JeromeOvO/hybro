@@ -5,7 +5,7 @@ import { UserPlus } from "lucide-react"
 import { useUser, UserButton, useClerk } from "@clerk/nextjs"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { isWaitlistEnabled } from "@/lib/utils"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 import {
   SidebarMenu,
@@ -26,9 +26,9 @@ export function NavUser() {
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className={`flex items-center gap-2 px-2 py-1.5 rounded-md ${SIDEBAR_ICON_BUTTON}`}
+            className={`flex h-10 items-center gap-2 px-2 rounded-md ${SIDEBAR_ICON_BUTTON}`}
           >
-            <div className="h-8 w-8 rounded-lg bg-muted animate-pulse" />
+            <div className={`h-8 w-8 rounded-lg bg-muted animate-pulse shrink-0 ${SIDEBAR_ICON_CENTER}`} />
             <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
               <div className="h-4 w-20 bg-muted animate-pulse rounded" />
               <div className="h-3 w-16 bg-muted animate-pulse rounded mt-1" />
@@ -45,11 +45,11 @@ export function NavUser() {
       <SidebarMenu>
         <SidebarMenuItem>
           <div
-            className={`flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
+            className={`flex h-10 items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
             title={isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
           >
             <div
-              className="flex items-center gap-2 flex-1 cursor-pointer"
+              className={`flex items-center gap-2 flex-1 cursor-pointer ${SIDEBAR_ICON_CENTER}`}
               onClick={() => {
                 if (isWaitlistEnabled()) {
                   openWaitlist()
@@ -93,21 +93,23 @@ export function NavUser() {
     <SidebarMenu>
       <SidebarMenuItem>
         <div
-          className={`flex items-center gap-2 px-2 py-1.5 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
+          className={`flex h-10 items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
           title={userEmail ? `${userName} (${userEmail})` : userName}
         >
-          <UserButton
-            appearance={{
-              elements: {
-                avatarBox: "h-8 w-8 rounded-lg",
-                userButtonPopoverCard: "shadow-lg border rounded-lg",
-                userButtonPopoverActionButton: "hover:bg-muted transition-colors",
-                userButtonPopoverActionButtonText: "text-sm",
-                userButtonPopoverActionButtonIcon: "w-4 h-4",
-              },
-            }}
-            showName={false}
-          />
+          <div className={`shrink-0 ${SIDEBAR_ICON_CENTER}`}>
+            <UserButton
+              appearance={{
+                elements: {
+                  avatarBox: "h-8 w-8 rounded-lg",
+                  userButtonPopoverCard: "shadow-lg border rounded-lg",
+                  userButtonPopoverActionButton: "hover:bg-muted transition-colors",
+                  userButtonPopoverActionButtonText: "text-sm",
+                  userButtonPopoverActionButtonIcon: "w-4 h-4",
+                },
+              }}
+              showName={false}
+            />
+          </div>
           <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
             <span className="truncate font-medium">{userName}</span>
             <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
