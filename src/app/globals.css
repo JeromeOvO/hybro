@@ -763,6 +763,19 @@ a.room-mention {
   border-top: 1px solid hsl(var(--color-border) / 0.5);
 }
 
+/* Active tab — visible in both light and dark modes */
+.tab-active {
+  background-color: rgb(255 255 255 / 0.9);
+  color: hsl(var(--color-foreground));
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+}
+.dark .tab-active {
+  background-color: rgb(255 255 255 / 0.15);
+  color: hsl(var(--color-foreground));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
 /* Card with hover lift effect */
 .card-lift {
   transition: all 0.2s ease;

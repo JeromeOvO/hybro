@@ -321,9 +321,9 @@ export function DeveloperDocsContent() {
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
-                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                   activeTab === id
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "tab-active"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
