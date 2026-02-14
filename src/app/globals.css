@@ -323,6 +323,14 @@
     0 0 0 1px hsl(var(--color-border));
 }
 
+/* Brand gradient text — inline gradient applied to text only */
+.text-brand-gradient {
+  background: linear-gradient(to right, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 /* Brand gradient button — primary CTA with Hybro gradient */
 .btn-brand-gradient {
   background: linear-gradient(to right, hsl(var(--color-hybro-bro-strong)), hsl(var(--color-hybro-hy-strong)));

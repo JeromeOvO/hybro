@@ -41,10 +41,11 @@ export function NavMain({
   const { state } = useSidebar()
   const pathname = usePathname()
 
-  const getIconClass = (title: string) =>
-    title === "History"
-      ? "text-foreground dark:icon-navigation"
-      : "icon-navigation"
+  const getIconClass = (title: string) => {
+    if (title === "History") return "text-foreground dark:icon-navigation"
+    if (title === "My Agents") return "icon-network"
+    return "icon-navigation"
+  }
 
   const isSubItemActive = (url: string) => {
     if (url === "#") return false

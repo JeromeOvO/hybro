@@ -16,5 +16,8 @@ export const SIDEBAR_ICON_CENTER = "group-data-[collapsible=icon]:mx-auto"
 /** Text / label: hidden when the sidebar is collapsed to icon-only. */
 export const SIDEBAR_ICON_HIDDEN = "group-data-[collapsible=icon]:hidden"
 
-/** Accent color for cross-portal navigation links (icon + label). */
-export const SIDEBAR_PORTAL_ACCENT = "text-blue-500 dark:text-blue-400"
+/** Accent color for cross-portal navigation link icons. */
+export const SIDEBAR_PORTAL_ICON = "text-[hsl(var(--color-hybro-bro))]"
+
+/** Gradient text for cross-portal navigation link labels. */
+export const SIDEBAR_PORTAL_TEXT = "text-brand-gradient"
