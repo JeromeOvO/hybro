@@ -68,7 +68,6 @@
   --color-icon-success: 152 60% 32%;
   --color-icon-warning: 38 85% 42%;
   --color-icon-error: 4 70% 48%;
-  --color-icon-info: 212 75% 42%;
   --color-icon-neutral: 220 25% 38%;
   --color-icon-action: 192 85% 38%;
   --color-icon-navigation: 220 35% 38%;
@@ -80,7 +79,6 @@
   /* Professional category colors - Light mode */
   --color-icon-create: 152 60% 35%;
   --color-icon-network: 192 80% 40%;
-  --color-icon-learn: 270 55% 45%;
   --color-icon-workflow: 158 65% 35%;
   --color-icon-collaboration: 320 55% 48%;
   --color-icon-architecture: 235 50% 45%;
@@ -136,13 +134,14 @@
 
   /* Brand colors for HYBRO - Dark mode */
   --color-hybro-hy: 180 100% 60%;
+  --color-hybro-hy-strong: 180 100% 50%;
   --color-hybro-bro: 270 80% 70%;
+  --color-hybro-bro-strong: 270 80% 62%;
 
   /* Semantic icon colors - Dark mode */
   --color-icon-success: 142 76% 60%;
   --color-icon-warning: 45 93% 65%;
   --color-icon-error: 0 84% 70%;
-  --color-icon-info: 217 91% 75%;
   --color-icon-neutral: 215 20% 75%;
   --color-icon-action: 180 100% 70%;
   --color-icon-navigation: 210 30% 75%;
@@ -154,7 +153,6 @@
   /* Professional category colors - Dark mode */
   --color-icon-create: 142 70% 65%;
   --color-icon-network: 180 100% 70%;
-  --color-icon-learn: 280 70% 70%;
   --color-icon-workflow: 160 80% 60%;
   --color-icon-collaboration: 320 65% 75%;
   --color-icon-architecture: 240 60% 75%;
@@ -232,11 +230,12 @@
 }
 
 .shimmer-text {
+  --shimmer-highlight: 0.55;
   background: linear-gradient(
     90deg,
     currentColor 0%,
     currentColor 40%,
-    hsl(0 0% 100% / 0.55) 50%,
+    hsl(0 0% 100% / var(--shimmer-highlight)) 50%,
     currentColor 60%,
     currentColor 100%
   );
@@ -248,19 +247,7 @@
 }
 
 .dark .shimmer-text {
-  background: linear-gradient(
-    90deg,
-    currentColor 0%,
-    currentColor 40%,
-    hsl(0 0% 100% / 0.7) 50%,
-    currentColor 60%,
-    currentColor 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer-sweep 5s ease-in-out infinite;
+  --shimmer-highlight: 0.7;
 }
 
 @layer base {
@@ -336,6 +323,14 @@
     0 0 0 1px hsl(var(--color-border));
 }
 
+/* Brand gradient text — inline gradient applied to text only */
+.text-brand-gradient {
+  background: linear-gradient(to right, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
 /* Brand gradient button — primary CTA with Hybro gradient */
 .btn-brand-gradient {
   background: linear-gradient(to right, hsl(var(--color-hybro-bro-strong)), hsl(var(--color-hybro-hy-strong)));
@@ -366,29 +361,6 @@
 
 .dark .btn-brand-tint:hover {
   background-color: hsl(var(--color-hybro-hy) / 0.22);
-}
-
-/* Futuristic buttons */
-.btn-futuristic {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(135deg, hsl(var(--color-primary)) 0%, hsl(var(--color-accent)) 100%);
-  transition: all 0.3s ease;
-}
-
-.btn-futuristic::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-  transition: left 0.5s;
-}
-
-.btn-futuristic:hover::before {
-  left: 100%;
 }
 
 .ProseMirror {
@@ -447,10 +419,6 @@
   color: hsl(var(--color-icon-error));
 }
 
-.icon-info {
-  color: hsl(var(--color-icon-info));
-}
-
 .icon-neutral {
   color: hsl(var(--color-icon-neutral));
 }
@@ -482,10 +450,6 @@
 
 .icon-network {
   color: hsl(var(--color-icon-network));
-}
-
-.icon-learn {
-  color: hsl(var(--color-icon-learn));
 }
 
 .icon-workflow {
@@ -534,23 +498,6 @@
 }
 
 .is-scrolling::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.25);
-}
-
-/* Dark mode */
-.dark *:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.15);
-}
-
-.dark *:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.25);
-}
-
-.dark .is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.15);
-}
-
-.dark .is-scrolling::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--color-foreground) / 0.25);
 }
 
