@@ -1637,6 +1637,18 @@ class RoomMessageCenter:
                 "RoomMessageCenter: task tracking setup failed for message %s — degraded mode",
                 current_message.message_id,
             )
+            # Degraded mode: still send task_submitted so the frontend can render
+            # the agent message placeholder immediately.
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=current_message.message_id,
+                task_id="degraded",
+                agent_name=agent_card.name,
+                agent_id=current_message.agent_id,
+                status="working",
+                step_number=step_number,
+                total_steps=total_steps,
+            )
 
         message_id = current_message.message_id
 
@@ -1676,6 +1688,23 @@ class RoomMessageCenter:
 
             if task_info:
                 await self._notify_task(ctx, "completed", content=full_response_text)
+            else:
+                # Degraded mode: still notify the frontend about the agent response
+                # so the UI updates in real-time without requiring a page refresh.
+                logger.info(
+                    "RoomMessageCenter: Degraded mode — sending task_update directly for %s",
+                    message_id,
+                )
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=message_id,
+                    status="completed",
+                    content=full_response_text,
+                    agent_name=agent_card.name if agent_card else None,
+                    agent_id=current_message.agent_id,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
             return True, full_response_text, None
 
         # Handle "task" response (async path)
@@ -1737,6 +1766,23 @@ class RoomMessageCenter:
                         state_value,
                         content=final_content,
                         error=final_error,
+                    )
+                else:
+                    # Degraded mode: still push the result via SSE
+                    logger.info(
+                        "RoomMessageCenter: Degraded mode — sending polled task_update for %s",
+                        message_id,
+                    )
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=message_id,
+                        status=state_value,
+                        content=final_content,
+                        error=final_error,
+                        agent_name=agent_card.name if agent_card else None,
+                        agent_id=current_message.agent_id,
+                        step_number=step_number,
+                        total_steps=total_steps,
                     )
                 return True, final_content, None
             else:
