@@ -37,6 +37,7 @@ from models.room import RoomAgentMessage
 from services.a2a_constants import (
     TERMINAL_STATES,
     SSEProcessingStatus,
+    SyntheticTaskId,
     is_failure_state,
     is_terminal_state,
 )
@@ -268,10 +269,10 @@ class RoomMessageCenter:
             await self.sse_manager.send_task_submitted(
                 room_id=room_id,
                 message_id=current_message.message_id,
-                task_id="pending",
+                task_id=SyntheticTaskId.PENDING,
                 agent_name=agent_card.name,
                 agent_id=current_message.agent_id,
-                status="working",
+                status=TaskState.working,
                 related_message_id=current_message.related_message_id,
                 created_at=created_at,
                 step_number=step_number,
@@ -501,7 +502,7 @@ class RoomMessageCenter:
         logger.info(
             "RoomMessageCenter: Streaming cancelled for message %s", ctx.user_message_id
         )
-        await self._notify_task(ctx, "canceled")
+        await self._notify_task(ctx, TaskState.canceled)
         await self.sse_manager.send_processing_status(
             ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
         )
@@ -517,7 +518,7 @@ class RoomMessageCenter:
         """Handle JSON-RPC error during streaming."""
         error_message = a2a_response.root.error.model_dump_json()
         logger.error("RoomMessageCenter: Agent error: %s", error_message)
-        await self._notify_task(ctx, "failed", error=error_message)
+        await self._notify_task(ctx, TaskState.failed, error=error_message)
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
         return ProcessingStatus.FAILED, streaming_state.full_response_text
@@ -735,7 +736,7 @@ class RoomMessageCenter:
                 ctx,
                 final_state_value,
                 content=streaming_state.full_response_text
-                if final_state_value == "completed"
+                if final_state == TaskState.completed
                 else None,
                 error=final_error,
             )
@@ -745,7 +746,7 @@ class RoomMessageCenter:
         else:
             await self._notify_task(
                 ctx,
-                "completed",
+                TaskState.completed,
                 content=streaming_state.full_response_text,
             )
 
@@ -1637,6 +1638,18 @@ class RoomMessageCenter:
                 "RoomMessageCenter: task tracking setup failed for message %s — degraded mode",
                 current_message.message_id,
             )
+            # Degraded mode: still send task_submitted so the frontend can render
+            # the agent message placeholder immediately.
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=current_message.message_id,
+                task_id=SyntheticTaskId.DEGRADED,
+                agent_name=agent_card.name,
+                agent_id=current_message.agent_id,
+                status=TaskState.working,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
 
         message_id = current_message.message_id
 
@@ -1659,7 +1672,7 @@ class RoomMessageCenter:
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
             if task_info:
-                await self._notify_task(ctx, "failed", error=str(exc))
+                await self._notify_task(ctx, TaskState.failed, error=str(exc))
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
@@ -1675,12 +1688,29 @@ class RoomMessageCenter:
                 await self._persist_message(current_message)
 
             if task_info:
-                await self._notify_task(ctx, "completed", content=full_response_text)
+                await self._notify_task(ctx, TaskState.completed, content=full_response_text)
+            else:
+                # Degraded mode: still notify the frontend about the agent response
+                # so the UI updates in real-time without requiring a page refresh.
+                logger.info(
+                    "RoomMessageCenter: Degraded mode — sending task_update directly for %s",
+                    message_id,
+                )
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=message_id,
+                    status=TaskState.completed,
+                    content=full_response_text,
+                    agent_name=agent_card.name if agent_card else None,
+                    agent_id=current_message.agent_id,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
             return True, full_response_text, None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":
-            status = response.get("status") or "working"
+            status = response.get("status") or TaskState.working
             if task_info:
                 await self._notify_task(
                     ctx,
@@ -1734,9 +1764,26 @@ class RoomMessageCenter:
                 if task_info:
                     await self._notify_task(
                         ctx,
-                        state_value,
+                        state,
                         content=final_content,
                         error=final_error,
+                    )
+                else:
+                    # Degraded mode: still push the result via SSE
+                    logger.info(
+                        "RoomMessageCenter: Degraded mode — sending polled task_update for %s",
+                        message_id,
+                    )
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=message_id,
+                        status=state,
+                        content=final_content,
+                        error=final_error,
+                        agent_name=agent_card.name if agent_card else None,
+                        agent_id=current_message.agent_id,
+                        step_number=step_number,
+                        total_steps=total_steps,
                     )
                 return True, final_content, None
             else:

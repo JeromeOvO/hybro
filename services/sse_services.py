@@ -3,10 +3,17 @@ import json
 from typing import Any
 from uuid import uuid4
 
+from enum import Enum
+
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
+
+
+def _enum_value(v: Any) -> Any:
+    """Extract the .value from an Enum member (e.g. TaskState), or return as-is."""
+    return v.value if isinstance(v, Enum) else v
 
 logger = get_logger(__name__)
 
@@ -108,7 +115,7 @@ class SSEManager:
         """broadcast message to room"""
         async with self.lock:
             if room_id not in self.room_connections:
-                logger.debug(f"No connections for room {room_id}")
+                logger.warning(f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!")
                 return
 
             disconnected_connections = []
@@ -124,8 +131,8 @@ class SSEManager:
                     del self.room_connections[room_id][connection_id]
 
             active_connections = len(self.room_connections[room_id])
-            logger.debug(
-                f"Broadcasted {message_type} to {active_connections} connections in room {room_id}"
+            logger.info(
+                f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
             )
 
     async def send_user_message(
@@ -305,7 +312,7 @@ class SSEManager:
         task_id: str,
         agent_name: str,
         agent_id: str | None = None,
-        status: str = "working",
+        status: Any = "working",
         related_message_id: str | None = None,
         created_at: str | None = None,
         step_number: int | None = None,
@@ -320,7 +327,7 @@ class SSEManager:
             message_id: The message ID (used for task tracking and frontend message identification)
             task_id: The agent's task ID
             agent_name: Name of the agent processing the task
-            status: Initial status (submitted or working)
+            status: Initial status — TaskState enum or string (serialised automatically)
             created_at: Task creation timestamp (for consistent ordering)
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
@@ -328,10 +335,10 @@ class SSEManager:
         """
         data = {
             "message_id": message_id,
-            "task_id": task_id,
+            "task_id": _enum_value(task_id),
             "agent_name": agent_name,
             "agent_id": agent_id,
-            "status": status,
+            "status": _enum_value(status),
             "related_message_id": related_message_id,
             "created_at": created_at or utcnow().isoformat(),
             "step_number": step_number,
@@ -345,7 +352,7 @@ class SSEManager:
         self,
         room_id: str,
         message_id: str,
-        status: str,
+        status: Any,
         content: str | None = None,
         error: str | None = None,
         requires_input: bool = False,
@@ -378,7 +385,7 @@ class SSEManager:
         """
         data = {
             "message_id": message_id,
-            "status": status,
+            "status": _enum_value(status),
             "content": content,
             "error": error,
             "requires_input": requires_input,

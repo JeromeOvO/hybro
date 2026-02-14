@@ -19,6 +19,23 @@ class TaskStateCategory(Enum):
 
 
 # ---------------------------------------------------------------------------
+# Synthetic Task IDs for degraded/fallback modes
+# ---------------------------------------------------------------------------
+
+
+class SyntheticTaskId(str, Enum):
+    """Task IDs used when real A2A task tracking is unavailable.
+
+    These replace hard-coded magic strings such as ``"pending"`` or
+    ``"degraded"`` that were previously scattered across the codebase.
+    """
+
+    PENDING = "pending"  # Task submitted but no real task_id yet
+    DEGRADED = "degraded"  # Degraded mode — no A2A task tracking available
+    FAILED = "failed"  # Placeholder task created on agent-call failure
+
+
+# ---------------------------------------------------------------------------
 # A2A Task State groupings (values come from the a2a.types.TaskState enum)
 # ---------------------------------------------------------------------------
 

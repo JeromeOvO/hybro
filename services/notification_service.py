@@ -1,3 +1,5 @@
+from typing import Any
+
 from a2a.types import AgentCard
 from common.utils.logger import get_logger
 from services.sse_services import sse_manager
@@ -24,7 +26,7 @@ class NotificationService:
         *,
         room_id: str,
         message_id: str | None,
-        status: str,
+        status: Any,
         agent_card: AgentCard | None = None,
         agent_name: str | None = None,
         agent_id: str | None = None,
