@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { Bot, PanelLeftIcon, SquareArrowOutUpRight } from "lucide-react"
+import { Bot, PanelLeftIcon } from "lucide-react"
 
 import { NavAgent } from "@/components/nav-agent"
 import { NavMain } from "@/components/nav-main"
@@ -12,7 +12,7 @@ import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import { DEVELOPER_NAV } from "@/lib/developer-nav"
 import { consumerUrl } from "@/lib/urls"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ACCENT } from "@/lib/sidebar-styles"
 import {
   Sidebar,
   SidebarContent,
@@ -60,7 +60,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <div className="flex h-12 items-center gap-2 px-2">
+        <div className="flex h-12 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
           <div className={`flex items-center gap-1.5 flex-1 ${SIDEBAR_ICON_HIDDEN}`}>
             <Logo className="flex-shrink-0" />
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Dev</span>
@@ -106,8 +106,8 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
               className={SIDEBAR_ICON_BUTTON}
             >
               <Link href={consumerUrl("/chat")} prefetch={false}>
-                <SquareArrowOutUpRight className={`h-4 w-4 ${SIDEBAR_ICON_CENTER}`} />
-                <span className={SIDEBAR_ICON_HIDDEN}>
+                <Bot className={`h-4 w-4 transition-colors ${SIDEBAR_PORTAL_ACCENT} ${SIDEBAR_ICON_CENTER}`} />
+                <span className={`${SIDEBAR_PORTAL_ACCENT} ${SIDEBAR_ICON_HIDDEN}`}>
                   Try Agents →
                 </span>
               </Link>

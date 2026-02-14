@@ -20,9 +20,9 @@ export function DiscordButton() {
           size="default"
           onClick={handleDiscordClick}
           tooltip="Join Community"
-          className={SIDEBAR_ICON_BUTTON}
+          className={`${SIDEBAR_ICON_BUTTON} hover:text-[#5865F2] dark:hover:text-[#7289DA]`}
         >
-          <DiscordIcon className={`h-4 w-4 ${SIDEBAR_ICON_CENTER}`} />
+          <DiscordIcon className={`h-4 w-4 transition-colors ${SIDEBAR_ICON_CENTER}`} />
           <span className={SIDEBAR_ICON_HIDDEN}>
             Join Community
           </span>

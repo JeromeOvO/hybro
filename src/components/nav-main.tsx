@@ -75,7 +75,6 @@ export function NavMain({
                       tooltip={item.title}
                       size="default"
                       className={cn(
-                        "transition-all duration-200 ease-out",
                         SIDEBAR_ICON_BUTTON,
                         // History section header doesn't need hover highlight
                         item.title !== "History" && "hover:bg-black/10 dark:hover:bg-white/15",
@@ -90,8 +89,7 @@ export function NavMain({
                         )}>
                           <item.icon className={cn(
                             getIconClass(item.title),
-                            "transition-transform duration-200",
-                            "group-hover/collapsible:scale-110"
+                            "transition-colors"
                           )} />
                           {hasActiveChild && state === "collapsed" && (
                             <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
@@ -127,11 +125,11 @@ export function NavMain({
                           asChild={subItem.url !== "#"}
                           className={cn(
                             "h-9 text-[0.9rem] pl-4 relative",
-                            "transition-all duration-200 ease-out",
+                            "transition-all duration-150 ease-out",
                             "hover:bg-black/10 dark:hover:bg-white/15",
                             "before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2",
                             "before:h-1.5 before:w-1.5 before:rounded-full",
-                            "before:transition-all before:duration-200",
+                            "before:transition-all before:duration-150",
                             isActive
                               ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-primary before:bg-primary before:scale-100"
                               : "before:bg-sidebar-border before:scale-75 hover:before:scale-100 hover:before:bg-sidebar-primary/50"

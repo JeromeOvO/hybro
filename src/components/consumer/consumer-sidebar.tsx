@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { History, PanelLeftIcon, SquareArrowOutUpRight } from "lucide-react"
+import { Code, History, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavAgent } from "@/components/nav-agent"
@@ -13,7 +13,7 @@ import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import { CONSUMER_NAV } from "@/lib/consumer-nav"
 import { developerUrl } from "@/lib/urls"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ACCENT } from "@/lib/sidebar-styles"
 import {
   Sidebar,
   SidebarContent,
@@ -101,7 +101,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <div className="flex h-12 items-center gap-2 px-2">
+        <div className="flex h-12 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
           <Logo className={`flex-1 ${SIDEBAR_ICON_HIDDEN}`} />
           <button
             type="button"
@@ -145,8 +145,8 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
               className={SIDEBAR_ICON_BUTTON}
             >
               <Link href={developerUrl("/")} prefetch={false}>
-                <SquareArrowOutUpRight className={`h-4 w-4 ${SIDEBAR_ICON_CENTER}`} />
-                <span className={SIDEBAR_ICON_HIDDEN}>
+                <Code className={`h-4 w-4 transition-colors ${SIDEBAR_PORTAL_ACCENT} ${SIDEBAR_ICON_CENTER}`} />
+                <span className={`${SIDEBAR_PORTAL_ACCENT} ${SIDEBAR_ICON_HIDDEN}`}>
                   Developer Portal →
                 </span>
               </Link>

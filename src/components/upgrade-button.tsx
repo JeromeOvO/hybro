@@ -22,7 +22,7 @@ export function UpgradeButton() {
           tooltip="Upgrade"
           className={SIDEBAR_ICON_BUTTON}
         >
-          <Gem className={`h-4 w-4 text-sky-400 ${SIDEBAR_ICON_CENTER}`} />
+          <Gem className={`h-4 w-4 text-sky-400 transition-colors ${SIDEBAR_ICON_CENTER}`} />
           <span className={SIDEBAR_ICON_HIDDEN}>
             Upgrade
           </span>
