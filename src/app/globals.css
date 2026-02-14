@@ -746,3 +746,16 @@ a.room-mention {
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   transform: translateY(-2px);
 }
+
+/* Amber tip link styling */
+.tip-link {
+  font-weight: 500;
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+}
+.tip-link:hover {
+  color: rgb(120 53 15); /* amber-900 */
+}
+.dark .tip-link:hover {
+  color: rgb(253 230 138); /* amber-200 */
+}

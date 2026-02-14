@@ -379,16 +379,70 @@ export default function RegisterAgentPage() {
           <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
             <Lightbulb className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
             <p className="text-sm text-amber-800 dark:text-amber-300">
-              <span className="font-medium">Tip:</span> New to A2A? Use{" "}
+              <span className="font-medium">Tip:</span> New to{" "}
+              <a
+                href="https://a2a-protocol.org/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                A2A
+              </a>
+              ? Use{" "}
               <a
                 href="https://github.com/hybroai/a2a-adapter"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+                className="tip-link"
               >
                 a2a-adapter
               </a>
-              {" "}to convert any agent from CrewAI, LangChain, LangGraph, n8n, or other frameworks.
+              {" "}to convert any agent from{" "}
+              <a
+                href="https://www.openclaw.ai/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                OpenClaw
+              </a>
+              ,{" "}
+              <a
+                href="https://n8n.io/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                n8n
+              </a>
+              ,{" "}
+              <a
+                href="https://www.crewai.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                CrewAI
+              </a>
+              ,{" "}
+              <a
+                href="https://www.langchain.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                LangChain
+              </a>
+              ,{" "}
+              <a
+                href="https://www.langchain.com/langgraph"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="tip-link"
+              >
+                LangGraph
+              </a>
+              , or other frameworks.
             </p>
           </div>
           )}

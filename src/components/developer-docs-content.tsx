@@ -13,6 +13,7 @@ import {
   Copy,
   Check,
   ArrowRight,
+  ClipboardList,
   Package,
   Shield,
   Network,
@@ -265,7 +266,7 @@ export function DeveloperDocsContent() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
               <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/10 text-blue-500">
                   <Layers className="h-5 w-5" />
                 </div>
                 <h3 className="font-semibold">1. Wrap your agent</h3>
@@ -276,7 +277,7 @@ export function DeveloperDocsContent() {
             </div>
             <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
               <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-500/10 text-amber-500">
                   <Zap className="h-5 w-5" />
                 </div>
                 <h3 className="font-semibold">2. Start the server</h3>
@@ -287,7 +288,7 @@ export function DeveloperDocsContent() {
             </div>
             <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
               <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-500">
                   <Network className="h-5 w-5" />
                 </div>
                 <h3 className="font-semibold">3. Register on HYBRO</h3>
@@ -391,7 +392,7 @@ export function DeveloperDocsContent() {
                 </p>
                 <Button variant="outline" size="sm" className="w-full" asChild>
                   <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer">
-                    <Shield className="mr-2 h-4 w-4 text-amber-500 dark:text-amber-400" />
+                    <Shield className="mr-2 h-4 w-4 icon-warning" />
                     Launch Inspector
                   </a>
                 </Button>
@@ -411,7 +412,7 @@ export function DeveloperDocsContent() {
                 </p>
                 <Button variant="outline" size="sm" className="w-full" asChild>
                   <a href="/register">
-                    <Network className="mr-2 h-4 w-4" />
+                    <ClipboardList className="mr-2 h-4 w-4 icon-workflow" />
                     Register Agent
                   </a>
                 </Button>
@@ -460,7 +461,7 @@ export function DeveloperDocsContent() {
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
-              <Shield className="h-5 w-5 text-amber-500 dark:text-amber-400 group-hover:text-amber-600 dark:group-hover:text-amber-300 transition-colors" />
+              <Shield className="h-5 w-5 icon-warning transition-colors" />
               <span className="text-sm font-medium">A2A Agent Inspector</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
@@ -470,7 +471,7 @@ export function DeveloperDocsContent() {
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
-              <YoutubeIcon className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <YoutubeIcon className="h-5 w-5 text-red-500 dark:text-red-400 group-hover:text-red-600 dark:group-hover:text-red-300 transition-colors" />
               <span className="text-sm font-medium">Demo Video</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
@@ -480,7 +481,7 @@ export function DeveloperDocsContent() {
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
-              <DiscordIcon className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <DiscordIcon className="h-5 w-5 text-indigo-500 dark:text-indigo-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition-colors" />
               <span className="text-sm font-medium">Discord Community</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
