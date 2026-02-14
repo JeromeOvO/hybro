@@ -31,7 +31,7 @@ from common.utils.logger import get_logger
 from config.settings import settings
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
-from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
+from services.a2a_constants import INTERACTIVE_STATES, SyntheticTaskId, is_terminal_state
 
 logger = get_logger(__name__)
 
@@ -333,7 +333,7 @@ class A2AService:
         except Exception as e:
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
             failed_task = Task(
-                id="failed",
+                id=SyntheticTaskId.FAILED,
                 context_id=context_id,
                 status=TaskStatus(
                     state=TaskState.failed,
@@ -353,7 +353,7 @@ class A2AService:
         if isinstance(response.root, JSONRPCErrorResponse):
             error_msg = str(response.root.error.message)
             failed_task = Task(
-                id="failed",
+                id=SyntheticTaskId.FAILED,
                 context_id=context_id,
                 status=TaskStatus(
                     state=TaskState.failed,

@@ -14,7 +14,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from a2a.types import Artifact, Part, Task, TaskStatusUpdateEvent, TextPart
+from a2a.types import Artifact, Part, Task, TaskState, TaskStatusUpdateEvent, TextPart
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from common.utils.logger import get_logger
@@ -104,7 +104,7 @@ async def notify_task_update(
     requires_auth = False
     status_message = None
 
-    if state_value == "completed" and task.artifacts:
+    if state == TaskState.completed and task.artifacts:
         content = extract_text_from_artifacts(task.artifacts)
         logger.info(
             f"Task {message_id} completed. Artifacts count: {len(task.artifacts)}, "
@@ -124,20 +124,20 @@ async def notify_task_update(
                             f"has_root={hasattr(part, 'root')}"
                         )
 
-    elif state_value == "failed":
+    elif state == TaskState.failed:
         error = extract_error_message(task) or "Task failed"
 
-    elif state_value == "rejected":
+    elif state == TaskState.rejected:
         error = extract_error_message(task) or "Task was rejected by the agent"
 
-    elif state_value == "canceled":
+    elif state == TaskState.canceled:
         error = "Task was canceled"
 
-    elif state_value == "input_required":
+    elif state == TaskState.input_required:
         requires_input = True
         status_message = extract_status_message(task)
 
-    elif state_value == "auth_required":
+    elif state == TaskState.auth_required:
         requires_auth = True
         status_message = extract_status_message(task) or "Authentication required"
 
@@ -160,7 +160,7 @@ async def notify_task_update(
         # from message_text if available
         existing_text = room_agent_message.message_content.message_text
         if (
-            state_value == "completed"
+            state == TaskState.completed
             and existing_text
             and (not task.artifacts or len(task.artifacts) == 0)
         ):
@@ -210,7 +210,7 @@ async def notify_task_update(
     await notification_service.send_task_update(
         room_id=room_id,
         message_id=message_id,
-        status=state_value,
+        status=state,
         content=content,
         error=error,
         requires_input=requires_input,
@@ -225,13 +225,13 @@ async def notify_task_update(
         task_content=task_content,
     )
 
-    logger.info(f"Sent SSE notification for task {message_id} state {state_value}")
+    logger.info(f"Sent SSE notification for task {message_id} state {state}")
 
     # Clear room processing status when task reaches a terminal state via webhook.
     # This ensures the "Working... Processing your request..." bubble is dismissed
     # even when the task completes through the webhook path rather than streaming.
     if is_terminal_state(state):
-        await sse_manager.send_processing_status(room_id, state_value, message_id)
+        await sse_manager.send_processing_status(room_id, state, message_id)
 
 
 @router.post("/webhooks/a2a/{message_id}")
@@ -355,8 +355,7 @@ async def handle_a2a_webhook(
     # Extract content for queue resumption (if task completed successfully)
     task_result_text = None
     if is_terminal_state(new_state):
-        state_value = new_state.value if hasattr(new_state, "value") else str(new_state)
-        if state_value == "completed" and updated_task.artifacts:
+        if new_state == TaskState.completed and updated_task.artifacts:
             task_result_text = extract_text_from_artifacts(updated_task.artifacts)
 
     if should_notify:
