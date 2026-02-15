@@ -210,7 +210,7 @@ export default function ConsumerAgentProfilePage() {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
+                <Button variant="brandTint" size="sm" asChild>
                   <a href={developerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
                     Manage
                     <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
@@ -284,7 +284,7 @@ export default function ConsumerAgentProfilePage() {
         <div className="lg:col-span-8 space-y-6">
           {/* Capabilities Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card className="h-full border-l-4 border-l-blue-500/50">
+            <Card className="h-full">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <Zap className="h-5 w-5 text-blue-500" />
@@ -313,7 +313,7 @@ export default function ConsumerAgentProfilePage() {
               </CardContent>
             </Card>
 
-            <Card className="h-full border-l-4 border-l-purple-500/50">
+            <Card className="h-full">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <MessageCircle className="h-5 w-5 text-purple-500" />

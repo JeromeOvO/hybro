@@ -103,7 +103,7 @@
   --color-muted-foreground: 220 14% 40%;
 
   /* Softer accent */
-  --color-accent: 270 55% 50%;
+  --color-accent: 270 40% 95%;
   --color-accent-foreground: 270 30% 22%;
 
   /* Destructive - clear danger signal */
@@ -185,8 +185,8 @@
   --color-muted: 235 20% 15%;
   --color-muted-foreground: 215 25% 65%;
 
-  /* Electric purple accent */
-  --color-accent: 270 80% 70%;
+  /* Subtle purple accent */
+  --color-accent: 270 30% 22%;
   --color-accent-foreground: 210 30% 88%;
 
   /* Destructive - vivid red on dark */

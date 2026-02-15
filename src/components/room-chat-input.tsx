@@ -613,10 +613,9 @@ export function RoomChatInput({
           ref={suggestionsRef}
           className={cn(
             "absolute bottom-full left-4 right-4 mb-3 z-50",
-            "bg-background/95 backdrop-blur-2xl",
-            "border border-border/40 shadow-2xl rounded-2xl",
-            "animate-in fade-in slide-in-from-bottom-3 duration-300",
-            "ring-1 ring-white/5"
+            "bg-popover backdrop-blur-xl",
+            "border border-border/50 shadow-xl rounded-2xl",
+            "animate-in fade-in slide-in-from-bottom-3 duration-300"
           )}
         >
           {/* Header */}
@@ -639,7 +638,7 @@ export function RoomChatInput({
                 className={cn(
                   "w-full text-left px-3 py-2.5 transition-all duration-100 flex items-center gap-3 mx-1 rounded-lg",
                   index === selectedAgentIndex
-                    ? 'bg-primary text-primary-foreground shadow-md'
+                    ? 'bg-accent text-accent-foreground'
                     : 'text-foreground hover:bg-muted'
                 )}
                 onMouseEnter={() => setSelectedAgentIndex(index)}
@@ -649,8 +648,8 @@ export function RoomChatInput({
                 <div className={cn(
                   "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 transition-all",
                   index === selectedAgentIndex
-                    ? 'bg-primary-foreground text-primary scale-105'
-                    : 'bg-primary/15 text-primary'
+                    ? 'bg-primary/20 text-primary'
+                    : 'bg-primary/10 text-primary'
                 )}>
                   {agent.name.charAt(0).toUpperCase()}
                 </div>
@@ -661,7 +660,7 @@ export function RoomChatInput({
 
                 {/* Keyboard hint for selected item */}
                 {index === selectedAgentIndex && (
-                  <kbd className="text-[10px] px-2 py-1 bg-primary-foreground/30 rounded font-mono font-semibold">
+                  <kbd className="text-[10px] px-2 py-1 bg-muted rounded font-mono font-semibold text-muted-foreground">
                     ↵
                   </kbd>
                 )}
@@ -775,12 +774,12 @@ export function RoomChatInput({
             ) : processing ? (
               <Button
                 onClick={onCancel}
-                variant="destructive"
                 size="lg"
                 className={cn(
                   "h-11 w-11 rounded-full p-0",
+                  "bg-primary/80",
                   "hover:scale-105 active:scale-95 transition-all duration-200",
-                  "shadow-md shadow-destructive/25 hover:shadow-lg hover:shadow-destructive/30"
+                  "shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30"
                 )}
                 title="Stop processing"
               >

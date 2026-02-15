@@ -88,6 +88,7 @@ export function NavUser() {
   const { openSettings } = useSettingsDialog()
   const { theme, setTheme } = useTheme()
   const [hydrated, setHydrated] = useState(false)
+  const [themeSubOpen, setThemeSubOpen] = useState(false)
 
   useEffect(() => {
     setHydrated(true)
@@ -198,7 +199,7 @@ export function NavUser() {
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuSub>
+            <DropdownMenuSub open={themeSubOpen} onOpenChange={setThemeSubOpen}>
               <DropdownMenuSubTrigger>
                 {theme === "dark" ? (
                   <Moon className="mr-2 h-4 w-4" />
@@ -210,7 +211,10 @@ export function NavUser() {
                 Theme
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+                <DropdownMenuRadioGroup value={theme} onValueChange={(val) => {
+                  setTheme(val)
+                  setThemeSubOpen(false)
+                }}>
                   <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
                     <Sun className="mr-2 h-4 w-4" /> Light
                   </DropdownMenuRadioItem>

@@ -255,7 +255,7 @@ export default function DeveloperAgentManagePage() {
             <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
             Back to My Agents
           </Button>
-          <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
+          <Button variant="brandTint" size="sm" asChild>
             <a href={consumerUrl(`/agents/${agentId}`)} target="_blank" rel="noopener noreferrer">
               View as User
               <SquareArrowOutUpRight className="h-4 w-4 ml-2" />

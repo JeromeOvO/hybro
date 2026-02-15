@@ -20,7 +20,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function NavMain({
   items,
@@ -76,7 +76,6 @@ export function NavMain({
                       tooltip={item.title}
                       size="default"
                       className={cn(
-                        SIDEBAR_ICON_BUTTON,
                         // History section header doesn't need hover highlight
                         item.title !== "History" && "hover:bg-black/10 dark:hover:bg-white/15",
                         "active:scale-[0.98]",
