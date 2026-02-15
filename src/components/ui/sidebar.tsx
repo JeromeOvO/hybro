@@ -503,24 +503,66 @@ function SidebarMenuButton({
   size = "default",
   tooltip,
   className,
+  children,
   ...props
 }: React.ComponentProps<"button"> & {
   asChild?: boolean
   isActive?: boolean
   tooltip?: string | React.ComponentProps<typeof TooltipContent>
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
-  const Comp = asChild ? Slot : "button"
   const { isMobile, state } = useSidebar()
+
+  const menuButtonProps = {
+    "data-slot": "sidebar-menu-button" as const,
+    "data-sidebar": "menu-button" as const,
+    "data-size": size,
+    "data-active": isActive,
+    className: cn(sidebarMenuButtonVariants({ variant, size }), className),
+  }
+
+  // When both asChild and tooltip are used, Radix creates a double-Slot chain
+  // (TooltipTrigger Slot → Comp Slot → child) that causes SSR hydration mismatches.
+  // Fix: bypass Slot and merge props via cloneElement so TooltipTrigger's Slot
+  // resolves onto a single real DOM element.
+  // Note: cloneElement overwrites (not composes) event handlers and refs, unlike Slot.
+  if (asChild && tooltip) {
+    const child = React.Children.only(children) as React.ReactElement<
+      { className?: string }
+    >
+    const mergedChild = React.cloneElement(child, {
+      ...props,
+      ...menuButtonProps,
+      className: cn(menuButtonProps.className, child.props.className),
+    })
+
+    if (typeof tooltip === "string") {
+      tooltip = { children: tooltip }
+    }
+
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {mergedChild}
+        </TooltipTrigger>
+        <TooltipContent
+          side="right"
+          align="center"
+          hidden={state !== "collapsed" || isMobile}
+          {...tooltip}
+        />
+      </Tooltip>
+    )
+  }
+
+  const Comp = asChild ? Slot : "button"
 
   const button = (
     <Comp
-      data-slot="sidebar-menu-button"
-      data-sidebar="menu-button"
-      data-size={size}
-      data-active={isActive}
-      className={cn(sidebarMenuButtonVariants({ variant, size }), className)}
+      {...menuButtonProps}
       {...props}
-    />
+    >
+      {children}
+    </Comp>
   )
 
   if (!tooltip) {
