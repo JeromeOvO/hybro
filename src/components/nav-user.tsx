@@ -164,74 +164,72 @@ export function NavUser() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <div
-          className={`flex h-10 items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out ${SIDEBAR_ICON_BUTTON}`}
-          title={userEmail ? `${userName} (${userEmail})` : userName}
-        >
-          <div className={`shrink-0 ${SIDEBAR_ICON_CENTER}`}>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="shrink-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-sidebar-ring">
-                  <Avatar className="h-8 w-8 rounded-lg">
-                    <AvatarImage src={user.imageUrl} alt={userName} />
-                    <AvatarFallback className="rounded-lg text-xs">
-                      {userName.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                </button>
-              </DropdownMenuTrigger>
-              <UserDropdownContent>
-                <DropdownMenuLabel className="px-2 py-1.5">
-                  <div className="text-sm font-medium">{userName}</div>
-                  <div className="text-xs text-muted-foreground font-normal">{userEmail}</div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => {
-                  openSettings()
-                  setOpenMobile(false)
-                }}>
-                  <Settings className="mr-2 h-4 w-4" />
-                  Settings
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    {theme === "dark" ? (
-                      <Moon className="mr-2 h-4 w-4" />
-                    ) : theme === "light" ? (
-                      <Sun className="mr-2 h-4 w-4" />
-                    ) : (
-                      <Monitor className="mr-2 h-4 w-4" />
-                    )}
-                    Theme
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
-                      <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
-                        <Sun className="mr-2 h-4 w-4" /> Light
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="dark" onSelect={(e) => e.preventDefault()}>
-                        <Moon className="mr-2 h-4 w-4" /> Dark
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="system" onSelect={(e) => e.preventDefault()}>
-                        <Monitor className="mr-2 h-4 w-4" /> System
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => signOut()}>
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Sign out
-                </DropdownMenuItem>
-              </UserDropdownContent>
-            </DropdownMenu>
-          </div>
-          <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
-            <span className="truncate font-medium">{userName}</span>
-            <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
-          </div>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className={`flex h-10 w-full items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-sidebar-ring ${SIDEBAR_ICON_BUTTON}`}
+              title={userEmail ? `${userName} (${userEmail})` : userName}
+            >
+              <div className={`shrink-0 ${SIDEBAR_ICON_CENTER}`}>
+                <Avatar className="h-8 w-8 rounded-lg">
+                  <AvatarImage src={user.imageUrl} alt={userName} />
+                  <AvatarFallback className="rounded-lg text-xs">
+                    {userName.charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+              <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
+                <span className="truncate font-medium">{userName}</span>
+                <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
+              </div>
+            </button>
+          </DropdownMenuTrigger>
+          <UserDropdownContent>
+            <DropdownMenuLabel className="px-2 py-1.5">
+              <div className="text-sm font-medium">{userName}</div>
+              <div className="text-xs text-muted-foreground font-normal">{userEmail}</div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => {
+              openSettings()
+              setOpenMobile(false)
+            }}>
+              <Settings className="mr-2 h-4 w-4" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                {theme === "dark" ? (
+                  <Moon className="mr-2 h-4 w-4" />
+                ) : theme === "light" ? (
+                  <Sun className="mr-2 h-4 w-4" />
+                ) : (
+                  <Monitor className="mr-2 h-4 w-4" />
+                )}
+                Theme
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+                  <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
+                    <Sun className="mr-2 h-4 w-4" /> Light
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="dark" onSelect={(e) => e.preventDefault()}>
+                    <Moon className="mr-2 h-4 w-4" /> Dark
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="system" onSelect={(e) => e.preventDefault()}>
+                    <Monitor className="mr-2 h-4 w-4" /> System
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => signOut()}>
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign out
+            </DropdownMenuItem>
+          </UserDropdownContent>
+        </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
   )
