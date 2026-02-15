@@ -187,7 +187,7 @@
 
   /* Electric purple accent */
   --color-accent: 270 80% 70%;
-  --color-accent-foreground: 230 25% 8%;
+  --color-accent-foreground: 210 30% 88%;
 
   /* Destructive - vivid red on dark */
   --color-destructive: 0 72% 51%;
@@ -428,27 +428,6 @@
   background: linear-gradient(to right, hsl(var(--color-hybro-bro)), hsl(var(--color-hybro-hy)));
 }
 
-/* Brand-tinted outline button — secondary action with brand presence */
-.btn-brand-tint {
-  border-color: hsl(var(--color-hybro-hy) / 0.3);
-  background-color: hsl(var(--color-hybro-hy) / 0.08);
-  color: hsl(var(--color-hybro-hy));
-}
-
-.btn-brand-tint:hover {
-  background-color: hsl(var(--color-hybro-hy) / 0.15);
-}
-
-.dark .btn-brand-tint {
-  border-color: hsl(var(--color-hybro-hy) / 0.4);
-  background-color: hsl(var(--color-hybro-hy) / 0.12);
-  color: hsl(var(--color-hybro-hy));
-}
-
-.dark .btn-brand-tint:hover {
-  background-color: hsl(var(--color-hybro-hy) / 0.22);
-}
-
 /* Room Chat Input & Message Mention Styles */
 .room-mention {
   display: inline-block;
@@ -493,72 +472,6 @@ a.room-mention {
   border-color: rgba(0, 255, 255, 0.5);
   box-shadow: 0 2px 6px rgba(0, 255, 255, 0.25), 0 0 12px rgba(0, 255, 255, 0.2);
   transform: translateY(-1px);
-}
-
-/* ── Reusable badge colors ── */
-
-/* Green badge – status "active", "passed", "supported" (non-interactive) */
-.badge-success {
-  background-color: rgb(240 253 244);
-  color: rgb(21 128 61);
-  border-color: rgb(187 247 208);
-}
-.dark .badge-success {
-  background-color: rgb(20 83 45 / 0.3);
-  color: rgb(134 239 172);
-  border-color: rgb(22 101 52);
-}
-
-/* Green badge with hover – interactive capability pills */
-.badge-success-interactive {
-  background-color: rgb(240 253 244);
-  color: rgb(22 163 74);
-  border-color: rgb(134 239 172);
-}
-.badge-success-interactive:hover {
-  background-color: rgb(220 252 231);
-}
-.dark .badge-success-interactive {
-  background-color: rgb(4 47 46);
-  color: rgb(74 222 128);
-  border-color: rgb(21 128 61);
-}
-.dark .badge-success-interactive:hover {
-  background-color: rgb(20 83 45);
-}
-
-/* Red badge – "failed", "error" */
-.badge-error {
-  background-color: rgb(254 242 242);
-  color: rgb(220 38 38);
-  border-color: rgb(252 165 165);
-}
-.dark .badge-error {
-  background-color: rgb(69 10 10);
-  color: rgb(248 113 113);
-  border-color: rgb(185 28 28);
-}
-
-/* Gray badge – "inactive" status */
-.badge-inactive {
-  background-color: rgb(249 250 251);
-  color: rgb(55 65 81);
-  border-color: rgb(229 231 235);
-}
-.dark .badge-inactive {
-  background-color: rgb(31 41 55 / 0.5);
-  color: rgb(156 163 175);
-  border-color: rgb(55 65 81);
-}
-
-/* Muted badge – "not supported" capability */
-.badge-muted {
-  color: hsl(var(--color-muted-foreground));
-  border-color: hsl(var(--color-muted));
-  background-color: hsl(var(--color-muted) / 0.5);
-}
-.badge-muted:hover {
-  background-color: hsl(var(--color-muted) / 0.7);
 }
 
 /* ── Page layout ── */

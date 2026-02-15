@@ -17,6 +17,16 @@ const badgeVariants = cva(
           "border-transparent bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
           "text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+        success:
+          "bg-[rgb(240,253,244)] text-[rgb(21,128,61)] border-[rgb(187,247,208)] dark:bg-[rgb(20,83,45,0.3)] dark:text-[rgb(134,239,172)] dark:border-[rgb(22,101,52)]",
+        successInteractive:
+          "bg-[rgb(240,253,244)] text-[rgb(22,163,74)] border-[rgb(134,239,172)] hover:bg-[rgb(220,252,231)] dark:bg-[rgb(4,47,46)] dark:text-[rgb(74,222,128)] dark:border-[rgb(21,128,61)] dark:hover:bg-[rgb(20,83,45)]",
+        error:
+          "bg-[rgb(254,242,242)] text-[rgb(220,38,38)] border-[rgb(252,165,165)] dark:bg-[rgb(69,10,10)] dark:text-[rgb(248,113,113)] dark:border-[rgb(185,28,28)]",
+        inactive:
+          "bg-[rgb(249,250,251)] text-[rgb(55,65,81)] border-[rgb(229,231,235)] dark:bg-[rgb(31,41,55,0.5)] dark:text-[rgb(156,163,175)] dark:border-[rgb(55,65,81)]",
+        badgeMuted:
+          "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70",
       },
     },
     defaultVariants: {

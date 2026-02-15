@@ -33,7 +33,7 @@ export default function InspectorPage() {
                 <ArrowRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
-            <Button variant="outline" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" asChild>
               <a href="https://github.com/hybroai/a2a-agent-inspector" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="mr-2 h-4 w-4" />
                 Inspector GitHub
