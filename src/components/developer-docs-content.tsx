@@ -222,7 +222,7 @@ export function DeveloperDocsContent() {
           </p>
 
           {/* Install command */}
-          <div className="inline-flex items-center gap-3 bg-muted/50 border border-border/50 border-l-2 border-l-primary rounded-lg px-5 py-3 mb-6">
+          <div className="inline-flex items-center gap-3 bg-muted/50 border border-border/50 rounded-lg px-5 py-3 mb-6">
             <Terminal className="h-4 w-4 text-muted-foreground" />
             <code className="font-mono text-sm font-medium">pip install a2a-adapter</code>
             <CopyButton text="pip install a2a-adapter" />
@@ -253,7 +253,7 @@ export function DeveloperDocsContent() {
 
         {/* Demo Video */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">See it in action</h2>
+          <h2 className="text-xl font-semibold mb-6">See it in action</h2>
           <VideoEmbed
             videoId="ZUQrnlBSsLg"
             title="HYBRO Demo - Multi-Agent Collaboration"
@@ -262,7 +262,7 @@ export function DeveloperDocsContent() {
 
         {/* Architecture Overview */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">How it works</h2>
+          <h2 className="text-xl font-semibold mb-6">How it works</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
               <div className="flex items-center gap-3 mb-3">
@@ -302,13 +302,13 @@ export function DeveloperDocsContent() {
 
         {/* Supported Frameworks */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Supported Frameworks</h2>
+          <h2 className="text-xl font-semibold mb-6">Supported Frameworks</h2>
           <FrameworkBadges />
         </section>
 
         {/* Code Examples with Tabs */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Getting Started</h2>
+          <h2 className="text-xl font-semibold mb-6">Getting Started</h2>
 
           {/* Tab buttons */}
           <div className="flex gap-1 mb-4 p-1 bg-muted/50 rounded-lg w-fit">
@@ -377,7 +377,7 @@ export function DeveloperDocsContent() {
 
         {/* Next Steps - Developer Funnel */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Next Steps</h2>
+          <h2 className="text-xl font-semibold mb-6">Next Steps</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="border-border/50 card-lift flex flex-col">
               <CardHeader className="pb-3">
@@ -443,7 +443,7 @@ export function DeveloperDocsContent() {
 
         {/* Resources */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Resources</h2>
+          <h2 className="text-xl font-semibold mb-6">Resources</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <a
               href="https://github.com/hybroai/a2a-adapter"

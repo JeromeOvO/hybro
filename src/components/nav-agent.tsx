@@ -10,7 +10,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import type { NavAgentItem } from "@/lib/nav-items"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function NavAgent({
   navAgents,
@@ -32,7 +32,6 @@ export function NavAgent({
                 isActive={isActive}
                 size="default"
                 tooltip={item.name}
-                className={SIDEBAR_ICON_BUTTON}
               >
                 <Link href={item.url} prefetch={false} scroll={false}>
                   <item.icon

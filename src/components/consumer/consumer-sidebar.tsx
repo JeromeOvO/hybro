@@ -13,7 +13,7 @@ import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import { CONSUMER_NAV } from "@/lib/consumer-nav"
 import { developerUrl } from "@/lib/urls"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ICON, SIDEBAR_PORTAL_TEXT } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ICON, SIDEBAR_PORTAL_TEXT } from "@/lib/sidebar-styles"
 import {
   Sidebar,
   SidebarContent,
@@ -139,7 +139,6 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
               asChild
               size="default"
               tooltip="Developer Portal"
-              className={SIDEBAR_ICON_BUTTON}
             >
               <Link href={developerUrl("/")} prefetch={false}>
                 <Code className={`h-4 w-4 transition-colors ${SIDEBAR_PORTAL_ICON} ${SIDEBAR_ICON_CENTER}`} />

@@ -12,7 +12,7 @@ import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
 import { DEVELOPER_NAV } from "@/lib/developer-nav"
 import { consumerUrl } from "@/lib/urls"
-import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ICON, SIDEBAR_PORTAL_TEXT } from "@/lib/sidebar-styles"
+import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ICON, SIDEBAR_PORTAL_TEXT } from "@/lib/sidebar-styles"
 import {
   Sidebar,
   SidebarContent,
@@ -101,7 +101,6 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
               asChild
               size="default"
               tooltip="Try Agents"
-              className={SIDEBAR_ICON_BUTTON}
             >
               <Link href={consumerUrl("/chat")} prefetch={false}>
                 <Bot className={`h-4 w-4 transition-colors ${SIDEBAR_PORTAL_ICON} ${SIDEBAR_ICON_CENTER}`} />
