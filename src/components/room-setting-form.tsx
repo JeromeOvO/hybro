@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
-import { MessageSquareMore } from "lucide-react"
+import { MessageCircleMore } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
 // Schema with required room name (for editing existing rooms)
@@ -195,7 +195,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
             <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 bg-card">
               <div className="space-y-0.5 flex-1">
                 <FormLabel className="text-base flex items-center gap-2">
-                  <MessageSquareMore className="h-4 w-4" />
+                  <MessageCircleMore className="h-4 w-4" />
                   Debate Mode
                 </FormLabel>
                 <FormDescription className="text-sm">

@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Cpu,
   Zap,
-  MessageSquare,
+  MessageCircle,
   Terminal,
   ArrowRightLeft,
   MessageCirclePlus,
@@ -316,7 +316,7 @@ export default function ConsumerAgentProfilePage() {
             <Card className="h-full border-l-4 border-l-purple-500/50">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2">
-                  <MessageSquare className="h-5 w-5 text-purple-500" />
+                  <MessageCircle className="h-5 w-5 text-purple-500" />
                   Interaction Modes
                 </CardTitle>
               </CardHeader>

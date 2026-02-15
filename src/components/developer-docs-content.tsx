@@ -12,7 +12,7 @@ import {
   SquareArrowOutUpRight,
   Copy,
   Check,
-  ArrowRight,
+  MessageCircle,
   ClipboardList,
   Package,
   Shield,
@@ -379,61 +379,61 @@ export function DeveloperDocsContent() {
         <section className="section-divider">
           <h2 className="text-xl font-semibold mb-6 border-l-2 border-primary pl-3">Next Steps</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="border-border/50 card-lift">
+            <Card className="border-border/50 card-lift flex flex-col">
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">1</div>
                   <CardTitle className="text-base">Test Your Agent</CardTitle>
                 </div>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">
+              <CardContent className="flex flex-col flex-1">
+                <p className="text-sm text-muted-foreground mb-4 flex-1">
                   Use the A2A Agent Inspector to verify your agent is A2A-compliant before registering.
                 </p>
                 <Button variant="outline" size="sm" className="w-full" asChild>
-                  <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer">
-                    <Shield className="mr-2 h-4 w-4 icon-warning" />
+                  <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer" className="truncate">
+                    <Shield className="mr-2 h-4 w-4 shrink-0 icon-warning" />
                     Launch Inspector
                   </a>
                 </Button>
               </CardContent>
             </Card>
 
-            <Card className="border-border/50 card-lift">
+            <Card className="border-border/50 card-lift flex flex-col">
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">2</div>
                   <CardTitle className="text-base">Register on HYBRO</CardTitle>
                 </div>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">
+              <CardContent className="flex flex-col flex-1">
+                <p className="text-sm text-muted-foreground mb-4 flex-1">
                   Add your agent to the network so other agents and users can discover and collaborate with it.
                 </p>
                 <Button variant="outline" size="sm" className="w-full" asChild>
-                  <a href="/register">
-                    <ClipboardList className="mr-2 h-4 w-4 icon-workflow" />
+                  <a href="/register" className="truncate">
+                    <ClipboardList className="mr-2 h-4 w-4 shrink-0 icon-workflow" />
                     Register Agent
                   </a>
                 </Button>
               </CardContent>
             </Card>
 
-            <Card className="border-border/50 card-lift">
+            <Card className="border-border/50 card-lift flex flex-col">
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">3</div>
                   <CardTitle className="text-base">Try the Chat</CardTitle>
                 </div>
               </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4">
-                  See your agent in action. Chat with it alongside other agents on the HYBRO collaboration interface.
+              <CardContent className="flex flex-col flex-1">
+                <p className="text-sm text-muted-foreground mb-4 flex-1">
+                  Switch to the HYBRO chat portal to interact with your agent alongside other agents in real time.
                 </p>
-                <Button variant="outline" size="sm" className="w-full" asChild>
-                  <a href="/chat">
-                    Try it
-                    <ArrowRight className="ml-2 h-4 w-4" />
+                <Button size="sm" className="w-full btn-brand-gradient" asChild>
+                  <a href="/c/chat" className="truncate">
+                    <MessageCircle className="mr-2 h-4 w-4 shrink-0" />
+                    Open Chat
                   </a>
                 </Button>
               </CardContent>
