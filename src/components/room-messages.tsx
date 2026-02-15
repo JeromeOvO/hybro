@@ -5,6 +5,7 @@ import {
   MessageCircle,
   ChevronsDownUp, 
   ChevronsUpDown,
+  MessageCirclePlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -43,7 +44,7 @@ function EmptyState() {
     <div className="h-full flex items-center justify-center">
       <div className="text-center space-y-4 max-w-sm px-4">
         <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 dark:from-primary/10 dark:to-accent/10 flex items-center justify-center mx-auto">
-          <MessageCircle className="h-8 w-8 text-primary/60" />
+          <MessageCirclePlus className="h-8 w-8 text-primary/60" />
         </div>
         <div className="space-y-2">
           <p className="text-lg font-medium text-foreground">Start the conversation</p>

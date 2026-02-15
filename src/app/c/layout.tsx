@@ -5,6 +5,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { ConsumerSidebar } from "@/components/consumer/consumer-sidebar"
 import { ConsumerHeader } from "@/components/consumer/consumer-header"
 import { BannerHost } from "@/components/ui/banner"
+import { SettingsDialogProvider } from "@/components/settings/settings-dialog-provider"
 
 export const metadata: Metadata = {
   title: "Hybro AI",
@@ -20,14 +21,16 @@ export default function ConsumerLayout({
     <div className="min-h-screen bg-background">
       <BannerHost />
       <SidebarProvider>
-        <ConsumerSidebar />
-        <SidebarInset>
-          <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-          <ConsumerHeader />
-          <main className="flex flex-1 flex-col min-w-0">
-            {children}
-          </main>
-        </SidebarInset>
+        <SettingsDialogProvider>
+          <ConsumerSidebar />
+          <SidebarInset>
+            <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+            <ConsumerHeader />
+            <main className="flex flex-1 flex-col min-w-0">
+              {children}
+            </main>
+          </SidebarInset>
+        </SettingsDialogProvider>
       </SidebarProvider>
     </div>
   )

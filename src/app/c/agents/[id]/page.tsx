@@ -227,7 +227,7 @@ export default function ConsumerAgentProfilePage() {
         {/* Left Column: Identity & Meta */}
         <div className="lg:col-span-4 space-y-6">
           <Card className="overflow-hidden border-primary/10 shadow-lg bg-gradient-to-b from-card to-secondary/20">
-            <div className="h-32 bg-linear-to-br from-primary/10 via-primary/5 to-transparent relative">
+            <div className="h-32 relative">
               <div className="absolute top-4 right-4">
                 {getStatusBadge(agent.agent_status)}
               </div>

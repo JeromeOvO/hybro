@@ -1,20 +1,92 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { UserPlus } from "lucide-react"
-import { useUser, UserButton, useClerk } from "@clerk/nextjs"
+import { UserPlus, LogOut, Settings, Sun, Moon, Monitor } from "lucide-react"
+import { useUser, useClerk } from "@clerk/nextjs"
+import { useTheme } from "next-themes"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
+import { useSettingsDialog } from "@/components/settings/settings-dialog-provider"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "@/components/ui/dropdown-menu"
+import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
+import { cn } from "@/lib/utils"
 
 import {
   SidebarMenu,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
+
+/**
+ * Dropdown menu content that renders without a portal on mobile
+ * (to stay inside the Sheet content tree and avoid Radix Dialog
+ * modal pointer-event conflicts), and with the standard portal
+ * on desktop.
+ */
+function UserDropdownContent({ children }: { children: React.ReactNode }) {
+  const { isMobile } = useSidebar()
+
+  const sharedClasses = cn(
+    "bg-popover text-popover-foreground",
+    "data-[state=open]:animate-in data-[state=closed]:animate-out",
+    "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+    "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+    "data-[side=top]:slide-in-from-bottom-2",
+    "z-50 min-w-48 w-64 overflow-hidden rounded-md border p-1 shadow-md",
+    "origin-(--radix-dropdown-menu-content-transform-origin)",
+  )
+
+  if (isMobile) {
+    // Non-portaled: stays inside the Sheet content tree
+    return (
+      <DropdownMenuPrimitive.Content
+        data-slot="dropdown-menu-content"
+        side="top"
+        align="start"
+        sideOffset={8}
+        className={cn(
+          sharedClasses,
+          "backdrop-blur-none bg-[hsl(220,14%,92%)] dark:bg-[hsl(230,22%,18%)]",
+        )}
+      >
+        {children}
+      </DropdownMenuPrimitive.Content>
+    )
+  }
+
+  // Desktop: standard portaled dropdown
+  return (
+    <DropdownMenuContent
+      side="top"
+      align="start"
+      sideOffset={8}
+      className="w-64 backdrop-blur-none bg-[hsl(220,14%,92%)] dark:bg-[hsl(230,22%,18%)]"
+    >
+      {children}
+    </DropdownMenuContent>
+  )
+}
 
 export function NavUser() {
   const { user, isLoaded } = useUser()
-  const { openWaitlist } = useClerk()
+  const { openWaitlist, signOut } = useClerk()
+  const { setOpenMobile } = useSidebar()
+  const { openSettings } = useSettingsDialog()
+  const { theme, setTheme } = useTheme()
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
@@ -97,25 +169,67 @@ export function NavUser() {
           title={userEmail ? `${userName} (${userEmail})` : userName}
         >
           <div className={`shrink-0 ${SIDEBAR_ICON_CENTER}`}>
-            <UserButton
-              appearance={{
-                elements: {
-                  avatarBox: "h-8 w-8 rounded-lg",
-                  userButtonPopoverCard: "shadow-lg border rounded-lg",
-                  userButtonPopoverActionButton: "hover:bg-muted transition-colors",
-                  userButtonPopoverActionButtonText: "text-sm",
-                  userButtonPopoverActionButtonIcon: "w-4 h-4",
-                },
-              }}
-              showName={false}
-            />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="shrink-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-sidebar-ring">
+                  <Avatar className="h-8 w-8 rounded-lg">
+                    <AvatarImage src={user.imageUrl} alt={userName} />
+                    <AvatarFallback className="rounded-lg text-xs">
+                      {userName.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+              </DropdownMenuTrigger>
+              <UserDropdownContent>
+                <DropdownMenuLabel className="px-2 py-1.5">
+                  <div className="text-sm font-medium">{userName}</div>
+                  <div className="text-xs text-muted-foreground font-normal">{userEmail}</div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => {
+                  openSettings()
+                  setOpenMobile(false)
+                }}>
+                  <Settings className="mr-2 h-4 w-4" />
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    {theme === "dark" ? (
+                      <Moon className="mr-2 h-4 w-4" />
+                    ) : theme === "light" ? (
+                      <Sun className="mr-2 h-4 w-4" />
+                    ) : (
+                      <Monitor className="mr-2 h-4 w-4" />
+                    )}
+                    Theme
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+                      <DropdownMenuRadioItem value="light" onSelect={(e) => e.preventDefault()}>
+                        <Sun className="mr-2 h-4 w-4" /> Light
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="dark" onSelect={(e) => e.preventDefault()}>
+                        <Moon className="mr-2 h-4 w-4" /> Dark
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="system" onSelect={(e) => e.preventDefault()}>
+                        <Monitor className="mr-2 h-4 w-4" /> System
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => signOut()}>
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Sign out
+                </DropdownMenuItem>
+              </UserDropdownContent>
+            </DropdownMenu>
           </div>
           <div className={`grid flex-1 text-left text-sm leading-tight ${SIDEBAR_ICON_HIDDEN}`}>
             <span className="truncate font-medium">{userName}</span>
             <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
-          </div>
-          <div className={SIDEBAR_ICON_HIDDEN}>
-            <ThemeToggle />
           </div>
         </div>
       </SidebarMenuItem>
