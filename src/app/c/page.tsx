@@ -143,7 +143,7 @@ export default function ConsumerLandingPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
               <a href={developerUrl("/docs")}>
-                <Code2 className="mr-2 h-4 w-4 icon-workflow" />
+                <Code2 className="mr-2 h-4 w-4 text-icon-workflow" />
                 Developer Docs
               </a>
             </Button>

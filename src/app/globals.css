@@ -306,6 +306,73 @@
 
 }
 
+/* Syntax highlighting — hljs base theme; dark mode overrides in .dark .hljs below */
+@import 'highlight.js/styles/atom-one-light.css';
+
+.hljs {
+  background: hsl(220 14% 96%) !important;
+  color: hsl(220 20% 20%) !important;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(220 14% 88%);
+}
+
+.dark .hljs {
+  background: hsl(235 20% 12%) !important;
+  color: hsl(var(--color-muted-foreground)) !important;
+  border-color: hsl(var(--color-border));
+  box-shadow:
+    inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
+    0 0 15px rgba(0, 255, 255, 0.05);
+}
+
+/* Auto-hiding scrollbars: hidden by default, visible on hover or while scrolling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+/* Show scrollbar on hover or while actively scrolling */
+:is(*:hover, .is-scrolling)::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-foreground) / 0.15);
+}
+
+:is(*:hover, .is-scrolling)::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--color-foreground) / 0.25);
+}
+
+/* Firefox: hidden by default, visible on hover or while scrolling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+:is(*:hover, .is-scrolling) {
+  scrollbar-color: hsl(var(--color-foreground) / 0.15) transparent;
+}
+
+/* Contenteditable placeholder */
+.placeholder-editor:empty:before {
+  content: attr(data-placeholder);
+  color: hsl(var(--color-muted-foreground) / 0.5);
+  pointer-events: none;
+}
+
+/* Tooltip */
+[data-slot="tooltip-content"] {
+  border: 1px solid hsl(var(--color-border) / 0.5);
+}
+
+@layer components {
+
 /* Clean message bubble shadows — neutral tones, no colored glow */
 .message-bubble {
   backdrop-filter: blur(12px);
@@ -382,138 +449,6 @@
   background-color: hsl(var(--color-hybro-hy) / 0.22);
 }
 
-/* Futuristic syntax highlighting */
-@import 'highlight.js/styles/atom-one-light.css';
-
-.dark {
-  @import 'highlight.js/styles/atom-one-dark.css';
-}
-
-.hljs {
-  background: hsl(220 14% 96%) !important;
-  color: hsl(220 20% 20%) !important;
-  border-radius: calc(var(--radius) - 2px);
-  border: 1px solid hsl(220 14% 88%);
-}
-
-.dark .hljs {
-  background: hsl(235 20% 12%) !important;
-  color: hsl(var(--color-muted-foreground)) !important;
-  border-color: hsl(var(--color-border));
-  box-shadow:
-    inset 0 1px 0 0 rgba(0, 255, 255, 0.1),
-    0 0 15px rgba(0, 255, 255, 0.05);
-}
-
-/* Semantic icon color utilities */
-.icon-success {
-  color: hsl(var(--color-icon-success));
-}
-
-.icon-warning {
-  color: hsl(var(--color-icon-warning));
-}
-
-.icon-error {
-  color: hsl(var(--color-icon-error));
-}
-
-.icon-neutral {
-  color: hsl(var(--color-icon-neutral));
-}
-
-.icon-action {
-  color: hsl(var(--color-icon-action));
-}
-
-.icon-navigation {
-  color: hsl(var(--color-icon-navigation));
-}
-
-.icon-sun {
-  color: hsl(var(--color-icon-sun));
-}
-
-.icon-moon {
-  color: hsl(var(--color-icon-moon));
-}
-
-.icon-exclaim {
-  color: hsl(var(--color-icon-exclaim));
-}
-
-/* Professional category color utilities */
-.icon-create {
-  color: hsl(var(--color-icon-create));
-}
-
-.icon-network {
-  color: hsl(var(--color-icon-network));
-}
-
-.icon-workflow {
-  color: hsl(var(--color-icon-workflow));
-}
-
-.icon-collaboration {
-  color: hsl(var(--color-icon-collaboration));
-}
-
-.icon-architecture {
-  color: hsl(var(--color-icon-architecture));
-}
-
-.icon-contact {
-  color: hsl(var(--color-icon-contact));
-}
-
-/* Auto-hiding scrollbars: hidden by default, visible on hover or while scrolling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 3px;
-}
-
-/* Show scrollbar on hover over any scrollable container */
-*:hover::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.15);
-}
-
-*:hover::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.25);
-}
-
-/* Show scrollbar while actively scrolling (JS-toggled class) */
-.is-scrolling::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-foreground) / 0.15);
-}
-
-.is-scrolling::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--color-foreground) / 0.25);
-}
-
-/* Firefox: hidden by default, visible on hover */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-
-*:hover {
-  scrollbar-color: hsl(var(--color-foreground) / 0.15) transparent;
-}
-
-.is-scrolling {
-  scrollbar-color: hsl(var(--color-foreground) / 0.15) transparent;
-}
-
 /* Room Chat Input & Message Mention Styles */
 .room-mention {
   display: inline-block;
@@ -558,17 +493,6 @@ a.room-mention {
   border-color: rgba(0, 255, 255, 0.5);
   box-shadow: 0 2px 6px rgba(0, 255, 255, 0.25), 0 0 12px rgba(0, 255, 255, 0.2);
   transform: translateY(-1px);
-}
-
-.placeholder-editor:empty:before {
-  content: attr(data-placeholder);
-  color: hsl(var(--color-muted-foreground) / 0.5);
-  pointer-events: none;
-}
-
-/* Tooltip */
-[data-slot="tooltip-content"] {
-  border: 1px solid hsl(var(--color-border) / 0.5);
 }
 
 /* ── Reusable badge colors ── */
@@ -715,3 +639,5 @@ a.room-mention {
 .dark .tip-link:hover {
   color: rgb(253 230 138); /* amber-200 */
 }
+
+} /* end @layer components */

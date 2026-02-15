@@ -117,11 +117,11 @@ function DeveloperDashboard() {
         {/* Quick Actions */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Button variant="outline" className="h-auto py-4 flex flex-col gap-2" onClick={() => router.push('/docs')}>
-            <BookOpen className="h-5 w-5 icon-workflow" />
+            <BookOpen className="h-5 w-5 text-icon-workflow" />
             <span>View Docs</span>
           </Button>
           <Button variant="outline" className="h-auto py-4 flex flex-col gap-2" onClick={() => router.push('/inspector')}>
-            <Shield className="h-5 w-5 icon-warning" />
+            <Shield className="h-5 w-5 text-icon-warning" />
             <span>Open Inspector</span>
           </Button>
         </div>

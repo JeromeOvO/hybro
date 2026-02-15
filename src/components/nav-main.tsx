@@ -42,9 +42,9 @@ export function NavMain({
   const pathname = usePathname()
 
   const getIconClass = (title: string) => {
-    if (title === "History") return "text-foreground dark:icon-navigation"
-    if (title === "My Agents") return "icon-network"
-    return "icon-navigation"
+    if (title === "History") return "text-foreground dark:text-icon-navigation"
+    if (title === "My Agents") return "text-icon-network"
+    return "text-icon-navigation"
   }
 
   const isSubItemActive = (url: string) => {
@@ -101,10 +101,10 @@ export function NavMain({
                         {item.title}
                       </span>
                       {item.isLoading ? (
-                        <RefreshCw className={`ml-auto h-4 w-4 animate-spin icon-action ${SIDEBAR_ICON_HIDDEN}`} />
+                        <RefreshCw className={`ml-auto h-4 w-4 animate-spin text-icon-action ${SIDEBAR_ICON_HIDDEN}`} />
                       ) : (
                         <ChevronRight className={cn(
-                          "ml-auto h-4 w-4 shrink-0 icon-neutral",
+                          "ml-auto h-4 w-4 shrink-0 text-icon-neutral",
                           "opacity-0 transition-opacity duration-200",
                           "group-hover/menu-item:opacity-100 group-data-[state=open]/collapsible:opacity-100",
                           "transition-transform duration-300 ease-out",

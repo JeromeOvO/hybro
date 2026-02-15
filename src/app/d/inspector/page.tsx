@@ -15,7 +15,7 @@ export default function InspectorPage() {
         {/* Hero */}
         <section className="pt-16 pb-12">
           <div className="flex items-center gap-2 mb-4">
-            <Shield className="h-5 w-5 icon-warning" />
+            <Shield className="h-5 w-5 text-icon-warning" />
             <span className="text-sm font-medium text-primary uppercase tracking-wider">Agent Testing</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight">

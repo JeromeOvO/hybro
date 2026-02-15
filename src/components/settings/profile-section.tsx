@@ -7,9 +7,9 @@ import { toast } from "sonner"
 import { getClerkErrorMessage } from "@/lib/clerk-error"
 
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 
+import { SettingsCard } from "@/components/settings/settings-card"
 import { LoadingButton } from "@/components/settings/loading-button"
 import { FormGroup } from "@/components/settings/form-group"
 
@@ -71,12 +71,7 @@ export function ProfileSection({ user }: { user: UserResource }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Profile</CardTitle>
-        <CardDescription>Manage your name and avatar</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
+    <SettingsCard title="Profile" description="Manage your name and avatar">
         {/* Avatar */}
         <div className="flex items-center gap-4">
           <button
@@ -144,7 +139,6 @@ export function ProfileSection({ user }: { user: UserResource }) {
             Save changes
           </LoadingButton>
         </div>
-      </CardContent>
-    </Card>
+    </SettingsCard>
   )
 }

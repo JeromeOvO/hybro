@@ -5,15 +5,18 @@ interface FormGroupProps {
   id: string
   label: React.ReactNode
   hint?: React.ReactNode
+  /** Validation error — shown in destructive color, replaces the hint when present */
+  error?: React.ReactNode
   children: React.ReactNode
 }
 
-export function FormGroup({ id, label, hint, children }: FormGroupProps) {
+export function FormGroup({ id, label, hint, error, children }: FormGroupProps) {
   return (
     <div className="space-y-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {!error && hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
 }

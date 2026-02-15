@@ -2,7 +2,6 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { 
-  MessageCircle,
   ChevronsDownUp, 
   ChevronsUpDown,
   MessageCirclePlus,

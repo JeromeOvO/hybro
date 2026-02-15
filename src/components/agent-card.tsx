@@ -29,7 +29,7 @@ export function AgentCard({
           icon: CircleCheck,
           className: [
             base,
-            "icon-success"
+            "text-icon-success"
           ].join(" "),
         };
 
@@ -38,7 +38,7 @@ export function AgentCard({
           icon: CircleMinus,
           className: [
             base,
-            "icon-error"
+            "text-icon-error"
           ].join(" "),
         };
 
@@ -47,7 +47,7 @@ export function AgentCard({
           icon: XCircle,
           className: [
             base,
-            "icon-error"
+            "text-icon-error"
           ].join(" "),
         };
     }
@@ -123,7 +123,7 @@ export function StatsCards({ agents }: { agents: Agent[] }) {
           alt="Hybro logo"
           width={28}
           height={28}
-          className="w-9 h-9 icon-action"
+          className="w-9 h-9 text-icon-action"
           priority
         />
         <CardDescription className="font-medium text-muted-foreground whitespace-nowrap">

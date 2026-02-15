@@ -37,6 +37,9 @@ import {
  * modal pointer-event conflicts), and with the standard portal
  * on desktop.
  */
+/** Opaque dropdown background — removes backdrop-blur and uses the secondary token. */
+const DROPDOWN_BG = "backdrop-blur-none bg-secondary"
+
 function UserDropdownContent({ children }: { children: React.ReactNode }) {
   const { isMobile } = useSidebar()
 
@@ -58,10 +61,7 @@ function UserDropdownContent({ children }: { children: React.ReactNode }) {
         side="top"
         align="start"
         sideOffset={8}
-        className={cn(
-          sharedClasses,
-          "backdrop-blur-none bg-[hsl(220,14%,92%)] dark:bg-[hsl(230,22%,18%)]",
-        )}
+        className={cn(sharedClasses, DROPDOWN_BG)}
       >
         {children}
       </DropdownMenuPrimitive.Content>
@@ -74,7 +74,7 @@ function UserDropdownContent({ children }: { children: React.ReactNode }) {
       side="top"
       align="start"
       sideOffset={8}
-      className="w-64 backdrop-blur-none bg-[hsl(220,14%,92%)] dark:bg-[hsl(230,22%,18%)]"
+      className={cn("w-64", DROPDOWN_BG)}
     >
       {children}
     </DropdownMenuContent>

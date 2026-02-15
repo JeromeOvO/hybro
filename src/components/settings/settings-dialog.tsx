@@ -36,7 +36,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
         {!isLoaded || !user ? (
           <div className="flex flex-col items-center justify-center gap-4 py-12">
-            <RefreshCw className="h-8 w-8 animate-spin icon-action" />
+            <RefreshCw className="h-8 w-8 animate-spin text-icon-action" />
             <span className="text-base font-medium text-muted-foreground">
               Loading settings...
             </span>

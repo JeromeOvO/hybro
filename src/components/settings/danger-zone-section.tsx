@@ -7,7 +7,6 @@ import { useClerk } from "@clerk/nextjs"
 import { toast } from "sonner"
 import { getClerkErrorMessage } from "@/lib/clerk-error"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   AlertDialog,
@@ -20,6 +19,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 
+import { SettingsCard } from "@/components/settings/settings-card"
 import { LoadingButton } from "@/components/settings/loading-button"
 import { FormGroup } from "@/components/settings/form-group"
 
@@ -51,17 +51,16 @@ export function DangerZoneSection({ user }: { user: UserResource }) {
   }
 
   return (
-    <Card className="border-destructive/30 dark:border-destructive/50">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-destructive">
-          <AlertTriangle className="h-5 w-5 icon-error" />
+    <SettingsCard
+      title={
+        <span className="flex items-center gap-2 text-destructive">
+          <AlertTriangle className="h-5 w-5 text-icon-error" />
           Danger zone
-        </CardTitle>
-        <CardDescription>
-          Irreversible and destructive actions
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </span>
+      }
+      description="Irreversible and destructive actions"
+      className="border-destructive/30 dark:border-destructive/50"
+    >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <p className="text-sm font-medium">Delete account</p>
@@ -121,7 +120,6 @@ export function DangerZoneSection({ user }: { user: UserResource }) {
             </AlertDialogContent>
           </AlertDialog>
         </div>
-      </CardContent>
-    </Card>
+    </SettingsCard>
   )
 }

@@ -11,24 +11,24 @@ export const DEVELOPER_NAV: NavAgentItem[] = [
     name: "Dashboard",
     url: "/",
     icon: LayoutDashboard,
-    colorClass: "icon-navigation",
+    colorClass: "text-icon-navigation",
   },
   {
     name: "Register Agent",
     url: "/register",
     icon: ClipboardList,
-    colorClass: "icon-workflow",
+    colorClass: "text-icon-workflow",
   },
   {
     name: "Inspector",
     url: "/inspector",
     icon: Shield,
-    colorClass: "icon-warning",
+    colorClass: "text-icon-warning",
   },
   {
     name: "Docs & SDK",
     url: "/docs",
     icon: Code2,
-    colorClass: "icon-workflow",
+    colorClass: "text-icon-workflow",
   },
 ]

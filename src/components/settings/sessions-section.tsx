@@ -7,9 +7,9 @@ import { useSession } from "@clerk/nextjs"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 
+import { SettingsCard } from "@/components/settings/settings-card"
 import { LoadingButton } from "@/components/settings/loading-button"
 
 const SESSION_ROW_CLASS = "flex items-center gap-3 rounded-lg border p-3"
@@ -30,12 +30,12 @@ function formatRelativeTime(date: Date): string {
 }
 
 function getDeviceIcon(deviceType?: string) {
-  if (!deviceType) return <Globe className="h-5 w-5 icon-neutral" />
+  if (!deviceType) return <Globe className="h-5 w-5 text-icon-neutral" />
   const dt = deviceType.toLowerCase()
   if (dt.includes("mobile") || dt.includes("phone") || dt.includes("tablet")) {
-    return <Smartphone className="h-5 w-5 icon-neutral" />
+    return <Smartphone className="h-5 w-5 text-icon-neutral" />
   }
-  return <Monitor className="h-5 w-5 icon-neutral" />
+  return <Monitor className="h-5 w-5 text-icon-neutral" />
 }
 
 export function SessionsSection({ user }: { user: UserResource }) {
@@ -113,17 +113,16 @@ export function SessionsSection({ user }: { user: UserResource }) {
   const otherSessions = sessions.filter((s) => s.id !== currentSession?.id)
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Shield className="h-5 w-5 icon-action" />
+    <SettingsCard
+      title={
+        <span className="flex items-center gap-2">
+          <Shield className="h-5 w-5 text-icon-action" />
           Active sessions
-        </CardTitle>
-        <CardDescription>
-          Manage your active sessions across devices
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </span>
+      }
+      description="Manage your active sessions across devices"
+      spacing={4}
+    >
         {loading ? (
           <div className="space-y-3">
             {[1, 2].map((i) => (
@@ -178,7 +177,7 @@ export function SessionsSection({ user }: { user: UserResource }) {
                       disabled={revokingId === session.id || revokingAll}
                     >
                       {revokingId === session.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin icon-action" />
+                        <Loader2 className="h-4 w-4 animate-spin text-icon-action" />
                       ) : (
                         "Revoke"
                       )}
@@ -209,7 +208,6 @@ export function SessionsSection({ user }: { user: UserResource }) {
             )}
           </>
         )}
-      </CardContent>
-    </Card>
+    </SettingsCard>
   )
 }

@@ -5,10 +5,10 @@ import type { UserResource } from "@clerk/types"
 import { toast } from "sonner"
 import { getClerkErrorMessage } from "@/lib/clerk-error"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 
+import { SettingsCard } from "@/components/settings/settings-card"
 import { PasswordInput } from "@/components/settings/password-input"
 import { LoadingButton } from "@/components/settings/loading-button"
 import { FormGroup } from "@/components/settings/form-group"
@@ -57,16 +57,15 @@ export function PasswordSection({ user }: { user: UserResource }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Password</CardTitle>
-        <CardDescription>
-          {hasPassword
-            ? "Change your password"
-            : "You signed in with a social provider. Set a password to also sign in with email."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SettingsCard
+      title="Password"
+      description={
+        hasPassword
+          ? "Change your password"
+          : "You signed in with a social provider. Set a password to also sign in with email."
+      }
+      spacing={4}
+    >
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Current password (only if user already has one) */}
           {hasPassword && (
@@ -82,7 +81,13 @@ export function PasswordSection({ user }: { user: UserResource }) {
           )}
 
           {/* New password */}
-          <FormGroup id="newPassword" label="New password">
+          <FormGroup
+            id="newPassword"
+            label="New password"
+            error={newPassword.length > 0 && !isLongEnough
+              ? `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+              : undefined}
+          >
             <PasswordInput
               id="newPassword"
               value={newPassword}
@@ -90,15 +95,16 @@ export function PasswordSection({ user }: { user: UserResource }) {
               placeholder="At least 8 characters"
               autoComplete="new-password"
             />
-            {newPassword.length > 0 && !isLongEnough && (
-              <p className="text-xs text-destructive">
-                Password must be at least {MIN_PASSWORD_LENGTH} characters
-              </p>
-            )}
           </FormGroup>
 
           {/* Confirm password */}
-          <FormGroup id="confirmPassword" label="Confirm new password">
+          <FormGroup
+            id="confirmPassword"
+            label="Confirm new password"
+            error={confirmPassword.length > 0 && !passwordsMatch
+              ? "Passwords do not match"
+              : undefined}
+          >
             <PasswordInput
               id="confirmPassword"
               value={confirmPassword}
@@ -106,9 +112,6 @@ export function PasswordSection({ user }: { user: UserResource }) {
               placeholder="Re-enter new password"
               autoComplete="new-password"
             />
-            {confirmPassword.length > 0 && !passwordsMatch && (
-              <p className="text-xs text-destructive">Passwords do not match</p>
-            )}
           </FormGroup>
 
           {/* Sign out other sessions toggle */}
@@ -134,7 +137,6 @@ export function PasswordSection({ user }: { user: UserResource }) {
             </LoadingButton>
           </div>
         </form>
-      </CardContent>
-    </Card>
+    </SettingsCard>
   )
 }
