@@ -67,6 +67,18 @@ export function PasswordSection({ user }: { user: UserResource }) {
       spacing={4}
     >
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Hidden username for password manager accessibility */}
+          <input
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={user.primaryEmailAddress?.emailAddress ?? user.username ?? ""}
+            readOnly
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+          />
+
           {/* Current password (only if user already has one) */}
           {hasPassword && (
             <FormGroup id="currentPassword" label="Current password">

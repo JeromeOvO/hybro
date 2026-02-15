@@ -19,11 +19,16 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB (Clerk limit)
 export function ProfileSection({ user }: { user: UserResource }) {
   const [firstName, setFirstName] = useState(user.firstName ?? "")
   const [lastName, setLastName] = useState(user.lastName ?? "")
+  const [username, setUsername] = useState(user.username ?? "")
   const [saving, setSaving] = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const isDirty = firstName !== (user.firstName ?? "") || lastName !== (user.lastName ?? "")
+  const hasUsername = user.username !== null
+  const isDirty =
+    firstName !== (user.firstName ?? "") ||
+    lastName !== (user.lastName ?? "") ||
+    username !== (user.username ?? "")
 
   const userName = user.fullName || user.firstName || user.username || "User"
   const userEmail = user.primaryEmailAddress?.emailAddress ?? ""
@@ -60,7 +65,7 @@ export function ProfileSection({ user }: { user: UserResource }) {
 
     try {
       setSaving(true)
-      await user.update({ firstName, lastName })
+      await user.update({ firstName, lastName, username: username || undefined })
       await user.reload()
       toast.success("Profile updated")
     } catch (err: unknown) {
@@ -133,6 +138,21 @@ export function ProfileSection({ user }: { user: UserResource }) {
             <Input id="email" value={userEmail} disabled className="opacity-60" />
           </FormGroup>
         )}
+
+        {/* Username */}
+        <FormGroup
+          id="username"
+          label="Username"
+          hint={hasUsername ? "Your unique username." : "Set a username for your account."}
+        >
+          <Input
+            id="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Enter a username"
+            autoComplete="username"
+          />
+        </FormGroup>
 
         <div className="flex justify-end">
           <LoadingButton onClick={handleSave} disabled={!isDirty} loading={saving}>
