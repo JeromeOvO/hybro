@@ -84,7 +84,7 @@ export default function ConsumerLandingPage() {
               <p className="text-muted-foreground mb-6 leading-relaxed">
                 Make your agent interoperable in 3 lines of code. Open source. Framework agnostic.
               </p>
-              <Button size="lg" variant="outline" asChild className="btn-brand-tint w-full max-w-[220px]">
+              <Button size="lg" variant="brandTint" asChild className="w-full max-w-[220px]">
                 <a href={developerUrl("/")}>
                   Developer Portal
                   <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
@@ -141,20 +141,20 @@ export default function ConsumerLandingPage() {
             Get Involved
           </h2>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" size="sm" asChild>
               <a href={developerUrl("/docs")}>
-                <Code2 className="mr-2 h-4 w-4 icon-workflow" />
+                <Code2 className="mr-2 h-4 w-4 text-icon-workflow" />
                 Developer Docs
               </a>
             </Button>
-            <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" size="sm" asChild>
               <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="mr-2 h-4 w-4" />
                 a2a-adapter
                 <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
               </a>
             </Button>
-            <Button variant="outline" size="sm" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" size="sm" asChild>
               <a href="https://discord.gg/2S5pCKzUmJ" target="_blank" rel="noopener noreferrer">
                 <DiscordIcon className="mr-2 h-4 w-4" />
                 Discord

@@ -36,7 +36,7 @@ export function NavAgent({
               >
                 <Link href={item.url} prefetch={false} scroll={false}>
                   <item.icon
-                    className={`transition-colors ${item.colorClass ?? "icon-navigation"} ${SIDEBAR_ICON_CENTER}`}
+                    className={`transition-colors ${item.colorClass ?? "text-icon-navigation"} ${SIDEBAR_ICON_CENTER}`}
                   />
                   <span className={`leading-7 ${SIDEBAR_ICON_HIDDEN}`}>
                     {item.name}

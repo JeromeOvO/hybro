@@ -169,14 +169,14 @@ export default function ConsumerAgentProfilePage() {
     switch (status) {
       case 'active':
         return (
-          <Badge variant="outline" className="badge-success gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="success" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <CheckCircle2 className="w-3.5 h-3.5 fill-current opacity-80" />
             Active
           </Badge>
         )
       case 'inactive':
         return (
-          <Badge variant="outline" className="badge-inactive gap-1.5 pl-1.5 pr-2.5 py-0.5">
+          <Badge variant="inactive" className="gap-1.5 pl-1.5 pr-2.5 py-0.5">
             <AlertCircle className="w-3.5 h-3.5 fill-current opacity-80" />
             Inactive
           </Badge>
@@ -227,7 +227,7 @@ export default function ConsumerAgentProfilePage() {
         {/* Left Column: Identity & Meta */}
         <div className="lg:col-span-4 space-y-6">
           <Card className="overflow-hidden border-primary/10 shadow-lg bg-gradient-to-b from-card to-secondary/20">
-            <div className="h-32 bg-linear-to-br from-primary/10 via-primary/5 to-transparent relative">
+            <div className="h-32 relative">
               <div className="absolute top-4 right-4">
                 {getStatusBadge(agent.agent_status)}
               </div>

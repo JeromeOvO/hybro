@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { ClerkProvider } from "@clerk/nextjs"
 import { ClerkAuthProvider } from "@/components/providers/ClerkAuthProvider"
 import { QueryProvider } from "@/components/providers/query-provider"
+import { Toaster } from "@/components/ui/sonner"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -45,6 +46,7 @@ export default function RootLayout({
               <QueryProvider>
                 {children}
               </QueryProvider>
+              <Toaster richColors closeButton />
             </ThemeProvider>
           </ClerkAuthProvider>
         </ClerkProvider>

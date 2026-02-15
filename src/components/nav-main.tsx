@@ -42,9 +42,9 @@ export function NavMain({
   const pathname = usePathname()
 
   const getIconClass = (title: string) => {
-    if (title === "History") return "text-foreground dark:icon-navigation"
-    if (title === "My Agents") return "icon-network"
-    return "icon-navigation"
+    if (title === "History") return "text-foreground dark:text-icon-navigation"
+    if (title === "My Agents") return "text-icon-network"
+    return "text-icon-navigation"
   }
 
   const isSubItemActive = (url: string) => {
@@ -101,10 +101,10 @@ export function NavMain({
                         {item.title}
                       </span>
                       {item.isLoading ? (
-                        <RefreshCw className={`ml-auto h-4 w-4 animate-spin icon-action ${SIDEBAR_ICON_HIDDEN}`} />
+                        <RefreshCw className={`ml-auto h-4 w-4 animate-spin text-icon-action ${SIDEBAR_ICON_HIDDEN}`} />
                       ) : (
                         <ChevronRight className={cn(
-                          "ml-auto h-4 w-4 shrink-0 icon-neutral",
+                          "ml-auto h-4 w-4 shrink-0 text-icon-neutral",
                           "opacity-0 transition-opacity duration-200",
                           "group-hover/menu-item:opacity-100 group-data-[state=open]/collapsible:opacity-100",
                           "transition-transform duration-300 ease-out",
@@ -116,7 +116,7 @@ export function NavMain({
                   </CollapsibleTrigger>
                 </div>
                 <CollapsibleContent className="animate-in slide-in-from-top-1 duration-200">
-                  <SidebarMenuSub className="gap-0.5 mt-1 ml-3 border-l border-sidebar-border/50 pl-0">
+                  <SidebarMenuSub className="gap-0.5 mt-1 ml-3 pl-0">
                     {item.items?.map((subItem, index) => {
                       const isActive = isSubItemActive(subItem.url)
 
@@ -128,12 +128,9 @@ export function NavMain({
                             "h-9 text-[0.9rem] pl-4 relative",
                             "transition-all duration-150 ease-out",
                             "hover:bg-black/10 dark:hover:bg-white/15",
-                            "before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2",
-                            "before:h-1.5 before:w-1.5 before:rounded-full",
-                            "before:transition-all before:duration-150",
                             isActive
-                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-primary before:bg-primary before:scale-100"
-                              : "before:bg-sidebar-border before:scale-75 hover:before:scale-100 hover:before:bg-sidebar-primary/50"
+                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-primary"
+                              : ""
                           )}
                         >
                             {subItem.url !== "#" ? (

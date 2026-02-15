@@ -1,5 +1,38 @@
 import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+/**
+ * Custom color tokens from the design system (globals.css).
+ * Registering them here teaches tailwind-merge that e.g. `bg-sidebar`
+ * and `bg-background` belong to the same class group, so the last
+ * one wins instead of both being kept in the output.
+ */
+const CUSTOM_COLORS = [
+  "background", "foreground",
+  "card", "card-foreground",
+  "popover", "popover-foreground",
+  "primary", "primary-foreground",
+  "secondary", "secondary-foreground",
+  "muted", "muted-foreground",
+  "accent", "accent-foreground",
+  "destructive", "destructive-foreground",
+  "border", "input", "ring",
+  "sidebar", "sidebar-foreground",
+  "sidebar-primary", "sidebar-primary-foreground",
+  "sidebar-accent", "sidebar-accent-foreground",
+  "sidebar-border", "sidebar-ring",
+]
+
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "bg-color": CUSTOM_COLORS.map((c) => `bg-${c}`),
+      "text-color": CUSTOM_COLORS.map((c) => `text-${c}`),
+      "border-color": CUSTOM_COLORS.map((c) => `border-${c}`),
+      "ring-color": CUSTOM_COLORS.map((c) => `ring-${c}`),
+    },
+  },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

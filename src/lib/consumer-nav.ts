@@ -9,12 +9,12 @@ export const CONSUMER_NAV: NavAgentItem[] = [
     name: "New Chat",
     url: "/chat",
     icon: MessageCirclePlus,
-    colorClass: "icon-create",
+    colorClass: "text-icon-create",
   },
   {
     name: "Explore Agents",
     url: "/agents",
     icon: Globe,
-    colorClass: "icon-network",
+    colorClass: "text-icon-network",
   },
 ]

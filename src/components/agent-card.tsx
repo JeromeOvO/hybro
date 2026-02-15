@@ -29,7 +29,7 @@ export function AgentCard({
           icon: CircleCheck,
           className: [
             base,
-            "icon-success"
+            "text-icon-success"
           ].join(" "),
         };
 
@@ -38,7 +38,7 @@ export function AgentCard({
           icon: CircleMinus,
           className: [
             base,
-            "icon-error"
+            "text-icon-error"
           ].join(" "),
         };
 
@@ -47,7 +47,7 @@ export function AgentCard({
           icon: XCircle,
           className: [
             base,
-            "icon-error"
+            "text-icon-error"
           ].join(" "),
         };
     }
@@ -65,7 +65,7 @@ export function AgentCard({
   return (
     <Card
       className="group relative overflow-hidden cursor-pointer
-                 aspect-square w-full max-w-[260px]
+                 h-[240px] w-full
                  backdrop-blur-sm
                  transition-all duration-300 ease-out
                  border border-primary/20 dark:border-primary/15 ring-0
@@ -75,9 +75,6 @@ export function AgentCard({
                  before:from-primary/5 before:via-transparent before:to-accent/5
                  before:opacity-0 before:transition-opacity before:duration-300
                  hover:before:opacity-100
-                 after:absolute after:inset-[2px] after:rounded-xl 
-                 after:shadow-inner after:shadow-primary/8
-                 dark:after:shadow-white/10 after:pointer-events-none
                  bg-secondary/40 dark:bg-muted/30 shadow-xl hover:shadow-black/10 hover:dark:shadow-black/50"
       onClick={handleCardClick}
     >
@@ -126,7 +123,7 @@ export function StatsCards({ agents }: { agents: Agent[] }) {
           alt="Hybro logo"
           width={28}
           height={28}
-          className="w-9 h-9 icon-action"
+          className="w-9 h-9 text-icon-action"
           priority
         />
         <CardDescription className="font-medium text-muted-foreground whitespace-nowrap">

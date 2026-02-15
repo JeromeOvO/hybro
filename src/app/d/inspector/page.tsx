@@ -15,7 +15,7 @@ export default function InspectorPage() {
         {/* Hero */}
         <section className="pt-16 pb-12">
           <div className="flex items-center gap-2 mb-4">
-            <Shield className="h-5 w-5 icon-warning" />
+            <Shield className="h-5 w-5 text-icon-warning" />
             <span className="text-sm font-medium text-primary uppercase tracking-wider">Agent Testing</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight">
@@ -33,7 +33,7 @@ export default function InspectorPage() {
                 <ArrowRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
-            <Button variant="outline" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" asChild>
               <a href="https://github.com/hybroai/a2a-agent-inspector" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="mr-2 h-4 w-4" />
                 Inspector GitHub

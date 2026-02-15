@@ -146,12 +146,7 @@ export default function DeveloperAgentsPage() {
                     </td>
                     <td className="px-3 sm:px-4 py-3">
                       <Badge
-                        variant="outline"
-                        className={
-                          agent.agent_status === 'active'
-                            ? 'badge-success'
-                            : 'badge-inactive'
-                        }
+                        variant={agent.agent_status === 'active' ? 'success' : 'inactive'}
                       >
                         {agent.agent_status}
                       </Badge>

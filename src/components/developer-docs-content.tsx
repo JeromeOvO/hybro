@@ -236,13 +236,13 @@ export function DeveloperDocsContent() {
                 GitHub
               </a>
             </Button>
-            <Button variant="outline" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" asChild>
               <a href="https://github.com/hybroai/a2a-adapter#readme" target="_blank" rel="noopener noreferrer">
                 Documentation
                 <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
-            <Button variant="outline" className="btn-brand-tint" asChild>
+            <Button variant="brandTint" asChild>
               <a href="https://pypi.org/project/a2a-adapter/" target="_blank" rel="noopener noreferrer">
                 <Package className="mr-2 h-4 w-4" />
                 PyPI
@@ -390,9 +390,9 @@ export function DeveloperDocsContent() {
                 <p className="text-sm text-muted-foreground mb-4 flex-1">
                   Use the A2A Agent Inspector to verify your agent is A2A-compliant before registering.
                 </p>
-                <Button variant="outline" size="sm" className="w-full" asChild>
+                <Button variant="brandTint" size="sm" className="w-full" asChild>
                   <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer" className="truncate">
-                    <Shield className="mr-2 h-4 w-4 shrink-0 icon-warning" />
+                    <Shield className="mr-2 h-4 w-4 shrink-0 text-icon-warning" />
                     Launch Inspector
                   </a>
                 </Button>
@@ -410,9 +410,9 @@ export function DeveloperDocsContent() {
                 <p className="text-sm text-muted-foreground mb-4 flex-1">
                   Add your agent to the network so other agents and users can discover and collaborate with it.
                 </p>
-                <Button variant="outline" size="sm" className="w-full" asChild>
+                <Button variant="brandTint" size="sm" className="w-full" asChild>
                   <a href="/register" className="truncate">
-                    <ClipboardList className="mr-2 h-4 w-4 shrink-0 icon-workflow" />
+                    <ClipboardList className="mr-2 h-4 w-4 shrink-0 text-icon-workflow" />
                     Register Agent
                   </a>
                 </Button>
@@ -461,7 +461,7 @@ export function DeveloperDocsContent() {
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
-              <Shield className="h-5 w-5 icon-warning transition-colors" />
+              <Shield className="h-5 w-5 text-icon-warning transition-colors" />
               <span className="text-sm font-medium">A2A Agent Inspector</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>

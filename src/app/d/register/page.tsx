@@ -28,6 +28,11 @@ export default function RegisterAgentPage() {
   const router = useRouter()
   const { user, isLoaded } = useUser()
   const { invalidate: refreshMyAgents } = useMyAgents()
+
+  // Tailwind badge styles (replaces old CSS badge-* classes)
+  const badgeSuccessInteractive = "bg-[rgb(240,253,244)] text-[rgb(22,163,74)] border-[rgb(134,239,172)] hover:bg-[rgb(220,252,231)] dark:bg-[rgb(4,47,46)] dark:text-[rgb(74,222,128)] dark:border-[rgb(21,128,61)] dark:hover:bg-[rgb(20,83,45)]"
+  const badgeMuted = "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70"
+  const badgeError = "bg-[rgb(254,242,242)] text-[rgb(220,38,38)] border-[rgb(252,165,165)] dark:bg-[rgb(69,10,10)] dark:text-[rgb(248,113,113)] dark:border-[rgb(185,28,28)]"
   const [url, setUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [inspecting, setInspecting] = useState(false)
@@ -481,8 +486,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.streaming 
-                      ? "badge-success-interactive" 
-                      : "badge-muted"
+                      ? badgeSuccessInteractive 
+                      : badgeMuted
                     }
                   >
                     {agentData.agent_card.capabilities.streaming ? "Supported" : "Not Supported"}
@@ -494,8 +499,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.extensions 
-                      ? "badge-success-interactive" 
-                      : "badge-muted"
+                      ? badgeSuccessInteractive 
+                      : badgeMuted
                     }
                   >
                     {agentData.agent_card.capabilities.extensions ? "Supported" : "Not Supported"}
@@ -507,8 +512,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.pushNotifications 
-                      ? "badge-success-interactive" 
-                      : "badge-muted"
+                      ? badgeSuccessInteractive 
+                      : badgeMuted
                     }
                   >
                     {agentData.agent_card.capabilities.pushNotifications ? "Supported" : "Not Supported"}
@@ -520,8 +525,8 @@ export default function RegisterAgentPage() {
                     variant="outline" 
                     size="sm"
                     className={agentData.agent_card.capabilities.stateTransitionHistory 
-                      ? "badge-success-interactive" 
-                      : "badge-muted"
+                      ? badgeSuccessInteractive 
+                      : badgeMuted
                     }
                   >
                     {agentData.agent_card.capabilities.stateTransitionHistory ? "Supported" : "Not Supported"}
@@ -547,7 +552,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="badge-success-interactive"
+                      className={badgeSuccessInteractive}
                     >
                       {skill.name}
                     </Button>
@@ -563,7 +568,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="badge-success-interactive"
+                      className={badgeSuccessInteractive}
                     >
                       {mode}
                     </Button>
@@ -579,7 +584,7 @@ export default function RegisterAgentPage() {
                       key={index} 
                       variant="outline" 
                       size="sm"
-                      className="badge-success-interactive"
+                      className={badgeSuccessInteractive}
                     >
                       {mode}
                     </Button>
@@ -609,7 +614,7 @@ export default function RegisterAgentPage() {
                       <Button 
                         variant="outline" 
                         size="sm"
-                        className="ml-auto pointer-events-none badge-success-interactive"
+                        className={`ml-auto pointer-events-none ${badgeSuccessInteractive}`}
                       >
                         All Passed
                       </Button>
@@ -639,8 +644,8 @@ export default function RegisterAgentPage() {
                             variant="outline" 
                             size="sm"
                             className={`pointer-events-none text-xs h-6 ${cardInspectionData.status_code === 200
-                              ? "badge-success-interactive" 
-                              : "badge-error"
+                              ? badgeSuccessInteractive 
+                              : badgeError
                             }`}
                           >
                             {cardInspectionData.status_code === 200 ? "Passed" : "Failed"}
@@ -696,8 +701,8 @@ export default function RegisterAgentPage() {
                             variant="outline" 
                             size="sm"
                             className={`pointer-events-none text-xs h-6 ${inspectionData.status_code === 200
-                              ? "badge-success-interactive" 
-                              : "badge-error"
+                              ? badgeSuccessInteractive 
+                              : badgeError
                             }`}
                           >
                             {inspectionData.status_code === 200 ? "Passed" : "Failed"}
