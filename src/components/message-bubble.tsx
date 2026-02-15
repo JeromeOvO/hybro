@@ -28,7 +28,7 @@ export function UserMessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <div className="flex justify-end w-full">
-      <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-primary text-primary-foreground message-bubble">
+        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble">
         <div className="flex items-center justify-between gap-4 mb-2">
           <span className="text-xs font-medium opacity-90">
             {message.sender_name}
