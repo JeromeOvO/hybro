@@ -2,7 +2,7 @@ import json
 import uuid
 from typing import Any
 
-from a2a.types import Message, Part, Role, TaskState, TaskStatus, TextPart
+from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.logger import get_logger
@@ -20,6 +20,7 @@ from models.request import (
 )
 from models.response import OrchestrationResponse
 from models.task import MetaTask, TaskDefaultValue
+from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_resolver_service import agent_resolver_service
 from services.agent_service import agent_service
@@ -94,9 +95,7 @@ class WorkflowCenter:
         )
 
         if not chat_context_response.success:
-            return self._error_response(
-                root_task_id, "Failed to get chat context"
-            )
+            return self._error_response(root_task_id, "Failed to get chat context")
 
         # Clean up any existing meta tasks before re-decomposition
         failed_deletions = await self._delete_existing_meta_tasks(root_task_id)
@@ -260,9 +259,7 @@ class WorkflowCenter:
         )
 
         if not query_result.success:
-            return self._error_response(
-                parent_task_id, "Failed to query meta tasks"
-            )
+            return self._error_response(parent_task_id, "Failed to query meta tasks")
 
         meta_tasks = query_result.meta_tasks
         if meta_tasks is None or len(meta_tasks) == 0:
@@ -378,13 +375,9 @@ class WorkflowCenter:
         )
 
         if update_response.success:
-            return self._success_response(
-                meta_task_id, agent_id=best_agent_id
-            )
+            return self._success_response(meta_task_id, agent_id=best_agent_id)
         else:
-            return self._error_response(
-                meta_task_id, "Failed to update meta task"
-            )
+            return self._error_response(meta_task_id, "Failed to update meta task")
 
     async def run_workflow(
         self, request: OrchestrationRequest
@@ -423,9 +416,7 @@ class WorkflowCenter:
                 "WorkflowCenter: Failed to query meta tasks for base task %s",
                 base_task_id,
             )
-            return self._error_response(
-                base_task_id, "Failed to query meta tasks"
-            )
+            return self._error_response(base_task_id, "Failed to query meta tasks")
 
         meta_tasks = meta_tasks_result.meta_tasks
         if meta_tasks is None or len(meta_tasks) == 0:
@@ -467,6 +458,23 @@ class WorkflowCenter:
                     "WorkflowCenter: Workflow cancelled for base task %s, stopping all processing",
                     base_task_id,
                 )
+                # Persist canceled status on all remaining (unprocessed) meta tasks
+                remaining_meta_tasks = meta_tasks[i:]
+                await self._cancel_remaining_meta_tasks(remaining_meta_tasks)
+
+                # Send terminal CANCELED status so the frontend clears the spinner
+                if message_id:
+                    await self.sse_manager.send_processing_status(
+                        base_task_id,
+                        SSEProcessingStatus.CANCELED,
+                        message_id,
+                    )
+                else:
+                    logger.warning(
+                        "WorkflowCenter: No message_id in base task %s extend_info — "
+                        "cannot send CANCELED SSE to frontend",
+                        base_task_id,
+                    )
                 self.sse_manager.clear_cancellation(message_id)
                 return OrchestrationResponse(
                     task_id=base_task_id,
@@ -794,9 +802,7 @@ class WorkflowCenter:
                 status_code=207,
             )
         else:
-            error_summary = (
-                f"All {operation_name} failed. Failed: {failed_items}"
-            )
+            error_summary = f"All {operation_name} failed. Failed: {failed_items}"
             return OrchestrationResponse(
                 task_id=task_id,
                 meta_task_ids=[],
@@ -804,6 +810,48 @@ class WorkflowCenter:
                 error=error_summary,
                 status_code=500,
             )
+
+    async def _cancel_remaining_meta_tasks(
+        self, remaining_meta_tasks: list[MetaTask]
+    ) -> None:
+        """Persist ``TaskState.canceled`` on each unprocessed MetaTask.
+
+        Skips tasks that have already reached a terminal state to avoid
+        overwriting a legitimate final status.  This mirrors the
+        ``_cancel_remaining_queue`` pattern in ``RoomMessageCenter``.
+        """
+        for meta_task in remaining_meta_tasks:
+            try:
+                # Skip if already terminal
+                if (
+                    meta_task.task
+                    and meta_task.task.status
+                    and is_terminal_state(meta_task.task.status.state)
+                ):
+                    continue
+
+                # Set canceled status
+                if meta_task.task is None:
+                    meta_task.task = Task(
+                        id=meta_task.task_id,
+                        status=TaskStatus(state=TaskState.canceled),
+                    )
+                else:
+                    meta_task.task.status = TaskStatus(state=TaskState.canceled)
+
+                await self.task_service.update_task_of_meta_task(
+                    TaskCenterRequest(task_id=meta_task.task_id, task=meta_task.task)
+                )
+                logger.info(
+                    "WorkflowCenter: Persisted canceled status on meta task %s",
+                    meta_task.task_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "WorkflowCenter: Failed to cancel meta task %s: %s",
+                    meta_task.task_id,
+                    e,
+                )
 
     def _get_first_text_from_task(
         self, base_task, fallback: str = "No task description available"
@@ -855,10 +903,8 @@ class WorkflowCenter:
 
         for meta_task in existing_meta_tasks_result.meta_tasks:
             try:
-                delete_response = (
-                    await self.task_service.delete_meta_task_by_task_id(
-                        TaskCenterRequest(task_id=meta_task.task_id)
-                    )
+                delete_response = await self.task_service.delete_meta_task_by_task_id(
+                    TaskCenterRequest(task_id=meta_task.task_id)
                 )
 
                 if delete_response.success:
@@ -1110,9 +1156,7 @@ CRITICAL INSTRUCTIONS:
         )
 
         if not chat_context_response.success:
-            return self._error_response(
-                base_task_id, "Failed to update chat context"
-            )
+            return self._error_response(base_task_id, "Failed to update chat context")
 
         if base_task.task.history is None:
             base_task.task.history = []
@@ -1133,9 +1177,7 @@ CRITICAL INSTRUCTIONS:
         if update_response.success:
             return self._success_response(base_task_id)
         else:
-            return self._error_response(
-                base_task_id, "Failed to update base task"
-            )
+            return self._error_response(base_task_id, "Failed to update base task")
 
 
 # Module-level singleton

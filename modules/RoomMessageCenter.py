@@ -121,6 +121,19 @@ def _state_str(state) -> str:
     return state.value if hasattr(state, "value") else str(state)
 
 
+@dataclass
+class AssignResult:
+    """Result of ``_assign_agent``.
+
+    Replaces the old ``self._last_resolve_failure`` pattern which stored the
+    failure reason on the singleton instance — a concurrency hazard when
+    multiple asyncio tasks process different rooms simultaneously (Issue 16).
+    """
+
+    agent: Agent | None
+    failure_reason: str | None = None
+
+
 def _get_task(msg: RoomAgentMessage) -> Task | None:
     """Safely access ``msg.message_content.message_task``, returning None on any miss."""
     if msg.message_content and msg.message_content.message_task:
@@ -144,9 +157,6 @@ class RoomMessageCenter:
         self.task_service = task_service
         self.notification_service = notification_service
         self.agent_resolver = agent_resolver_service
-        # Transient state set by _assign_agent so callers can relay
-        # the human-readable reason to the frontend via SSE.
-        self._last_resolve_failure: str | None = None
 
     # ------------------------------------------------------------------
     # Shared helpers (reduce repeated boilerplate)
@@ -290,6 +300,38 @@ class RoomMessageCenter:
                 msg, TaskState.canceled, persist=True, notify=False
             )
 
+    async def _try_cancel_remote_task(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+    ) -> None:
+        """Best-effort, fire-and-forget cancellation of the remote A2A agent task.
+
+        Looks for a remote task ID on the message's stored task object.
+        If found, sends a ``tasks/cancel`` JSON-RPC request to the agent.
+        Failures are logged at DEBUG level and silently ignored — the local
+        cancellation must not depend on the remote agent supporting cancel.
+        """
+        task = _get_task(current_message)
+        if not task:
+            return
+        remote_task_id = task.id if task.id else None
+        # The placeholder ID format "pending-<uuid>" means we haven't received
+        # a real task ID from the agent yet — no point trying to cancel it.
+        if not remote_task_id or remote_task_id.startswith("pending-"):
+            logger.debug(
+                "RoomMessageCenter: No remote task ID to cancel for message %s",
+                current_message.message_id,
+            )
+            return
+
+        logger.info(
+            "RoomMessageCenter: Attempting to cancel remote task %s on agent %s",
+            remote_task_id,
+            agent_card.name,
+        )
+        await self.a2a_service.cancel_remote_task(agent_card, remote_task_id)
+
     @asynccontextmanager
     async def _managed_queue(self, message_queue: deque):
         """Context manager that cancels remaining items when the queue is
@@ -432,6 +474,7 @@ class RoomMessageCenter:
         timeout_seconds: int = 120,
         initial_delay: float = 0.5,
         max_delay: float = 5.0,
+        user_message_id: str | None = None,
     ) -> Task | None:
         """
         Poll an agent for task completion with exponential backoff.
@@ -447,13 +490,16 @@ class RoomMessageCenter:
             timeout_seconds: Maximum time to wait for completion (default: 120s)
             initial_delay: Initial delay between polls (default: 0.5s)
             max_delay: Maximum delay between polls (default: 5s)
+            user_message_id: The user message ID for cancellation checks.
+                If provided, the loop checks ``is_cancelled()`` between polls.
 
         Returns:
-            The completed Task if found, None if timeout or error
+            The completed Task if found, None if timeout, error, or cancelled
         """
         start_time = asyncio.get_event_loop().time()
         delay = initial_delay
         poll_count = 0
+        cancel_key = user_message_id or message_id
 
         logger.info(
             "RoomMessageCenter: Starting poll for task %s (agent task: %s), "
@@ -471,6 +517,15 @@ class RoomMessageCenter:
                     "(%d polls)",
                     message_id,
                     elapsed,
+                    poll_count,
+                )
+                return None
+
+            # Check for cancellation between polls (Issue 11)
+            if self.sse_manager.is_cancelled(cancel_key):
+                logger.info(
+                    "RoomMessageCenter: Polling cancelled for task %s after %d polls",
+                    message_id,
                     poll_count,
                 )
                 return None
@@ -608,6 +663,10 @@ class RoomMessageCenter:
             ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
         )
         self.sse_manager.clear_cancellation(ctx.user_message_id)
+        # Best-effort: tell the remote agent to stop (Issue 14).
+        # Sent *after* the CANCELED SSE event so the frontend gets immediate
+        # feedback — the remote cancel may take up to the timeout (5 s).
+        await self._try_cancel_remote_task(ctx.current_message, ctx.agent_card)
         return ProcessingStatus.CANCELED, streaming_state.full_response_text
 
     async def _handle_streaming_error(
@@ -1113,14 +1172,14 @@ class RoomMessageCenter:
 
                 # Assign agent if not already assigned
                 if current_message.agent_id is None:
-                    agent = await self._assign_agent(current_message)
-                    if agent is None:
+                    assign_result = await self._assign_agent(current_message)
+                    if assign_result.agent is None:
                         logger.error(
                             "RoomMessageCenter: Failed to assign agent for message %s",
                             current_message.message_id,
                         )
                         error_text = (
-                            self._last_resolve_failure
+                            assign_result.failure_reason
                             or "No available agent could be found for your request."
                         )
                         # Try to identify the intended agent from allowed_agent_ids
@@ -1141,6 +1200,7 @@ class RoomMessageCenter:
                             agent_id=intended_agent_id,
                         )
                         return QueueResult.FAILED
+                    agent = assign_result.agent
                 else:
                     # Agent already assigned, fetch it and verify it's active
                     agent = await self.database_service.get_agent_by_agent_id(
@@ -1172,14 +1232,14 @@ class RoomMessageCenter:
                         original_agent_id = current_message.agent_id
                         # Clear the agent_id and re-assign
                         current_message.agent_id = None
-                        agent = await self._assign_agent(current_message)
-                        if agent is None:
+                        reassign_result = await self._assign_agent(current_message)
+                        if reassign_result.agent is None:
                             logger.error(
                                 "RoomMessageCenter: Failed to re-assign agent for message %s after inactive agent",
                                 current_message.message_id,
                             )
                             error_text = (
-                                self._last_resolve_failure
+                                reassign_result.failure_reason
                                 or "The assigned agent is no longer available and no alternative agent could be found."
                             )
                             # Restore original agent_id so the frontend can show the right name
@@ -1191,6 +1251,7 @@ class RoomMessageCenter:
                                 agent_id=original_agent_id,
                             )
                             return QueueResult.FAILED
+                        agent = reassign_result.agent
 
                 # Check rate limits before processing (only if user_id is available)
                 if request_user_id:
@@ -1501,12 +1562,12 @@ class RoomMessageCenter:
             )
         return ""
 
-    async def _assign_agent(self, current_message: RoomAgentMessage) -> Agent | None:
+    async def _assign_agent(self, current_message: RoomAgentMessage) -> AssignResult:
         """Assign an agent to the message by inferring from content.
 
         Uses the AgentResolverService to find the best accessible agent from
-        the allowed agent list.  Returns None (with ``last_resolve_failure``
-        set) when no agent is available.
+        the allowed agent list.  Returns an ``AssignResult`` with the chosen
+        agent or a human-readable ``failure_reason`` when no agent is available.
         """
         allowed_agent_ids = await self._resolve_allowed_agent_ids(current_message)
         user_input = self._extract_user_input(current_message)
@@ -1516,8 +1577,10 @@ class RoomMessageCenter:
                 "RoomMessageCenter: No user input in message %s, cannot infer agent",
                 current_message.message_id,
             )
-            self._last_resolve_failure = "Unable to determine what to ask an agent — the message appears to be empty."
-            return None
+            return AssignResult(
+                agent=None,
+                failure_reason="Unable to determine what to ask an agent — the message appears to be empty.",
+            )
 
         logger.info(
             "RoomMessageCenter: Inferring agent for message %s (input length: %d, scoped_ids=%d)",
@@ -1538,8 +1601,7 @@ class RoomMessageCenter:
                 current_message.message_id,
                 result.failure_reason,
             )
-            self._last_resolve_failure = result.failure_reason
-            return None
+            return AssignResult(agent=None, failure_reason=result.failure_reason)
 
         agent = result.agent
         current_message.agent_id = agent.agent_id
@@ -1556,18 +1618,17 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Failed to update agent assignment for message %s",
                 current_message.message_id,
             )
-            self._last_resolve_failure = (
-                "Internal error: failed to persist agent assignment."
+            return AssignResult(
+                agent=None,
+                failure_reason="Internal error: failed to persist agent assignment.",
             )
-            return None
 
         logger.info(
             "RoomMessageCenter: Assigned agent %s to message %s",
             agent.agent_id,
             current_message.message_id,
         )
-        self._last_resolve_failure = None
-        return agent
+        return AssignResult(agent=agent)
 
     async def _process_single_agent_message(
         self,
@@ -1670,10 +1731,22 @@ class RoomMessageCenter:
                 prepared_message,
                 room_id,
                 current_message.user_id,
+                user_message_id=user_message_id,
                 step_number=step_number,
                 total_steps=total_steps,
             )
             if not success:
+                # Distinguish cancellation from failure: if the cancellation
+                # flag is (still) set or the task was already transitioned to
+                # canceled by the sync handler, report CANCELED so the queue
+                # handler skips sending a second FAILED status.
+                task = _get_task(current_message)
+                was_canceled = (
+                    self.sse_manager.is_cancelled(user_message_id)
+                    or (task and task.status and task.status.state == TaskState.canceled)
+                )
+                if was_canceled:
+                    return ProcessingResult(ProcessingStatus.CANCELED)
                 return ProcessingResult(ProcessingStatus.FAILED)
 
         # Check if this is a push notification task that requires queue pausing
@@ -1769,6 +1842,8 @@ class RoomMessageCenter:
         prepared_message: Message,
         room_id: str,
         _user_id: str | None,
+        *,
+        user_message_id: str | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None]:
@@ -1805,6 +1880,20 @@ class RoomMessageCenter:
             )
 
         message_id = current_message.message_id
+        # The cancel key is the *user* message ID (the top-level workflow
+        # trigger), not the individual agent message ID.
+        cancel_key = user_message_id or message_id
+
+        # Check for cancellation before the (potentially long) sync agent call
+        if self.sse_manager.is_cancelled(cancel_key):
+            logger.info(
+                "RoomMessageCenter: Sync call cancelled before agent call for %s",
+                message_id,
+            )
+            await self._transition_task(
+                current_message, TaskState.canceled, ctx=ctx if task_info else None
+            )
+            return False, "", None
 
         # Call the agent (this blocks until response)
         try:
@@ -1831,6 +1920,21 @@ class RoomMessageCenter:
                 ctx=ctx if task_info else None,
             )
             await self.sse_manager.send_error(room_id, str(exc))
+            return False, "", None
+
+        # Check for cancellation after the sync call returns (Issue 11).
+        # The user may have clicked cancel while the blocking HTTP call was
+        # in progress.  If so, discard the response and report cancellation.
+        if self.sse_manager.is_cancelled(cancel_key):
+            logger.info(
+                "RoomMessageCenter: Sync call cancelled after agent response for %s",
+                message_id,
+            )
+            await self._transition_task(
+                current_message, TaskState.canceled, ctx=ctx if task_info else None
+            )
+            # Best-effort: tell the remote agent to stop
+            await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None
 
         # Handle "message" response (fast path)
@@ -1896,7 +2000,23 @@ class RoomMessageCenter:
                 task_id=agent_task_id,
                 message_id=message_id,
                 timeout_seconds=120,
+                user_message_id=cancel_key,
             )
+
+            # If poll returned None and cancellation is pending, handle it
+            # (the poll loop exits early on cancellation but doesn't send SSE —
+            # the queue-level handler takes care of that)
+            if completed_task is None and self.sse_manager.is_cancelled(cancel_key):
+                logger.info(
+                    "RoomMessageCenter: Poll cancelled for task %s, transitioning to canceled",
+                    message_id,
+                )
+                await self._transition_task(
+                    current_message, TaskState.canceled, ctx=ctx if task_info else None
+                )
+                # Best-effort: tell the remote agent to stop
+                await self._try_cancel_remote_task(current_message, agent_card)
+                return False, "", None
 
             if completed_task:
                 state = completed_task.status.state
