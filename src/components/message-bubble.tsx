@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, Quote } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
@@ -76,48 +76,109 @@ export function AgentMessageBubble({
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
-  const [quoteBtn, setQuoteBtn] = useState<{ top: number; left: number; text: string } | null>(null)
+  const quoteBtnRef = useRef<HTMLButtonElement | null>(null)
+  const selectedTextRef = useRef<string>('')
+
+  // Create or update quote button using native DOM to avoid React re-render
+  const showQuoteButton = useCallback((top: number, left: number, text: string) => {
+    selectedTextRef.current = text
+    
+    // Remove existing button if any
+    if (quoteBtnRef.current) {
+      quoteBtnRef.current.remove()
+    }
+
+    // Create button element
+    const btn = document.createElement('button')
+    btn.setAttribute('data-quote-btn', 'true')
+    btn.setAttribute('type', 'button')
+    btn.className = 'fixed z-[9999] flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors whitespace-nowrap select-none'
+    btn.style.top = `${top}px`
+    btn.style.left = `${left}px`
+    btn.style.transform = 'translateX(-50%)'
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V21c0 1 0 1 1 1z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z"/></svg>Quote`
+    
+    btn.onmousedown = (e) => {
+      e.preventDefault() // Prevent selection from being cleared
+    }
+    
+    btn.onclick = () => {
+      onQuote?.({
+        messageId: message.id,
+        content: selectedTextRef.current,
+        senderName: message.sender_name,
+      })
+      hideQuoteButton()
+      window.getSelection()?.removeAllRanges()
+    }
+
+    document.body.appendChild(btn)
+    quoteBtnRef.current = btn
+  }, [message.id, message.sender_name, onQuote])
+
+  const hideQuoteButton = useCallback(() => {
+    if (quoteBtnRef.current) {
+      quoteBtnRef.current.remove()
+      quoteBtnRef.current = null
+    }
+    selectedTextRef.current = ''
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      hideQuoteButton()
+    }
+  }, [hideQuoteButton])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    if (!onQuote) return
     // Don't dismiss when clicking the Quote button itself (let onClick fire first)
     if ((e.target as HTMLElement).closest('[data-quote-btn]')) return
 
-    const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || !contentRef.current) {
-      setQuoteBtn(null)
-      return
-    }
-    const text = selection.toString().trim()
-    if (!text) { setQuoteBtn(null); return }
+    // Use a small delay to let the browser finalize the selection
+    requestAnimationFrame(() => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || !contentRef.current) {
+        hideQuoteButton()
+        return
+      }
+      const text = selection.toString().trim()
+      if (!text) { hideQuoteButton(); return }
 
-    // Make sure the selection is inside this bubble
-    const range = selection.getRangeAt(0)
-    if (!contentRef.current.contains(range.commonAncestorContainer)) {
-      setQuoteBtn(null)
-      return
-    }
+      // Make sure the selection is inside this bubble
+      const range = selection.getRangeAt(0)
+      if (!contentRef.current.contains(range.commonAncestorContainer)) {
+        hideQuoteButton()
+        return
+      }
 
-    const rect = range.getBoundingClientRect()
-    const containerRect = contentRef.current.getBoundingClientRect()
-    setQuoteBtn({
-      top: rect.top - containerRect.top - 32,
-      left: rect.left - containerRect.left + rect.width / 2,
-      text,
+      // Only show quote button if onQuote callback is provided
+      if (!onQuote) return
+
+      // Use viewport coordinates for positioning
+      const rect = range.getBoundingClientRect()
+      showQuoteButton(
+        rect.top - 32 + window.scrollY,
+        rect.left + rect.width / 2 + window.scrollX,
+        text
+      )
     })
-  }, [onQuote])
+  }, [onQuote, showQuoteButton, hideQuoteButton])
 
-  // Dismiss quote button when clicking elsewhere
+  // Dismiss quote button when clicking elsewhere (but not when selecting text)
   useEffect(() => {
     const handleDown = (e: MouseEvent) => {
-      if (!quoteBtn) return
+      if (!quoteBtnRef.current) return
       const target = e.target as HTMLElement
+      // Don't dismiss when clicking the Quote button itself
       if (target.closest('[data-quote-btn]')) return
-      setQuoteBtn(null)
+      // Don't dismiss when clicking inside the content area (user might be selecting text)
+      if (contentRef.current?.contains(target)) return
+      hideQuoteButton()
     }
     document.addEventListener('mousedown', handleDown)
     return () => document.removeEventListener('mousedown', handleDown)
-  }, [quoteBtn])
+  }, [hideQuoteButton])
 
   useEffect(() => {
     setIsExpanded(false)
@@ -200,39 +261,13 @@ export function AgentMessageBubble({
         <div
           ref={contentRef}
           className={cn(
-            "relative text-sm leading-relaxed",
+            "text-sm leading-relaxed select-text",
             contentColorClass,
             !isExpanded && isLongMessage && "line-clamp-4"
           )}
           onMouseUp={handleMouseUp}
         >
           <MarkdownContent content={displayContent} />
-
-          {/* Floating Quote button */}
-          {quoteBtn && (
-            <button
-              data-quote-btn
-              type="button"
-              onClick={() => {
-                onQuote?.({
-                  messageId: message.id,
-                  content: quoteBtn.text,
-                  senderName: message.sender_name,
-                })
-                setQuoteBtn(null)
-                window.getSelection()?.removeAllRanges()
-              }}
-              className="absolute z-20 flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors whitespace-nowrap"
-              style={{
-                top: quoteBtn.top,
-                left: quoteBtn.left,
-                transform: 'translateX(-50%)',
-              }}
-            >
-              <Quote className="h-3 w-3" />
-              Quote
-            </button>
-          )}
         </div>
 
         {/* Expand/Collapse button */}
