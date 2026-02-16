@@ -11,6 +11,7 @@ interface PendingRoomData {
 interface RoomUiState {
   sending: boolean
   processing: boolean
+  cancelling: boolean
   updatingRoom: boolean
   sseEnabled: boolean
   sseConnected: boolean
@@ -20,6 +21,7 @@ interface RoomUiState {
   pendingRoomData: Record<RoomId, PendingRoomData>
   setSending: (v: boolean) => void
   setProcessing: (v: boolean) => void
+  setCancelling: (v: boolean) => void
   setUpdatingRoom: (v: boolean) => void
   setSseEnabled: (v: boolean) => void
   setSseConnected: (v: boolean) => void
@@ -39,6 +41,7 @@ interface RoomUiState {
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   sending: false,
   processing: false,
+  cancelling: false,
   updatingRoom: false,
   sseEnabled: true,
   sseConnected: false,
@@ -47,6 +50,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   pendingRoomData: {},
   setSending: (v) => set({ sending: v }),
   setProcessing: (v) => set({ processing: v }),
+  setCancelling: (v) => set({ cancelling: v }),
   setUpdatingRoom: (v) => set({ updatingRoom: v }),
   setSseEnabled: (v) => set({ sseEnabled: v }),
   setSseConnected: (v) => set({ sseConnected: v }),
@@ -99,6 +103,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
         liveMessagesByRoom: liveCopy,
         sending: false,
         processing: false,
+        cancelling: false,
         updatingRoom: false,
         sseConnected: false,
         sseError: null,
@@ -110,6 +115,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       pendingRoomData: {},
       sending: false,
       processing: false,
+      cancelling: false,
       updatingRoom: false,
       sseConnected: false,
       sseError: null,

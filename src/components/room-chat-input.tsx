@@ -34,6 +34,10 @@ interface RoomChatInputProps {
    */
   processing?: boolean
   /**
+   * When true, shows a disabled spinner button indicating cancellation is in progress
+   */
+  cancelling?: boolean
+  /**
    * Callback when user clicks Stop button to cancel ongoing processing
    */
   onCancel?: () => void
@@ -72,6 +76,7 @@ export function RoomChatInput({
   disableSend = false,
   sending = false,
   processing = false,
+  cancelling = false,
   onCancel,
   agents,
   groups = [],
@@ -806,6 +811,18 @@ export function RoomChatInput({
                 </Button>
                 <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
               </div>
+            ) : cancelling && processing ? (
+              <Button
+                disabled
+                size="lg"
+                className={cn(
+                  "h-11 w-11 rounded-full p-0",
+                  "bg-destructive/60",
+                )}
+                title="Cancelling..."
+              >
+                <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              </Button>
             ) : processing ? (
               <Button
                 onClick={onCancel}

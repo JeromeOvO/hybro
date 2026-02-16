@@ -4,6 +4,7 @@ import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, VariantProps } from "class-variance-authority"
 import { PanelLeftIcon } from "lucide-react"
+import { usePathname } from "next/navigation"
 
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
@@ -92,6 +93,14 @@ function SidebarProvider({
   const toggleSidebar = React.useCallback(() => {
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
   }, [isMobile, setOpen, setOpenMobile])
+
+  // Close mobile sidebar on route change.
+  const pathname = usePathname()
+  React.useEffect(() => {
+    if (isMobile && openMobile) {
+      setOpenMobile(false)
+    }
+  }, [pathname]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
