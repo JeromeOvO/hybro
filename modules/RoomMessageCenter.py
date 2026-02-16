@@ -193,22 +193,17 @@ class RoomMessageCenter:
     ) -> None:
         """Persist a failed TaskStatus on *message* and send the failure notification.
 
+        Delegates state persistence to ``_transition_task`` (which includes the
+        terminal-state guard) and then sends the notification via
+        ``notification_service`` with the full set of display parameters.
+
         *step_number* / *total_steps* default to the values stored on *message*
         when not supplied explicitly.  *agent_card* is forwarded to the
         notification service so it can resolve the agent display-name.
         """
-        task = _get_task(message)
-        if task:
-            task.status = TaskStatus(
-                state=TaskState.failed,
-                message=Message(
-                    message_id=uuid4().hex,
-                    role=Role.agent,
-                    parts=[TextPart(text=error_text)],
-                ),
-            )
-            message.task_updated_at = utcnow()
-            await self._persist_message(message)
+        await self._transition_task(
+            message, TaskState.failed, error=error_text, persist=True, notify=False
+        )
         await self.notification_service.send_task_update(
             room_id=room_id,
             message_id=message.message_id,
@@ -220,6 +215,79 @@ class RoomMessageCenter:
             total_steps=total_steps if total_steps is not None else message.total_steps,
             task_content=message.task_content,
         )
+
+    async def _transition_task(
+        self,
+        message: RoomAgentMessage,
+        new_state: TaskState,
+        *,
+        ctx: ProcessingContext | None = None,
+        error: str | None = None,
+        content: str | None = None,
+        notify: bool = True,
+        persist: bool = True,
+    ) -> None:
+        """Single entry point for all task state transitions.
+
+        Always persists by default. Always notifies by default (when *ctx* is
+        provided).  Callers opt out explicitly (e.g., ``notify=False`` for batch
+        queue cleanup).
+
+        The terminal-state guard prevents overwriting a ``completed``,
+        ``failed``, ``canceled``, or ``rejected`` status — making double-
+        transition bugs harmless instead of data-corrupting.
+        """
+        task = _get_task(message)
+        if not task:
+            return
+
+        # Guard: never overwrite a terminal state
+        if task.status and is_terminal_state(task.status.state):
+            logger.warning(
+                "Attempted to transition already-terminal task %s from %s to %s",
+                message.message_id,
+                _state_str(task.status.state),
+                _state_str(new_state),
+            )
+            return
+
+        # Update state
+        task.status = TaskStatus(state=new_state)
+        if error:
+            task.status.message = Message(
+                message_id=uuid4().hex,
+                role=Role.agent,
+                parts=[TextPart(text=error)],
+            )
+        message.task_updated_at = utcnow()
+
+        if persist:
+            await self._persist_message(message)
+
+        if notify and ctx:
+            await self._notify_task(
+                ctx, new_state, content=content, error=error
+            )
+
+    async def _cancel_remaining_queue(
+        self,
+        message_queue: deque,
+        current_message: RoomAgentMessage | None = None,
+    ) -> None:
+        """Persist ``TaskState.canceled`` for *current_message* (if given)
+        and every remaining message in *message_queue*.
+
+        Already-terminal messages are skipped by ``_transition_task``'s guard.
+        """
+        messages_to_cancel: list[RoomAgentMessage] = []
+        if current_message is not None:
+            messages_to_cancel.append(current_message)
+        messages_to_cancel.extend(message_queue)
+
+        for msg in messages_to_cancel:
+            await self._transition_task(
+                msg, TaskState.canceled, persist=True, notify=False
+            )
 
     # ------------------------------------------------------------------
 
@@ -502,7 +570,10 @@ class RoomMessageCenter:
         logger.info(
             "RoomMessageCenter: Streaming cancelled for message %s", ctx.user_message_id
         )
-        await self._notify_task(ctx, TaskState.canceled)
+        # Persist canceled status to DB and notify frontend in one step
+        await self._transition_task(
+            ctx.current_message, TaskState.canceled, ctx=ctx
+        )
         await self.sse_manager.send_processing_status(
             ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
         )
@@ -518,7 +589,10 @@ class RoomMessageCenter:
         """Handle JSON-RPC error during streaming."""
         error_message = a2a_response.root.error.model_dump_json()
         logger.error("RoomMessageCenter: Agent error: %s", error_message)
-        await self._notify_task(ctx, TaskState.failed, error=error_message)
+        # Persist + notify failure (fixes Issue 10: previously only notified)
+        await self._transition_task(
+            ctx.current_message, TaskState.failed, error=error_message, ctx=ctx
+        )
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
         return ProcessingStatus.FAILED, streaming_state.full_response_text
@@ -710,13 +784,17 @@ class RoomMessageCenter:
         already_terminal = task and task.status and is_terminal_state(task.status.state)
 
         if task and not already_terminal:
-            task.status = TaskStatus(state=TaskState.completed)
+            # Set message_text before _transition_task persists
             if streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
                 )
-            ctx.current_message.task_updated_at = utcnow()
-            await self._persist_message(ctx.current_message)
+            await self._transition_task(
+                ctx.current_message,
+                TaskState.completed,
+                ctx=ctx,
+                content=streaming_state.full_response_text,
+            )
 
         if already_terminal:
             final_state = task.status.state
@@ -859,6 +937,8 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Processing cancelled for message %s, stopping all processing",
                 room_user_message_id,
             )
+            # Persist canceled status for all queued steps
+            await self._cancel_remaining_queue(message_queue)
             await self.sse_manager.send_processing_status(
                 room_id, SSEProcessingStatus.CANCELED, room_user_message_id
             )
@@ -989,6 +1069,10 @@ class RoomMessageCenter:
                     "RoomMessageCenter: Message processing cancelled for %s, stopping all processing",
                     user_message_id,
                 )
+                # Persist canceled status for this step + all remaining steps
+                await self._cancel_remaining_queue(
+                    message_queue, current_message=current_message
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
@@ -1024,6 +1108,9 @@ class RoomMessageCenter:
                         error_text=error_text,
                         agent_id=intended_agent_id,
                     )
+                    # Cancel remaining queue items so they don't orphan at
+                    # "submitted" in MongoDB (Issue 9 fix)
+                    await self._cancel_remaining_queue(message_queue)
                     return QueueResult.FAILED
             else:
                 # Agent already assigned, fetch it and verify it's active
@@ -1036,6 +1123,15 @@ class RoomMessageCenter:
                         current_message.agent_id,
                         current_message.message_id,
                     )
+                    # Persist failure on the current step (was a bare return
+                    # before — Issue 9 fix)
+                    await self._fail_task_and_notify(
+                        room_id=room_id,
+                        message=current_message,
+                        error_text="The assigned agent could not be found.",
+                        agent_id=current_message.agent_id,
+                    )
+                    await self._cancel_remaining_queue(message_queue)
                     return QueueResult.FAILED
 
                 # Check if the assigned agent is still active
@@ -1068,6 +1164,8 @@ class RoomMessageCenter:
                             error_text=error_text,
                             agent_id=original_agent_id,
                         )
+                        # Cancel remaining queue items (Issue 9 fix)
+                        await self._cancel_remaining_queue(message_queue)
                         return QueueResult.FAILED
 
             # Check rate limits before processing (only if user_id is available)
@@ -1122,9 +1220,16 @@ class RoomMessageCenter:
             )
 
             if result.status == ProcessingStatus.FAILED:
+                # Cancel remaining queue items so they don't orphan at
+                # "submitted" in MongoDB (Issue 9 fix).  The current step was
+                # already transitioned to failed by the sub-handler.
+                await self._cancel_remaining_queue(message_queue)
                 return QueueResult.FAILED
             elif result.status == ProcessingStatus.CANCELED:
-                # Graceful cancellation - don't treat as error
+                # Graceful cancellation — current step was already persisted as
+                # canceled by _handle_streaming_cancellation; persist remaining
+                # queue items so they don't appear as "running" after refresh.
+                await self._cancel_remaining_queue(message_queue)
                 return QueueResult.CANCELED
             elif result.status == ProcessingStatus.PAUSED:
                 # Push notification task submitted - save continuation state
@@ -1696,25 +1801,29 @@ class RoomMessageCenter:
                 response = self._parse_sync_fallback_response(raw_response, message_id)
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
-            if task_info:
-                await self._notify_task(ctx, TaskState.failed, error=str(exc))
+            # Persist failure + notify (previously only notified — same class
+            # as Issue 10)
+            await self._transition_task(
+                current_message, TaskState.failed, error=str(exc),
+                ctx=ctx if task_info else None,
+            )
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
         # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
-            task = _get_task(current_message)
-            if task:
-                task.status = TaskStatus(state=TaskState.completed)
-                if full_response_text:
-                    current_message.message_content.message_text = full_response_text
-                current_message.task_updated_at = utcnow()
-                await self._persist_message(current_message)
+            # Set message_text before _transition_task persists
+            if full_response_text:
+                current_message.message_content.message_text = full_response_text
+            await self._transition_task(
+                current_message,
+                TaskState.completed,
+                ctx=ctx if task_info else None,
+                content=full_response_text,
+            )
 
-            if task_info:
-                await self._notify_task(ctx, TaskState.completed, content=full_response_text)
-            else:
+            if not task_info:
                 # Degraded mode: still notify the frontend about the agent response
                 # so the UI updates in real-time without requiring a page refresh.
                 logger.info(
