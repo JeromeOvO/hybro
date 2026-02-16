@@ -36,11 +36,13 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   const {
     sending,
     processing,
+    cancelling,
     updatingRoom,
     sseEnabled,
     liveMessagesByRoom,
     setSending,
     setProcessing,
+    setCancelling,
     setUpdatingRoom,
     setSseEnabled,
     setSseConnected,
@@ -67,6 +69,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
   // Tracks whether the processing placeholder has been dismissed by SSE
   const placeholderDismissedRef = useRef(false)
+
+  // Cancellation timeout ref (FE-3 safety net)
+  const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clean up cancel timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (cancelTimeoutRef.current) {
+        clearTimeout(cancelTimeoutRef.current)
+        cancelTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   // Processing placeholder ID - used to show "Processing your request" before first task arrives
   const getProcessingPlaceholderId = useCallback(() => `processing-placeholder-${roomId}`, [roomId])
@@ -566,6 +581,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             setProcessing(true)
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
             setProcessing(false)
+            setCancelling(false)
+            // Clear cancel timeout safety net
+            if (cancelTimeoutRef.current) {
+              clearTimeout(cancelTimeoutRef.current)
+              cancelTimeoutRef.current = null
+            }
             // Remove processing placeholder if it's still showing
             removeLiveMessage(roomId, getProcessingPlaceholderId())
             placeholderDismissedRef.current = true
@@ -707,6 +728,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           // If task is terminal, stop processing indicator
           if (isTerminalState(status)) {
             setProcessing(false)
+            setCancelling(false)
+            // Clear cancel timeout safety net
+            if (cancelTimeoutRef.current) {
+              clearTimeout(cancelTimeoutRef.current)
+              cancelTimeoutRef.current = null
+            }
 
             // Show appropriate notification
             if (status === 'failed') {
@@ -723,7 +750,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, addLiveMessage, replaceLiveMessage, removeLiveMessage, getProcessingPlaceholderId, roomId, setProcessing, liveMessagesByRoom])
+  }, [getAgentName, addLiveMessage, replaceLiveMessage, removeLiveMessage, getProcessingPlaceholderId, roomId, setProcessing, setCancelling, liveMessagesByRoom])
 
   // Initialize SSE connection
   const {
@@ -874,6 +901,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Agent responses will arrive via SSE.
       setSending(false)  // Parsing done - stop showing spinner
       setProcessing(true)  // Now show Stop button (cancellation works from here)
+      // Defensively clear any stale cancelling state from a previous workflow
+      setCancelling(false)
+      if (cancelTimeoutRef.current) {
+        clearTimeout(cancelTimeoutRef.current)
+        cancelTimeoutRef.current = null
+      }
 
       console.log('📡 Message queued for processing, waiting for agent responses via SSE...')
 
@@ -911,29 +944,41 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = false
       // NOTE: Don't setProcessing(false) here - SSE will send "completed" status
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomLiveState, messagesQuery, setSending, setProcessing, getProcessingPlaceholderId])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, addLiveMessage, replaceLiveMessage, resetRoomLiveState, messagesQuery, setSending, setProcessing, setCancelling, getProcessingPlaceholderId])
 
   // Cancel ongoing message processing
   const cancelProcessing = useCallback(async () => {
     const messageId = currentProcessingMessageId.current
     if (!messageId) {
-      console.warn('No message to cancel')
+      banner.warning('Unable to cancel — no active task found')
       return false
     }
 
     try {
+      setCancelling(true)
       console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
+
+      // Start cancellation timeout safety net (FE-3)
+      cancelTimeoutRef.current = setTimeout(() => {
+        const { cancelling } = useRoomUiStore.getState()
+        if (cancelling) {
+          setCancelling(false)
+          setProcessing(false)
+          banner.warning('Cancellation timed out — the agent may still be running')
+        }
+      }, 15000)
 
       // Note: Don't clear currentProcessingMessageId or setProcessing here
       // The SSE 'canceled' status event will handle state cleanup
       return true
     } catch (error) {
       console.error('Error cancelling message:', error)
+      setCancelling(false)
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken])
+  }, [getToken, setCancelling, setProcessing])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
@@ -1003,6 +1048,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     loading,
     sending,
     processing,
+    cancelling,
     updatingRoom,
 
     // SSE State

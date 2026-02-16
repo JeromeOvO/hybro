@@ -44,6 +44,7 @@ export default function RoomChatPage() {
     loading,
     sending,
     processing,
+    cancelling,
     updatingRoom,
     sendUserMessage,
     cancelProcessing,
@@ -324,6 +325,7 @@ export default function RoomChatPage() {
             disableSend={sending || processing}
             sending={sending}
             processing={processing}
+            cancelling={cancelling}
             onCancel={cancelProcessing}
             agents={agentList}
             showGroupSelector={true}
