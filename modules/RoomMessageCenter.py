@@ -1223,7 +1223,11 @@ class RoomMessageCenter:
                         await self.sse_manager.send_processing_status(
                             room_id, SSEProcessingStatus.RATE_LIMITED, user_message_id
                         )
-                        # Rate limiting is expected behavior, not a server error
+                        # current_message was already popped — cancel it directly;
+                        # the context manager's finally block handles the rest.
+                        await self._transition_task(
+                            current_message, TaskState.canceled, persist=True, notify=False
+                        )
                         return QueueResult.CANCELED
 
                 # Process the agent message
@@ -1269,6 +1273,9 @@ class RoomMessageCenter:
                             result.message_id,
                             len(message_queue),
                         )
+                    # Items have been serialized into the continuation — clear the
+                    # deque so _managed_queue's finally block doesn't cancel them.
+                    message_queue.clear()
                     return QueueResult.PAUSED  # Successfully paused, webhook will resume
 
                 # Record the request for rate limiting (only if user_id is available)
