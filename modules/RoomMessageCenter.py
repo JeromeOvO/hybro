@@ -27,6 +27,7 @@ from common.utils.a2a_helpers import (
     get_text_from_a2a_response,
     get_text_from_message,
 )
+from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -104,6 +105,7 @@ class ProcessingContext:
     current_message: RoomAgentMessage
     agent_card: AgentCard
     user_message_id: str
+    token: CancellationToken | None = None
     task_info: dict[str, Any] | None = None
     created_at: str | None = None
     step_number: int | None = None
@@ -432,6 +434,7 @@ class RoomMessageCenter:
         room_id: str,
         user_message_id: str,
         *,
+        token: CancellationToken | None = None,
         send_sse: bool = False,
         step_number: int | None = None,
         total_steps: int | None = None,
@@ -458,6 +461,7 @@ class RoomMessageCenter:
             current_message=current_message,
             agent_card=agent_card,
             user_message_id=user_message_id,
+            token=token,
             task_info=task_info,
             created_at=task_info.get("created_at") if task_info else None,
             step_number=step_number,
@@ -474,7 +478,7 @@ class RoomMessageCenter:
         timeout_seconds: int = 120,
         initial_delay: float = 0.5,
         max_delay: float = 5.0,
-        user_message_id: str | None = None,
+        token: CancellationToken | None = None,
     ) -> Task | None:
         """
         Poll an agent for task completion with exponential backoff.
@@ -490,8 +494,7 @@ class RoomMessageCenter:
             timeout_seconds: Maximum time to wait for completion (default: 120s)
             initial_delay: Initial delay between polls (default: 0.5s)
             max_delay: Maximum delay between polls (default: 5s)
-            user_message_id: The user message ID for cancellation checks.
-                If provided, the loop checks ``is_cancelled()`` between polls.
+            token: CancellationToken for instant cancellation of the sleep (A-3).
 
         Returns:
             The completed Task if found, None if timeout, error, or cancelled
@@ -499,7 +502,6 @@ class RoomMessageCenter:
         start_time = asyncio.get_event_loop().time()
         delay = initial_delay
         poll_count = 0
-        cancel_key = user_message_id or message_id
 
         logger.info(
             "RoomMessageCenter: Starting poll for task %s (agent task: %s), "
@@ -522,7 +524,7 @@ class RoomMessageCenter:
                 return None
 
             # Check for cancellation between polls (Issue 11)
-            if self.sse_manager.is_cancelled(cancel_key):
+            if token and token.is_cancelled:
                 logger.info(
                     "RoomMessageCenter: Polling cancelled for task %s after %d polls",
                     message_id,
@@ -530,9 +532,20 @@ class RoomMessageCenter:
                 )
                 return None
 
-            # Wait before polling (except first iteration)
+            # Wait before polling (except first iteration).
+            # Use token.race() so cancellation instantly wakes the sleep (A-3).
             if poll_count > 0:
-                await asyncio.sleep(delay)
+                try:
+                    if token:
+                        await token.race(asyncio.sleep(delay))
+                    else:
+                        await asyncio.sleep(delay)
+                except CancellationError:
+                    logger.info(
+                        "RoomMessageCenter: Polling sleep interrupted by cancellation for task %s",
+                        message_id,
+                    )
+                    return None
                 # Exponential backoff with cap
                 delay = min(delay * 1.5, max_delay)
 
@@ -599,6 +612,8 @@ class RoomMessageCenter:
         prepared_message: Message,
         room_id: str,
         user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
         send_sse: bool = False,
         step_number: int | None = None,
         total_steps: int | None = None,
@@ -610,6 +625,7 @@ class RoomMessageCenter:
             prepared_message,
             room_id,
             user_message_id,
+            token=token,
             send_sse=send_sse,
             step_number=step_number,
             total_steps=total_steps,
@@ -619,7 +635,7 @@ class RoomMessageCenter:
         async for a2a_response in self.a2a_service.send_message_streaming(
             agent_card, prepared_message
         ):
-            if self.sse_manager.is_cancelled(user_message_id):
+            if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
 
             if isinstance(a2a_response.root, JSONRPCErrorResponse):
@@ -992,6 +1008,15 @@ class RoomMessageCenter:
         if user_message and isinstance(user_message.extend_info, dict):
             quoted_text = user_message.extend_info.get("quoted_text") or None
 
+        # Create a CancellationToken for this message pipeline (A-3).
+        # The token is pre-signalled if cancel_message() was called before
+        # processing started — no race window.
+        # If a token was already created (e.g. by send_message_to_room for
+        # the parsing phase), reuse it so the entire pipeline shares one token.
+        token = self.sse_manager.get_token(room_user_message_id)
+        if token is None:
+            token = self.sse_manager.create_token(room_user_message_id)
+
         # Query agent messages to process
         query_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(
@@ -1021,7 +1046,7 @@ class RoomMessageCenter:
         )
 
         # Check for cancellation before processing agent messages
-        if self.sse_manager.is_cancelled(room_user_message_id):
+        if token.is_cancelled:
             logger.info(
                 "RoomMessageCenter: Processing cancelled for message %s, stopping all processing",
                 room_user_message_id,
@@ -1042,6 +1067,7 @@ class RoomMessageCenter:
             message_queue,
             room_id,
             room_user_message_id,
+            token=token,
             request_user_id=user_id,
             quoted_text=quoted_text,
         )
@@ -1121,6 +1147,8 @@ class RoomMessageCenter:
         message_queue: deque,
         room_id: str,
         user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
         request_user_id: str | None = None,
         quoted_text: str | None = None,
     ) -> QueueResult:
@@ -1131,6 +1159,7 @@ class RoomMessageCenter:
             message_queue: Queue of agent messages to process
             room_id: The room ID
             user_message_id: The user message ID for cancellation checks
+            token: CancellationToken for cooperative cancellation (A-3)
             request_user_id: The ID of the user making the request (for rate limiting)
             quoted_text: Text the user highlighted and quoted from a previous message
 
@@ -1154,7 +1183,7 @@ class RoomMessageCenter:
                 )
 
                 # Check for cancellation before processing each agent message
-                if self.sse_manager.is_cancelled(user_message_id):
+                if token and token.is_cancelled:
                     logger.info(
                         "RoomMessageCenter: Message processing cancelled for %s, stopping all processing",
                         user_message_id,
@@ -1303,6 +1332,7 @@ class RoomMessageCenter:
                     room_id,
                     agent,
                     user_message_id,
+                    token=token,
                     step_number=None if is_direct_chat else current_message.step_number,
                     total_steps=None if is_direct_chat else current_message.total_steps,
                     quoted_text=quoted_text,
@@ -1470,11 +1500,20 @@ class RoomMessageCenter:
 
         # Resume processing the remaining queue
         if len(remaining_queue) > 0:
+            # Create (or retrieve) a CancellationToken so the resumed queue
+            # can detect cancellation via the token (A-3).  The original
+            # token from the first run may have been evicted from the TTL
+            # cache while the queue was paused, so always ensure one exists.
+            token = self.sse_manager.get_token(user_message_id)
+            if token is None:
+                token = self.sse_manager.create_token(user_message_id)
+
             queue_result = await self._process_agent_message_queue(
                 remaining_queue,
                 room_id,
                 user_message_id,
-                request_user_id,
+                token=token,
+                request_user_id=request_user_id,
             )
 
             if queue_result == QueueResult.PAUSED:
@@ -1636,6 +1675,8 @@ class RoomMessageCenter:
         room_id: str,
         agent: Agent,
         user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
         quoted_text: str | None = None,
@@ -1648,6 +1689,7 @@ class RoomMessageCenter:
             room_id: The room ID
             agent: The agent to process the message
             user_message_id: User message ID for cancellation checks
+            token: CancellationToken for cooperative cancellation (A-3)
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
             quoted_text: Text the user highlighted and quoted from a previous message
@@ -1697,6 +1739,7 @@ class RoomMessageCenter:
                     prepared_message,
                     room_id,
                     user_message_id,
+                    token=token,
                     send_sse=True,
                     step_number=step_number,
                     total_steps=total_steps,
@@ -1732,6 +1775,7 @@ class RoomMessageCenter:
                 room_id,
                 current_message.user_id,
                 user_message_id=user_message_id,
+                token=token,
                 step_number=step_number,
                 total_steps=total_steps,
             )
@@ -1742,7 +1786,7 @@ class RoomMessageCenter:
                 # handler skips sending a second FAILED status.
                 task = _get_task(current_message)
                 was_canceled = (
-                    self.sse_manager.is_cancelled(user_message_id)
+                    (token and token.is_cancelled)
                     or (task and task.status and task.status.state == TaskState.canceled)
                 )
                 if was_canceled:
@@ -1844,6 +1888,7 @@ class RoomMessageCenter:
         _user_id: str | None,
         *,
         user_message_id: str | None = None,
+        token: CancellationToken | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
     ) -> tuple[bool, str | None, str | None]:
@@ -1858,6 +1903,7 @@ class RoomMessageCenter:
             prepared_message,
             room_id,
             current_message.message_id,
+            token=token,
             step_number=step_number,
             total_steps=total_steps,
         )
@@ -1880,12 +1926,9 @@ class RoomMessageCenter:
             )
 
         message_id = current_message.message_id
-        # The cancel key is the *user* message ID (the top-level workflow
-        # trigger), not the individual agent message ID.
-        cancel_key = user_message_id or message_id
 
         # Check for cancellation before the (potentially long) sync agent call
-        if self.sse_manager.is_cancelled(cancel_key):
+        if token and token.is_cancelled:
             logger.info(
                 "RoomMessageCenter: Sync call cancelled before agent call for %s",
                 message_id,
@@ -1895,10 +1938,11 @@ class RoomMessageCenter:
             )
             return False, "", None
 
-        # Call the agent (this blocks until response)
+        # Call the agent — wrap with token.race() so a cancellation during the
+        # blocking HTTP call interrupts immediately (A-3, eliminates Issue 18/19).
         try:
             if task_info:
-                response = await self.a2a_service.send_message_to_tracked_agent(
+                agent_coro = self.a2a_service.send_message_to_tracked_agent(
                     agent_card=agent_card,
                     message=prepared_message,
                     message_id=message_id,
@@ -1906,11 +1950,30 @@ class RoomMessageCenter:
                     context_id=task_info["context_id"],
                 )
             else:
-                raw_response = await self.a2a_service.send_message_sync(
-                    agent_card=agent_card,
-                    message=prepared_message,
-                )
-                response = self._parse_sync_fallback_response(raw_response, message_id)
+                async def _sync_fallback():
+                    raw = await self.a2a_service.send_message_sync(
+                        agent_card=agent_card,
+                        message=prepared_message,
+                    )
+                    return self._parse_sync_fallback_response(raw, message_id)
+
+                agent_coro = _sync_fallback()
+
+            if token:
+                response = await token.race(agent_coro)
+            else:
+                response = await agent_coro
+        except CancellationError:
+            logger.info(
+                "RoomMessageCenter: Sync call cancelled during agent call for %s",
+                message_id,
+            )
+            await self._transition_task(
+                current_message, TaskState.canceled, ctx=ctx if task_info else None
+            )
+            # Best-effort: tell the remote agent to stop
+            await self._try_cancel_remote_task(current_message, agent_card)
+            return False, "", None
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
             # Persist failure + notify (previously only notified — same class
@@ -1922,10 +1985,10 @@ class RoomMessageCenter:
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
-        # Check for cancellation after the sync call returns (Issue 11).
-        # The user may have clicked cancel while the blocking HTTP call was
-        # in progress.  If so, discard the response and report cancellation.
-        if self.sse_manager.is_cancelled(cancel_key):
+        # Post-call cancellation check: if the token was signalled just
+        # after the HTTP call completed (race window narrower than before,
+        # but still possible), honour the cancellation.
+        if token and token.is_cancelled:
             logger.info(
                 "RoomMessageCenter: Sync call cancelled after agent response for %s",
                 message_id,
@@ -2000,13 +2063,13 @@ class RoomMessageCenter:
                 task_id=agent_task_id,
                 message_id=message_id,
                 timeout_seconds=120,
-                user_message_id=cancel_key,
+                token=token,
             )
 
             # If poll returned None and cancellation is pending, handle it
             # (the poll loop exits early on cancellation but doesn't send SSE —
             # the queue-level handler takes care of that)
-            if completed_task is None and self.sse_manager.is_cancelled(cancel_key):
+            if completed_task is None and (token and token.is_cancelled):
                 logger.info(
                     "RoomMessageCenter: Poll cancelled for task %s, transitioning to canceled",
                     message_id,

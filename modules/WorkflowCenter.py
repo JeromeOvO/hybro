@@ -5,6 +5,7 @@ from typing import Any
 from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
+from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from models.error import (
     AgentNotAssignedError,
@@ -450,10 +451,19 @@ class WorkflowCenter:
 
         message_id = (base_task.extend_info or {}).get("message_id")
 
+        # Create (or look up) a CancellationToken so workflow steps can
+        # detect cancellation via the token instead of polling the SSE
+        # manager cache.
+        token: CancellationToken | None = None
+        if message_id:
+            token = self.sse_manager.get_token(message_id)
+            if token is None:
+                token = self.sse_manager.create_token(message_id)
+
         # Execute each meta task sequentially
         for i, meta_task in enumerate(meta_tasks):
             # Check for cancellation before processing each task
-            if self.sse_manager.is_cancelled(message_id):
+            if token and token.is_cancelled:
                 logger.info(
                     "WorkflowCenter: Workflow cancelled for base task %s, stopping all processing",
                     base_task_id,

@@ -15,6 +15,7 @@ from a2a.types import (
     TextPart,
 )
 
+from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import (
     build_context_for_agent,
     build_minimal_context,
@@ -1009,6 +1010,7 @@ class RoomServices:
         target_group: str | None = None,
         agents: list | None = None,
         conversation_context: str | None = None,
+        token: CancellationToken | None = None,
     ) -> ParseResult:
         """
         Parse user message
@@ -1027,7 +1029,7 @@ class RoomServices:
             is responsible for sending the appropriate SSE terminal status.
         """
         # Check for cancellation before parsing
-        if self.sse_manager.is_cancelled(user_message_id):
+        if token and token.is_cancelled:
             logger.info(
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
@@ -1109,6 +1111,12 @@ class RoomServices:
 
         await self._send_processing_status(request.room_id, user_message.message_id)
 
+        # Create a CancellationToken early in the pipeline so the parse step
+        # (and later the queue step in RoomMessageCenter) can detect cancels
+        # via the token.  If the user already hit cancel before we got here,
+        # the token is pre-signalled.
+        token = self.sse_manager.create_token(user_message.message_id)
+
         memory_response = await self._initialize_room_memory(request, user_message)
         if memory_response:
             await self.sse_manager.send_processing_status(
@@ -1177,6 +1185,7 @@ class RoomServices:
             target_group=target_group,
             agents=agents,
             conversation_context=conversation_context,
+            token=token,
         )
         if not parse_user_message_success.success:
             if parse_user_message_success.canceled:
