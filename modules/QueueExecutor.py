@@ -4,9 +4,7 @@ Owns the queue loop, RAII cleanup (``_managed_queue``), continuation
 save/resume for webhook-paused queues, per-item dispatch to the
 ``ResponseProcessor``, and queue chaining (``_queue_next_messages``).
 
-Agent assignment is injected as a callable so that
-``RoomMessageCenter`` (or a future ``AgentDispatcher``) retains
-ownership of the resolution logic.
+Agent assignment is delegated to the injected ``AgentDispatcher``.
 """
 
 from __future__ import annotations
@@ -17,8 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from collections.abc import Awaitable, Callable
-
 from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
@@ -26,6 +22,7 @@ from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
 from models.memory import MemoryContent
 from models.room import RoomAgentMessage
+from modules.AgentDispatcher import AgentDispatcher
 from modules.ResponseProcessor import ProcessingStatus, ResponseProcessor
 from modules.TaskStateManager import TaskStateManager, get_task
 from services.a2a_constants import SSEProcessingStatus
@@ -65,11 +62,6 @@ class ProcessingResult:
     message_id: str | None = None
 
 
-# Type alias for the agent-assignment callback injected by the caller.
-AssignAgentResult = tuple[Agent | None, str | None]  # (agent, failure_reason)
-AssignAgentFn = Callable[[RoomAgentMessage], Awaitable[AssignAgentResult]]
-
-
 @dataclass
 class ResumeResult:
     """Returned by ``QueueExecutor.resume_from_continuation``.
@@ -105,6 +97,7 @@ class QueueExecutor:
         database_service: DatabaseService,
         debate_service: DebateService,
         rate_limit_service: RateLimitService,
+        agent_dispatcher: AgentDispatcher,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -115,6 +108,7 @@ class QueueExecutor:
         self.database_service = database_service
         self.debate_service = debate_service
         self.rate_limit_service = rate_limit_service
+        self.agent_dispatcher = agent_dispatcher
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -149,7 +143,6 @@ class QueueExecutor:
         room_id: str,
         user_message_id: str,
         *,
-        assign_agent: AssignAgentFn,
         token: CancellationToken | None = None,
         request_user_id: str | None = None,
         quoted_text: str | None = None,
@@ -164,10 +157,6 @@ class QueueExecutor:
             The room this queue belongs to.
         user_message_id:
             The originating user message ID (for cancellation checks).
-        assign_agent:
-            Callback that resolves an agent for a message.  Returns
-            ``(Agent, None)`` on success or ``(None, failure_reason)``
-            on failure.
         token:
             ``CancellationToken`` for cooperative cancellation (A-3).
         request_user_id:
@@ -207,7 +196,7 @@ class QueueExecutor:
 
                 # Assign agent if not already assigned
                 agent = await self._resolve_agent_for_message(
-                    current_message, room_id, assign_agent
+                    current_message, room_id
                 )
                 if agent is None:
                     return QueueResult.FAILED
@@ -295,19 +284,20 @@ class QueueExecutor:
         self,
         current_message: RoomAgentMessage,
         room_id: str,
-        assign_agent: AssignAgentFn,
     ) -> Agent | None:
         """Resolve or verify the agent for *current_message*.
 
-        If no ``agent_id`` is set, delegates to the *assign_agent* callback.
+        If no ``agent_id`` is set, delegates to the ``AgentDispatcher``.
         If one is set, fetches from DB and verifies it is still active,
-        re-assigning via *assign_agent* if not.
+        re-assigning via the dispatcher if not.
 
         Returns the ``Agent`` on success or ``None`` after persisting a
         failure notification on the message.
         """
         if current_message.agent_id is None:
-            agent, failure_reason = await assign_agent(current_message)
+            agent, failure_reason = await self.agent_dispatcher.assign_agent_for_queue(
+                current_message
+            )
             if agent is None:
                 error_text = (
                     failure_reason
@@ -356,7 +346,9 @@ class QueueExecutor:
             )
             original_agent_id = current_message.agent_id
             current_message.agent_id = None
-            reassigned, failure_reason = await assign_agent(current_message)
+            reassigned, failure_reason = await self.agent_dispatcher.assign_agent_for_queue(
+                current_message
+            )
             if reassigned is None:
                 error_text = (
                     failure_reason
@@ -600,8 +592,6 @@ class QueueExecutor:
         self,
         message_id: str,
         task_result_text: str | None = None,
-        *,
-        assign_agent: AssignAgentFn,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 
@@ -663,7 +653,6 @@ class QueueExecutor:
                 remaining_queue,
                 room_id,
                 user_message_id,
-                assign_agent=assign_agent,
                 token=token,
                 request_user_id=request_user_id,
             )

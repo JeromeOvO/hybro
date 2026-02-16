@@ -1,18 +1,13 @@
 from collections import deque
-from dataclasses import dataclass
 
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
-from models.agent import Agent
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
-from models.room import RoomAgentMessage
+from modules.AgentDispatcher import AgentDispatcher
 from modules.QueueExecutor import QueueExecutor, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
-from modules.TaskStateManager import (
-    TaskStateManager,
-    get_task,
-)
+from modules.TaskStateManager import TaskStateManager
 from services.a2a_constants import SSEProcessingStatus
 from services.a2a_service import a2a_service
 from services.agent_resolver_service import agent_resolver_service
@@ -29,53 +24,38 @@ from services.task_service import task_service
 logger = get_logger(__name__)
 
 
-@dataclass
-class AssignResult:
-    """Result of ``_assign_agent``.
-
-    Replaces the old ``self._last_resolve_failure`` pattern which stored the
-    failure reason on the singleton instance — a concurrency hazard when
-    multiple asyncio tasks process different rooms simultaneously (Issue 16).
-    """
-
-    agent: Agent | None
-    failure_reason: str | None = None
-
-
 class RoomMessageCenter:
     """Room user message processing: agent communication,
     streaming/sync responses, queue management, and memory updates."""
 
     def __init__(self):
-        self.a2a_service = a2a_service
         self.room_services = room_services
-        self.room_memory_service = room_memory_service
         self.database_service = db_service
-        self.debate_service = debate_service
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
-        self.rate_limit_service = rate_limit_service
-        self.task_service = task_service
-        self.notification_service = notification_service
-        self.agent_resolver = agent_resolver_service
         self.tsm = TaskStateManager(room_services, notification_service)
         self.response_processor = ResponseProcessor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
-            a2a_service=self.a2a_service,
-            task_service=self.task_service,
+            a2a_service=a2a_service,
+            task_service=task_service,
+            database_service=self.database_service,
+        )
+        self.agent_dispatcher = AgentDispatcher(
+            agent_resolver=agent_resolver_service,
             database_service=self.database_service,
         )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
             response_processor=self.response_processor,
-            a2a_service=self.a2a_service,
+            a2a_service=a2a_service,
             room_services=self.room_services,
-            room_memory_service=self.room_memory_service,
+            room_memory_service=room_memory_service,
             database_service=self.database_service,
-            debate_service=self.debate_service,
-            rate_limit_service=self.rate_limit_service,
+            debate_service=debate_service,
+            rate_limit_service=rate_limit_service,
+            agent_dispatcher=self.agent_dispatcher,
         )
 
     # ------------------------------------------------------------------
@@ -186,7 +166,6 @@ class RoomMessageCenter:
             message_queue,
             room_id,
             room_user_message_id,
-            assign_agent=self._assign_agent_for_queue,
             token=token,
             request_user_id=user_id,
             quoted_text=quoted_text,
@@ -263,22 +242,6 @@ class RoomMessageCenter:
         return None
 
     # ------------------------------------------------------------------
-    # Agent assignment callback for QueueExecutor
-    # ------------------------------------------------------------------
-
-    async def _assign_agent_for_queue(
-        self, current_message: RoomAgentMessage
-    ) -> tuple[Agent | None, str | None]:
-        """Adapter for ``QueueExecutor.AssignAgentFn``.
-
-        Delegates to ``_assign_agent`` and unpacks the ``AssignResult``
-        into the ``(Agent | None, failure_reason | None)`` tuple expected
-        by the queue executor.
-        """
-        result = await self._assign_agent(current_message)
-        return result.agent, result.failure_reason
-
-    # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
     # ------------------------------------------------------------------
 
@@ -297,7 +260,6 @@ class RoomMessageCenter:
         result = await self.queue_executor.resume_from_continuation(
             message_id,
             task_result_text,
-            assign_agent=self._assign_agent_for_queue,
         )
 
         if not result.success:
@@ -313,130 +275,6 @@ class RoomMessageCenter:
             await self._log_room_memory_stats(result.room_id)
 
         return True
-
-    async def _resolve_allowed_agent_ids(
-        self,
-        current_message: RoomAgentMessage,
-    ) -> list[str]:
-        """Resolve allowed agent IDs from extend_info, merging group members."""
-        if not isinstance(current_message.extend_info, dict):
-            return []
-
-        allowed_agent_ids = current_message.extend_info.get("allowed_agent_ids") or []
-        target_group = current_message.extend_info.get("target_group")
-
-        # Normalize target_group into a list
-        target_groups: list[str] = []
-        if isinstance(target_group, list | tuple):
-            target_groups = [str(g) for g in target_group]
-        elif isinstance(target_group, str) and target_group:
-            target_groups = [target_group]
-
-        merged_ids = set(str(aid) for aid in allowed_agent_ids)
-        for tg in target_groups:
-            if tg in ["all_agents", "room_team"]:
-                continue
-            try:
-                group = await self.database_service.get_agent_group_by_id(tg)
-                if group and group.agents:
-                    merged_ids |= set(str(aid) for aid in group.agents)
-            except Exception as e:
-                logger.error(
-                    "RoomMessageCenter: Failed to load agents for group %s: %s", tg, e
-                )
-
-        return list(merged_ids)
-
-    @staticmethod
-    def _extract_user_input(current_message: RoomAgentMessage) -> str:
-        """Extract the user's text input from the message's first history entry."""
-        try:
-            task = get_task(current_message)
-            if (
-                task
-                and task.history
-                and len(task.history) > 0
-                and task.history[0].parts
-                and len(task.history[0].parts) > 0
-            ):
-                first_part = task.history[0].parts[0]
-                if first_part.root and hasattr(first_part.root, "text"):
-                    return first_part.root.text or ""
-        except (IndexError, AttributeError) as e:
-            logger.warning(
-                "RoomMessageCenter: Failed to extract content from message %s: %s",
-                current_message.message_id,
-                e,
-            )
-        return ""
-
-    async def _assign_agent(self, current_message: RoomAgentMessage) -> AssignResult:
-        """Assign an agent to the message by inferring from content.
-
-        Uses the AgentResolverService to find the best accessible agent from
-        the allowed agent list.  Returns an ``AssignResult`` with the chosen
-        agent or a human-readable ``failure_reason`` when no agent is available.
-        """
-        allowed_agent_ids = await self._resolve_allowed_agent_ids(current_message)
-        user_input = self._extract_user_input(current_message)
-
-        if not user_input:
-            logger.error(
-                "RoomMessageCenter: No user input in message %s, cannot infer agent",
-                current_message.message_id,
-            )
-            return AssignResult(
-                agent=None,
-                failure_reason="Unable to determine what to ask an agent — the message appears to be empty.",
-            )
-
-        logger.info(
-            "RoomMessageCenter: Inferring agent for message %s (input length: %d, scoped_ids=%d)",
-            current_message.message_id,
-            len(user_input),
-            len(allowed_agent_ids),
-        )
-
-        result = await self.agent_resolver.resolve(
-            user_input,
-            allowed_agent_ids=allowed_agent_ids if allowed_agent_ids else None,
-            user_id=current_message.user_id,
-        )
-
-        if result.agent is None:
-            logger.error(
-                "RoomMessageCenter: No accessible agent for message %s: %s",
-                current_message.message_id,
-                result.failure_reason,
-            )
-            return AssignResult(agent=None, failure_reason=result.failure_reason)
-
-        agent = result.agent
-        current_message.agent_id = agent.agent_id
-
-        update_success = (
-            await self.database_service.update_room_agent_message_by_message_id(
-                message_id=current_message.message_id,
-                room_agent_message=current_message,
-            )
-        )
-
-        if not update_success:
-            logger.error(
-                "RoomMessageCenter: Failed to update agent assignment for message %s",
-                current_message.message_id,
-            )
-            return AssignResult(
-                agent=None,
-                failure_reason="Internal error: failed to persist agent assignment.",
-            )
-
-        logger.info(
-            "RoomMessageCenter: Assigned agent %s to message %s",
-            agent.agent_id,
-            current_message.message_id,
-        )
-        return AssignResult(agent=agent)
 
     # ------------------------------------------------------------------
     # Monitoring
