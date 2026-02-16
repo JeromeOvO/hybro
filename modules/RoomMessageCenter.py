@@ -820,6 +820,11 @@ class RoomMessageCenter:
             (user_message.user_id if user_message else None) or request.user_id
         )
 
+        # Extract quoted context from user message extend_info (set when user quotes text)
+        quoted_text: str | None = None
+        if user_message and isinstance(user_message.extend_info, dict):
+            quoted_text = user_message.extend_info.get("quoted_text") or None
+
         # Query agent messages to process
         query_response = (
             await self.room_services.inquiry_agent_messages_by_related_message_id(
@@ -869,6 +874,7 @@ class RoomMessageCenter:
             room_id,
             room_user_message_id,
             request_user_id=user_id,
+            quoted_text=quoted_text,
         )
 
         if queue_result == QueueResult.FAILED:
@@ -947,6 +953,7 @@ class RoomMessageCenter:
         room_id: str,
         user_message_id: str,
         request_user_id: str | None = None,
+        quoted_text: str | None = None,
     ) -> QueueResult:
         """
         Process all messages in the queue sequentially.
@@ -956,6 +963,7 @@ class RoomMessageCenter:
             room_id: The room ID
             user_message_id: The user message ID for cancellation checks
             request_user_id: The ID of the user making the request (for rate limiting)
+            quoted_text: Text the user highlighted and quoted from a previous message
 
         Returns:
             QueueResult indicating whether the queue completed, failed, was
@@ -1110,6 +1118,7 @@ class RoomMessageCenter:
                 user_message_id,
                 step_number=None if is_direct_chat else current_message.step_number,
                 total_steps=None if is_direct_chat else current_message.total_steps,
+                quoted_text=quoted_text,
             )
 
             if result.status == ProcessingStatus.FAILED:
@@ -1440,6 +1449,7 @@ class RoomMessageCenter:
         user_message_id: str,
         step_number: int | None = None,
         total_steps: int | None = None,
+        quoted_text: str | None = None,
     ) -> ProcessingResult:
         """
         Process a single agent message with streaming support.
@@ -1451,6 +1461,7 @@ class RoomMessageCenter:
             user_message_id: User message ID for cancellation checks
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
+            quoted_text: Text the user highlighted and quoted from a previous message
 
         Returns:
             ProcessingResult with:
@@ -1469,6 +1480,7 @@ class RoomMessageCenter:
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
             room_memory_content,
+            quoted_text=quoted_text,
         )
 
         if not process_response.success:

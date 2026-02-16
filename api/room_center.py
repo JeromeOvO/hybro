@@ -230,13 +230,18 @@ async def send_message(
         room_center_request, target_group
     )
 
+    # Extract related_message_id from the user message (set when quoting)
+    related_message_id = ""
+    if isinstance(message, dict):
+        related_message_id = message.get("related_message_id") or ""
+
     # Auto-trigger processing as background task if message was created successfully
     # This prevents orphaned messages when user refreshes before frontend calls processRoomUserMessage
     if room_center_response.success and room_center_response.message_id:
         orchestration_request = OrchestrationRequest(
             room_id=room_id,
             room_user_message_id=room_center_response.message_id,
-            room_related_message_id="",
+            room_related_message_id=related_message_id,
             user_id=user.user_id,
         )
         background_tasks.add_task(
