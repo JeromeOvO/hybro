@@ -490,7 +490,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Check if room has an active processing state
     if (room.processing_message_id) {
       console.log('🔄 Restoring processing placeholder for message:', room.processing_message_id)
-      
+
+      // Always restore the message ID so cancellation works after refresh,
+      // regardless of whether the placeholder is shown below.
+      currentProcessingMessageId.current = room.processing_message_id
+
       // Check if the triggering user message is stale (> 2 min).
       // The placeholder only covers the brief parsing phase before real task
       // bubbles arrive, so if it's been more than 2 minutes the backend likely
@@ -579,6 +583,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
           if (status === PROCESSING_STATUS.PROCESSING) {
             setProcessing(true)
+            // Hydrate cancellation ref if empty (e.g. page was refreshed mid-processing)
+            if (!currentProcessingMessageId.current && sseMessage.data.message_id) {
+              currentProcessingMessageId.current = sseMessage.data.message_id
+            }
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
             setProcessing(false)
             setCancelling(false)
