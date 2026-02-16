@@ -74,6 +74,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Cancellation timeout ref (FE-3 safety net)
   const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Tracks whether the cancel timeout has already fired.
+  // When true, SSE handlers skip showing cancel/done banners to avoid
+  // contradictory messages after the "timed out" banner.
+  const cancelTimedOutRef = useRef(false)
+
   // Clean up cancel timeout on unmount
   useEffect(() => {
     return () => {
@@ -472,6 +477,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     resetRoomLiveState(roomId)
     agentNameCache.current = {}
     placeholderDismissedRef.current = false
+    cancelTimedOutRef.current = false
+    if (cancelTimeoutRef.current) {
+      clearTimeout(cancelTimeoutRef.current)
+      cancelTimeoutRef.current = null
+    }
   }, [roomId, resetRoomLiveState])
 
   // Mirror query loading state to local loading flag for consumers
@@ -603,16 +613,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
               currentProcessingMessageId.current = null
             }
-            // Show appropriate notification
-            if (status === PROCESSING_STATUS.CANCELED) {
-              banner.info('Processing stopped by user')
-            } else if (status === PROCESSING_STATUS.FAILED) {
-              banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
-            } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
-              // Rate limit error is handled separately via 'error' event with more details
-              console.log('Rate limit reached, processing stopped')
+            // Show appropriate notification (skip if cancel timeout already fired — Issue 13)
+            if (!cancelTimedOutRef.current) {
+              if (status === PROCESSING_STATUS.CANCELED) {
+                banner.info('Processing stopped by user')
+              } else if (status === PROCESSING_STATUS.FAILED) {
+                banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+              } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
+                // Rate limit error is handled separately via 'error' event with more details
+                console.log('Rate limit reached, processing stopped')
+              }
+              // 'completed' has no banner - messages come via SSE
             }
-            // 'completed' has no banner - messages come via SSE
+            cancelTimedOutRef.current = false
           }
         }
         break
@@ -744,14 +757,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               cancelTimeoutRef.current = null
             }
 
-            // Show appropriate notification
-            if (status === 'failed') {
-              banner.error(sseMessage.data.error || 'Task failed')
-            } else if (status === 'rejected') {
-              banner.error(sseMessage.data.error || 'Task was rejected')
-            } else if (status === 'canceled') {
-              banner.info('Task was canceled')
+            // Show appropriate notification (skip if cancel timeout already fired — Issue 13)
+            // Note: 'canceled' banner is intentionally omitted here — the
+            // workflow-level processing_status CANCELED handler already shows
+            // "Processing stopped by user".  Showing a second banner from
+            // task_update would be a duplicate (Issue 12).
+            if (!cancelTimedOutRef.current) {
+              if (status === 'failed') {
+                banner.error(sseMessage.data.error || 'Task failed')
+              } else if (status === 'rejected') {
+                banner.error(sseMessage.data.error || 'Task was rejected')
+              }
             }
+            cancelTimedOutRef.current = false
           }
         }
         break
@@ -916,6 +934,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       setProcessing(true)  // Now show Stop button (cancellation works from here)
       // Defensively clear any stale cancelling state from a previous workflow
       setCancelling(false)
+      cancelTimedOutRef.current = false
       if (cancelTimeoutRef.current) {
         clearTimeout(cancelTimeoutRef.current)
         cancelTimeoutRef.current = null
@@ -969,6 +988,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     try {
       setCancelling(true)
+      cancelTimedOutRef.current = false
       console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
 
@@ -976,6 +996,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       cancelTimeoutRef.current = setTimeout(() => {
         const { cancelling } = useRoomUiStore.getState()
         if (cancelling) {
+          cancelTimedOutRef.current = true
           setCancelling(false)
           setProcessing(false)
           banner.warning('Cancellation timed out — the agent may still be running')
