@@ -1,10 +1,69 @@
 'use client'
 
-import React from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { Check, Copy } from 'lucide-react'
 import { formatIfJson } from '@/lib/utils'
+
+/**
+ * Extract plain text from React children tree (strips HTML / highlight spans).
+ */
+function extractText(node: React.ReactNode): string {
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (!node) return ''
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (typeof node === 'object' && 'props' in node) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return extractText((node as React.ReactElement<any>).props.children)
+  }
+  return ''
+}
+
+/**
+ * Code block with a copy-to-clipboard button in the top-right corner.
+ */
+function CodeBlockWithCopy({
+  className,
+  children,
+  ...props
+}: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) {
+  const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopy = useCallback(() => {
+    const text = extractText(children).replace(/\n$/, '')
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 2000)
+    })
+  }, [children])
+
+  return (
+    <div className="relative group">
+      <pre className="max-w-full bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 pr-10 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
+        <code className={className} {...props}>
+          {children}
+        </code>
+      </pre>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? 'Copied' : 'Copy'}
+        className="absolute top-2 right-2 p-1 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors duration-150"
+      >
+        {copied ? (
+          <Check className="h-4 w-4 text-green-500" />
+        ) : (
+          <Copy className="h-4 w-4" />
+        )}
+      </button>
+    </div>
+  )
+}
 
 /**
  * Convert <@agent_id|agent_name> mention syntax to markdown links.
@@ -93,11 +152,9 @@ export function MarkdownContent({
                 {children}
               </code>
             ) : (
-              <pre className="max-w-full bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-200 p-3 rounded-md overflow-x-auto border border-slate-200 dark:border-slate-700">
-                <code className={className} {...props}>
-                  {children}
-                </code>
-              </pre>
+              <CodeBlockWithCopy className={className} {...props}>
+                {children}
+              </CodeBlockWithCopy>
             )
           },
           // --- Block elements ---
