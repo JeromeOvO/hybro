@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useClerk, useAuth } from '@clerk/nextjs'
 import { Settings, Users } from 'lucide-react'
@@ -25,6 +25,7 @@ import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
+import type { QuoteData } from '@/components/message-bubble'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 import { isWaitlistEnabled } from "@/lib/utils"
 
@@ -37,6 +38,11 @@ export default function RoomChatPage() {
   const { openWaitlist } = useClerk()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
+
+  // Quote state
+  const [quote, setQuote] = useState<QuoteData | null>(null)
+  const handleQuote = useCallback((data: QuoteData) => setQuote(data), [])
+  const clearQuote = useCallback(() => setQuote(null), [])
 
   const {
     room,
@@ -131,8 +137,8 @@ export default function RoomChatPage() {
   }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
-  const handleSendMessage = async (userInput: string, targetGroup?: string) => {
-    await sendUserMessage(userInput, targetGroup || gm.selectedGroup)
+  const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null) => {
+    await sendUserMessage(userInput, targetGroup || gm.selectedGroup, quoteData ?? undefined)
   }
 
   // Handle room settings update
@@ -312,6 +318,7 @@ export default function RoomChatPage() {
             <RoomMessages
               messages={messages}
               loading={false}
+              onQuote={handleQuote}
             />
           </main>
         </div>
@@ -337,6 +344,8 @@ export default function RoomChatPage() {
             onDeleteGroup={gm.handleDeleteGroup}
             isOverride={gm.isOverride}
             onClearOverride={gm.handleClearOverride}
+            quote={quote}
+            onClearQuote={clearQuote}
           />
         </div>
       </div>

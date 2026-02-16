@@ -1,13 +1,20 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { ChevronDown, ChevronUp, Quote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import type { MessageData } from './room-messages'
 import { MESSAGE_TYPE } from '@/lib/types'
+
+/** Lightweight UI type for passing quote data between components. */
+export interface QuoteData {
+  messageId: string
+  content: string
+  senderName: string
+}
 
 interface MessageBubbleProps {
   message: MessageData
@@ -18,6 +25,7 @@ interface MessageBubbleProps {
   isLatestAgent?: boolean
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
+  onQuote?: (data: QuoteData) => void
 }
 
 /**
@@ -57,6 +65,7 @@ export function AgentMessageBubble({
   isLatestAgent = false,
   isUserExpanded = false,
   onUserToggle,
+  onQuote,
 }: MessageBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(
     defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
@@ -64,6 +73,51 @@ export function AgentMessageBubble({
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+
+  // --- Quote selection state ---
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [quoteBtn, setQuoteBtn] = useState<{ top: number; left: number; text: string } | null>(null)
+
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (!onQuote) return
+    // Don't dismiss when clicking the Quote button itself (let onClick fire first)
+    if ((e.target as HTMLElement).closest('[data-quote-btn]')) return
+
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || !contentRef.current) {
+      setQuoteBtn(null)
+      return
+    }
+    const text = selection.toString().trim()
+    if (!text) { setQuoteBtn(null); return }
+
+    // Make sure the selection is inside this bubble
+    const range = selection.getRangeAt(0)
+    if (!contentRef.current.contains(range.commonAncestorContainer)) {
+      setQuoteBtn(null)
+      return
+    }
+
+    const rect = range.getBoundingClientRect()
+    const containerRect = contentRef.current.getBoundingClientRect()
+    setQuoteBtn({
+      top: rect.top - containerRect.top - 32,
+      left: rect.left - containerRect.left + rect.width / 2,
+      text,
+    })
+  }, [onQuote])
+
+  // Dismiss quote button when clicking elsewhere
+  useEffect(() => {
+    const handleDown = (e: MouseEvent) => {
+      if (!quoteBtn) return
+      const target = e.target as HTMLElement
+      if (target.closest('[data-quote-btn]')) return
+      setQuoteBtn(null)
+    }
+    document.addEventListener('mousedown', handleDown)
+    return () => document.removeEventListener('mousedown', handleDown)
+  }, [quoteBtn])
 
   useEffect(() => {
     setIsExpanded(false)
@@ -143,12 +197,42 @@ export function AgentMessageBubble({
         </div>
 
         {/* Content - Collapsible for long messages */}
-        <div className={cn(
-          "text-sm leading-relaxed",
-          contentColorClass,
-          !isExpanded && isLongMessage && "line-clamp-4"
-        )}>
+        <div
+          ref={contentRef}
+          className={cn(
+            "relative text-sm leading-relaxed",
+            contentColorClass,
+            !isExpanded && isLongMessage && "line-clamp-4"
+          )}
+          onMouseUp={handleMouseUp}
+        >
           <MarkdownContent content={displayContent} />
+
+          {/* Floating Quote button */}
+          {quoteBtn && (
+            <button
+              data-quote-btn
+              type="button"
+              onClick={() => {
+                onQuote?.({
+                  messageId: message.id,
+                  content: quoteBtn.text,
+                  senderName: message.sender_name,
+                })
+                setQuoteBtn(null)
+                window.getSelection()?.removeAllRanges()
+              }}
+              className="absolute z-20 flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors whitespace-nowrap"
+              style={{
+                top: quoteBtn.top,
+                left: quoteBtn.left,
+                transform: 'translateX(-50%)',
+              }}
+            >
+              <Quote className="h-3 w-3" />
+              Quote
+            </button>
+          )}
         </div>
 
         {/* Expand/Collapse button */}
@@ -215,6 +299,7 @@ export function MessageBubble({
   isLatestAgent = false,
   isUserExpanded = false,
   onUserToggle,
+  onQuote,
 }: MessageBubbleProps) {
   if (message.type === MESSAGE_TYPE.USER) {
     return <UserMessageBubble message={message} />
@@ -229,6 +314,7 @@ export function MessageBubble({
       isLatestAgent={isLatestAgent}
       isUserExpanded={isUserExpanded}
       onUserToggle={onUserToggle}
+      onQuote={onQuote}
     />
   )
 }

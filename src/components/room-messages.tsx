@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { MessageBubble } from './message-bubble'
+import { MessageBubble, type QuoteData } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
 import { type TaskState, PROCESSING_STATUS } from '@/lib/types/sse'
 import { type MessageType, MESSAGE_TYPE } from '@/lib/types'
@@ -83,9 +83,10 @@ function toAgentMessage(message: MessageData): MessageData {
 interface RoomMessagesProps {
   messages: MessageData[]
   loading?: boolean
+  onQuote?: (data: QuoteData) => void
 }
 
-export function RoomMessages({ messages, loading }: RoomMessagesProps) {
+export function RoomMessages({ messages, loading, onQuote }: RoomMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
@@ -256,6 +257,7 @@ export function RoomMessages({ messages, loading }: RoomMessagesProps) {
                       isLatestAgent={msg.id === lastAgentMessageId}
                       isUserExpanded={userExpandedIds.has(msg.id)}
                       onUserToggle={handleUserToggle}
+                      onQuote={onQuote}
                     />
                   )
                 })}
