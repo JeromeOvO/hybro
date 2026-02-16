@@ -196,7 +196,9 @@ export async function SendMessage(
   getToken?: () => Promise<string | null>,
   user_id?: string,
   user_name?: string,
-  target_group: string = "all_agents"  // Group ID: "all_agents", "room_team", or custom group ID
+  target_group: string = "all_agents",  // Group ID: "all_agents", "room_team", or custom group ID
+  related_message_id?: string | null,
+  quoted_text?: string | null,
 ): Promise<RoomCenterUserMessageResponse> {
   const requestData = {
     room_id,
@@ -208,12 +210,12 @@ export async function SendMessage(
       room_id,
       message_id: "",
       message_type: "user",
-      related_message_id: null,
+      related_message_id: related_message_id || null,
       message_content: {
         message_text: user_input
       },
       user_id: user_id || "",
-      extend_info: null
+      extend_info: quoted_text ? { quoted_text } : null
     }
   }
 

@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send, Square, AtSign, Maximize2, Minimize2 } from 'lucide-react'
+import { Send, Square, AtSign, Maximize2, Minimize2, X, Quote } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
+import type { QuoteData } from './message-bubble'
 
 interface Agent {
   id: string
@@ -14,7 +15,7 @@ interface Agent {
 }
 
 interface RoomChatInputProps {
-  onSubmit: (message: string, targetGroup?: string) => void
+  onSubmit: (message: string, targetGroup?: string, quote?: QuoteData | null) => void
   /**
    * When true, the editor itself is disabled (read-only).
    * For normal sending-state control, prefer using disableSend.
@@ -59,6 +60,10 @@ interface RoomChatInputProps {
    * Call this to reset externalValue to empty after it's been applied.
    */
   onExternalValueConsumed?: () => void
+  /** Currently quoted message (shown as preview above editor). */
+  quote?: QuoteData | null
+  /** Callback to clear the current quote. */
+  onClearQuote?: () => void
 }
 
 export function RoomChatInput({
@@ -82,6 +87,8 @@ export function RoomChatInput({
   onClearOverride,
   externalValue,
   onExternalValueConsumed,
+  quote,
+  onClearQuote,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -592,13 +599,15 @@ export function RoomChatInput({
       const targetGroup = mentionedAgents.length > 0 ? undefined : selectedGroup
 
       console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup)
-      onSubmit(trimmedMessage, targetGroup)
+      onSubmit(trimmedMessage, targetGroup, quote)
       setMessage('')
       if (editorRef.current) {
         editorRef.current.innerHTML = ''
       }
       setShowAgentSuggestions(false)
       setSelectedAgentIndex(0)
+      // Clear quote after sending
+      onClearQuote?.()
     }
   }
 
@@ -726,6 +735,32 @@ export function RoomChatInput({
                   onClearOverride={onClearOverride}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Quote preview */}
+          {quote && (
+            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2 text-sm">
+              <div className="w-0.5 shrink-0 self-stretch rounded-full bg-primary" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <Quote className="h-3 w-3 text-primary shrink-0" />
+                  <span className="text-xs font-semibold text-primary truncate">
+                    {quote.senderName}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground line-clamp-2 break-words">
+                  {quote.content}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onClearQuote}
+                className="shrink-0 p-0.5 rounded hover:bg-muted-foreground/20 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Remove quote"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
 

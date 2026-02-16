@@ -15,6 +15,7 @@ import { useQuery } from '@tanstack/react-query'
 // Import the correct RoomMessage type from response.ts (API response format)
 import type { RoomMessage } from '@/lib/types/response'
 import type { MessageData } from '@/components/room-messages'
+import type { QuoteData } from '@/components/message-bubble'
 import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
 import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
@@ -811,7 +812,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom])
 
   // Complete user message sending workflow - using unified SendMessage API
-  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents") => {
+  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData) => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
     }
@@ -850,7 +851,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       isProcessingRef.current = true
 
       // Step 1: Send user message to backend using unified SendMessage API
-      const createResponse = await SendMessage(roomId, userInput, getToken, userId, userName, targetGroup)
+      const createResponse = await SendMessage(
+        roomId, userInput, getToken, userId, userName, targetGroup,
+        quoteData?.messageId ?? null,
+        quoteData?.content ?? null,
+      )
 
       if (!createResponse.success) {
         throw new Error(`Failed to create user message: ${createResponse.error}`)
