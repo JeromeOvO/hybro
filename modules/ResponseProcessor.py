@@ -1,4 +1,8 @@
-# modules/ResponseProcessor.py
+"""Streaming and synchronous response processing from A2A agents.
+
+Handles chunk accumulation, artifact collection, stream finalization,
+sync response handling with polling, and cancellation/error handling.
+"""
 
 import asyncio
 from dataclasses import dataclass, field
@@ -394,9 +398,7 @@ class ResponseProcessor:
         logger.info(
             "ResponseProcessor: Streaming cancelled for message %s", ctx.user_message_id
         )
-        await self.tsm.transition_task(
-            ctx.current_message, TaskState.canceled, ctx=ctx
-        )
+        await self.tsm.transition_task(ctx.current_message, TaskState.canceled, ctx=ctx)
         await self.sse_manager.send_processing_status(
             ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
         )
@@ -501,10 +503,13 @@ class ResponseProcessor:
 
         task = get_task(ctx.current_message)
         if task:
-            if task.status is None:
-                task.status = TaskStatus(state=TaskState.submitted)
-            task.status.state = state
-            await self.tsm.persist_message(ctx.current_message)
+            if is_terminal_state(state):
+                await self.tsm.transition_task(
+                    ctx.current_message, state, persist=True, notify=False
+                )
+            else:
+                task.status = TaskStatus(state=state)
+                await self.tsm.persist_message(ctx.current_message)
 
         if state in TERMINAL_STATES:
             logger.info(
@@ -643,12 +648,6 @@ class ResponseProcessor:
 
             if is_failure_state(final_state):
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
-        else:
-            await self.tsm.notify_task(
-                ctx,
-                TaskState.completed,
-                content=streaming_state.full_response_text,
-            )
 
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
@@ -791,6 +790,7 @@ class ResponseProcessor:
                     context_id=task_info["context_id"],
                 )
             else:
+
                 async def _sync_fallback():
                     raw = await self.a2a_service.send_message_sync(
                         agent_card=agent_card,
@@ -817,7 +817,9 @@ class ResponseProcessor:
         except Exception as exc:
             logger.error("Agent error: %s", exc, exc_info=True)
             await self.tsm.transition_task(
-                current_message, TaskState.failed, error=str(exc),
+                current_message,
+                TaskState.failed,
+                error=str(exc),
                 ctx=ctx if task_info else None,
             )
             await self.sse_manager.send_error(room_id, str(exc))
@@ -836,9 +838,16 @@ class ResponseProcessor:
             return False, "", None
 
         return await self._process_sync_response(
-            response, current_message, agent_card, room_id,
-            message_id, task_info, ctx, token,
-            step_number=step_number, total_steps=total_steps,
+            response,
+            current_message,
+            agent_card,
+            room_id,
+            message_id,
+            task_info,
+            ctx,
+            token,
+            step_number=step_number,
+            total_steps=total_steps,
         )
 
     async def _process_sync_response(
@@ -932,9 +941,15 @@ class ResponseProcessor:
 
             if completed_task:
                 return await self._finalize_polled_task(
-                    completed_task, current_message, agent_card, room_id,
-                    message_id, task_info, ctx,
-                    step_number=step_number, total_steps=total_steps,
+                    completed_task,
+                    current_message,
+                    agent_card,
+                    room_id,
+                    message_id,
+                    task_info,
+                    ctx,
+                    step_number=step_number,
+                    total_steps=total_steps,
                 )
             else:
                 logger.warning(
@@ -973,9 +988,7 @@ class ResponseProcessor:
         if state == TaskState.completed and completed_task.artifacts:
             final_content = extract_text_from_artifacts(completed_task.artifacts)
         elif is_failure_state(state):
-            final_error = (
-                extract_error_message(completed_task) or f"Task {state_value}"
-            )
+            final_error = extract_error_message(completed_task) or f"Task {state_value}"
 
         if task_info:
             await self.tsm.notify_task(
