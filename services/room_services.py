@@ -1613,6 +1613,7 @@ class RoomServices:
         self,
         request: RoomCenterAgentMessageRequest,
         room_memory_content: MemoryContent | str | None,
+        quoted_text: str | None = None,
     ) -> RoomCenterAgentMessageResponse:
         """
         Process an agent message by building ChatGPT/Claude-style context.
@@ -1620,6 +1621,7 @@ class RoomServices:
         Args:
             request: The agent message request
             room_memory_content: Either MemoryContent (new style) or str (legacy)
+            quoted_text: Text the user highlighted and quoted from a previous message
 
         Returns:
             Response with the prepared A2A message including context
@@ -1680,13 +1682,22 @@ class RoomServices:
                         current_task=original_text,
                         agent_name=agent_name,
                         include_system_instruction=True,
+                        quoted_text=quoted_text,
                     )
                 elif (
                     isinstance(room_memory_content, str) and room_memory_content.strip()
                 ):
                     # Legacy style: Use raw text as context
+                    quoted_section = ""
+                    if quoted_text:
+                        quoted_section = (
+                            f"[Quoted context]\n"
+                            f'The user is referencing the following specific content:\n'
+                            f'"{quoted_text}"\n\n'
+                        )
                     context = (
                         f"[Context]\n{room_memory_content}\n\n"
+                        f"{quoted_section}"
                         f"[Current request]\nUser: {original_text}"
                     )
                     if agent_name:
@@ -1696,7 +1707,14 @@ class RoomServices:
                         )
                 else:
                     # No context available
-                    context = f"[Current request]\nUser: {original_text}"
+                    quoted_section = ""
+                    if quoted_text:
+                        quoted_section = (
+                            f"[Quoted context]\n"
+                            f'The user is referencing the following specific content:\n'
+                            f'"{quoted_text}"\n\n'
+                        )
+                    context = f"{quoted_section}[Current request]\nUser: {original_text}"
                     if agent_name:
                         context += (
                             f"\n\nYou are {agent_name}. "

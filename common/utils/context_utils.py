@@ -158,6 +158,7 @@ def build_context_for_agent(
     current_task: str,
     agent_name: str | None = None,
     include_system_instruction: bool = True,
+    quoted_text: str | None = None,
 ) -> str:
     """
     Build context string for an agent request (ChatGPT/Claude style).
@@ -165,14 +166,16 @@ def build_context_for_agent(
     This creates a clean conversation context that:
     1. Shows summarized older context if available
     2. Lists recent conversation turns clearly
-    3. Presents the current task/request
-    4. Optionally adds agent-specific instructions
+    3. Presents quoted context (if the user quoted a specific message)
+    4. Presents the current task/request
+    5. Optionally adds agent-specific instructions
 
     Args:
         memory_content: The room's MemoryContent with conversation history
         current_task: The current user request/task
         agent_name: Name of the agent receiving context (for personalization)
         include_system_instruction: Whether to add agent instructions at the end
+        quoted_text: Text the user highlighted and quoted from a previous message
 
     Returns:
         Formatted context string ready to send to agent
@@ -196,18 +199,31 @@ def build_context_for_agent(
                 parts.append(f"{speaker}: {turn.content}")
         parts.append("")  # Empty line before current task
 
-    # 3. Current task/request
+    # 3. Quoted context (user highlighted specific text from a previous message)
+    if quoted_text:
+        parts.append("[Quoted context]")
+        parts.append(f"The user is referencing the following specific content:")
+        parts.append(f'"{quoted_text}"')
+        parts.append("")
+
+    # 4. Current task/request
     parts.append("[Current request]")
     parts.append(f"User: {current_task}")
 
-    # 4. Agent instruction (optional)
+    # 5. Agent instruction (optional)
     if include_system_instruction and agent_name:
         parts.append("")
-        parts.append(
+        instruction = (
             f"You are {agent_name}. Execute the current request above and provide concrete results. "
             "Do NOT just describe or plan what should be done - actually complete the task and deliver the output. "
             "Use the conversation context if relevant."
         )
+        if quoted_text:
+            instruction += (
+                " Pay special attention to the quoted context — "
+                "the user is asking about or responding to that specific content."
+            )
+        parts.append(instruction)
 
     return "\n".join(parts)
 
