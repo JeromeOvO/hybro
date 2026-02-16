@@ -8,6 +8,7 @@ from common.auth import ClerkUser, get_current_user, get_current_user_with_query
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
+from services.database_service import db_service
 from services.sse_services import sse_manager
 
 logger = get_logger(__name__)
@@ -114,6 +115,21 @@ async def cancel_message(
         dict: Success status and message
     """
     try:
+        # Verify the message exists and the user owns the room it belongs to
+        message = await db_service.get_room_user_message_by_message_id(message_id)
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        room = await db_service.get_room_by_room_id(message.room_id)
+        if not room:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        if room.room_owner_id != user.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to cancel this message",
+            )
+
         # Add to local cache immediately (for same instance)
         sse_manager.cancel_message(message_id)
 
