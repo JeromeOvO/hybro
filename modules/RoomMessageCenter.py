@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -288,6 +289,35 @@ class RoomMessageCenter:
             await self._transition_task(
                 msg, TaskState.canceled, persist=True, notify=False
             )
+
+    @asynccontextmanager
+    async def _managed_queue(self, message_queue: deque):
+        """Context manager that cancels remaining items when the queue is
+        abandoned (failure, cancellation, or unhandled exception).
+
+        Usage::
+
+            async with self._managed_queue(queue) as q:
+                while len(q) > 0:
+                    current = q.popleft()
+                    ...
+                    if something_failed:
+                        return QueueResult.FAILED  # cleanup runs automatically
+
+        On normal completion (queue drained) the ``finally`` block is a no-op
+        because nothing remains.  On early exit the ``finally`` block cancels
+        every message still in the deque via ``_cancel_remaining_queue``.
+
+        **Important:** Messages that have already been ``popleft``-ed from the
+        deque are *not* visible to this cleanup.  The caller must transition
+        the *current* message itself before returning (e.g., via
+        ``_fail_task_and_notify`` or ``_transition_task``).
+        """
+        try:
+            yield message_queue
+        finally:
+            if len(message_queue) > 0:
+                await self._cancel_remaining_queue(message_queue)
 
     # ------------------------------------------------------------------
 
@@ -1053,227 +1083,213 @@ class RoomMessageCenter:
             "RoomMessageCenter: Starting to process message queue with %d messages",
             len(message_queue),
         )
-        while len(message_queue) > 0:
-            current_message = message_queue.popleft()
-            logger.info(
-                "RoomMessageCenter: Processing message %s (step %s/%s), %d messages remaining in queue",
-                current_message.message_id,
-                current_message.step_number,
-                current_message.total_steps,
-                len(message_queue),
-            )
-
-            # Check for cancellation before processing each agent message
-            if self.sse_manager.is_cancelled(user_message_id):
+        async with self._managed_queue(message_queue):
+            while len(message_queue) > 0:
+                current_message = message_queue.popleft()
                 logger.info(
-                    "RoomMessageCenter: Message processing cancelled for %s, stopping all processing",
-                    user_message_id,
+                    "RoomMessageCenter: Processing message %s (step %s/%s), %d messages remaining in queue",
+                    current_message.message_id,
+                    current_message.step_number,
+                    current_message.total_steps,
+                    len(message_queue),
                 )
-                # Persist canceled status for this step + all remaining steps
-                await self._cancel_remaining_queue(
-                    message_queue, current_message=current_message
-                )
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.CANCELED, user_message_id
-                )
-                self.sse_manager.clear_cancellation(user_message_id)
-                return QueueResult.CANCELED
 
-            # Assign agent if not already assigned
-            if current_message.agent_id is None:
-                agent = await self._assign_agent(current_message)
-                if agent is None:
-                    logger.error(
-                        "RoomMessageCenter: Failed to assign agent for message %s",
-                        current_message.message_id,
+                # Check for cancellation before processing each agent message
+                if self.sse_manager.is_cancelled(user_message_id):
+                    logger.info(
+                        "RoomMessageCenter: Message processing cancelled for %s, stopping all processing",
+                        user_message_id,
                     )
-                    error_text = (
-                        self._last_resolve_failure
-                        or "No available agent could be found for your request."
+                    # current_message was already popped — cancel it directly;
+                    # the context manager's finally block handles the rest.
+                    await self._transition_task(
+                        current_message, TaskState.canceled, persist=True, notify=False
                     )
-                    # Try to identify the intended agent from allowed_agent_ids
-                    intended_agent_id = None
-                    if isinstance(current_message.extend_info, dict):
-                        allowed = (
-                            current_message.extend_info.get("allowed_agent_ids") or []
-                        )
-                        if len(allowed) == 1:
-                            intended_agent_id = allowed[0]
-                    # Persist the intended agent_id so the frontend can show the right name
-                    if intended_agent_id:
-                        current_message.agent_id = intended_agent_id
-                    await self._fail_task_and_notify(
-                        room_id=room_id,
-                        message=current_message,
-                        error_text=error_text,
-                        agent_id=intended_agent_id,
+                    await self.sse_manager.send_processing_status(
+                        room_id, SSEProcessingStatus.CANCELED, user_message_id
                     )
-                    # Cancel remaining queue items so they don't orphan at
-                    # "submitted" in MongoDB (Issue 9 fix)
-                    await self._cancel_remaining_queue(message_queue)
-                    return QueueResult.FAILED
-            else:
-                # Agent already assigned, fetch it and verify it's active
-                agent = await self.database_service.get_agent_by_agent_id(
-                    current_message.agent_id
-                )
-                if agent is None:
-                    logger.error(
-                        "RoomMessageCenter: Assigned agent %s not found for message %s",
-                        current_message.agent_id,
-                        current_message.message_id,
-                    )
-                    # Persist failure on the current step (was a bare return
-                    # before — Issue 9 fix)
-                    await self._fail_task_and_notify(
-                        room_id=room_id,
-                        message=current_message,
-                        error_text="The assigned agent could not be found.",
-                        agent_id=current_message.agent_id,
-                    )
-                    await self._cancel_remaining_queue(message_queue)
-                    return QueueResult.FAILED
+                    self.sse_manager.clear_cancellation(user_message_id)
+                    return QueueResult.CANCELED
 
-                # Check if the assigned agent is still active
-                if agent.agent_status != AgentStatus.active:
-                    logger.warning(
-                        "RoomMessageCenter: Assigned agent %s is not active (status=%s), re-assigning for message %s",
-                        current_message.agent_id,
-                        agent.agent_status,
-                        current_message.message_id,
-                    )
-                    # Save original agent_id before clearing for the error notification
-                    original_agent_id = current_message.agent_id
-                    # Clear the agent_id and re-assign
-                    current_message.agent_id = None
+                # Assign agent if not already assigned
+                if current_message.agent_id is None:
                     agent = await self._assign_agent(current_message)
                     if agent is None:
                         logger.error(
-                            "RoomMessageCenter: Failed to re-assign agent for message %s after inactive agent",
+                            "RoomMessageCenter: Failed to assign agent for message %s",
                             current_message.message_id,
                         )
                         error_text = (
                             self._last_resolve_failure
-                            or "The assigned agent is no longer available and no alternative agent could be found."
+                            or "No available agent could be found for your request."
                         )
-                        # Restore original agent_id so the frontend can show the right name
-                        current_message.agent_id = original_agent_id
+                        # Try to identify the intended agent from allowed_agent_ids
+                        intended_agent_id = None
+                        if isinstance(current_message.extend_info, dict):
+                            allowed = (
+                                current_message.extend_info.get("allowed_agent_ids") or []
+                            )
+                            if len(allowed) == 1:
+                                intended_agent_id = allowed[0]
+                        # Persist the intended agent_id so the frontend can show the right name
+                        if intended_agent_id:
+                            current_message.agent_id = intended_agent_id
                         await self._fail_task_and_notify(
                             room_id=room_id,
                             message=current_message,
                             error_text=error_text,
-                            agent_id=original_agent_id,
+                            agent_id=intended_agent_id,
                         )
-                        # Cancel remaining queue items (Issue 9 fix)
-                        await self._cancel_remaining_queue(message_queue)
+                        return QueueResult.FAILED
+                else:
+                    # Agent already assigned, fetch it and verify it's active
+                    agent = await self.database_service.get_agent_by_agent_id(
+                        current_message.agent_id
+                    )
+                    if agent is None:
+                        logger.error(
+                            "RoomMessageCenter: Assigned agent %s not found for message %s",
+                            current_message.agent_id,
+                            current_message.message_id,
+                        )
+                        await self._fail_task_and_notify(
+                            room_id=room_id,
+                            message=current_message,
+                            error_text="The assigned agent could not be found.",
+                            agent_id=current_message.agent_id,
+                        )
                         return QueueResult.FAILED
 
-            # Check rate limits before processing (only if user_id is available)
-            if request_user_id:
-                rate_limit_result = await self.rate_limit_service.check_rate_limit(
-                    agent_id=agent.agent_id,
-                    user_id=request_user_id,
-                    rate_limit_per_user=agent.rate_limit_per_user_per_hour,
-                    rate_limit_system=agent.rate_limit_system_per_hour,
-                )
+                    # Check if the assigned agent is still active
+                    if agent.agent_status != AgentStatus.active:
+                        logger.warning(
+                            "RoomMessageCenter: Assigned agent %s is not active (status=%s), re-assigning for message %s",
+                            current_message.agent_id,
+                            agent.agent_status,
+                            current_message.message_id,
+                        )
+                        # Save original agent_id before clearing for the error notification
+                        original_agent_id = current_message.agent_id
+                        # Clear the agent_id and re-assign
+                        current_message.agent_id = None
+                        agent = await self._assign_agent(current_message)
+                        if agent is None:
+                            logger.error(
+                                "RoomMessageCenter: Failed to re-assign agent for message %s after inactive agent",
+                                current_message.message_id,
+                            )
+                            error_text = (
+                                self._last_resolve_failure
+                                or "The assigned agent is no longer available and no alternative agent could be found."
+                            )
+                            # Restore original agent_id so the frontend can show the right name
+                            current_message.agent_id = original_agent_id
+                            await self._fail_task_and_notify(
+                                room_id=room_id,
+                                message=current_message,
+                                error_text=error_text,
+                                agent_id=original_agent_id,
+                            )
+                            return QueueResult.FAILED
 
-                if not rate_limit_result.allowed:
-                    logger.warning(
-                        "RoomMessageCenter: Rate limit exceeded for agent %s, user %s: %s",
-                        agent.agent_id,
-                        request_user_id,
-                        rate_limit_result.reason,
-                    )
-                    # Send rate limit error via SSE with full details
-                    await self.sse_manager.send_rate_limit_error(
-                        room_id=room_id,
-                        message_id=user_message_id,
+                # Check rate limits before processing (only if user_id is available)
+                if request_user_id:
+                    rate_limit_result = await self.rate_limit_service.check_rate_limit(
                         agent_id=agent.agent_id,
-                        reason=rate_limit_result.reason or "Rate limit exceeded",
-                        retry_after_seconds=rate_limit_result.retry_after_seconds,
-                        user_requests_used=rate_limit_result.user_requests_used,
-                        user_requests_limit=rate_limit_result.user_requests_limit,
-                        system_requests_used=rate_limit_result.system_requests_used,
-                        system_requests_limit=rate_limit_result.system_requests_limit,
+                        user_id=request_user_id,
+                        rate_limit_per_user=agent.rate_limit_per_user_per_hour,
+                        rate_limit_system=agent.rate_limit_system_per_hour,
                     )
-                    await self.sse_manager.send_processing_status(
-                        room_id, SSEProcessingStatus.RATE_LIMITED, user_message_id
-                    )
-                    # Rate limiting is expected behavior, not a server error
+
+                    if not rate_limit_result.allowed:
+                        logger.warning(
+                            "RoomMessageCenter: Rate limit exceeded for agent %s, user %s: %s",
+                            agent.agent_id,
+                            request_user_id,
+                            rate_limit_result.reason,
+                        )
+                        # Send rate limit error via SSE with full details
+                        await self.sse_manager.send_rate_limit_error(
+                            room_id=room_id,
+                            message_id=user_message_id,
+                            agent_id=agent.agent_id,
+                            reason=rate_limit_result.reason or "Rate limit exceeded",
+                            retry_after_seconds=rate_limit_result.retry_after_seconds,
+                            user_requests_used=rate_limit_result.user_requests_used,
+                            user_requests_limit=rate_limit_result.user_requests_limit,
+                            system_requests_used=rate_limit_result.system_requests_used,
+                            system_requests_limit=rate_limit_result.system_requests_limit,
+                        )
+                        await self.sse_manager.send_processing_status(
+                            room_id, SSEProcessingStatus.RATE_LIMITED, user_message_id
+                        )
+                        # Rate limiting is expected behavior, not a server error
+                        return QueueResult.CANCELED
+
+                # Process the agent message
+                # Step info comes from the RoomAgentMessage (set during task decomposition)
+                # For direct chat (single agent, no debate), skip step progress UI
+                is_direct_chat = bool(
+                    current_message.extend_info
+                    and current_message.extend_info.get("is_direct_chat")
+                )
+                result = await self._process_single_agent_message(
+                    current_message,
+                    room_id,
+                    agent,
+                    user_message_id,
+                    step_number=None if is_direct_chat else current_message.step_number,
+                    total_steps=None if is_direct_chat else current_message.total_steps,
+                    quoted_text=quoted_text,
+                )
+
+                if result.status == ProcessingStatus.FAILED:
+                    return QueueResult.FAILED
+                elif result.status == ProcessingStatus.CANCELED:
                     return QueueResult.CANCELED
+                elif result.status == ProcessingStatus.PAUSED:
+                    # Push notification task submitted - save continuation state
+                    # First, queue up next messages so they're included in continuation
+                    if not is_direct_chat:
+                        await self._queue_next_messages(
+                            current_message, message_queue, room_id
+                        )
 
-            # Process the agent message
-            # Step info comes from the RoomAgentMessage (set during task decomposition)
-            # For direct chat (single agent, no debate), skip step progress UI
-            is_direct_chat = bool(
-                current_message.extend_info
-                and current_message.extend_info.get("is_direct_chat")
-            )
-            result = await self._process_single_agent_message(
-                current_message,
-                room_id,
-                agent,
-                user_message_id,
-                step_number=None if is_direct_chat else current_message.step_number,
-                total_steps=None if is_direct_chat else current_message.total_steps,
-                quoted_text=quoted_text,
-            )
+                    if result.message_id:
+                        await self._save_queue_continuation(
+                            message_id=result.message_id,
+                            message_queue=message_queue,
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            request_user_id=request_user_id,
+                            current_agent=agent,
+                        )
+                        logger.info(
+                            "RoomMessageCenter: Queue paused for message %s with %d remaining messages",
+                            result.message_id,
+                            len(message_queue),
+                        )
+                    return QueueResult.PAUSED  # Successfully paused, webhook will resume
 
-            if result.status == ProcessingStatus.FAILED:
-                # Cancel remaining queue items so they don't orphan at
-                # "submitted" in MongoDB (Issue 9 fix).  The current step was
-                # already transitioned to failed by the sub-handler.
-                await self._cancel_remaining_queue(message_queue)
-                return QueueResult.FAILED
-            elif result.status == ProcessingStatus.CANCELED:
-                # Graceful cancellation — current step was already persisted as
-                # canceled by _handle_streaming_cancellation; persist remaining
-                # queue items so they don't appear as "running" after refresh.
-                await self._cancel_remaining_queue(message_queue)
-                return QueueResult.CANCELED
-            elif result.status == ProcessingStatus.PAUSED:
-                # Push notification task submitted - save continuation state
-                # First, queue up next messages so they're included in continuation
-                if not is_direct_chat:
-                    await self._queue_next_messages(
-                        current_message, message_queue, room_id
+                # Record the request for rate limiting (only if user_id is available)
+                if request_user_id:
+                    await self.rate_limit_service.record_request(
+                        agent_id=agent.agent_id,
+                        user_id=request_user_id,
                     )
 
-                if result.message_id:
-                    await self._save_queue_continuation(
-                        message_id=result.message_id,
-                        message_queue=message_queue,
+                # Store agent response in conversation history (ChatGPT/Claude style)
+                if result.response_text:
+                    await self.room_memory_service.add_agent_response_to_memory(
                         room_id=room_id,
-                        user_message_id=user_message_id,
-                        request_user_id=request_user_id,
-                        current_agent=agent,
+                        agent_id=current_message.agent_id,
+                        agent_name=agent.agent_card.name if agent else "Agent",
+                        response_text=result.response_text,
                     )
-                    logger.info(
-                        "RoomMessageCenter: Queue paused for message %s with %d remaining messages",
-                        result.message_id,
-                        len(message_queue),
-                    )
-                return QueueResult.PAUSED  # Successfully paused, webhook will resume
 
-            # Record the request for rate limiting (only if user_id is available)
-            if request_user_id:
-                await self.rate_limit_service.record_request(
-                    agent_id=agent.agent_id,
-                    user_id=request_user_id,
-                )
-
-            # Store agent response in conversation history (ChatGPT/Claude style)
-            if result.response_text:
-                await self.room_memory_service.add_agent_response_to_memory(
-                    room_id=room_id,
-                    agent_id=current_message.agent_id,
-                    agent_name=agent.agent_card.name if agent else "Agent",
-                    response_text=result.response_text,
-                )
-
-            # Queue up next messages in the chain (skip for direct chat)
-            if not is_direct_chat:
-                await self._queue_next_messages(current_message, message_queue, room_id)
+                # Queue up next messages in the chain (skip for direct chat)
+                if not is_direct_chat:
+                    await self._queue_next_messages(current_message, message_queue, room_id)
 
         logger.info("RoomMessageCenter: Finished processing message queue")
         return QueueResult.COMPLETED
