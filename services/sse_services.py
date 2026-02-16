@@ -1,9 +1,10 @@
 import asyncio
 import json
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from enum import Enum
+from cachetools import TTLCache
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -73,8 +74,13 @@ class SSEManager:
         self.room_connections: dict[str, dict[str, SSEConnection]] = {}
         self.lock = asyncio.Lock()
 
-        # Message cancellation tracking
-        self.cancelled_messages: set[str] = set()
+        # Message cancellation tracking — TTL cache auto-evicts entries that
+        # are never cleared by a processing checkpoint (e.g. message already
+        # finished or was never started).  maxsize is generous; TTL is the
+        # primary eviction mechanism.
+        self.cancelled_messages: TTLCache[str, bool] = TTLCache(
+            maxsize=10_000, ttl=3600
+        )
         self._db_collection = None
         self._change_stream_task = None
         self._shutdown_flag = False
@@ -445,7 +451,7 @@ class SSEManager:
                             break
                         try:
                             message_id = change["fullDocument"]["message_id"]
-                            self.cancelled_messages.add(message_id)
+                            self.cancelled_messages[message_id] = True
                             logger.info(
                                 f"Received cancellation via change stream: {message_id}"
                             )
@@ -478,7 +484,7 @@ class SSEManager:
         Args:
             message_id: The message ID to cancel
         """
-        self.cancelled_messages.add(message_id)
+        self.cancelled_messages[message_id] = True
         logger.info(f"Message {message_id} marked as cancelled in local cache")
 
     def is_cancelled(self, message_id: str) -> bool:
@@ -502,7 +508,7 @@ class SSEManager:
         Args:
             message_id: The message ID to clear
         """
-        self.cancelled_messages.discard(message_id)
+        self.cancelled_messages.pop(message_id, None)
         logger.debug(f"Cleared cancellation flag for message {message_id}")
 
 

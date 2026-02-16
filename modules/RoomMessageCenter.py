@@ -892,7 +892,16 @@ class RoomMessageCenter:
                 room_id=room_id, success=True, error=None, status_code=200
             )
 
-        # QueueResult.COMPLETED or CANCELED — proceed with summary + completion.
+        if queue_result == QueueResult.CANCELED:
+            # CANCELED status was already sent to the frontend inside the queue
+            # processor. Return early — do NOT send COMPLETED or trigger summary.
+            return OrchestrationResponse(
+                success=True,
+                error="Processing cancelled by user",
+                status_code=200,
+            )
+
+        # QueueResult.COMPLETED — proceed with summary + completion.
         # Let the local room coordinator perform any post-processing logic
         # such as generating debate summaries. Coordination failures should
         # not break the main message processing flow.
@@ -1278,7 +1287,11 @@ class RoomMessageCenter:
                     room_id, SSEProcessingStatus.ERROR, user_message_id
                 )
                 return False
-            # COMPLETED or CANCELED — fall through to summary
+            if queue_result == QueueResult.CANCELED:
+                # CANCELED status was already sent inside the queue processor.
+                # Return early — do NOT send COMPLETED or trigger summary.
+                return True
+            # COMPLETED — fall through to summary
 
         # Trigger summary + completion (covers both empty-queue and
         # completed-queue cases).  An empty remaining_queue means the
