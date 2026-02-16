@@ -16,6 +16,7 @@ def _enum_value(v: Any) -> Any:
     """Extract the .value from an Enum member (e.g. TaskState), or return as-is."""
     return v.value if isinstance(v, Enum) else v
 
+
 logger = get_logger(__name__)
 
 
@@ -85,6 +86,14 @@ class SSEManager:
         self._change_stream_task = None
         self._shutdown_flag = False
 
+        # Deduplication cache for terminal processing statuses.
+        # Prevents double-sends (e.g. CANCELED then COMPLETED) from reaching
+        # the frontend.  Key: "room_id:message_id", value: first terminal
+        # status sent.  5-minute TTL is well beyond any processing duration.
+        self._terminal_status_sent: TTLCache[str, str] = TTLCache(
+            maxsize=10_000, ttl=300
+        )
+
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
         async with self.lock:
@@ -121,7 +130,9 @@ class SSEManager:
         """broadcast message to room"""
         async with self.lock:
             if room_id not in self.room_connections:
-                logger.warning(f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!")
+                logger.warning(
+                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
+                )
                 return
 
             disconnected_connections = []
@@ -295,6 +306,22 @@ class SSEManager:
             message_id: The user message ID being processed
             details: Optional details about the status
         """
+        # A-5: Deduplicate terminal statuses — once a terminal status has been
+        # sent for a (room, message) pair, suppress any subsequent terminal
+        # status.  This is the safety net that makes double-send bugs harmless.
+        if status in PROCESSING_DONE_STATUSES and message_id:
+            dedup_key = f"{room_id}:{message_id}"
+            already_sent = self._terminal_status_sent.get(dedup_key)
+            if already_sent is not None:
+                logger.warning(
+                    "Suppressing duplicate terminal status %s for %s (already sent %s)",
+                    status,
+                    dedup_key,
+                    already_sent,
+                )
+                return
+            self._terminal_status_sent[dedup_key] = status
+
         # Persist processing state to room for page refresh recovery
         # Set processing_message_id when processing starts, clear it when done
         if status == SSEProcessingStatus.PROCESSING and message_id:

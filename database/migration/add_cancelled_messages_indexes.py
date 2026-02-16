@@ -3,7 +3,7 @@ Migration: Add indexes for cancelled_messages collection
 
 This migration creates the cancelled_messages collection with appropriate indexes:
 - Unique index on message_id (primary lookup key)
-- TTL index on cancelled_at (auto-cleanup after 1 hour)
+- TTL index on cancelled_at (auto-cleanup after 3 days)
 
 Run this script once to set up the collection:
     python -m database.migration.add_cancelled_messages_indexes
@@ -31,8 +31,8 @@ async def create_cancelled_messages_indexes():
         await collection.create_index("message_id", unique=True)
         print("Created unique index on message_id")
 
-        # 2. TTL index on cancelled_at (auto-delete after 1 hour)
-        # MongoDB will automatically delete documents 1 hour after cancelled_at timestamp
+        # 2. TTL index on cancelled_at (auto-delete after 3 days)
+        # MongoDB will automatically delete documents 3 days after cancelled_at timestamp
         await collection.create_index(
             "cancelled_at",
             expireAfterSeconds=3600 * 24 * 3,  # 3 days in seconds

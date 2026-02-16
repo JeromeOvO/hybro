@@ -1,5 +1,6 @@
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
 
@@ -55,6 +56,19 @@ from services.sse_services import sse_manager
 from services.task_service import task_service
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class ParseResult:
+    """Result of ``parse_user_message``.
+
+    Replaces the previous ``bool`` return so the caller can distinguish
+    cancellation from failure without ``parse_user_message`` sending SSE
+    events directly (Issue 20).
+    """
+
+    success: bool
+    canceled: bool = False
 
 
 class RoomServices:
@@ -995,7 +1009,7 @@ class RoomServices:
         target_group: str | None = None,
         agents: list | None = None,
         conversation_context: str | None = None,
-    ) -> bool:
+    ) -> ParseResult:
         """
         Parse user message
 
@@ -1007,6 +1021,10 @@ class RoomServices:
             is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
             agents: Full Agent objects for detailed LLM context (optional)
+
+        Returns:
+            ParseResult with ``success`` and ``canceled`` flags.  The caller
+            is responsible for sending the appropriate SSE terminal status.
         """
         # Check for cancellation before parsing
         if self.sse_manager.is_cancelled(user_message_id):
@@ -1014,11 +1032,8 @@ class RoomServices:
                 "RoomServices: Message parsing cancelled for %s, stopping all processing",
                 user_message_id,
             )
-            await self.sse_manager.send_processing_status(
-                room_id, SSEProcessingStatus.CANCELED, user_message_id
-            )
             self.sse_manager.clear_cancellation(user_message_id)
-            return False
+            return ParseResult(success=False, canceled=True)
 
         # Direct chat: single agent + no debate = skip LLM parsing entirely
         direct_chat = not is_debate_mode and len(selected_agent_set) == 1
@@ -1055,7 +1070,7 @@ class RoomServices:
 
         if not parsed_result:
             logger.warning("No parsed result from LLM")
-            return False
+            return ParseResult(success=False)
 
         extend_info = {
             "allowed_agent_ids": list(selected_agent_set.keys()),
@@ -1071,7 +1086,7 @@ class RoomServices:
             extend_info=extend_info,
         )
 
-        return True if agent_messages else False
+        return ParseResult(success=True) if agent_messages else ParseResult(success=False)
 
     async def send_message_to_room(
         self, request: RoomCenterUserMessageRequest, target_group: str = "room_team"
@@ -1163,17 +1178,22 @@ class RoomServices:
             agents=agents,
             conversation_context=conversation_context,
         )
-        if not parse_user_message_success:
-            await self.sse_manager.send_processing_status(
-                request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
-                details="Failed to parse user message",
-            )
+        if not parse_user_message_success.success:
+            if parse_user_message_success.canceled:
+                await self.sse_manager.send_processing_status(
+                    request.room_id, SSEProcessingStatus.CANCELED, user_message.message_id
+                )
+            else:
+                await self.sse_manager.send_processing_status(
+                    request.room_id, SSEProcessingStatus.FAILED, user_message.message_id,
+                    details="Failed to parse user message",
+                )
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
-                success=False,
-                error="Failed to parse user message",
-                status_code=500,
+                success=parse_user_message_success.canceled,
+                error="Failed to parse user message" if not parse_user_message_success.canceled else None,
+                status_code=200 if parse_user_message_success.canceled else 500,
             )
 
         return RoomCenterUserMessageResponse(
