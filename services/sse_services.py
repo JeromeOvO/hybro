@@ -1,13 +1,16 @@
 import asyncio
 import json
+import random
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from cachetools import TTLCache
 
+from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from config.settings import settings
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
 
@@ -15,6 +18,7 @@ from services.database_service import db_service
 def _enum_value(v: Any) -> Any:
     """Extract the .value from an Enum member (e.g. TaskState), or return as-is."""
     return v.value if isinstance(v, Enum) else v
+
 
 logger = get_logger(__name__)
 
@@ -84,6 +88,22 @@ class SSEManager:
         self._db_collection = None
         self._change_stream_task = None
         self._shutdown_flag = False
+        self._change_stream_connected = False
+
+        # Deduplication cache for terminal processing statuses.
+        # Prevents double-sends (e.g. CANCELED then COMPLETED) from reaching
+        # the frontend.  Key: "room_id:message_id", value: first terminal
+        # status sent.  5-minute TTL is well beyond any processing duration.
+        self._terminal_status_sent: TTLCache[str, str] = TTLCache(
+            maxsize=10_000, ttl=300
+        )
+
+        # CancellationToken store — keyed by message_id.  Tokens are created
+        # when processing starts and looked up by the cancel endpoint /
+        # change-stream watcher to signal cancellation instantly.
+        self._cancellation_tokens: TTLCache[str, CancellationToken] = TTLCache(
+            maxsize=10_000, ttl=3600
+        )
 
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
@@ -121,7 +141,9 @@ class SSEManager:
         """broadcast message to room"""
         async with self.lock:
             if room_id not in self.room_connections:
-                logger.warning(f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!")
+                logger.warning(
+                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
+                )
                 return
 
             disconnected_connections = []
@@ -295,6 +317,22 @@ class SSEManager:
             message_id: The user message ID being processed
             details: Optional details about the status
         """
+        # Deduplicate terminal statuses — once a terminal status has been
+        # sent for a (room, message) pair, suppress any subsequent terminal
+        # status.  This is the safety net that makes double-send bugs harmless.
+        if status in PROCESSING_DONE_STATUSES and message_id:
+            dedup_key = f"{room_id}:{message_id}"
+            already_sent = self._terminal_status_sent.get(dedup_key)
+            if already_sent is not None:
+                logger.warning(
+                    "Suppressing duplicate terminal status %s for %s (already sent %s)",
+                    status,
+                    dedup_key,
+                    already_sent,
+                )
+                return
+            self._terminal_status_sent[dedup_key] = status
+
         # Persist processing state to room for page refresh recovery
         # Set processing_message_id when processing starts, clear it when done
         if status == SSEProcessingStatus.PROCESSING and message_id:
@@ -437,34 +475,110 @@ class SSEManager:
         self._change_stream_task = asyncio.create_task(self._watch_cancellations())
         logger.info("Change stream watcher started for message cancellations")
 
+    def _handle_change_event(self, change: dict) -> None:
+        """Process a single change-stream event (non-async, pure in-memory).
+
+        Adds the message to the cancelled set and signals the corresponding
+        ``CancellationToken`` if one exists.
+        """
+        message_id = change["fullDocument"]["message_id"]
+        self.cancelled_messages[message_id] = True
+        token = self._cancellation_tokens.get(message_id)
+        if token is not None:
+            token.cancel()
+        logger.info(f"Received cancellation via change stream: {message_id}")
+
+    async def _consume_change_stream(self, change_stream, resume_token):
+        """Iterate over a change stream cursor, processing each event.
+
+        Returns the last resume token seen (may be the same as *resume_token*
+        if no events were received before the cursor closed).
+        """
+        if resume_token is not None:
+            logger.info("Reconnected to cancellation change stream (resumed)")
+        else:
+            logger.info("Connected to cancellation change stream")
+
+        async for change in change_stream:
+            if self._shutdown_flag:
+                break
+            try:
+                self._handle_change_event(change)
+            except KeyError as e:
+                logger.error(f"Invalid change stream document: {e}")
+
+            # Persist the resume token after each event so that a
+            # reconnection doesn't replay it.
+            resume_token = change.get("_id")
+
+        return resume_token
+
     async def _watch_cancellations(self):
-        """Background task that watches MongoDB for cancellation changes"""
+        """Background task that watches MongoDB change stream for cancellation inserts.
+
+        Resilience features (Issue 17):
+        - **Exponential backoff** with jitter on connection failures.
+        - **Resume token** — after each event the resume token is saved so that
+          reconnections resume from the last successfully processed event instead
+          of replaying from "now".
+        - **Health flag** — ``_change_stream_connected`` is kept up-to-date so
+          the ``/health`` endpoint can report whether cross-instance cancellation
+          propagation is operational.
+        """
+        resume_token: dict | None = None
+        backoff_delay = settings.cs_backoff_base
+        consecutive_failures = 0
+
         while not self._shutdown_flag:
             try:
                 pipeline = [{"$match": {"operationType": "insert"}}]
+                watch_kwargs: dict[str, Any] = {}
+                if resume_token is not None:
+                    watch_kwargs["resume_after"] = resume_token
 
-                async with self._db_collection.watch(pipeline) as change_stream:
-                    logger.info("Connected to cancellation change stream")
-
-                    async for change in change_stream:
-                        if self._shutdown_flag:
-                            break
-                        try:
-                            message_id = change["fullDocument"]["message_id"]
-                            self.cancelled_messages[message_id] = True
-                            logger.info(
-                                f"Received cancellation via change stream: {message_id}"
-                            )
-                        except KeyError as e:
-                            logger.error(f"Invalid change stream document: {e}")
+                try:
+                    async with self._db_collection.watch(
+                        pipeline, **watch_kwargs
+                    ) as change_stream:
+                        self._change_stream_connected = True
+                        backoff_delay = settings.cs_backoff_base
+                        consecutive_failures = 0
+                        resume_token = await self._consume_change_stream(
+                            change_stream, resume_token
+                        )
+                finally:
+                    self._change_stream_connected = False
 
             except asyncio.CancelledError:
                 logger.info("Change stream watcher cancelled")
                 break
             except Exception as e:
+                consecutive_failures += 1
                 if not self._shutdown_flag:
-                    logger.error(f"Change stream error: {e}. Reconnecting in 5s...")
-                    await asyncio.sleep(5)
+                    # If the resume token is stale (oplog rolled past it),
+                    # MongoDB will reject every reconnect.  After a few
+                    # consecutive failures, fall back to "start from now".
+                    if consecutive_failures >= 3 and resume_token is not None:
+                        logger.warning(
+                            "Clearing stale resume token after %d consecutive "
+                            "failures — will resume from current oplog position",
+                            consecutive_failures,
+                        )
+                        resume_token = None
+
+                    jitter = backoff_delay * settings.cs_jitter_fraction
+                    delay = backoff_delay + random.uniform(-jitter, jitter)
+                    logger.warning(
+                        "Change stream error: %s. Reconnecting in %.1fs "
+                        "(backoff=%.1fs)...",
+                        e,
+                        delay,
+                        backoff_delay,
+                    )
+                    await asyncio.sleep(delay)
+                    backoff_delay = min(
+                        backoff_delay * settings.cs_backoff_factor, settings.cs_backoff_max
+                    )
 
     async def stop_change_stream_watcher(self):
         """Stop the change stream watcher. Should be called on application shutdown."""
@@ -476,21 +590,46 @@ class SSEManager:
             except asyncio.CancelledError:
                 logger.info("Change stream watcher stopped")
 
+    @property
+    def change_stream_connected(self) -> bool:
+        """Whether the change stream watcher is currently connected.
+
+        Returns ``True`` when the watcher has an open change stream cursor and
+        is actively listening for cancellation events.  Returns ``False`` when
+        the watcher is reconnecting, has not been started, or has been stopped.
+
+        Intended for use by the ``/health`` endpoint so operators can detect
+        degraded cross-instance cancellation propagation.
+        """
+        return self._change_stream_connected
+
     def cancel_message(self, message_id: str) -> None:
         """
         Mark a message as cancelled (local cache only).
         Actual persistence to MongoDB should be done separately.
 
+        If a ``CancellationToken`` exists for this message_id the internal
+        ``asyncio.Event`` is set immediately, unblocking any coroutine in
+        ``token.race()`` without waiting for the next polling checkpoint.
+
         Args:
             message_id: The message ID to cancel
         """
         self.cancelled_messages[message_id] = True
+        token = self._cancellation_tokens.get(message_id)
+        if token is not None:
+            token.cancel()
         logger.info(f"Message {message_id} marked as cancelled in local cache")
 
     def is_cancelled(self, message_id: str) -> bool:
         """
         Check if a message has been cancelled.
         Uses local cache updated by change stream.
+
+        .. deprecated::
+            Prefer ``CancellationToken.is_cancelled`` or ``token.check()``
+            which are threaded through ``ProcessingContext``.  This method
+            is kept for backward-compatibility during the migration.
 
         Args:
             message_id: The message ID to check
@@ -509,7 +648,36 @@ class SSEManager:
             message_id: The message ID to clear
         """
         self.cancelled_messages.pop(message_id, None)
+        self._cancellation_tokens.pop(message_id, None)
         logger.debug(f"Cleared cancellation flag for message {message_id}")
+
+    # ------------------------------------------------------------------
+    # CancellationToken management (A-3)
+    # ------------------------------------------------------------------
+
+    def create_token(self, message_id: str) -> CancellationToken:
+        """Create and store a ``CancellationToken`` for *message_id*.
+
+        If the message was already marked as cancelled (e.g. the cancel
+        request arrived before processing started), the token is pre-
+        signalled so the very first ``token.check()`` raises immediately.
+
+        Returns the newly created token.
+        """
+        token = CancellationToken(message_id=message_id)
+        # Pre-signal if the message was cancelled before the token existed
+        if message_id in self.cancelled_messages:
+            token.cancel()
+        self._cancellation_tokens[message_id] = token
+        return token
+
+    def get_token(self, message_id: str) -> CancellationToken | None:
+        """Return the ``CancellationToken`` for *message_id*, or ``None``."""
+        return self._cancellation_tokens.get(message_id)
+
+    def remove_token(self, message_id: str) -> None:
+        """Remove (but do not cancel) the token for *message_id*."""
+        self._cancellation_tokens.pop(message_id, None)
 
 
 # global SSE manager instance

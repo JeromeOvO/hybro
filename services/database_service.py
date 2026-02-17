@@ -811,6 +811,24 @@ class DatabaseService:
             )
             return []
 
+    async def cancel_descendants(self, message_id: str) -> int:
+        """Cancel all agent messages downstream in the related_message_id chain.
+
+        Delegates to the MongoDB implementation which walks the chain via BFS
+        and bulk-updates non-terminal descendants to ``canceled``.
+
+        Returns the number of messages actually modified, or 0 on error.
+        """
+        try:
+            return await self.mongo.cancel_descendants(message_id)
+        except Exception as e:
+            logger.error(
+                "Failed to cancel descendants of message %s: %s",
+                message_id,
+                str(e),
+            )
+            return 0
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from uuid import uuid4
@@ -7,6 +8,7 @@ from a2a.client import A2ACardResolver, A2AClient
 from a2a.client.errors import A2AClientHTTPError
 from a2a.types import (
     AgentCard,
+    CancelTaskRequest,
     JSONRPCErrorResponse,
     Message,
     MessageSendConfiguration,
@@ -18,6 +20,7 @@ from a2a.types import (
     SendStreamingMessageRequest,
     SendStreamingMessageResponse,
     Task,
+    TaskIdParams,
     TaskState,
     TaskStatus,
     TextPart,
@@ -31,7 +34,11 @@ from common.utils.logger import get_logger
 from config.settings import settings
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
-from services.a2a_constants import INTERACTIVE_STATES, SyntheticTaskId, is_terminal_state
+from services.a2a_constants import (
+    INTERACTIVE_STATES,
+    SyntheticTaskId,
+    is_terminal_state,
+)
 
 logger = get_logger(__name__)
 
@@ -819,6 +826,65 @@ class A2AService:
         logger.info(f"process_a2a_response: response_data: {response_data}")
 
         return response_data
+
+    async def cancel_remote_task(
+        self,
+        agent_card: AgentCard,
+        task_id: str,
+        *,
+        timeout: float = 5.0,
+    ) -> bool:
+        """Send a best-effort cancel request to a remote A2A agent.
+
+        This is fire-and-forget: if the agent doesn't support cancellation or
+        returns an error, we log and continue — the local cancellation must
+        not depend on the remote agent cooperating.
+
+        Args:
+            agent_card: The agent's card information.
+            task_id: The remote task ID to cancel.
+            timeout: Maximum seconds to wait for the cancel round-trip.
+                Defaults to 5 s — long enough for a healthy agent but short
+                enough to avoid blocking callers.
+
+        Returns True if the cancel request was acknowledged, False otherwise.
+        """
+        try:
+            a2a_client = await self.create_a2a_client(agent_card)
+            cancel_request = CancelTaskRequest(
+                id=str(uuid4()),
+                params=TaskIdParams(id=task_id),
+            )
+            response = await asyncio.wait_for(
+                a2a_client.cancel_task(cancel_request),
+                timeout=timeout,
+            )
+            if isinstance(response.root, JSONRPCErrorResponse):
+                logger.debug(
+                    "a2a_service: Remote cancel rejected for task %s: %s",
+                    task_id,
+                    response.root.error.message,
+                )
+                return False
+            logger.info(
+                "a2a_service: Remote cancel acknowledged for task %s",
+                task_id,
+            )
+            return True
+        except TimeoutError:
+            logger.debug(
+                "a2a_service: Remote cancel timed out for task %s after %.1fs",
+                task_id,
+                timeout,
+            )
+            return False
+        except Exception as e:
+            logger.debug(
+                "a2a_service: Remote cancel failed for task %s: %s",
+                task_id,
+                e,
+            )
+            return False
 
 
 a2a_service = A2AService()

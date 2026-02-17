@@ -144,7 +144,10 @@ app.add_middleware(
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "change_stream_connected": sse_manager.change_stream_connected,
+    }
 
 
 # Include API routers with /api/v1 prefix and global authentication
