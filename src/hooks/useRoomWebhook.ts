@@ -83,6 +83,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // contradictory messages after the "timed out" banner.
   const cancelTimedOutRef = useRef(false)
 
+  // Tracks whether SSE disconnected at any point during the current processing cycle.
+  // When true, a reconciliation refetch fires after processing completes to catch
+  // any missed events. When false (happy path), the refetch is skipped entirely.
+  const sseHadDisconnectionRef = useRef(false)
+
   // Clean up cancel timeout on unmount
   useEffect(() => {
     return () => {
@@ -487,6 +492,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     agentNameCache.current = {}
     placeholderDismissedRef.current = false
     cancelTimedOutRef.current = false
+    sseHadDisconnectionRef.current = false
     if (cancelTimeoutRef.current) {
       clearTimeout(cancelTimeoutRef.current)
       cancelTimeoutRef.current = null
@@ -676,11 +682,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             }
             cancelTimedOutRef.current = false
 
-            // Reconcile with DB after processing completes (belt-and-suspenders)
-            // Small delay to let backend finish any async cleanup
-            setTimeout(() => {
-              messagesQueryRef.current?.refetch()
-            }, 1500)
+            // Reconcile with DB only if SSE had a gap during this processing cycle.
+            // In the happy path (SSE stayed connected), live messages are complete
+            // and no refetch is needed — avoiding a disruptive full re-render.
+            if (sseHadDisconnectionRef.current) {
+              console.log('🔄 SSE had disconnection during processing — reconciling with DB')
+              setTimeout(() => {
+                messagesQueryRef.current?.refetch()
+              }, 1500)
+              sseHadDisconnectionRef.current = false
+            }
           }
         }
         break
@@ -851,6 +862,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     setSseError(sseError ? String(sseError) : null)
   }, [sseConnected, sseError, setSseConnected, setSseError])
 
+  // Track SSE disconnections during active processing.
+  // If SSE drops while agents are working, we may have missed events and need
+  // to reconcile with DB after processing completes.
+  useEffect(() => {
+    if (!sseConnected && processing) {
+      console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
+      sseHadDisconnectionRef.current = true
+    }
+  }, [sseConnected, processing])
+
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
     roomName: string,
@@ -990,6 +1011,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       // Defensively clear any stale cancelling state from a previous workflow
       setCancelling(false)
       cancelTimedOutRef.current = false
+      sseHadDisconnectionRef.current = false
       if (cancelTimeoutRef.current) {
         clearTimeout(cancelTimeoutRef.current)
         cancelTimeoutRef.current = null
