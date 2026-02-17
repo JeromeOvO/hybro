@@ -556,7 +556,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               ? (sseMessage.data.status_message || null)
               : undefined,
             // Gap 17: Pass through as-is — undefined preserves existing values
-            // instead of coercing to false which could clear an input_required state.
+            // instead of coercing to false which could clear an input-required state.
             taskRequiresInput: sseMessage.data.requires_input,
             taskRequiresAuth: sseMessage.data.requires_auth,
             taskContent: sseMessage.data.task_content,

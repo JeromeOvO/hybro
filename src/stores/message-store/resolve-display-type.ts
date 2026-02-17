@@ -33,6 +33,6 @@ export function resolveDisplayType(msg: {
     return 'agent-bubble'
   }
 
-  // Everything else: working, failed, canceled, input_required, etc.
+  // Everything else: working, failed, canceled, input-required, etc.
   return 'task-status'
 }

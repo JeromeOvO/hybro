@@ -67,17 +67,17 @@ describe('resolveDisplayType', () => {
     })).toBe('task-status')
   })
 
-  it('returns task-status for input_required task', () => {
+  it('returns task-status for input-required task', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
-      taskStatus: 'input_required',
+      taskStatus: 'input-required',
     })).toBe('task-status')
   })
 
-  it('returns task-status for auth_required task', () => {
+  it('returns task-status for auth-required task', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
-      taskStatus: 'auth_required',
+      taskStatus: 'auth-required',
     })).toBe('task-status')
   })
 

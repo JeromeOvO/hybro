@@ -335,7 +335,7 @@ export function TaskStatusMessage({
   }
 
   // Input required state
-  if (status === "input_required") {
+  if (status === "input-required") {
     const inputContent = statusMessage || "The agent needs additional information to continue."
     const isLong = inputContent.length > LONG_CONTENT_THRESHOLD
     return (
@@ -377,7 +377,7 @@ export function TaskStatusMessage({
   }
 
   // Auth required state
-  if (status === "auth_required") {
+  if (status === "auth-required") {
     const authContent = statusMessage || "Please authenticate to continue."
     const isLong = authContent.length > LONG_CONTENT_THRESHOLD
     return (
