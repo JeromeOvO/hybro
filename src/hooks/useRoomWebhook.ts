@@ -74,6 +74,20 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Cancellation timeout ref (FE-3 safety net)
   const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Ref for messagesQuery so SSE handler can refetch without stale closures
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messagesQueryRef = useRef<any>(null)
+
+  // Tracks whether the cancel timeout has already fired.
+  // When true, SSE handlers skip showing cancel/done banners to avoid
+  // contradictory messages after the "timed out" banner.
+  const cancelTimedOutRef = useRef(false)
+
+  // Tracks whether SSE disconnected at any point during the current processing cycle.
+  // When true, a reconciliation refetch fires after processing completes to catch
+  // any missed events. When false (happy path), the refetch is skipped entirely.
+  const sseHadDisconnectionRef = useRef(false)
+
   // Clean up cancel timeout on unmount
   useEffect(() => {
     return () => {
@@ -424,6 +438,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     },
   })
 
+  // Keep messagesQueryRef in sync
+  messagesQueryRef.current = messagesQuery
+
   const liveMessages = useMemo(
     () => liveMessagesByRoom[roomId] || [],
     [liveMessagesByRoom, roomId]
@@ -435,27 +452,29 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       ; (messagesQuery.data || []).forEach((msg: MessageData) => map.set(msg.id, msg))
     // overlay live messages (SSE/optimistic)
     liveMessages.forEach((msg: MessageData) => map.set(msg.id, msg))
-    // Sort messages with special handling for task messages:
-    // - For task messages (those with step_number), prioritize step_number over timestamp
-    //   This ensures task bubbles maintain correct order even when timestamps differ slightly
-    // - For non-task messages, sort by timestamp
-    // - Use message_id as final tiebreaker for stability
+    // Sort messages: timestamp-first with step_number tiebreaker within the same
+    // workflow batch (timestamps within 60 seconds).  This keeps task bubbles from
+    // different questions separated chronologically while preserving step ordering
+    // within each workflow.  Use message_id as final tiebreaker for stability.
     return Array.from(map.values()).sort((a, b) => {
+      const aTime = new Date(a.timestamp).getTime()
+      const bTime = new Date(b.timestamp).getTime()
+      const timeDiff = aTime - bTime
+
       const aHasStep = a.step_number !== undefined && a.step_number !== null
       const bHasStep = b.step_number !== undefined && b.step_number !== null
 
-      // If both messages have step_number, they're part of a workflow - sort by step_number
-      if (aHasStep && bHasStep) {
+      // If both have step_number AND are within the same workflow batch
+      // (timestamps within 60 seconds), sort by step_number
+      if (aHasStep && bHasStep && Math.abs(timeDiff) < 60_000) {
         const stepDiff = a.step_number! - b.step_number!
         if (stepDiff !== 0) return stepDiff
-        // Same step_number (shouldn't happen normally) - fall through to timestamp
       }
 
-      // Primary sort by timestamp for non-task messages or when step_number is equal
-      const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      // Primary sort by timestamp (separates different workflows)
       if (timeDiff !== 0) return timeDiff
 
-      // Secondary sort by step_number if only one has it (task messages after their trigger)
+      // Secondary sort by step_number if only one has it
       const stepA = a.step_number ?? Infinity
       const stepB = b.step_number ?? Infinity
       if (stepA !== stepB) return stepA - stepB
@@ -472,6 +491,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     resetRoomLiveState(roomId)
     agentNameCache.current = {}
     placeholderDismissedRef.current = false
+    cancelTimedOutRef.current = false
+    sseHadDisconnectionRef.current = false
+    if (cancelTimeoutRef.current) {
+      clearTimeout(cancelTimeoutRef.current)
+      cancelTimeoutRef.current = null
+    }
   }, [roomId, resetRoomLiveState])
 
   // Mirror query loading state to local loading flag for consumers
@@ -603,16 +628,70 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
               currentProcessingMessageId.current = null
             }
-            // Show appropriate notification
-            if (status === PROCESSING_STATUS.CANCELED) {
-              banner.info('Processing stopped by user')
-            } else if (status === PROCESSING_STATUS.FAILED) {
-              banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
-            } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
-              // Rate limit error is handled separately via 'error' event with more details
-              console.log('Rate limit reached, processing stopped')
+            // Show appropriate notification (skip if cancel timeout already fired)
+            if (!cancelTimedOutRef.current) {
+              if (status === PROCESSING_STATUS.CANCELED) {
+                banner.info('Processing stopped by user')
+
+                // Insert an inline cancel confirmation message in the chat timeline
+                const cancelConfirmationMessage: MessageData = {
+                  id: `cancel-confirm-${Date.now()}`,
+                  type: MESSAGE_TYPE.TASK,
+                  content: 'Processing was stopped by the user.',
+                  sender_name: 'System',
+                  timestamp: new Date().toISOString(),
+                  task_status: 'canceled',
+                  task_content: 'Processing stopped by user',
+                }
+                addLiveMessage(roomId, cancelConfirmationMessage)
+
+                // Update all non-terminal task bubbles to canceled
+                const currentLiveMessages = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
+                currentLiveMessages.forEach(msg => {
+                  if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
+                    replaceLiveMessage(roomId, msg.id, {
+                      ...msg,
+                      task_status: 'canceled',
+                    })
+                  }
+                })
+
+                // Also cancel DB-loaded task bubbles (not in liveMessages).
+                // Dependent tasks that never received task_submitted SSE events only
+                // exist in messagesQuery.data — FE-7 above doesn't touch them.
+                const queryMessages = messagesQueryRef.current?.data || []
+                const freshLive = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
+                queryMessages.forEach((msg: MessageData) => {
+                  if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
+                    const alreadyLive = freshLive.some((m: MessageData) => m.id === msg.id)
+                    if (!alreadyLive) {
+                      addLiveMessage(roomId, {
+                        ...msg,
+                        task_status: 'canceled',
+                      })
+                    }
+                  }
+                })
+              } else if (status === PROCESSING_STATUS.FAILED) {
+                banner.error(`Processing failed: ${sseMessage.data.details || 'Unknown error'}`)
+              } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
+                // Rate limit error is handled separately via 'error' event with more details
+                console.log('Rate limit reached, processing stopped')
+              }
+              // 'completed' has no banner - messages come via SSE
             }
-            // 'completed' has no banner - messages come via SSE
+            cancelTimedOutRef.current = false
+
+            // Reconcile with DB only if SSE had a gap during this processing cycle.
+            // In the happy path (SSE stayed connected), live messages are complete
+            // and no refetch is needed — avoiding a disruptive full re-render.
+            if (sseHadDisconnectionRef.current) {
+              console.log('🔄 SSE had disconnection during processing — reconciling with DB')
+              setTimeout(() => {
+                messagesQueryRef.current?.refetch()
+              }, 1500)
+              sseHadDisconnectionRef.current = false
+            }
           }
         }
         break
@@ -744,14 +823,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               cancelTimeoutRef.current = null
             }
 
-            // Show appropriate notification
-            if (status === 'failed') {
-              banner.error(sseMessage.data.error || 'Task failed')
-            } else if (status === 'rejected') {
-              banner.error(sseMessage.data.error || 'Task was rejected')
-            } else if (status === 'canceled') {
-              banner.info('Task was canceled')
+            // Show appropriate notification (skip if cancel timeout already fired)
+            // Note: 'canceled' banner is intentionally omitted here — the
+            // workflow-level processing_status CANCELED handler already shows
+            // "Processing stopped by user".  Showing a second banner from
+            // task_update would be a duplicate.
+            if (!cancelTimedOutRef.current) {
+              if (status === 'failed') {
+                banner.error(sseMessage.data.error || 'Task failed')
+              } else if (status === 'rejected') {
+                banner.error(sseMessage.data.error || 'Task was rejected')
+              }
             }
+            cancelTimedOutRef.current = false
           }
         }
         break
@@ -777,6 +861,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     setSseConnected(!!sseConnected)
     setSseError(sseError ? String(sseError) : null)
   }, [sseConnected, sseError, setSseConnected, setSseError])
+
+  // Track SSE disconnections during active processing.
+  // If SSE drops while agents are working, we may have missed events and need
+  // to reconcile with DB after processing completes.
+  useEffect(() => {
+    if (!sseConnected && processing) {
+      console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
+      sseHadDisconnectionRef.current = true
+    }
+  }, [sseConnected, processing])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
@@ -916,6 +1010,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       setProcessing(true)  // Now show Stop button (cancellation works from here)
       // Defensively clear any stale cancelling state from a previous workflow
       setCancelling(false)
+      cancelTimedOutRef.current = false
+      sseHadDisconnectionRef.current = false
       if (cancelTimeoutRef.current) {
         clearTimeout(cancelTimeoutRef.current)
         cancelTimeoutRef.current = null
@@ -969,13 +1065,43 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     try {
       setCancelling(true)
+      cancelTimedOutRef.current = false
       console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
 
-      // Start cancellation timeout safety net (FE-3)
+      // Optimistic update — immediately show non-terminal task bubbles as "cancelling"
+      const currentLiveMessages = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
+      currentLiveMessages.forEach(msg => {
+        if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
+          replaceLiveMessage(roomId, msg.id, {
+            ...msg,
+            task_status: 'canceled',
+          })
+        }
+      })
+
+      // Also cancel DB-loaded task bubbles (not in liveMessages).
+      // Dependent tasks that never received task_submitted SSE events only
+      // exist in messagesQuery.data.
+      const queryMessages = messagesQueryRef.current?.data || []
+      const freshLive = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
+      queryMessages.forEach((msg: MessageData) => {
+        if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
+          const alreadyLive = freshLive.some((m: MessageData) => m.id === msg.id)
+          if (!alreadyLive) {
+            addLiveMessage(roomId, {
+              ...msg,
+              task_status: 'canceled',
+            })
+          }
+        }
+      })
+
+      // Start cancellation timeout safety net 
       cancelTimeoutRef.current = setTimeout(() => {
         const { cancelling } = useRoomUiStore.getState()
         if (cancelling) {
+          cancelTimedOutRef.current = true
           setCancelling(false)
           setProcessing(false)
           banner.warning('Cancellation timed out — the agent may still be running')
@@ -991,7 +1117,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken, setCancelling, setProcessing])
+  }, [getToken, setCancelling, setProcessing, replaceLiveMessage, addLiveMessage, roomId])
 
   // Manually refresh messages - only for user-initiated refresh
   const refreshMessages = useCallback(async () => {
