@@ -8,11 +8,15 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { MessageBubble, type QuoteData } from './message-bubble'
+import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
-import { type TaskState, PROCESSING_STATUS } from '@/lib/types/sse'
-import { type MessageType, MESSAGE_TYPE } from '@/lib/types'
+import { type TaskState } from '@/lib/types/sse'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
+import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
+import { useMessageStore } from '@/stores/message-store'
+import type { MessageType } from '@/lib/types'
+
+// ── Legacy types kept for backward compatibility (still imported by other files) ──
 
 export interface MessageData {
   id: string
@@ -22,17 +26,15 @@ export interface MessageData {
   timestamp: string
   user_id?: string
   agent_id?: string
-  // Task-specific fields (for type: 'task')
   task_status?: string
   task_error?: string | null
   task_status_message?: string | null
   task_requires_input?: boolean
   task_requires_auth?: boolean
-  task_content?: string // The task description being processed
-  task_updated_at?: string // Last update timestamp for staleness detection
-  task_created_at?: string // Task creation timestamp for elapsed time calculation
-  timestamp_was_missing?: boolean // Flag if original timestamp was missing (implies defaulted to now)
-  // Workflow step tracking from backend
+  task_content?: string
+  task_updated_at?: string
+  task_created_at?: string
+  timestamp_was_missing?: boolean
   step_number?: number
   total_steps?: number
 }
@@ -72,51 +74,122 @@ function LoadingState() {
   )
 }
 
-function shouldRenderTaskAsAgent(message: MessageData): boolean {
-  return message.type === MESSAGE_TYPE.TASK && message.task_status === PROCESSING_STATUS.COMPLETED && !!message.content
-}
+// ── MemoizedMessage: per-message subscriber (Gap 4, Gap 8) ─────────────
 
-function toAgentMessage(message: MessageData): MessageData {
-  return message.type === MESSAGE_TYPE.AGENT ? message : { ...message, type: MESSAGE_TYPE.AGENT }
-}
-
-interface RoomMessagesProps {
-  messages: MessageData[]
-  loading?: boolean
+interface MemoizedMessageProps {
+  id: string
+  isLatestAgent: boolean
+  collapseSignal: number
+  autoCollapseVersion: number
+  isUserExpanded: boolean
+  onUserToggle: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }
 
-export function RoomMessages({ messages, loading, onQuote }: RoomMessagesProps) {
+const MemoizedMessage = React.memo(function MemoizedMessage({
+  id,
+  isLatestAgent,
+  collapseSignal,
+  autoCollapseVersion,
+  isUserExpanded,
+  onUserToggle,
+  onQuote,
+}: MemoizedMessageProps) {
+  const entity = useMessage(id)
+  if (!entity) return null
+
+  switch (entity.displayType) {
+    case 'user-bubble':
+      return <EntityUserBubble entity={entity} />
+
+    case 'agent-bubble':
+      return (
+        <EntityAgentBubble
+          entity={entity}
+          defaultExpanded={isLatestAgent}
+          collapseSignal={collapseSignal}
+          autoCollapseVersion={autoCollapseVersion}
+          isLatestAgent={isLatestAgent}
+          isUserExpanded={isUserExpanded}
+          onUserToggle={onUserToggle}
+          onQuote={onQuote}
+        />
+      )
+
+    case 'task-status':
+      return (
+        <TaskStatusMessage
+          internalId={entity.id}
+          agentId={entity.agentId}
+          agentName={entity.senderName}
+          initialStatus={(entity.taskStatus || 'working') as TaskState}
+          content={entity.content || null}
+          error={entity.taskError}
+          statusMessage={entity.taskStatusMessage}
+          stepNumber={entity.stepNumber}
+          totalSteps={entity.totalSteps}
+          taskContent={entity.taskContent}
+          taskCreatedAt={entity.taskCreatedAt || entity.timestamp}
+        />
+      )
+  }
+})
+
+// ── RoomMessages: main list component ──────────────────────────────────
+
+interface RoomMessagesProps {
+  onQuote?: (data: QuoteData) => void
+}
+
+export function RoomMessages({ onQuote }: RoomMessagesProps) {
+  const orderedIds = useOrderedIds()
+  const hydrated = useMessagesHydrated()
+  const messageCount = useMessageCount()
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
-  const previousMessageCountRef = useRef(messages.length)
+  const prevCountRef = useRef(messageCount)
 
   // Auto-hide scrollbar when not scrolling
   useAutoHideScroll(scrollContainerRef)
+
+  // ── Expand / collapse state (pure UI, not in message store — Gap 4) ──
   const [collapseSignal, setCollapseSignal] = useState(0)
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
   const prevLatestAgentIdRef = useRef<string | null>(null)
 
-  const allAgentIds = useMemo(
-    () => messages.filter(m => m.type === MESSAGE_TYPE.AGENT || shouldRenderTaskAsAgent(m)).map(m => m.id),
-    [messages]
-  )
+  // Subscribe to store version so derived state recomputes on displayType transitions (Gap 15)
+  const storeVersion = useMessageStore(s => s.version)
+
+  // Compute which IDs are agent bubbles (for expand/collapse pill)
+  const allAgentIds = useMemo(() => {
+    const store = useMessageStore.getState()
+    return orderedIds.filter(id => {
+      const e = store.entities[id]
+      return e && (e.displayType === 'agent-bubble')
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeVersion is an intentional invalidation signal (Gap 15)
+  }, [orderedIds, storeVersion])
 
   const allExpanded = useMemo(
     () => allAgentIds.length > 0 && allAgentIds.every(id => userExpandedIds.has(id)),
     [allAgentIds, userExpandedIds]
   )
 
+  // Find last agent message ID (for auto-expand)
   const lastAgentMessageId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].type === MESSAGE_TYPE.AGENT || shouldRenderTaskAsAgent(messages[i])) {
-        return messages[i].id
+    const store = useMessageStore.getState()
+    for (let i = orderedIds.length - 1; i >= 0; i--) {
+      const e = store.entities[orderedIds[i]]
+      if (e && e.displayType === 'agent-bubble') {
+        return orderedIds[i]
       }
     }
     return null
-  }, [messages])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeVersion is an intentional invalidation signal (Gap 15)
+  }, [orderedIds, storeVersion])
 
   // Track newest agent message to auto-collapse prior non-user-expanded responses
   useEffect(() => {
@@ -168,19 +241,26 @@ export function RoomMessages({ messages, loading, onQuote }: RoomMessagesProps) 
     setShouldAutoScroll(isNearBottom)
   }, [checkIfNearBottom])
 
-  // Auto scroll when new messages arrive
+  // Auto scroll when new messages arrive (count-based, not reference-based)
   useEffect(() => {
-    const messageCountIncreased = messages.length > previousMessageCountRef.current
-    const lastMessageIsUser = messages.length > 0 && messages[messages.length - 1].type === MESSAGE_TYPE.USER
-    
-    if (messageCountIncreased && (lastMessageIsUser || shouldAutoScroll)) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-    }
-    
-    previousMessageCountRef.current = messages.length
-  }, [messages, shouldAutoScroll])
+    if (messageCount > prevCountRef.current) {
+      const store = useMessageStore.getState()
+      const lastId = store.orderedIds[store.orderedIds.length - 1]
+      const lastEntity = lastId ? store.entities[lastId] : null
 
-  if (loading) {
+      if (lastEntity?.source === 'optimistic' && lastEntity.messageType === 'user') {
+        // User just sent a message -> always scroll to bottom
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+      } else if (shouldAutoScroll) {
+        // Agent message arrived while user is near bottom -> scroll
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+      }
+    }
+
+    prevCountRef.current = messageCount
+  }, [messageCount, shouldAutoScroll])
+
+  if (!hydrated) {
     return <LoadingState />
   }
 
@@ -194,7 +274,7 @@ export function RoomMessages({ messages, loading, onQuote }: RoomMessagesProps) 
         className="flex-1 h-full w-full overflow-y-auto"
       >
         <div className="py-4 min-h-full px-4 sm:px-6 max-w-4xl mx-auto">
-          {messages.length === 0 ? (
+          {orderedIds.length === 0 ? (
             <EmptyState />
           ) : (
             <>
@@ -226,41 +306,18 @@ export function RoomMessages({ messages, loading, onQuote }: RoomMessagesProps) 
 
               {/* Messages Display - Timeline view */}
               <div className="space-y-4">
-                {messages.map(msg => {
-                  // Render task messages with TaskStatusMessage component
-                  if (msg.type === MESSAGE_TYPE.TASK && !shouldRenderTaskAsAgent(msg)) {
-                    return (
-                      <TaskStatusMessage
-                        key={msg.id}
-                        internalId={msg.id}
-                        agentId={msg.agent_id}
-                        agentName={msg.sender_name}
-                        initialStatus={(msg.task_status || 'working') as TaskState}
-                        content={msg.content || null}
-                        error={msg.task_error}
-                        statusMessage={msg.task_status_message}
-                        stepNumber={msg.step_number}
-                        totalSteps={msg.total_steps}
-                        taskContent={msg.task_content}
-                        taskCreatedAt={msg.task_created_at || msg.timestamp}
-                      />
-                    )
-                  }
-                  // Render regular messages
-                  return (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg.type === MESSAGE_TYPE.USER ? msg : toAgentMessage(msg)}
-                      defaultExpanded={msg.id === lastAgentMessageId}
-                      collapseSignal={collapseSignal}
-                      autoCollapseVersion={autoCollapseVersion}
-                      isLatestAgent={msg.id === lastAgentMessageId}
-                      isUserExpanded={userExpandedIds.has(msg.id)}
-                      onUserToggle={handleUserToggle}
-                      onQuote={onQuote}
-                    />
-                  )
-                })}
+                {orderedIds.map(id => (
+                  <MemoizedMessage
+                    key={id}
+                    id={id}
+                    isLatestAgent={id === lastAgentMessageId}
+                    collapseSignal={collapseSignal}
+                    autoCollapseVersion={autoCollapseVersion}
+                    isUserExpanded={userExpandedIds.has(id)}
+                    onUserToggle={handleUserToggle}
+                    onQuote={onQuote}
+                  />
+                ))}
               </div>
             
               <div ref={messagesEndRef} className="h-4" />
