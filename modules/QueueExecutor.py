@@ -115,23 +115,48 @@ class QueueExecutor:
     # ------------------------------------------------------------------
 
     @asynccontextmanager
-    async def _managed_queue(self, message_queue: deque):
+    async def _managed_queue(self, message_queue: deque, last_popped: list[str]):
         """Context manager that cancels remaining items when the queue is
         abandoned (failure, cancellation, or unhandled exception).
 
         On normal completion (queue drained) the ``finally`` block is a no-op
-        because nothing remains.  On early exit the ``finally`` block cancels
-        every message still in the deque via ``cancel_remaining_queue``.
+        because nothing remains.  On early exit (``break`` from the loop) the
+        ``finally`` block cancels every message still in the deque and clears
+        it, guaranteeing all DB writes happen *before* control returns to the
+        caller's post-``async with`` Phase 2 (deferred SSE notification).
 
         **Important:** Messages that have already been ``popleft``-ed from the
         deque are *not* visible to this cleanup.  The caller must transition
-        the *current* message itself before returning.
+        the *current* message itself before ``break``-ing.
+
+        **Descendant cleanup:** After cancelling in-memory siblings, this also
+        bulk-cancels any DB-only descendants (not yet loaded into the deque)
+        that are downstream in the ``related_message_id`` chain.  The
+        ``last_popped`` list must contain the ``message_id`` of the most
+        recently popped message so we know where the chain was interrupted.
+
+        **PAUSED caveat:** The PAUSED path must call ``message_queue.clear()``
+        *before* ``break`` (after ``_save_continuation`` captures the queue
+        state) to prevent this handler from canceling saved messages.
         """
         try:
             yield message_queue
         finally:
             if len(message_queue) > 0:
-                await self.tsm.cancel_remaining_queue(message_queue)
+                for msg in message_queue:
+                    await self.tsm.transition_task(
+                        msg, TaskState.canceled, persist=True, notify=False
+                    )
+                # Collect IDs of canceled siblings for descendant cleanup
+                canceled_ids = [msg.message_id for msg in message_queue]
+                message_queue.clear()
+                # Cancel DB-only descendants of each canceled sibling
+                for mid in canceled_ids:
+                    await self.database_service.cancel_descendants(mid)
+            # Cancel descendants of the last popped message (the one that
+            # was being processed when the queue was interrupted).
+            if last_popped:
+                await self.database_service.cancel_descendants(last_popped[0])
 
     # ------------------------------------------------------------------
     # Main queue loop
@@ -148,6 +173,17 @@ class QueueExecutor:
         quoted_text: str | None = None,
     ) -> QueueResult:
         """Process all messages in the queue sequentially.
+
+        Uses a two-phase approach to guarantee persist-before-notify ordering:
+
+        **Phase 1** (inside ``async with _managed_queue``): The queue loop
+        processes messages.  On any early exit the loop ``break``-s instead of
+        ``return``-ing, which triggers the ``_managed_queue`` ``finally`` block
+        to persist all remaining siblings as ``canceled`` in the DB.
+
+        **Phase 2** (after the ``async with`` block): The deferred SSE
+        notification is sent.  Because ``_managed_queue`` has already run, all
+        DB writes are guaranteed complete before the frontend is notified.
 
         Parameters
         ----------
@@ -168,9 +204,23 @@ class QueueExecutor:
             "QueueExecutor: Starting to process message queue with %d messages",
             len(message_queue),
         )
-        async with self._managed_queue(message_queue):
+
+        queue_result = QueueResult.COMPLETED
+        # Deferred SSE: (status, should_clear_cancellation)
+        # None means caller handles SSE (FAILED, COMPLETED) or no SSE needed (PAUSED)
+        deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
+
+        # Tracks the message_id of the last message popped from the queue.
+        # Used by _managed_queue to cancel DB-only descendants on early exit.
+        # Empty list = nothing popped yet; on normal completion this is harmless
+        # because cancel_descendants on a completed message finds no actionable
+        # children.
+        last_popped: list[str] = []
+
+        async with self._managed_queue(message_queue, last_popped):
             while len(message_queue) > 0:
                 current_message = message_queue.popleft()
+                last_popped[:] = [current_message.message_id]
                 logger.info(
                     "QueueExecutor: Processing message %s (step %s/%s), %d remaining",
                     current_message.message_id,
@@ -179,7 +229,7 @@ class QueueExecutor:
                     len(message_queue),
                 )
 
-                # Check for cancellation before processing each agent message
+                # --- Cancel check ---
                 if token and token.is_cancelled:
                     logger.info(
                         "QueueExecutor: Message processing cancelled for %s",
@@ -188,28 +238,35 @@ class QueueExecutor:
                     await self.tsm.transition_task(
                         current_message, TaskState.canceled, persist=True, notify=False
                     )
-                    await self.sse_manager.send_processing_status(
-                        room_id, SSEProcessingStatus.CANCELED, user_message_id
-                    )
-                    self.sse_manager.clear_cancellation(user_message_id)
-                    return QueueResult.CANCELED
+                    queue_result = QueueResult.CANCELED
+                    deferred_sse = (SSEProcessingStatus.CANCELED, True)
+                    break  # → _managed_queue finally persists remaining siblings
 
-                # Assign agent if not already assigned
+                # --- Agent resolution ---
                 agent = await self._resolve_agent_for_message(
                     current_message, room_id
                 )
                 if agent is None:
-                    return QueueResult.FAILED
+                    # _resolve_agent_for_message already persisted a failure
+                    # notification for current_message.
+                    queue_result = QueueResult.FAILED
+                    break  # → _managed_queue finally persists remaining siblings;
+                    # caller sends FAILED SSE after process_queue returns
 
-                # Check rate limits before processing (only if user_id available)
+                # --- Rate limit check ---
                 if request_user_id:
                     rate_limited = await self._check_rate_limit(
                         current_message, agent, room_id, user_message_id, request_user_id
                     )
                     if rate_limited:
-                        return QueueResult.CANCELED
+                        # _check_rate_limit sent send_rate_limit_error (contextual
+                        # data) but NOT send_processing_status — that's deferred
+                        # to Phase 2.
+                        queue_result = QueueResult.CANCELED
+                        deferred_sse = (SSEProcessingStatus.RATE_LIMITED, False)
+                        break
 
-                # Dispatch to single-message processing
+                # --- Dispatch to single-message processing ---
                 is_direct_chat = bool(
                     current_message.extend_info
                     and current_message.extend_info.get("is_direct_chat")
@@ -226,9 +283,15 @@ class QueueExecutor:
                 )
 
                 if result.status == ProcessingStatus.FAILED:
-                    return QueueResult.FAILED
+                    queue_result = QueueResult.FAILED
+                    break  # → _managed_queue finally persists remaining siblings;
+                    # caller sends FAILED SSE after process_queue returns
+
                 elif result.status == ProcessingStatus.CANCELED:
-                    return QueueResult.CANCELED
+                    queue_result = QueueResult.CANCELED
+                    deferred_sse = (SSEProcessingStatus.CANCELED, True)
+                    break
+
                 elif result.status == ProcessingStatus.PAUSED:
                     if not is_direct_chat:
                         await self._queue_next_messages(
@@ -248,8 +311,14 @@ class QueueExecutor:
                             result.message_id,
                             len(message_queue),
                         )
+                    # PAUSED caveat: clear BEFORE break so _managed_queue doesn't
+                    # cancel messages that were saved for later resumption.
                     message_queue.clear()
-                    return QueueResult.PAUSED
+                    last_popped.clear()
+                    queue_result = QueueResult.PAUSED
+                    break
+
+                # --- Success: continue loop ---
 
                 # Record the request for rate limiting
                 if request_user_id:
@@ -273,8 +342,27 @@ class QueueExecutor:
                         current_message, message_queue, room_id
                     )
 
-        logger.info("QueueExecutor: Finished processing message queue")
-        return QueueResult.COMPLETED
+            else:
+                # While loop drained normally (NOT via break) — all messages
+                # processed successfully.  Clear last_popped so _managed_queue's
+                # finally block skips the (harmless but unnecessary)
+                # cancel_descendants call.
+                last_popped.clear()
+
+        # Phase 2: _managed_queue finally has run — all DB writes done.
+        # Now safe to send workflow-level SSE notification.
+        if deferred_sse:
+            sse_status, clear_cancel = deferred_sse
+            await self.sse_manager.send_processing_status(
+                room_id, sse_status, user_message_id
+            )
+            if clear_cancel:
+                self.sse_manager.clear_cancellation(user_message_id)
+
+        if queue_result == QueueResult.COMPLETED:
+            logger.info("QueueExecutor: Finished processing message queue")
+
+        return queue_result
 
     # ------------------------------------------------------------------
     # Agent resolution / rate-limit helpers (delegated from queue loop)
@@ -374,7 +462,14 @@ class QueueExecutor:
         user_message_id: str,
         request_user_id: str,
     ) -> bool:
-        """Check rate limits. Returns ``True`` if rate-limited (caller should cancel)."""
+        """Check rate limits. Returns ``True`` if rate-limited (caller should cancel).
+
+        Sends the contextual ``send_rate_limit_error`` event (which needs
+        agent-specific data only available here) but does **not** send the
+        workflow-level ``send_processing_status(RATE_LIMITED)`` — that is
+        deferred to ``process_queue`` Phase 2 so it fires *after*
+        ``_managed_queue`` has persisted all remaining siblings.
+        """
         rate_limit_result = await self.rate_limit_service.check_rate_limit(
             agent_id=agent.agent_id,
             user_id=request_user_id,
@@ -400,9 +495,9 @@ class QueueExecutor:
                 system_requests_used=rate_limit_result.system_requests_used,
                 system_requests_limit=rate_limit_result.system_requests_limit,
             )
-            await self.sse_manager.send_processing_status(
-                room_id, SSEProcessingStatus.RATE_LIMITED, user_message_id
-            )
+            # NOTE: Do NOT send send_processing_status here — process_queue
+            # handles the workflow-level SSE in Phase 2 after all siblings
+            # are persisted by _managed_queue.
             await self.tsm.transition_task(
                 current_message, TaskState.canceled, persist=True, notify=False
             )

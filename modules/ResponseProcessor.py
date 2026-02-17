@@ -39,7 +39,6 @@ from modules.TaskStateManager import (
 )
 from services.a2a_constants import (
     TERMINAL_STATES,
-    SSEProcessingStatus,
     SyntheticTaskId,
     is_failure_state,
     is_terminal_state,
@@ -394,15 +393,20 @@ class ResponseProcessor:
         ctx: ProcessingContext,
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
-        """Handle cancellation during streaming."""
+        """Handle cancellation during streaming — per-message cleanup only.
+
+        Transitions the *current* message to ``canceled`` and attempts to
+        cancel the remote A2A task.  Does **not** send the workflow-level
+        ``send_processing_status(CANCELED)`` — that is the responsibility of
+        ``QueueExecutor.process_queue`` (Phase 2), which fires *after*
+        ``_managed_queue`` has persisted all remaining siblings.
+        """
         logger.info(
             "ResponseProcessor: Streaming cancelled for message %s", ctx.user_message_id
         )
         await self.tsm.transition_task(ctx.current_message, TaskState.canceled, ctx=ctx)
-        await self.sse_manager.send_processing_status(
-            ctx.room_id, SSEProcessingStatus.CANCELED, ctx.user_message_id
-        )
-        self.sse_manager.clear_cancellation(ctx.user_message_id)
+        # NOTE: Do NOT send processing_status here — QueueExecutor handles
+        # workflow-level SSE after all siblings are persisted.
         await self._try_cancel_remote_task(ctx.current_message, ctx.agent_card)
         return ProcessingStatus.CANCELED, streaming_state.full_response_text
 

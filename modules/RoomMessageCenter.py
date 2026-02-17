@@ -151,7 +151,13 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Processing cancelled for message %s, stopping all processing",
                 room_user_message_id,
             )
+            # Capture IDs before cancellation for descendant cleanup
+            step1_ids = [msg.message_id for msg in message_queue]
             await self.tsm.cancel_remaining_queue(message_queue)
+            # Cancel DB-only descendants (step 2, 3, …) downstream in the
+            # related_message_id chain from these step-1 messages.
+            for mid in step1_ids:
+                await self.database_service.cancel_descendants(mid)
             await self.sse_manager.send_processing_status(
                 room_id, SSEProcessingStatus.CANCELED, room_user_message_id
             )

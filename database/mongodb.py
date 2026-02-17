@@ -688,6 +688,55 @@ class MongoDB:
             for room_agent_message in results
         ]
 
+    async def cancel_descendants(self, message_id: str) -> int:
+        """Cancel all agent messages downstream in the related_message_id chain.
+
+        Walks the chain iteratively via BFS: at each level, finds agent
+        messages whose ``related_message_id`` matches any of the current
+        frontier IDs and whose task status is still actionable (not already
+        completed/canceled/failed).  After collecting all descendant IDs, a
+        single ``update_many`` bulk-writes them to ``canceled``.
+
+        Returns the number of messages actually modified.
+        """
+        terminal_statuses = ["completed", "canceled", "failed", "rejected"]
+        to_visit = [message_id]
+        all_descendant_ids: list[str] = []
+
+        while to_visit:
+            cursor = self.room_agent_messages_collection.find(
+                {
+                    "related_message_id": {"$in": to_visit},
+                    "message_content.message_task": {"$ne": None},
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_statuses
+                    },
+                },
+                {"message_id": 1},
+            )
+            children = await cursor.to_list(length=None)
+            child_ids = [c["message_id"] for c in children]
+            all_descendant_ids.extend(child_ids)
+            to_visit = child_ids
+
+        if not all_descendant_ids:
+            return 0
+
+        result = await self.room_agent_messages_collection.update_many(
+            {"message_id": {"$in": all_descendant_ids}},
+            {
+                "$set": {
+                    "message_content.message_task.status.state": "canceled",
+                }
+            },
+        )
+        logger.info(
+            "cancel_descendants: canceled %d descendant(s) of message %s",
+            result.modified_count,
+            message_id,
+        )
+        return result.modified_count
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
