@@ -1,38 +1,64 @@
-/* tslint:disable */
 /**
-/* This file was automatically generated from pydantic models by running pydantic2ts.
-/* Do not modify it by hand - just update the pydantic models and then re-run the script
-*/
+ * Request types for the backend API.
+ *
+ * A2A protocol types are imported from the canonical @a2a-js/sdk package.
+ * Only backend-specific request wrappers and orchestration types are defined here.
+ */
 
-export type SecurityScheme =
-  | APIKeySecurityScheme
-  | HTTPAuthSecurityScheme
-  | OAuth2SecurityScheme
-  | OpenIdConnectSecurityScheme
-  | MutualTLSSecurityScheme;
+// ── Re-export A2A types needed by downstream consumers of this module ────
+export type {
+  TaskState,
+  Part,
+  TextPart,
+  FilePart,
+  DataPart,
+  FileWithBytes,
+  FileWithUri,
+  Message,
+  Task,
+  TaskStatus,
+  Artifact,
+  AgentCard,
+  AgentCapabilities,
+  AgentExtension,
+  AgentInterface,
+  AgentProvider,
+  AgentSkill,
+  AgentCardSignature,
+  SecurityScheme,
+  APIKeySecurityScheme,
+  HTTPAuthSecurityScheme,
+  OAuth2SecurityScheme,
+  OpenIdConnectSecurityScheme,
+  MutualTLSSecurityScheme,
+  OAuthFlows,
+  AuthorizationCodeOAuthFlow,
+  ClientCredentialsOAuthFlow,
+  ImplicitOAuthFlow,
+  PasswordOAuthFlow,
+} from '@a2a-js/sdk'
+
+import type {
+  AgentCard,
+  Task,
+  Message,
+} from '@a2a-js/sdk'
+
+// ── Types NOT in SDK ─────────────────────────────────────────────────────
+
 /**
  * The location of the API key.
+ * (Not exported from @a2a-js/sdk as a standalone type.)
  */
 export type In = "cookie" | "header" | "query";
-export type AgentStatus = "active" | "inactive" | "deleted";
-export type Part = TextPart | FilePart | DataPart;
+
 /**
- * Identifies the sender of the message. `user` for the client, `agent` for the service.
+ * Identifies the sender of the message.
+ * (Not exported from @a2a-js/sdk as a standalone type.)
  */
 export type Role = "agent" | "user";
-/**
- * Defines the lifecycle states of a Task.
- */
-export type TaskState =
-  | "submitted"
-  | "working"
-  | "input-required"
-  | "completed"
-  | "canceled"
-  | "failed"
-  | "rejected"
-  | "auth-required"
-  | "unknown";
+
+export type AgentStatus = "active" | "inactive" | "deleted";
 
 export interface Agent {
   agent_id: string;
@@ -44,208 +70,6 @@ export interface Agent {
   call_success_count?: number;
   like_count?: number;
   dislike_count?: number;
-}
-/**
- * The AgentCard is a self-describing manifest for an agent. It provides essential
- * metadata including the agent's identity, capabilities, skills, supported
- * communication methods, and security requirements.
- */
-export interface AgentCard {
-  additionalInterfaces?: AgentInterface[] | null;
-  capabilities: AgentCapabilities;
-  defaultInputModes: string[];
-  defaultOutputModes: string[];
-  description: string;
-  documentationUrl?: string | null;
-  iconUrl?: string | null;
-  name: string;
-  preferredTransport?: string | null;
-  protocolVersion?: string | null;
-  provider?: AgentProvider | null;
-  security?:
-    | {
-        [k: string]: string[];
-      }[]
-    | null;
-  securitySchemes?: {
-    [k: string]: SecurityScheme;
-  } | null;
-  signatures?: AgentCardSignature[] | null;
-  skills: AgentSkill[];
-  supportsAuthenticatedExtendedCard?: boolean | null;
-  url: string;
-  version: string;
-}
-/**
- * Declares a combination of a target URL and a transport protocol for interacting with the agent.
- * This allows agents to expose the same functionality over multiple transport mechanisms.
- */
-export interface AgentInterface {
-  transport: string;
-  url: string;
-  [k: string]: unknown;
-}
-/**
- * Defines optional capabilities supported by an agent.
- */
-export interface AgentCapabilities {
-  extensions?: AgentExtension[] | null;
-  pushNotifications?: boolean | null;
-  stateTransitionHistory?: boolean | null;
-  streaming?: boolean | null;
-  [k: string]: unknown;
-}
-/**
- * A declaration of a protocol extension supported by an Agent.
- */
-export interface AgentExtension {
-  description?: string | null;
-  params?: {
-    [k: string]: unknown;
-  } | null;
-  required?: boolean | null;
-  uri: string;
-  [k: string]: unknown;
-}
-/**
- * Represents the service provider of an agent.
- */
-export interface AgentProvider {
-  organization: string;
-  url: string;
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using an API key.
- */
-export interface APIKeySecurityScheme {
-  description?: string | null;
-  in: In;
-  name: string;
-  type?: "apiKey";
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using HTTP authentication.
- */
-export interface HTTPAuthSecurityScheme {
-  bearerFormat?: string | null;
-  description?: string | null;
-  scheme: string;
-  type?: "http";
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using OAuth 2.0.
- */
-export interface OAuth2SecurityScheme {
-  description?: string | null;
-  flows: OAuthFlows;
-  oauth2MetadataUrl?: string | null;
-  type?: "oauth2";
-  [k: string]: unknown;
-}
-/**
- * Defines the configuration for the supported OAuth 2.0 flows.
- */
-export interface OAuthFlows {
-  authorizationCode?: AuthorizationCodeOAuthFlow | null;
-  clientCredentials?: ClientCredentialsOAuthFlow | null;
-  implicit?: ImplicitOAuthFlow | null;
-  password?: PasswordOAuthFlow | null;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Authorization Code flow.
- */
-export interface AuthorizationCodeOAuthFlow {
-  authorizationUrl: string;
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Client Credentials flow.
- */
-export interface ClientCredentialsOAuthFlow {
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Implicit flow.
- */
-export interface ImplicitOAuthFlow {
-  authorizationUrl: string;
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Resource Owner Password flow.
- */
-export interface PasswordOAuthFlow {
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using OpenID Connect.
- */
-export interface OpenIdConnectSecurityScheme {
-  description?: string | null;
-  openIdConnectUrl: string;
-  type?: "openIdConnect";
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using mTLS authentication.
- */
-export interface MutualTLSSecurityScheme {
-  description?: string | null;
-  type?: "mutualTLS";
-  [k: string]: unknown;
-}
-/**
- * AgentCardSignature represents a JWS signature of an AgentCard.
- * This follows the JSON format of an RFC 7515 JSON Web Signature (JWS).
- */
-export interface AgentCardSignature {
-  header?: {
-    [k: string]: unknown;
-  } | null;
-  protected: string;
-  signature: string;
-  [k: string]: unknown;
-}
-/**
- * Represents a distinct capability or function that an agent can perform.
- */
-export interface AgentSkill {
-  description: string;
-  examples?: string[] | null;
-  id: string;
-  inputModes?: string[] | null;
-  name: string;
-  outputModes?: string[] | null;
-  security?:
-    | {
-        [k: string]: string[];
-      }[]
-    | null;
-  tags: string[];
-  [k: string]: unknown;
 }
 export interface AgentCenterRequest {
   agent_id?: string | null;
@@ -311,75 +135,6 @@ export interface AgentTaskRequest {
   } | null;
   message?: Message | null;
 }
-/**
- * Represents a single message in the conversation between a user and an agent.
- */
-export interface Message {
-  contextId?: string | null;
-  extensions?: string[] | null;
-  kind?: "message";
-  messageId: string;
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  parts: Part[];
-  referenceTaskIds?: string[] | null;
-  role: Role;
-  taskId?: string | null;
-}
-/**
- * Represents a text segment within a message or artifact.
- */
-export interface TextPart {
-  kind?: "text";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  text: string;
-}
-/**
- * Represents a file segment within a message or artifact. The file content can be
- * provided either directly as bytes or as a URI.
- */
-export interface FilePart {
-  file: FileWithBytes | FileWithUri;
-  kind?: "file";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a file with its content provided directly as a base64-encoded string.
- */
-export interface FileWithBytes {
-  bytes: string;
-  mimeType?: string | null;
-  name?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a file with its content located at a specific URI.
- */
-export interface FileWithUri {
-  mimeType?: string | null;
-  name?: string | null;
-  uri: string;
-  [k: string]: unknown;
-}
-/**
- * Represents a structured data segment (e.g., JSON) within a message or artifact.
- */
-export interface DataPart {
-  data: {
-    [k: string]: unknown;
-  };
-  kind?: "data";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  [k: string]: unknown;
-}
 export interface AgentUpdate {
   agent_url?: string | null;
   agent_card: AgentCard | null;
@@ -410,43 +165,6 @@ export interface BaseTask {
   user_name: string;
   task: Task;
   extend_info?: unknown;
-}
-/**
- * Represents a single, stateful operation or conversation between a client and an agent.
- */
-export interface Task {
-  artifacts?: Artifact[] | null;
-  contextId: string;
-  history?: Message[] | null;
-  id: string;
-  kind?: "task";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  status: TaskStatus;
-}
-/**
- * Represents a file, data structure, or other resource generated by an agent during a task.
- */
-export interface Artifact {
-  artifactId: string;
-  description?: string | null;
-  extensions?: string[] | null;
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  name?: string | null;
-  parts: Part[];
-  [k: string]: unknown;
-}
-/**
- * Represents the status of a task at a specific point in time.
- */
-export interface TaskStatus {
-  message?: Message | null;
-  state: TaskState;
-  timestamp?: string | null;
-  [k: string]: unknown;
 }
 /**
  * A ChatContext represents a chat context between a user and the multi-agent system.

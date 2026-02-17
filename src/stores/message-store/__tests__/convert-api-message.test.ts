@@ -121,6 +121,9 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             metadata: { agent_id: 'meta-agent-1' },
             status: { state: 'working' },
+            kind: 'task',
+            contextId: 'ctx-1',
+            id: 'task-1',
           } as RoomMessage['message_content']['message_task'],
         },
       })
@@ -192,6 +195,9 @@ describe('convertApiMessageToIncoming', () => {
           message_task: {
             metadata: { task_content: 'From metadata' },
             status: { state: 'working' },
+            kind: 'task',
+            contextId: 'ctx-1',
+            id: 'task-1',
           } as RoomMessage['message_content']['message_task'],
         },
       })
