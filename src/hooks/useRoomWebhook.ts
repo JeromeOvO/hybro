@@ -296,18 +296,32 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       cancelTimeoutRef.current = null
     }
 
+    // Reset UI flags so the new room starts with clean state.
+    // The previous room's processing continues server-side; when the user
+    // returns, the restore effect re-enables processing from room data.
+    setSending(false)
+    setProcessing(false)
+    setCancelling(false)
+    setSseConnected(false)
+    setSseError(null)
+    isProcessingRef.current = false
+    currentProcessingMessageId.current = null
+
     // Initialize normalized store for this room
     useMessageStore.getState().setRoom(roomId)
     hydrationStartedRef.current = null
-  }, [roomId])
+  }, [roomId, setSending, setProcessing, setCancelling, setSseConnected, setSseError])
 
-  // Hydrate from DB once room data and agent catalog are available
+  // Hydrate from DB once room data is available.
+  // Gating on `room` ensures the room query has completed and pre-populated
+  // agentNameCache from room_agent_set, so agent names resolve correctly
+  // instead of falling back to "Agent <id>" on page refresh.
   useEffect(() => {
-    if (!roomId || !userName) return
+    if (!roomId || !userName || !room) return
     if (hydrationStartedRef.current === roomId) return
     hydrationStartedRef.current = roomId
     hydrateFromDb(roomId)
-  }, [roomId, userName, hydrateFromDb])
+  }, [roomId, userName, room, hydrateFromDb])
 
   // Mirror query loading state to local loading flag for consumers
   useEffect(() => {
