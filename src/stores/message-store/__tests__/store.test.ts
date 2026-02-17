@@ -236,14 +236,4 @@ describe('useMessageStore', () => {
       expect(state.lastDbSyncAt).toBeGreaterThan(0)
     })
   })
-
-  describe('setSseGapDetected', () => {
-    it('sets the flag', () => {
-      const store = useMessageStore.getState()
-      store.setSseGapDetected(true)
-      expect(useMessageStore.getState().sseGapDetected).toBe(true)
-      store.setSseGapDetected(false)
-      expect(useMessageStore.getState().sseGapDetected).toBe(false)
-    })
-  })
 })

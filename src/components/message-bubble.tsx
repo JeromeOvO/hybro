@@ -6,9 +6,7 @@ import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
-import type { MessageData } from './room-messages'
 import type { MessageEntity } from '@/stores/message-store'
-import { MESSAGE_TYPE } from '@/lib/types'
 
 /** Lightweight UI type for passing quote data between components. */
 export interface QuoteData {
@@ -40,18 +38,6 @@ function entityToBubble(entity: MessageEntity): BubbleMessage {
   }
 }
 
-interface MessageBubbleProps {
-  message: MessageData
-  compact?: boolean
-  defaultExpanded?: boolean
-  collapseSignal?: number
-  autoCollapseVersion?: number
-  isLatestAgent?: boolean
-  isUserExpanded?: boolean
-  onUserToggle?: (id: string, expanded: boolean) => void
-  onQuote?: (data: QuoteData) => void
-}
-
 interface EntityBubbleProps {
   message: BubbleMessage
   compact?: boolean
@@ -62,13 +48,6 @@ interface EntityBubbleProps {
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
-}
-
-/**
- * User message bubble - aligned to the right (legacy MessageData API)
- */
-export function UserMessageBubble({ message }: MessageBubbleProps) {
-  return <UserMessageBubbleInner message={message} />
 }
 
 /**
@@ -93,35 +72,6 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
         </div>
       </div>
     </div>
-  )
-}
-
-/**
- * Agent message bubble - with optional expand/collapse for long messages (legacy MessageData API)
- */
-export function AgentMessageBubble({
-  message,
-  compact = false,
-  defaultExpanded = false,
-  collapseSignal = 0,
-  autoCollapseVersion = 0,
-  isLatestAgent = false,
-  isUserExpanded = false,
-  onUserToggle,
-  onQuote,
-}: MessageBubbleProps) {
-  return (
-    <AgentMessageBubbleInner
-      message={message}
-      compact={compact}
-      defaultExpanded={defaultExpanded}
-      collapseSignal={collapseSignal}
-      autoCollapseVersion={autoCollapseVersion}
-      isLatestAgent={isLatestAgent}
-      isUserExpanded={isUserExpanded}
-      onUserToggle={onUserToggle}
-      onQuote={onQuote}
-    />
   )
 }
 
@@ -394,38 +344,6 @@ function AgentMessageBubbleInner({
   )
 }
 
-/**
- * Generic message bubble that delegates to the appropriate type
- */
-export function MessageBubble({
-  message,
-  compact = false,
-  defaultExpanded = false,
-  collapseSignal = 0,
-  autoCollapseVersion = 0,
-  isLatestAgent = false,
-  isUserExpanded = false,
-  onUserToggle,
-  onQuote,
-}: MessageBubbleProps) {
-  if (message.type === MESSAGE_TYPE.USER) {
-    return <UserMessageBubble message={message} />
-  }
-  return (
-    <AgentMessageBubble
-      message={message}
-      compact={compact}
-      defaultExpanded={defaultExpanded}
-      collapseSignal={collapseSignal}
-      autoCollapseVersion={autoCollapseVersion}
-      isLatestAgent={isLatestAgent}
-      isUserExpanded={isUserExpanded}
-      onUserToggle={onUserToggle}
-      onQuote={onQuote}
-    />
-  )
-}
-
 // ── Entity-based bubble components (for normalized store) ────────────────
 
 /**
@@ -439,7 +357,6 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
- * Accepts the same expand/collapse props as the original AgentMessageBubble.
  */
 export function EntityAgentBubble({
   entity,

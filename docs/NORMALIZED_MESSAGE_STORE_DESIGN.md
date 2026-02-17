@@ -1,7 +1,7 @@
 # Normalized Message Store — Design Document
 
-**Status:** Steps 1–4 implemented; post-implementation review completed (Gaps 15–20 added)
-**Date:** 2026-02-17
+**Status:** All 5 migration steps complete. Store is the sole source of truth for messages.
+**Date:** 2026-02-17 (design) · 2026-02-17 (implementation complete)
 **Author:** Architecture Review
 
 ---
@@ -327,40 +327,63 @@ interface MessageStoreState {
   version: number                // global counter — increments on any mutation
 
   // ── Write operations ─────────────────────────────────────
-  upsertMessage:    (msg: IncomingMessage, source: MessageSource) => void
-  upsertMany:       (msgs: IncomingMessage[], source: MessageSource) => void
-  removeMessage:    (id: string) => void
-  setRoom:          (roomId: string) => void
-  clearRoom:        () => void
-  markDbSynced:     () => void
-  setSseGapDetected:(v: boolean) => void
+  upsertMessage:       (msg: IncomingMessage, source: MessageSource) => void
+  upsertMany:          (msgs: IncomingMessage[], source: MessageSource) => void
+  removeMessage:       (id: string) => void
+  cancelAllNonTerminal:(roomId: string) => void
+  setRoom:             (roomId: string) => void
+  clearRoom:           () => void
+  markDbSynced:        () => void
+  setSseGapDetected:   (v: boolean) => void
+}
+
+const INITIAL_STATE = {
+  entities: {} as Record<string, MessageEntity>,
+  orderedIds: [] as string[],
+  roomId: null as string | null,
+  hydratedFromDb: false,
+  lastDbSyncAt: null as number | null,
+  sseGapDetected: false,
+  version: 0,
 }
 
 export const useMessageStore = create<MessageStoreState>()(
   subscribeWithSelector((set, get) => ({
-    entities: {},
-    orderedIds: [],
-    roomId: null,
-    hydratedFromDb: false,
-    lastDbSyncAt: null,
-    sseGapDetected: false,
-    version: 0,
+    ...INITIAL_STATE,
 
-    upsertMessage: (incoming, source) => { /* see next section */ },
+    upsertMessage: (incoming, source) => {
+      set((state) => {
+        const result = applyUpsert(state.entities, state.orderedIds, incoming, source)
+        if (!result) return state
+
+        const newOrderedIds = result.idsChanged
+          ? buildSortedIds(result.entities)
+          : state.orderedIds
+
+        return {
+          entities: result.entities,
+          orderedIds: newOrderedIds,
+          version: state.version + 1,
+        }
+      })
+    },
 
     upsertMany: (msgs, source) => {
-      // Batch: apply upsertMessage logic for each, but produce a single state update.
       set((state) => {
         let newEntities = { ...state.entities }
         let idsChanged = false
+        let anyChanged = false
 
         for (const incoming of msgs) {
           const result = applyUpsert(newEntities, state.orderedIds, incoming, source)
           if (result) {
             newEntities = result.entities
             idsChanged = idsChanged || result.idsChanged
+            anyChanged = true
           }
         }
+
+        if (!anyChanged) return state
 
         const newOrderedIds = idsChanged
           ? buildSortedIds(newEntities)
@@ -384,24 +407,49 @@ export const useMessageStore = create<MessageStoreState>()(
       }
     }),
 
+    /**
+     * Batch-cancel all non-terminal tasks in a room.
+     * Uses resolveDisplayType instead of hardcoding displayType (Gap 19).
+     */
+    cancelAllNonTerminal: (roomId) => set((state) => {
+      let changed = false
+      const newEntities = { ...state.entities }
+
+      for (const [id, entity] of Object.entries(newEntities)) {
+        if (
+          entity.roomId === roomId &&
+          entity.taskStatus &&
+          !isTerminalState(entity.taskStatus) &&
+          !entity.isEphemeral
+        ) {
+          newEntities[id] = {
+            ...entity,
+            taskStatus: 'canceled' as TaskState,
+            displayType: resolveDisplayType({
+              messageType: entity.messageType,
+              taskStatus: 'canceled' as TaskState,
+              content: entity.content,
+              isEphemeral: entity.isEphemeral,
+            }),
+            sourceVersion: entity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+          changed = true
+        }
+      }
+
+      return changed
+        ? { entities: newEntities, version: state.version + 1 }
+        : state
+    }),
+
     setRoom: (roomId) => set({
+      ...INITIAL_STATE,
       roomId,
-      entities: {},
-      orderedIds: [],
-      hydratedFromDb: false,
-      lastDbSyncAt: null,
-      sseGapDetected: false,
-      version: 0,
     }),
 
     clearRoom: () => set({
-      roomId: null,
-      entities: {},
-      orderedIds: [],
-      hydratedFromDb: false,
-      lastDbSyncAt: null,
-      sseGapDetected: false,
-      version: 0,
+      ...INITIAL_STATE,
     }),
 
     markDbSynced: () => set({
@@ -489,13 +537,14 @@ function applyUpsert(
     isEphemeral: incoming.isEphemeral,
   })
 
+  // Merge: preserve fields not present in incoming, overlay incoming fields,
+  // then set computed/provenance fields.
+  // For nullable fields (taskError, taskStatusMessage), we must distinguish
+  // between `undefined` (not provided → keep existing) and `null` (explicitly clear).
+  const merged = mergeIncoming(existing, incoming)
+
   const entity: MessageEntity = {
-    // Preserve fields not present in incoming (e.g. stepNumber from SSE
-    // when DB update only carries content)
-    ...(existing || {}),
-    // Overlay incoming fields
-    ...incoming,
-    // Computed / provenance fields
+    ...merged,
     displayType,
     source,
     sourceVersion: (existing?.sourceVersion ?? 0) + 1,
@@ -511,28 +560,56 @@ function applyUpsert(
 }
 ```
 
+### Field Merging — `undefined` vs `null` Semantics
+
+The `mergeIncoming` helper distinguishes between `undefined` (field not provided — keep
+existing value) and `null` (explicitly clear the field). For each optional field, it
+checks `incoming.field !== undefined` before overwriting. This is critical for fields
+like `taskError` and `taskStatusMessage` where `null` means "no error" and `undefined`
+means "no update to this field" (see Gap 9, Gap 16, Gap 20).
+
 ### No-Op Detection
 
 ```ts
+/**
+ * Helper: if incoming field is undefined, treat as "not changing" → use existing.
+ * If incoming field is explicitly null or a value, it IS a change candidate.
+ * This distinguishes "field not provided" from "field explicitly set to null".
+ */
+function coalesce<T>(incomingVal: T | undefined, existingVal: T): T {
+  return incomingVal === undefined ? existingVal : incomingVal
+}
+
+/**
+ * Detect whether an incoming update changes any rendering-visible fields.
+ * Returns true if nothing visible changed — the store should skip this update.
+ *
+ * Gap 18: includes taskStatusMessage, taskContent, taskRequiresInput, and
+ * taskRequiresAuth which are all displayed in the TaskStatusMessage component.
+ */
 function isNoOpUpdate(
   existing: MessageEntity,
   incoming: IncomingMessage,
-  source: MessageSource,
+  _source: MessageSource,
 ): boolean {
   const incomingDisplayType = resolveDisplayType({
     messageType: incoming.messageType ?? existing.messageType,
-    taskStatus: incoming.taskStatus ?? existing.taskStatus,
+    taskStatus: coalesce(incoming.taskStatus, existing.taskStatus) as TaskState | undefined,
     content: incoming.content ?? existing.content,
   })
 
   return (
-    existing.content      === (incoming.content ?? existing.content) &&
-    existing.taskStatus   === (incoming.taskStatus ?? existing.taskStatus) &&
-    existing.taskError    === (incoming.taskError ?? existing.taskError) &&
-    existing.senderName   === (incoming.senderName ?? existing.senderName) &&
-    existing.stepNumber   === (incoming.stepNumber ?? existing.stepNumber) &&
-    existing.totalSteps   === (incoming.totalSteps ?? existing.totalSteps) &&
-    existing.displayType  === incomingDisplayType
+    existing.content           === coalesce(incoming.content, existing.content) &&
+    existing.taskStatus        === coalesce(incoming.taskStatus, existing.taskStatus) &&
+    existing.taskError         === coalesce(incoming.taskError, existing.taskError) &&
+    existing.taskStatusMessage === coalesce(incoming.taskStatusMessage, existing.taskStatusMessage) &&
+    existing.senderName        === coalesce(incoming.senderName, existing.senderName) &&
+    existing.stepNumber        === coalesce(incoming.stepNumber, existing.stepNumber) &&
+    existing.totalSteps        === coalesce(incoming.totalSteps, existing.totalSteps) &&
+    existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
+    existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
+    existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.displayType       === incomingDisplayType
   )
 }
 ```
@@ -587,8 +664,13 @@ display logic.
 On room entry, a one-time fetch loads messages from the database and hydrates the store.
 This replaces the current `messagesQuery` (React Query) entirely for the message path.
 
+> **Implementation note:** `hydrateFromDb` and `reconcileWithDb` are implemented as
+> `useCallback` functions inside `useRoomWebhook.ts`, not in a separate `useRoomData.ts`
+> hook as originally designed. The separation was unnecessary since all data-source
+> coordination already lives in that hook.
+
 ```ts
-// hooks/useRoomData.ts (new hook, replaces messages portion of useRoomWebhook)
+// hooks/useRoomWebhook.ts
 
 async function hydrateFromDb(roomId: string, getToken: GetTokenFn) {
   const store = useMessageStore.getState()
@@ -752,7 +834,7 @@ reconciliation**. It only runs when there is evidence of data loss, and it uses
 `upsertMany` which applies per-entity conflict resolution.
 
 ```ts
-// hooks/useRoomData.ts
+// hooks/useRoomWebhook.ts
 
 async function reconcileWithDb(roomId: string, getToken: GetTokenFn) {
   const response = await inquiryRoomMessagesByRoomId(roomId, getToken)
@@ -796,13 +878,17 @@ case 'processing_status': {
 
 **Detecting SSE gaps:**
 
+> **Implementation note:** The actual implementation uses a local `sseHadDisconnectionRef`
+> ref in `useRoomWebhook.ts` rather than the store's `sseGapDetected` flag. Both approaches
+> are functionally equivalent; the ref was more natural for the hook's lifecycle.
+
 ```ts
-// In useRoomSSE, when reconnection occurs:
+// In useRoomWebhook, when reconnection occurs:
 onClose: () => {
   // If we were processing when SSE disconnected, flag it
   const { processing } = useRoomUiStore.getState()
   if (processing) {
-    useMessageStore.getState().setSseGapDetected(true)
+    sseHadDisconnectionRef.current = true
   }
 }
 ```
@@ -821,7 +907,9 @@ their specific slice changes.
 ```ts
 // hooks/useRoomMessages.ts
 
+import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
+import type { MessageEntity } from '@/stores/message-store'
 
 /** Ordered message IDs only. Only re-renders when IDs are added/removed/reordered. */
 export function useOrderedIds(): string[] {
@@ -849,6 +937,11 @@ export function useMessageCount(): number {
 /** Whether initial DB load is complete. */
 export function useMessagesHydrated(): boolean {
   return useMessageStore(s => s.hydratedFromDb)
+}
+
+/** The current room ID tracked by the message store. */
+export function useMessageStoreRoomId(): string | null {
+  return useMessageStore(s => s.roomId)
 }
 ```
 
@@ -1012,9 +1105,10 @@ messages do. This completely eliminates the scroll jump for the reconciliation c
 ## Design Review — Identified Gaps and Resolutions
 
 The following issues were found during a cross-reference audit of the design against the
-existing codebase. Each gap is documented with its resolution.
+existing codebase. Each gap is documented with its resolution. **All gaps have been
+addressed in the implementation.**
 
-### Gap 1: Stale Task Detection at Hydration Time
+### Gap 1: Stale Task Detection at Hydration Time — RESOLVED
 
 **What the current code does:** The `messagesQuery.queryFn` (lines 348–422 of
 `useRoomWebhook.ts`) runs stale-task detection on every DB fetch. Non-terminal tasks
@@ -1059,7 +1153,7 @@ const withStaleDetection = detectAndMarkStaleTasks(incoming)
 store.upsertMany(withStaleDetection, 'db')
 ```
 
-### Gap 2: Cancellation Workflow — Batch Status Updates
+### Gap 2: Cancellation Workflow — Batch Status Updates — RESOLVED
 
 **What the current code does:** When the user cancels, `cancelProcessing` (line 1037)
 optimistically sets all non-terminal task entities to `task_status: 'canceled'`. When
@@ -1133,7 +1227,7 @@ store.upsertMessage({               // cancel confirmation message
 This replaces the current dual-store iteration pattern (live messages + query messages)
 with a single store scan.
 
-### Gap 3: Processing Placeholder Restore on Page Refresh
+### Gap 3: Processing Placeholder Restore on Page Refresh — RESOLVED
 
 **What the current code does:** `useRoomWebhook` lines 501–559 check
 `room.processing_message_id` after initial load. If the room has an active processing
@@ -1148,7 +1242,7 @@ check room-level processing state. The placeholder restore logic has no equivale
 the room data:
 
 ```ts
-// hooks/useRoomData.ts — after hydrateFromDb completes:
+// hooks/useRoomWebhook.ts — after hydrateFromDb completes:
 
 function restoreProcessingState(room: Room, roomId: string) {
   if (!room.processing_message_id) return
@@ -1188,7 +1282,7 @@ function restoreProcessingState(room: Room, roomId: string) {
 }
 ```
 
-### Gap 4: Expand/Collapse State Management
+### Gap 4: Expand/Collapse State Management — RESOLVED
 
 **What the current code does:** `RoomMessages` maintains elaborate expand/collapse state
 for agent message bubbles:
@@ -1284,7 +1378,7 @@ updates** (from reconciliation) no longer cause re-renders, because the entity
 reference only changes when `upsertMessage` determines a meaningful update occurred.
 Collapse/expand changes are user-initiated and expected.
 
-### Gap 5: Optimistic Rollback on Send Failure
+### Gap 5: Optimistic Rollback on Send Failure — RESOLVED
 
 **What the current code does:** When `sendUserMessage` fails (line 1008), it calls
 `resetRoomLiveState(roomId)` to wipe all live messages, then refetches from DB. This
@@ -1307,7 +1401,7 @@ await reconcileWithDb(roomId, getToken)
 This is more targeted than the current `resetRoomLiveState` approach — it doesn't
 destroy SSE-delivered messages from prior successful workflows.
 
-### Gap 6: `displayType` Transitions During Task Lifecycle
+### Gap 6: `displayType` Transitions During Task Lifecycle — RESOLVED (by design)
 
 **What the design says:** `displayType` is "resolved once at write time."
 
@@ -1331,7 +1425,7 @@ into an agent response. The key difference from the current bug is:
 **No code change needed**, but this should be documented as expected behavior in
 `resolveDisplayType`.
 
-### Gap 7: The `processing_status` Handler Does More Than Refetch
+### Gap 7: The `processing_status` Handler Does More Than Refetch — RESOLVED
 
 > **See also Gap 12** for the same issue with `task_update` terminal-state
 > side effects.
@@ -1363,7 +1457,7 @@ The "thin adapter" description in Section 7.2 applies specifically to `task_subm
 `task_update` (when terminal — see Gap 12), `error`, and `heartbeat` events remain
 richer handlers that coordinate between the message store and the UI state store.
 
-### Gap 8: `useOrderedMessages` Selector Causes Unnecessary Parent Re-renders
+### Gap 8: `useOrderedMessages` Selector Causes Unnecessary Parent Re-renders — RESOLVED
 
 **What the design proposes:**
 
@@ -1435,7 +1529,7 @@ documented as intentionally non-granular (suitable for derived computations like
 `lastAgentMessageId` where you need entity data, but not for the primary render
 path).
 
-### Gap 9: `isNoOpUpdate` — `null` vs `undefined` Confusion for Nullable Fields
+### Gap 9: `isNoOpUpdate` — `null` vs `undefined` Confusion for Nullable Fields — RESOLVED
 
 **What the design proposes:**
 
@@ -1454,44 +1548,48 @@ field to `null`. The store would silently keep the stale error.
 This affects `taskError`, `taskStatusMessage`, and any other `string | null`
 field on `IncomingMessage`.
 
-**Resolution:** Use explicit `undefined` checks for nullable fields in the
-no-op comparison:
+**Resolution:** Use a `coalesce` helper that checks for `undefined` specifically
+rather than using `??` (nullish coalescing):
 
 ```ts
+// stores/message-store/upsert.ts — already implemented
+
+function coalesce<T>(incomingVal: T | undefined, existingVal: T): T {
+  return incomingVal === undefined ? existingVal : incomingVal
+}
+
 function isNoOpUpdate(
   existing: MessageEntity,
   incoming: IncomingMessage,
-  source: MessageSource,
+  _source: MessageSource,
 ): boolean {
-  // Helper: if incoming field is undefined, treat as "not changing" → use existing
-  // If incoming field is explicitly null or a value, it IS a change candidate
-  const coalesce = <T,>(incomingVal: T | undefined, existingVal: T): T =>
-    incomingVal === undefined ? existingVal : incomingVal
-
   const incomingDisplayType = resolveDisplayType({
     messageType: incoming.messageType ?? existing.messageType,
-    taskStatus: incoming.taskStatus ?? existing.taskStatus,
+    taskStatus: coalesce(incoming.taskStatus, existing.taskStatus) as TaskState | undefined,
     content: incoming.content ?? existing.content,
   })
 
   return (
-    existing.content        === coalesce(incoming.content, existing.content) &&
-    existing.taskStatus     === coalesce(incoming.taskStatus, existing.taskStatus) &&
-    existing.taskError      === coalesce(incoming.taskError, existing.taskError) &&
-    existing.senderName     === coalesce(incoming.senderName, existing.senderName) &&
-    existing.stepNumber     === coalesce(incoming.stepNumber, existing.stepNumber) &&
-    existing.totalSteps     === coalesce(incoming.totalSteps, existing.totalSteps) &&
-    existing.displayType    === incomingDisplayType
+    existing.content           === coalesce(incoming.content, existing.content) &&
+    existing.taskStatus        === coalesce(incoming.taskStatus, existing.taskStatus) &&
+    existing.taskError         === coalesce(incoming.taskError, existing.taskError) &&
+    existing.taskStatusMessage === coalesce(incoming.taskStatusMessage, existing.taskStatusMessage) &&
+    existing.senderName        === coalesce(incoming.senderName, existing.senderName) &&
+    existing.stepNumber        === coalesce(incoming.stepNumber, existing.stepNumber) &&
+    existing.totalSteps        === coalesce(incoming.totalSteps, existing.totalSteps) &&
+    existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
+    existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
+    existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.displayType       === incomingDisplayType
   )
 }
 ```
 
-The same `coalesce` approach must also be applied in the `applyUpsert` merge
-(`...incoming` spread) for nullable fields. When `incoming.taskError` is
-`undefined`, the spread must not overwrite the existing value with `undefined`;
-when it is `null`, it must write `null`.
+The same `coalesce` approach is applied in the `mergeIncoming` function for all
+optional fields. When `incoming.taskError` is `undefined`, `mergeIncoming` preserves
+the existing value; when it is `null`, it writes `null`.
 
-### Gap 10: Empty Agent Messages Without Task Status Could Leak Through
+### Gap 10: Empty Agent Messages Without Task Status Could Leak Through — RESOLVED
 
 **What the current code does:** The `messagesQuery.queryFn` post-processing
 (line 384–396) filters out agent messages that have: no content AND are
@@ -1529,7 +1627,7 @@ const filtered = filterHydrationMessages(withStaleDetection)
 store.upsertMany(filtered, 'db')
 ```
 
-### Gap 11: Cancellation Timeout Safety Net Not Addressed
+### Gap 11: Cancellation Timeout Safety Net Not Addressed — RESOLVED
 
 **What the current code does:** After calling `cancelMessage()`, the handler
 starts a 15-second timeout (line 1079):
@@ -1581,7 +1679,7 @@ cancelTimeoutRef.current = setTimeout(() => {
 // Gate banner calls behind `if (!cancelTimedOutRef.current)` — same as today
 ```
 
-### Gap 12: `task_update` Terminal State Has Side Effects Beyond Store Write
+### Gap 12: `task_update` Terminal State Has Side Effects Beyond Store Write — RESOLVED
 
 **What the current code does:** When a `task_update` SSE event arrives with a
 terminal status (lines 806–828 of `useRoomWebhook.ts`), the handler also:
@@ -1624,7 +1722,7 @@ case 'task_update': {
 The "thin adapter" description in Section 7.2 should be updated to exclude
 `task_update` terminal cases.
 
-### Gap 13: No Room-Switch Caching — Performance Regression
+### Gap 13: No Room-Switch Caching — Performance Regression — ACCEPTED
 
 **What the current system does:** React Query caches `messagesQuery.data` per
 `queryKey`. When the user navigates away from room A to room B and back to
@@ -1655,7 +1753,7 @@ multiple agent conversations) would see a loading flash on every switch.
 Recommended: **Option 1** (accept) for the initial implementation, with a note
 to revisit if user feedback indicates room switching is a frequent workflow.
 
-### Gap 14: Manual `refreshMessages` Not Replicated
+### Gap 14: Manual `refreshMessages` Not Replicated — RESOLVED
 
 **What the current code does:** The hook exposes `refreshMessages()` which
 calls `messagesQuery.refetch()`. This is returned as part of the hook's public
@@ -1668,16 +1766,18 @@ programmatic refresh function.
 `reconcileWithDb`:
 
 ```ts
+// hooks/useRoomWebhook.ts — already implemented
+
 const refreshMessages = useCallback(async () => {
   console.log('🔄 Manual message refresh requested')
-  await reconcileWithDb(roomId, getToken)
-}, [roomId, getToken])
+  await reconcileWithDb(roomId)
+}, [roomId, reconcileWithDb])
 ```
 
 This preserves the existing API contract while using the new non-disruptive
 reconciliation path.
 
-### Gap 15: Derived Expand/Collapse State Stale After `displayType` Transitions
+### Gap 15: Derived Expand/Collapse State Stale After `displayType` Transitions — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1739,7 +1839,7 @@ the performance cost is negligible. The alternative — a dedicated selector
 that returns only agent-bubble IDs — would be more complex without a
 meaningful gain.
 
-### Gap 16: SSE `task_update` Handler Sends `null` Instead of `undefined` for Missing Fields
+### Gap 16: SSE `task_update` Handler Sends `null` Instead of `undefined` for Missing Fields — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1785,7 +1885,7 @@ The rule: if the SSE payload doesn't include a field, pass `undefined` so
 `mergeIncoming` preserves the existing value. If it explicitly includes the
 field (even as empty string or `null`), pass a value so the store updates.
 
-### Gap 17: `taskRequiresInput` / `taskRequiresAuth` Coerced to `false` When Absent
+### Gap 17: `taskRequiresInput` / `taskRequiresAuth` Coerced to `false` When Absent — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1811,7 +1911,7 @@ This could prematurely clear an `input_required` state if a subsequent
 **Resolution:** Pass through as-is (see Gap 16 resolution). `undefined`
 will be preserved by `mergeIncoming` as "not provided."
 
-### Gap 18: `isNoOpUpdate` Missing Several Rendering-Visible Fields
+### Gap 18: `isNoOpUpdate` Missing Several Rendering-Visible Fields — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1833,37 +1933,11 @@ will be preserved by `mergeIncoming` as "not provided."
 returns `true` and the update is silently dropped. The UI won't reflect
 the change.
 
-**Resolution:** Add the missing fields to the comparison:
+**Resolution:** Add the missing fields to the comparison. **Implemented** — see the
+`isNoOpUpdate` function above (Section 6) which includes all 10 rendering-visible
+fields plus `displayType`.
 
-```ts
-function isNoOpUpdate(
-  existing: MessageEntity,
-  incoming: IncomingMessage,
-  _source: MessageSource,
-): boolean {
-  const incomingDisplayType = resolveDisplayType({
-    messageType: incoming.messageType ?? existing.messageType,
-    taskStatus: coalesce(incoming.taskStatus, existing.taskStatus) as TaskState | undefined,
-    content: incoming.content ?? existing.content,
-  })
-
-  return (
-    existing.content           === coalesce(incoming.content, existing.content) &&
-    existing.taskStatus        === coalesce(incoming.taskStatus, existing.taskStatus) &&
-    existing.taskError         === coalesce(incoming.taskError, existing.taskError) &&
-    existing.taskStatusMessage === coalesce(incoming.taskStatusMessage, existing.taskStatusMessage) &&
-    existing.senderName        === coalesce(incoming.senderName, existing.senderName) &&
-    existing.stepNumber        === coalesce(incoming.stepNumber, existing.stepNumber) &&
-    existing.totalSteps        === coalesce(incoming.totalSteps, existing.totalSteps) &&
-    existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
-    existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
-    existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
-    existing.displayType       === incomingDisplayType
-  )
-}
-```
-
-### Gap 19: `cancelAllNonTerminal` Hardcodes `displayType` Instead of Calling `resolveDisplayType`
+### Gap 19: `cancelAllNonTerminal` Hardcodes `displayType` Instead of Calling `resolveDisplayType` — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1913,7 +1987,7 @@ cancelAllNonTerminal: (roomId) => set((state) => {
 })
 ```
 
-### Gap 20: `convertApiMessageToIncoming` Cannot Clear Errors from DB
+### Gap 20: `convertApiMessageToIncoming` Cannot Clear Errors from DB — RESOLVED
 
 **Found during:** Post-implementation review of Steps 1–4.
 
@@ -1954,134 +2028,153 @@ non-task agent messages don't interfere.
 
 ## Migration Path
 
-This is not a big-bang rewrite. The migration is incremental — each step can be shipped
-independently, and steps 1–3 are zero-risk because they don't change the UI.
+All five migration steps have been completed. The normalized message store is the sole
+source of truth for chat messages. React Query and the `liveMessagesByRoom` Zustand
+slice have been fully removed from the message path.
 
-### Step 1: Create the store and write tests
+### Step 1: Create the store and write tests — DONE
+
+**Commit:** `ef774b4 feat: implement normalized message store`
 
 **Files created:**
 - `stores/message-store/types.ts` — `MessageEntity`, `IncomingMessage`, `MessageSource`, `DisplayType`
 - `stores/message-store/resolve-display-type.ts` — `resolveDisplayType()`
-- `stores/message-store/upsert.ts` — `applyUpsert()`, `isNoOpUpdate()`, `buildSortedIds()`
-- `stores/message-store/index.ts` — `useMessageStore` Zustand store
-- `hooks/useRoomMessages.ts` — selector hooks
+- `stores/message-store/upsert.ts` — `applyUpsert()`, `mergeIncoming()`, `isNoOpUpdate()`, `buildSortedIds()`, `coalesce()`
+- `stores/message-store/stale-detection.ts` — `detectAndMarkStaleTasks()` (Gap 1)
+- `stores/message-store/hydration-filter.ts` — `filterHydrationMessages()` (Gap 10)
+- `stores/message-store/convert-api-message.ts` — `convertApiMessageToIncoming()` (not in original plan — added during implementation as the DB-to-store adapter)
+- `stores/message-store/index.ts` — `useMessageStore` Zustand store (incl. `cancelAllNonTerminal` from Gap 2)
+- `hooks/useRoomMessages.ts` — selector hooks (`useOrderedIds`, `useOrderedMessages`, `useMessage`, `useMessageCount`, `useMessagesHydrated`, `useMessageStoreRoomId`)
 
-**Tests:**
-- Conflict resolution rules (all 5 rules, positive and negative cases)
-- `resolveDisplayType` for all message/task state combinations
-- `isNoOpUpdate` correctly detects no-ops vs. real changes
-- `buildSortedIds` produces correct order for mixed timestamp/step scenarios
-- `upsertMany` batches correctly and only triggers one state update
+**Tests (6 files, all passing):**
+- `__tests__/store.test.ts` — full store integration tests
+- `__tests__/upsert.test.ts` — `applyUpsert`, `isNoOpUpdate`, `buildSortedIds` conflict resolution rules
+- `__tests__/resolve-display-type.test.ts` — display type resolution for all message/task state combinations
+- `__tests__/hydration-filter.test.ts` — hydration filtering logic
+- `__tests__/stale-detection.test.ts` — stale task detection
+- `__tests__/convert-api-message.test.ts` — API message conversion
 
-**Risk:** None. No existing code is modified.
+### Step 2: Wire SSE handlers to write to new store — DONE
 
-### Step 2: Wire SSE handlers to write to new store (dual-write)
+SSE handlers in `useRoomWebhook.ts` write directly to the normalized store via
+`store.upsertMessage()`. The old `addLiveMessage`/`replaceLiveMessage`/`removeLiveMessage`
+calls have been fully removed.
 
-**Files modified:**
-- `hooks/useRoomWebhook.ts` — in `handleSSEMessage`, add `store.upsertMessage()`
-  calls alongside existing `addLiveMessage` / `replaceLiveMessage` calls.
+**Implementation note:** Steps 2–4 were shipped together rather than as a dual-write
+migration. The SSE handlers became "thin adapters" for data events (`task_submitted`,
+`user_message`, `agent_response`) and remain "rich handlers" for lifecycle events
+(`processing_status`, `task_update` with terminal status) per Gap 7 and Gap 12.
 
-**Verification:** Log diffs between the old live messages and the new store entities
-to confirm parity. The UI still reads from the old path.
+### Step 3: Wire DB fetch to write to new store — DONE
 
-**Risk:** Low. The new store is a write-only shadow; nothing reads from it yet.
+`hydrateFromDb` and `reconcileWithDb` are implemented as `useCallback` functions inside
+`useRoomWebhook.ts` (not in a separate `useRoomData.ts` hook as originally planned — the
+separation was unnecessary since all data-source coordination already lives in that hook).
 
-### Step 3: Wire DB fetch to write to new store (dual-write)
+The hydration pipeline runs: `convertApiMessageToIncoming()` → `detectAndMarkStaleTasks()`
+→ `filterHydrationMessages()` → `store.upsertMany(filtered, 'db')`.
 
-**Files modified:**
-- `hooks/useRoomWebhook.ts` — after `messagesQuery.queryFn` resolves, also call
-  `store.upsertMany(incoming, 'db')`.
+React Query (`messagesQuery`) has been fully removed from the message path.
 
-**Verification:** After page load and after reconciliation refetch, compare store
-contents with `messagesQuery.data` to confirm parity.
-
-**Risk:** Low. Still a shadow store.
-
-### Step 4: Switch rendering to read from new store
-
-**Files modified:**
-- `components/room-messages.tsx` — replace `messages` prop with `useOrderedMessages()`
-  selector hook. Add `MemoizedMessage` per-message component.
-- `app/c/room/[id]/page.tsx` — stop passing `messages` prop to `RoomMessages`.
-- `hooks/useRoomWebhook.ts` — remove the `messages` useMemo, the
-  `liveMessagesByRoom` reads, and the `messagesQuery` React Query hook.
-
-**Files removed / cleaned:**
-- `liveMessagesByRoom` slice from `stores/room-ui-store.ts` (along with
-  `addLiveMessage`, `replaceLiveMessage`, `removeLiveMessage`)
-- The SSE handler no longer calls old Zustand live message methods
-- Remove `messagesQuery` (React Query) entirely from `useRoomWebhook`
-
-**Risk:** Medium. This is the swap-over. Feature-flag it if needed:
-
-```ts
-const USE_NORMALIZED_STORE = process.env.NEXT_PUBLIC_USE_NORMALIZED_STORE === 'true'
-
-// In RoomMessages:
-const messages = USE_NORMALIZED_STORE
-  ? useOrderedMessages()
-  : props.messages  // old path
-```
-
-### Step 5: Replace automatic refetch with conditional reconciliation
+### Step 4: Switch rendering to read from new store — DONE
 
 **Files modified:**
-- `hooks/useRoomWebhook.ts` — remove the `setTimeout(() => refetch(), 1500)` in the
-  `processing_status` handler. Replace with conditional `reconcileWithDb()` gated
-  on `sseGapDetected`.
-- `hooks/useRoomSSE.ts` — set `sseGapDetected = true` on SSE close during processing.
+- `components/room-messages.tsx` — reads from `useOrderedIds()`, `useMessage(id)`,
+  `useMessageCount()`, `useMessagesHydrated()`. Uses `MemoizedMessage` per-message
+  component with `displayType`-based routing. Subscribes to `storeVersion` for
+  derived expand/collapse state (Gap 15). Legacy `MessageData` interface retained
+  for backward compatibility (still imported by `message-bubble.tsx`).
+- `components/message-bubble.tsx` — has both legacy wrappers (`UserMessageBubble`,
+  `AgentMessageBubble` accepting `MessageData`) and new entity-based components
+  (`EntityUserBubble`, `EntityAgentBubble` accepting `MessageEntity`).
+- `hooks/useRoomWebhook.ts` — `messages` useMemo removed. No longer returns a
+  `messages` array. `liveMessagesByRoom` reads removed.
 
-**Risk:** Low after Step 4 is stable. The refetch was a safety net for the old
-dual-source model. The normalized store's conflict resolution makes it unnecessary
-in the happy path.
+**Files cleaned:**
+- `stores/room-ui-store.ts` — `liveMessagesByRoom` slice and related methods
+  (`addLiveMessage`, `replaceLiveMessage`, `removeLiveMessage`) fully removed.
+
+### Step 5: Replace automatic refetch with conditional reconciliation — DONE
+
+**Files modified:**
+- `hooks/useRoomWebhook.ts` — the old `setTimeout(() => refetch(), 1500)` has been
+  replaced with conditional `reconcileWithDb()` gated on `sseHadDisconnectionRef`.
+  `refreshMessages()` delegates to `reconcileWithDb()` (Gap 14). On send failure,
+  targeted removal of optimistic messages + reconciliation replaces the old
+  `resetRoomLiveState` approach (Gap 5).
+
+**Implementation note:** SSE gap detection uses a local `sseHadDisconnectionRef` ref
+in the hook rather than the store's `sseGapDetected` flag. The store flag exists but
+the ref was more natural for the hook's lifecycle. Both approaches are functionally
+equivalent.
 
 ---
 
 ## Files Inventory
 
-Summary of all files created, modified, and removed:
+Summary of all files created, modified, and removed. All actions are **completed**.
 
 | Action | File | Description |
 |--------|------|-------------|
-| **Create** | `stores/message-store/types.ts` | `MessageEntity`, `IncomingMessage`, type definitions |
+| **Create** | `stores/message-store/types.ts` | `MessageEntity`, `IncomingMessage`, `MessageSource`, `DisplayType` |
 | **Create** | `stores/message-store/resolve-display-type.ts` | `resolveDisplayType()` |
-| **Create** | `stores/message-store/upsert.ts` | `applyUpsert()`, `isNoOpUpdate()`, `buildSortedIds()` |
+| **Create** | `stores/message-store/upsert.ts` | `applyUpsert()`, `mergeIncoming()`, `isNoOpUpdate()`, `buildSortedIds()`, `coalesce()` |
 | **Create** | `stores/message-store/stale-detection.ts` | `detectAndMarkStaleTasks()` (Gap 1) |
 | **Create** | `stores/message-store/hydration-filter.ts` | `filterHydrationMessages()` (Gap 10) |
+| **Create** | `stores/message-store/convert-api-message.ts` | `convertApiMessageToIncoming()` — DB API adapter (added during implementation) |
 | **Create** | `stores/message-store/index.ts` | `useMessageStore` Zustand store (incl. `cancelAllNonTerminal` from Gap 2) |
-| **Create** | `hooks/useRoomMessages.ts` | Selector hooks (`useOrderedIds`, `useOrderedMessages`, `useMessage`, etc.) (Gap 8) |
-| **Create** | `hooks/useRoomData.ts` | `hydrateFromDb()`, `reconcileWithDb()`, `restoreProcessingState()`, `refreshMessages()` (Gap 3, Gap 14) |
-| **Modify** | `hooks/useRoomWebhook.ts` | Remove `messagesQuery`, `messages` memo, live message calls; add store writes; keep processing/cancellation lifecycle handlers (incl. cancel timeout safety net from Gap 11, `task_update` terminal side effects from Gap 12) |
-| **Modify** | `components/room-messages.tsx` | Read from store selectors via `useOrderedIds`; add `MemoizedMessage` with expand/collapse props (Gap 4, Gap 8) |
-| **Modify** | `app/c/room/[id]/page.tsx` | Remove `messages` prop pass-through |
-| **Modify** | `hooks/useRoomSSE.ts` | Set `sseGapDetected` on disconnect during processing |
-| **Modify** | `stores/room-ui-store.ts` | Remove `liveMessagesByRoom` slice and related methods |
+| **Create** | `stores/message-store/__tests__/store.test.ts` | Store integration tests |
+| **Create** | `stores/message-store/__tests__/upsert.test.ts` | Conflict resolution, no-op detection, sorting tests |
+| **Create** | `stores/message-store/__tests__/resolve-display-type.test.ts` | Display type resolution tests |
+| **Create** | `stores/message-store/__tests__/hydration-filter.test.ts` | Hydration filter tests |
+| **Create** | `stores/message-store/__tests__/stale-detection.test.ts` | Stale task detection tests |
+| **Create** | `stores/message-store/__tests__/convert-api-message.test.ts` | API message conversion tests |
+| **Create** | `hooks/useRoomMessages.ts` | Selector hooks: `useOrderedIds`, `useOrderedMessages`, `useMessage`, `useMessageCount`, `useMessagesHydrated`, `useMessageStoreRoomId` |
+| **Modify** | `hooks/useRoomWebhook.ts` | Removed `messagesQuery`, `messages` memo, live message calls. Added `hydrateFromDb()`, `reconcileWithDb()`, `refreshMessages()`, store writes for SSE handlers, processing/cancellation lifecycle handlers (incl. cancel timeout safety net from Gap 11, `task_update` terminal side effects from Gap 12) |
+| **Modify** | `components/room-messages.tsx` | Reads from store selectors via `useOrderedIds`; uses `MemoizedMessage` with `displayType` routing and expand/collapse props (Gap 4, Gap 8, Gap 15). Legacy `MessageData` interface retained for backward compat. |
+| **Modify** | `components/message-bubble.tsx` | Added `EntityUserBubble`, `EntityAgentBubble` accepting `MessageEntity`; legacy `UserMessageBubble`, `AgentMessageBubble` retained for backward compat. |
+| **Modify** | `stores/room-ui-store.ts` | Removed `liveMessagesByRoom` slice and methods (`addLiveMessage`, `replaceLiveMessage`, `removeLiveMessage`) |
+
+**Design divergences from original plan:**
+- `hooks/useRoomData.ts` was **not** created as a separate file. `hydrateFromDb()` and `reconcileWithDb()` live inside `useRoomWebhook.ts`.
+- `hooks/useRoomSSE.ts` was **not** modified. SSE gap detection uses a local `sseHadDisconnectionRef` ref in `useRoomWebhook.ts` rather than modifying `useRoomSSE.ts`.
+- `app/c/room/[id]/page.tsx` was **not** modified — the `messages` prop pass-through was already absent (the component reads from the store directly).
+- The feature flag (`USE_NORMALIZED_STORE`) was not needed — the migration was shipped directly without a flag.
+
+**Remaining legacy artifacts (cleanup candidates):**
+- `MessageData` interface in `room-messages.tsx` — kept for backward compat, still imported by `message-bubble.tsx`
+- Legacy `UserMessageBubble` and `AgentMessageBubble` wrappers in `message-bubble.tsx` — accept `MessageData`, coexist with new `Entity*` variants
 
 ---
 
 ## Summary
 
-| Current Problem | How This Design Fixes It |
-|-----------------|--------------------------|
-| Scroll jump on post-processing refetch | Reconciliation is per-entity upsert; unchanged messages don't re-render. `messageCount`-based scroll only triggers for genuinely new messages. |
-| Component type flicker (Task → Agent swap) | `displayType` resolved once at write time via `resolveDisplayType()`. Both SSE and DB produce the same value for the same state. Transitions happen once during live SSE, not again during reconciliation (Gap 6). |
-| Full list re-render on any change | `useOrderedIds()` selector + per-message `useMessage(id)` selectors via `MemoizedMessage` isolate re-renders. Parent only re-renders when messages are added/removed (Gap 8). |
-| Dual source of truth (React Query + Zustand) | Single normalized Zustand store. Single `upsertMessage` write path with conflict resolution. |
-| "Belt-and-suspenders" refetch always needed | Reconciliation only fires after detected SSE gaps. Conflict resolution makes it non-disruptive even when it does fire. |
-| Agent name in query key causing refetches | Agent names resolved at write time and stored in entity. No query key dependency. |
-| Scattered type-conversion logic | `resolveDisplayType()` is the single source of truth, replacing 3 scattered locations. |
-| Stale tasks shown as perpetually "working" | `detectAndMarkStaleTasks()` runs at hydration and reconciliation time (Gap 1). |
-| Cancellation requires scanning two stores | `cancelAllNonTerminal()` store action scans one normalized store (Gap 2). |
-| Processing placeholder lost on page refresh | `restoreProcessingState()` runs after hydration, using `room.processing_message_id` (Gap 3). |
-| Blunt `resetRoomLiveState` on send failure | Targeted removal of specific optimistic messages + reconciliation (Gap 5). |
-| Nullable field clearing treated as no-op | `isNoOpUpdate` uses `undefined`-only checks to distinguish "field not provided" from "field set to null" (Gap 9). |
-| Empty agent messages from DB showing as blank bubbles | `filterHydrationMessages()` drops content-less agent messages without task status (Gap 10). |
-| Cancellation timeout safety net lost | 15-second timeout + `cancelTimedOutRef` banner suppression preserved in hook (Gap 11). |
-| `task_update` terminal side effects omitted | Handler explicitly coordinates UI state on terminal task updates (Gap 12). |
-| Manual `refreshMessages` API removed | `refreshMessages()` delegates to `reconcileWithDb()` (Gap 14). |
-| Expand/collapse stale after `displayType` transition | `allAgentIds` / `lastAgentMessageId` subscribe to store `version` to recompute when entities change (Gap 15). |
-| SSE handler clears existing errors when field is absent | `task_update` uses `undefined`-preserving coalescing instead of `|| null` for nullable fields (Gap 16). |
-| `taskRequiresInput/Auth` reset to `false` when SSE omits field | Pass through raw SSE values instead of coercing `undefined` to `false` (Gap 17). |
-| `isNoOpUpdate` misses rendering-visible fields | `taskStatusMessage`, `taskContent`, `taskRequiresInput`, `taskRequiresAuth` added to comparison (Gap 18). |
-| `cancelAllNonTerminal` bypasses `resolveDisplayType` | Calls `resolveDisplayType()` instead of hardcoding `'task-status'` (Gap 19). |
-| DB reconciliation cannot clear stale errors | `convertApiMessageToIncoming` sends `null` for task messages without errors (Gap 20). |
+All design goals have been achieved. The normalized message store is the sole source
+of truth for chat messages, with all 5 migration steps and all 20 identified gaps
+resolved.
+
+| Current Problem | How This Design Fixes It | Status |
+|-----------------|--------------------------|--------|
+| Scroll jump on post-processing refetch | Reconciliation is per-entity upsert; unchanged messages don't re-render. `messageCount`-based scroll only triggers for genuinely new messages. | Done |
+| Component type flicker (Task → Agent swap) | `displayType` resolved once at write time via `resolveDisplayType()`. Both SSE and DB produce the same value for the same state. Transitions happen once during live SSE, not again during reconciliation (Gap 6). | Done |
+| Full list re-render on any change | `useOrderedIds()` selector + per-message `useMessage(id)` selectors via `MemoizedMessage` isolate re-renders. Parent only re-renders when messages are added/removed (Gap 8). | Done |
+| Dual source of truth (React Query + Zustand) | Single normalized Zustand store. Single `upsertMessage` write path with conflict resolution. | Done |
+| "Belt-and-suspenders" refetch always needed | Reconciliation only fires after detected SSE gaps. Conflict resolution makes it non-disruptive even when it does fire. | Done |
+| Agent name in query key causing refetches | Agent names resolved at write time and stored in entity. No query key dependency. | Done |
+| Scattered type-conversion logic | `resolveDisplayType()` is the single source of truth, replacing 3 scattered locations. | Done |
+| Stale tasks shown as perpetually "working" | `detectAndMarkStaleTasks()` runs at hydration and reconciliation time (Gap 1). | Done |
+| Cancellation requires scanning two stores | `cancelAllNonTerminal()` store action scans one normalized store (Gap 2). | Done |
+| Processing placeholder lost on page refresh | `restoreProcessingState()` runs after hydration, using `room.processing_message_id` (Gap 3). | Done |
+| Blunt `resetRoomLiveState` on send failure | Targeted removal of specific optimistic messages + reconciliation (Gap 5). | Done |
+| Nullable field clearing treated as no-op | `isNoOpUpdate` uses `coalesce()` with `undefined`-only checks to distinguish "field not provided" from "field set to null" (Gap 9). | Done |
+| Empty agent messages from DB showing as blank bubbles | `filterHydrationMessages()` drops content-less agent messages without task status (Gap 10). | Done |
+| Cancellation timeout safety net lost | 15-second timeout + `cancelTimedOutRef` banner suppression preserved in hook (Gap 11). | Done |
+| `task_update` terminal side effects omitted | Handler explicitly coordinates UI state on terminal task updates (Gap 12). | Done |
+| Room-switch cache miss | Accepted as Option 1 — fresh fetch per room entry. Revisit if user feedback warrants LRU cache (Gap 13). | Accepted |
+| Manual `refreshMessages` API removed | `refreshMessages()` delegates to `reconcileWithDb()` (Gap 14). | Done |
+| Expand/collapse stale after `displayType` transition | `allAgentIds` / `lastAgentMessageId` subscribe to store `version` to recompute when entities change (Gap 15). | Done |
+| SSE handler clears existing errors when field is absent | `task_update` uses `undefined`-preserving coalescing instead of `|| null` for nullable fields (Gap 16). | Done |
+| `taskRequiresInput/Auth` reset to `false` when SSE omits field | Pass through raw SSE values instead of coercing `undefined` to `false` (Gap 17). | Done |
+| `isNoOpUpdate` misses rendering-visible fields | `taskStatusMessage`, `taskContent`, `taskRequiresInput`, `taskRequiresAuth` added to comparison (Gap 18). | Done |
+| `cancelAllNonTerminal` bypasses `resolveDisplayType` | Calls `resolveDisplayType()` instead of hardcoding `'task-status'` (Gap 19). | Done |
+| DB reconciliation cannot clear stale errors | `convertApiMessageToIncoming` sends `null` for task messages without errors (Gap 20). | Done |

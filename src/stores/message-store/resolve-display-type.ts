@@ -5,11 +5,6 @@ import type { DisplayType } from './types'
  * Resolve the display type for a message — the single source of truth for which
  * React component renders a given message.
  *
- * This replaces three scattered locations in the current codebase:
- *   - `shouldRenderTaskAsAgent()` in room-messages.tsx
- *   - The post-processing `.map()` in messagesQuery.queryFn
- *   - Implicit `type: MESSAGE_TYPE.TASK` assignments in SSE handlers
- *
  * Display type transitions are expected during the task lifecycle:
  *   1. task_submitted → 'task-status' (working, no content)
  *   2. task_update completed with content → 'agent-bubble'

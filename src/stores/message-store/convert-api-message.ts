@@ -7,8 +7,6 @@ import type { IncomingMessage } from './types'
 
 /**
  * Parameters for converting API messages to IncomingMessage shape.
- * These are the same dependencies that convertApiMessageToMessageData uses
- * (userId, userName, getAgentName) but passed explicitly instead of via closure.
  */
 export interface ConvertApiMessageOptions {
   userId?: string
@@ -19,11 +17,9 @@ export interface ConvertApiMessageOptions {
 /**
  * Convert a RoomMessage (DB API format) to an IncomingMessage (normalized store format).
  *
- * This is the normalized-store equivalent of convertApiMessageToMessageData.
- * It extracts the same fields but produces an IncomingMessage rather than
- * a MessageData. The display-type resolution happens downstream in the
- * store's upsert path via resolveDisplayType — this function does not
- * perform any type-conversion logic.
+ * Extracts content, task state, sender info, and timestamps from the API response.
+ * Display-type resolution happens downstream in the store's upsert path via
+ * resolveDisplayType — this function does not perform any type-conversion logic.
  */
 export async function convertApiMessageToIncoming(
   apiMessage: RoomMessage,

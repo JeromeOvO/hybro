@@ -8,8 +8,7 @@ const STALE_TASK_THRESHOLD_MS = 10 * 60 * 1000 // 10 minutes, matches backend
  * Detect tasks that are stuck in non-terminal state beyond the threshold.
  * These are marked as failed with a timeout error.
  *
- * This replaces the stale-task detection in the current messagesQuery.queryFn
- * post-processing. Runs at hydration and reconciliation time.
+ * Runs at hydration and reconciliation time.
  */
 export function detectAndMarkStaleTasks(messages: IncomingMessage[]): IncomingMessage[] {
   return messages.map(msg => {

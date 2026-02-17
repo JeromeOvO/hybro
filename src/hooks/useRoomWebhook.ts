@@ -538,8 +538,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
 
           // The normalized store's upsert preserves existing fields when incoming
-          // fields are undefined, so we don't need the manual field-preservation
-          // logic that the old liveMessagesByRoom path required.
+          // fields are undefined, so we don't need manual field-preservation logic.
           store.upsertMessage({
             id: messageId,
             roomId,
@@ -615,7 +614,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       sseHadDisconnectionRef.current = true
-      useMessageStore.getState().setSseGapDetected(true)
     }
   }, [sseConnected, processing])
 

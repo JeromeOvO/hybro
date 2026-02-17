@@ -14,30 +14,6 @@ import { type TaskState } from '@/lib/types/sse'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
-import type { MessageType } from '@/lib/types'
-
-// ── Legacy types kept for backward compatibility (still imported by other files) ──
-
-export interface MessageData {
-  id: string
-  type: MessageType
-  content: string
-  sender_name: string
-  timestamp: string
-  user_id?: string
-  agent_id?: string
-  task_status?: string
-  task_error?: string | null
-  task_status_message?: string | null
-  task_requires_input?: boolean
-  task_requires_auth?: boolean
-  task_content?: string
-  task_updated_at?: string
-  task_created_at?: string
-  timestamp_was_missing?: boolean
-  step_number?: number
-  total_steps?: number
-}
 
 // Empty state component
 function EmptyState() {

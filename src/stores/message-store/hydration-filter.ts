@@ -3,10 +3,9 @@ import type { IncomingMessage } from './types'
 /**
  * Filter out empty/invalid agent messages during DB hydration and reconciliation.
  *
- * This replaces the filtering logic in the current messagesQuery.queryFn
- * post-processing that drops agent messages with no content and no task status.
- * Without this filter, resolveDisplayType would resolve such messages to
- * 'agent-bubble', resulting in empty agent bubbles in the UI.
+ * Without this filter, resolveDisplayType would resolve agent messages with
+ * no content and no task status to 'agent-bubble', resulting in empty agent
+ * bubbles in the UI.
  */
 export function filterHydrationMessages(messages: IncomingMessage[]): IncomingMessage[] {
   return messages.filter(msg => {

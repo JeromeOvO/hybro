@@ -23,7 +23,6 @@ interface MessageStoreState {
   // ── Sync metadata ────────────────────────────────────────
   hydratedFromDb: boolean
   lastDbSyncAt: number | null
-  sseGapDetected: boolean
   version: number
 
   // ── Write operations ─────────────────────────────────────
@@ -34,7 +33,6 @@ interface MessageStoreState {
   setRoom: (roomId: string) => void
   clearRoom: () => void
   markDbSynced: () => void
-  setSseGapDetected: (v: boolean) => void
 }
 
 const INITIAL_STATE = {
@@ -43,7 +41,6 @@ const INITIAL_STATE = {
   roomId: null as string | null,
   hydratedFromDb: false,
   lastDbSyncAt: null as number | null,
-  sseGapDetected: false,
   version: 0,
 }
 
@@ -156,7 +153,5 @@ export const useMessageStore = create<MessageStoreState>()(
       hydratedFromDb: true,
       lastDbSyncAt: Date.now(),
     }),
-
-    setSseGapDetected: (v) => set({ sseGapDetected: v }),
   }))
 )
