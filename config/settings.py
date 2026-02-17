@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
     processing_status_expiry_minutes: int = 30  # Clear stuck processing status older than this
 
+    # Change stream reconnection backoff
+    cs_backoff_base: float = 1.0  # initial delay in seconds
+    cs_backoff_max: float = 30.0  # ceiling delay in seconds
+    cs_backoff_factor: float = 2.0  # multiplier per retry
+    cs_jitter_fraction: float = 0.25  # ±25% random jitter
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -9,15 +9,14 @@ failure mode where "forgot to persist" was the common bug.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from a2a.types import AgentCard, Message, Role, Task, TaskState, TaskStatus, TextPart
 
-from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from models.processing import ProcessingContext
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 from services.a2a_constants import is_terminal_state
@@ -44,32 +43,6 @@ def get_task(msg: RoomAgentMessage) -> Task | None:
 def state_str(state) -> str:
     """Convert a TaskState enum (or string) to its string value."""
     return state.value if hasattr(state, "value") else str(state)
-
-
-# ------------------------------------------------------------------
-# Processing context (shared across streaming/sync sub-handlers)
-# ------------------------------------------------------------------
-
-
-@dataclass
-class ProcessingContext:
-    """Bundles the common parameters threaded through streaming/sync sub-handlers."""
-
-    room_id: str
-    current_message: RoomAgentMessage
-    agent_card: AgentCard
-    user_message_id: str
-    token: CancellationToken | None = None
-    task_info: dict[str, Any] | None = None
-    created_at: str | None = None
-    step_number: int | None = None
-    total_steps: int | None = None
-    send_sse: bool = False
-
-    @property
-    def tracked_message_id(self) -> str | None:
-        """Return message_id only if task tracking was set up."""
-        return self.current_message.message_id if self.task_info else None
 
 
 # ------------------------------------------------------------------

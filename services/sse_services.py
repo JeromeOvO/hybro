@@ -10,14 +10,9 @@ from cachetools import TTLCache
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from config.settings import settings
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
-
-# Exponential backoff parameters for change stream reconnection
-_CS_BACKOFF_BASE: float = 1.0  # initial delay in seconds
-_CS_BACKOFF_MAX: float = 30.0  # ceiling delay in seconds
-_CS_BACKOFF_FACTOR: float = 2.0  # multiplier per retry
-_CS_JITTER_FRACTION: float = 0.25  # ±25% random jitter
 
 
 def _enum_value(v: Any) -> Any:
@@ -531,7 +526,7 @@ class SSEManager:
           propagation is operational.
         """
         resume_token: dict | None = None
-        backoff_delay = _CS_BACKOFF_BASE
+        backoff_delay = settings.cs_backoff_base
         consecutive_failures = 0
 
         while not self._shutdown_flag:
@@ -546,7 +541,7 @@ class SSEManager:
                         pipeline, **watch_kwargs
                     ) as change_stream:
                         self._change_stream_connected = True
-                        backoff_delay = _CS_BACKOFF_BASE
+                        backoff_delay = settings.cs_backoff_base
                         consecutive_failures = 0
                         resume_token = await self._consume_change_stream(
                             change_stream, resume_token
@@ -571,7 +566,7 @@ class SSEManager:
                         )
                         resume_token = None
 
-                    jitter = backoff_delay * _CS_JITTER_FRACTION
+                    jitter = backoff_delay * settings.cs_jitter_fraction
                     delay = backoff_delay + random.uniform(-jitter, jitter)
                     logger.warning(
                         "Change stream error: %s. Reconnecting in %.1fs "
@@ -582,7 +577,7 @@ class SSEManager:
                     )
                     await asyncio.sleep(delay)
                     backoff_delay = min(
-                        backoff_delay * _CS_BACKOFF_FACTOR, _CS_BACKOFF_MAX
+                        backoff_delay * settings.cs_backoff_factor, settings.cs_backoff_max
                     )
 
     async def stop_change_stream_watcher(self):

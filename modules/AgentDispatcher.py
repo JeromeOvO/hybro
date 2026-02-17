@@ -10,11 +10,11 @@ Extracted from ``RoomMessageCenter`` as part of the A-4 decomposition.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
 from models.agent import Agent
+from models.dispatcher import AssignResult
 from models.room import RoomAgentMessage
 from modules.TaskStateManager import get_task
 
@@ -23,24 +23,6 @@ if TYPE_CHECKING:
     from services.database_service import DatabaseService
 
 logger = get_logger(__name__)
-
-
-# ------------------------------------------------------------------
-# Public data types
-# ------------------------------------------------------------------
-
-
-@dataclass
-class AssignResult:
-    """Result of ``assign_agent``.
-
-    Replaces the old ``self._last_resolve_failure`` pattern which stored the
-    failure reason on the singleton instance — a concurrency hazard when
-    multiple asyncio tasks process different rooms simultaneously (Issue 16).
-    """
-
-    agent: Agent | None
-    failure_reason: str | None = None
 
 
 # ------------------------------------------------------------------

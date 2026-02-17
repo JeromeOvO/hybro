@@ -1,6 +1,5 @@
 import re
 import uuid
-from dataclasses import dataclass
 from datetime import timedelta
 from uuid import uuid4
 
@@ -46,6 +45,7 @@ from models.room import (
     RoomMessage,
     RoomUserMessage,
 )
+from models.room_services_models import ParseResult
 from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_selection_service import agent_selection_service
@@ -57,19 +57,6 @@ from services.sse_services import sse_manager
 from services.task_service import task_service
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class ParseResult:
-    """Result of ``parse_user_message``.
-
-    Replaces the previous ``bool`` return so the caller can distinguish
-    cancellation from failure without ``parse_user_message`` sending SSE
-    events directly (Issue 20).
-    """
-
-    success: bool
-    canceled: bool = False
 
 
 class RoomServices:

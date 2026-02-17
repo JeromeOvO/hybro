@@ -30,9 +30,9 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
+from models.processing import ProcessingContext
 from models.room import RoomAgentMessage
 from modules.TaskStateManager import (
-    ProcessingContext,
     TaskStateManager,
     get_task,
     state_str,

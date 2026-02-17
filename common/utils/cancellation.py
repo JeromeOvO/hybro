@@ -28,7 +28,7 @@ class CancellationError(Exception):
 
     def __init__(self, message_id: str) -> None:
         self.message_id = message_id
-        super().__init__(f"Processing cancelled for message {message_id}")
+        super().__init__(f"Failed: Processing cancelled for message {message_id}")
 
 
 @dataclass
