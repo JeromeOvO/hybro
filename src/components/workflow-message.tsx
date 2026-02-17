@@ -18,7 +18,14 @@ import {
 import type { MetaTask, Agent } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-export type WorkflowStage = 'decomposed' | 'agents_assigned' | 'running' | 'completed'
+export const WORKFLOW_STAGE = {
+  DECOMPOSED: "decomposed",
+  AGENTS_ASSIGNED: "agents_assigned",
+  RUNNING: "running",
+  COMPLETED: "completed",
+} as const
+
+export type WorkflowStage = (typeof WORKFLOW_STAGE)[keyof typeof WORKFLOW_STAGE]
 
 interface WorkflowMessageProps {
   baseTaskId: string
@@ -61,28 +68,28 @@ export function WorkflowMessage({
 
   const getStageInfo = () => {
     switch (stage) {
-      case 'decomposed':
+      case WORKFLOW_STAGE.DECOMPOSED:
         return {
           title: 'Task Decomposition Complete',
           description: 'The task has been broken down into manageable sub-tasks',
           nextLabel: 'Assign Agents',
           icon: <CheckCircle className="h-5 w-5 text-green-500" />
         }
-      case 'agents_assigned':
+      case WORKFLOW_STAGE.AGENTS_ASSIGNED:
         return {
           title: 'Agents Assigned',
           description: 'All meta-tasks have been assigned to appropriate agents',
           nextLabel: 'Run Workflow',
           icon: <Bot className="h-5 w-5 text-blue-500" />
         }
-      case 'running':
+      case WORKFLOW_STAGE.RUNNING:
         return {
           title: 'Workflow Running',
           description: 'The workflow is currently being executed',
           nextLabel: 'Running...',
           icon: <Loader2 className="h-5 w-5 text-orange-500 animate-spin" />
         }
-      case 'completed':
+      case WORKFLOW_STAGE.COMPLETED:
         return {
           title: 'Workflow Completed',
           description: 'All tasks have been executed successfully',
@@ -148,7 +155,7 @@ export function WorkflowMessage({
                       )}
                     </div>
                     
-                    {stage === 'agents_assigned' && onRetryMetaTask && (
+                    {stage === WORKFLOW_STAGE.AGENTS_ASSIGNED && onRetryMetaTask && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -200,7 +207,7 @@ export function WorkflowMessage({
                         </div>
                       )}
                       
-                      {!agent && stage === 'agents_assigned' && (
+                      {!agent && stage === WORKFLOW_STAGE.AGENTS_ASSIGNED && (
                         <div className="flex items-center gap-2 text-orange-600">
                           <AlertCircle className="h-4 w-4 flex-shrink-0" />
                           <span className="text-sm">No agent assigned</span>
@@ -221,7 +228,7 @@ export function WorkflowMessage({
           <Button
             variant="outline"
             onClick={onRetry}
-            disabled={isLoading || stage === 'running'}
+            disabled={isLoading || stage === WORKFLOW_STAGE.RUNNING}
             className="flex items-center gap-2"
           >
             <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
@@ -230,10 +237,10 @@ export function WorkflowMessage({
 
           <Button
             onClick={onNext}
-            disabled={isLoading || stage === 'running' || stage === 'completed'}
+            disabled={isLoading || stage === WORKFLOW_STAGE.RUNNING || stage === WORKFLOW_STAGE.COMPLETED}
             className="flex items-center gap-2"
           >
-            {stage === 'running' ? (
+            {stage === WORKFLOW_STAGE.RUNNING ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Play className="h-4 w-4" />

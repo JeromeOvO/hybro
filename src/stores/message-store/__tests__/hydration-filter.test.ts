@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { filterHydrationMessages } from '../hydration-filter'
 import type { IncomingMessage } from '../types'
+import { TASK_STATE } from '@/lib/types/sse'
 
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
@@ -34,7 +35,7 @@ describe('filterHydrationMessages', () => {
 
   it('keeps agent messages with taskStatus (even without content)', () => {
     const messages = [
-      makeIncoming({ id: 'task-1', content: '', taskStatus: 'working' }),
+      makeIncoming({ id: 'task-1', content: '', taskStatus: TASK_STATE.WORKING }),
     ]
     const result = filterHydrationMessages(messages)
     expect(result).toHaveLength(1)
@@ -54,7 +55,7 @@ describe('filterHydrationMessages', () => {
       makeIncoming({ id: 'user', messageType: 'user', content: 'Hi' }),
       makeIncoming({ id: 'agent-good', content: 'Response' }),
       makeIncoming({ id: 'agent-empty', content: '' }),
-      makeIncoming({ id: 'task', content: '', taskStatus: 'working' }),
+      makeIncoming({ id: 'task', content: '', taskStatus: TASK_STATE.WORKING }),
     ]
     const result = filterHydrationMessages(messages)
     expect(result.map(m => m.id)).toEqual(['user', 'agent-good', 'task'])

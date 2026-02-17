@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useMessageStore } from '../index'
 import type { IncomingMessage } from '../types'
+import { TASK_STATE } from '@/lib/types/sse'
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -153,21 +154,21 @@ describe('useMessageStore', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(
         makeIncoming({
-          id: 'task-1', taskStatus: 'working',
+          id: 'task-1', taskStatus: TASK_STATE.WORKING,
           timestamp: '2026-02-17T10:00:00Z',
         }),
         'sse',
       )
       store.upsertMessage(
         makeIncoming({
-          id: 'task-2', taskStatus: 'submitted',
+          id: 'task-2', taskStatus: TASK_STATE.SUBMITTED,
           timestamp: '2026-02-17T10:01:00Z',
         }),
         'sse',
       )
       store.upsertMessage(
         makeIncoming({
-          id: 'task-3', taskStatus: 'completed', content: 'Done',
+          id: 'task-3', taskStatus: TASK_STATE.COMPLETED, content: 'Done',
           timestamp: '2026-02-17T10:02:00Z',
         }),
         'sse',
@@ -175,34 +176,34 @@ describe('useMessageStore', () => {
 
       store.cancelAllNonTerminal('room-1')
       const state = useMessageStore.getState()
-      expect(state.entities['task-1'].taskStatus).toBe('canceled')
-      expect(state.entities['task-2'].taskStatus).toBe('canceled')
-      expect(state.entities['task-3'].taskStatus).toBe('completed') // unchanged
+      expect(state.entities['task-1'].taskStatus).toBe(TASK_STATE.CANCELED)
+      expect(state.entities['task-2'].taskStatus).toBe(TASK_STATE.CANCELED)
+      expect(state.entities['task-3'].taskStatus).toBe(TASK_STATE.COMPLETED) // unchanged
     })
 
     it('does not cancel ephemeral messages', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(
         makeIncoming({
-          id: 'placeholder', taskStatus: 'working', isEphemeral: true,
+          id: 'placeholder', taskStatus: TASK_STATE.WORKING, isEphemeral: true,
         }),
         'optimistic',
       )
 
       store.cancelAllNonTerminal('room-1')
       const state = useMessageStore.getState()
-      expect(state.entities['placeholder'].taskStatus).toBe('working')
+      expect(state.entities['placeholder'].taskStatus).toBe(TASK_STATE.WORKING)
     })
 
     it('only cancels tasks in the specified room', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(
-        makeIncoming({ id: 'task-r1', roomId: 'room-1', taskStatus: 'working' }),
+        makeIncoming({ id: 'task-r1', roomId: 'room-1', taskStatus: TASK_STATE.WORKING }),
         'sse',
       )
       store.upsertMessage(
         makeIncoming({
-          id: 'task-r2', roomId: 'room-2', taskStatus: 'working',
+          id: 'task-r2', roomId: 'room-2', taskStatus: TASK_STATE.WORKING,
           timestamp: '2026-02-17T10:01:00Z',
         }),
         'sse',
@@ -210,14 +211,14 @@ describe('useMessageStore', () => {
 
       store.cancelAllNonTerminal('room-1')
       const state = useMessageStore.getState()
-      expect(state.entities['task-r1'].taskStatus).toBe('canceled')
-      expect(state.entities['task-r2'].taskStatus).toBe('working')
+      expect(state.entities['task-r1'].taskStatus).toBe(TASK_STATE.CANCELED)
+      expect(state.entities['task-r2'].taskStatus).toBe(TASK_STATE.WORKING)
     })
 
     it('is a no-op when no non-terminal tasks exist', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(
-        makeIncoming({ id: 'task-1', taskStatus: 'completed', content: 'Done' }),
+        makeIncoming({ id: 'task-1', taskStatus: TASK_STATE.COMPLETED, content: 'Done' }),
         'sse',
       )
       const v1 = useMessageStore.getState().version

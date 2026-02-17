@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
 import { TaskStatusMessage } from './task-status-message'
-import { type TaskState } from '@/lib/types/sse'
+import { type TaskState, TASK_STATE } from '@/lib/types/sse'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
@@ -98,7 +98,7 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
           internalId={entity.id}
           agentId={entity.agentId}
           agentName={entity.senderName}
-          initialStatus={(entity.taskStatus || 'working') as TaskState}
+          initialStatus={(entity.taskStatus || TASK_STATE.WORKING) as TaskState}
           content={entity.content || null}
           error={entity.taskError}
           statusMessage={entity.taskStatusMessage}

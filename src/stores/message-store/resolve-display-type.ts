@@ -1,4 +1,5 @@
 import type { TaskState } from '@/lib/types/sse'
+import { TASK_STATE } from '@/lib/types/sse'
 import type { DisplayType } from './types'
 
 /**
@@ -24,7 +25,7 @@ export function resolveDisplayType(msg: {
   if (!msg.taskStatus) return 'agent-bubble'
 
   // Completed task with content → agent bubble (successful response)
-  if (msg.taskStatus === 'completed' && msg.content?.trim()) {
+  if (msg.taskStatus === TASK_STATE.COMPLETED && msg.content?.trim()) {
     return 'agent-bubble'
   }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { convertApiMessageToIncoming } from '../convert-api-message'
 import type { RoomMessage } from '@/lib/types/response'
 import type { ConvertApiMessageOptions } from '../convert-api-message'
+import { TASK_STATE } from '@/lib/types/sse'
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -171,7 +172,7 @@ describe('convertApiMessageToIncoming', () => {
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
-      expect(result.taskStatus).toBe('working')
+      expect(result.taskStatus).toBe(TASK_STATE.WORKING)
     })
 
     it('extracts task_content from top-level field', async () => {
@@ -315,7 +316,7 @@ describe('convertApiMessageToIncoming', () => {
         messageType: 'agent',
         content: 'Here are the results',
         agentId: 'agent-1',
-        taskStatus: 'completed',
+        taskStatus: TASK_STATE.COMPLETED,
         taskContent: 'Analyzing data...',
         stepNumber: 3,
         totalSteps: 7,

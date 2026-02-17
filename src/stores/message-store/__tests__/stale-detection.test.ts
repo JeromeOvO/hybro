@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { detectAndMarkStaleTasks } from '../stale-detection'
 import type { IncomingMessage } from '../types'
+import { TASK_STATE } from '@/lib/types/sse'
 
 function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   return {
@@ -28,12 +29,12 @@ describe('detectAndMarkStaleTasks', () => {
     const messages = [
       makeIncoming({
         id: 'stale',
-        taskStatus: 'working',
+        taskStatus: TASK_STATE.WORKING,
         timestamp: '2026-02-17T11:45:00Z', // 15 minutes old
       }),
     ]
     const result = detectAndMarkStaleTasks(messages)
-    expect(result[0].taskStatus).toBe('failed')
+    expect(result[0].taskStatus).toBe(TASK_STATE.FAILED)
     expect(result[0].taskError).toContain('timed out')
   })
 
@@ -41,25 +42,25 @@ describe('detectAndMarkStaleTasks', () => {
     const messages = [
       makeIncoming({
         id: 'fresh',
-        taskStatus: 'working',
+        taskStatus: TASK_STATE.WORKING,
         timestamp: '2026-02-17T11:55:00Z', // 5 minutes old
       }),
     ]
     const result = detectAndMarkStaleTasks(messages)
-    expect(result[0].taskStatus).toBe('working')
+    expect(result[0].taskStatus).toBe(TASK_STATE.WORKING)
   })
 
   it('does not mark terminal tasks as stale', () => {
     const messages = [
       makeIncoming({
         id: 'completed',
-        taskStatus: 'completed',
+        taskStatus: TASK_STATE.COMPLETED,
         content: 'Done',
         timestamp: '2026-02-17T10:00:00Z', // 2 hours old
       }),
     ]
     const result = detectAndMarkStaleTasks(messages)
-    expect(result[0].taskStatus).toBe('completed')
+    expect(result[0].taskStatus).toBe(TASK_STATE.COMPLETED)
   })
 
   it('does not mark user messages', () => {
@@ -91,20 +92,20 @@ describe('detectAndMarkStaleTasks', () => {
     const messages = [
       makeIncoming({
         id: 'updated-recently',
-        taskStatus: 'working',
+        taskStatus: TASK_STATE.WORKING,
         timestamp: '2026-02-17T10:00:00Z', // 2 hours old
         taskUpdatedAt: '2026-02-17T11:55:00Z', // 5 minutes old
       }),
     ]
     const result = detectAndMarkStaleTasks(messages)
-    expect(result[0].taskStatus).toBe('working') // not stale because taskUpdatedAt is fresh
+    expect(result[0].taskStatus).toBe(TASK_STATE.WORKING) // not stale because taskUpdatedAt is fresh
   })
 
   it('provides default content for stale tasks with no content', () => {
     const messages = [
       makeIncoming({
         id: 'stale-no-content',
-        taskStatus: 'working',
+        taskStatus: TASK_STATE.WORKING,
         content: '',
         timestamp: '2026-02-17T11:40:00Z',
       }),
@@ -117,7 +118,7 @@ describe('detectAndMarkStaleTasks', () => {
     const messages = [
       makeIncoming({
         id: 'stale-with-content',
-        taskStatus: 'working',
+        taskStatus: TASK_STATE.WORKING,
         content: 'Was working on analysis',
         timestamp: '2026-02-17T11:40:00Z',
       }),

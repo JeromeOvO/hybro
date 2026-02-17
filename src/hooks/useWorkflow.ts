@@ -12,6 +12,7 @@ import { getAllAgents } from '@/lib/api'
 import { banner } from "@/components/ui/banner"
 import type { MetaTask, Agent, OrchestrationResponse, AgentCenterResponse, BaseTask } from '@/lib/types'
 import type { WorkflowStage } from '@/components/workflow-message'
+import { WORKFLOW_STAGE } from '@/components/workflow-message'
 
 interface UseWorkflowProps {
   baseTaskId: string
@@ -21,7 +22,7 @@ interface UseWorkflowProps {
 export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps) {
   const [metaTasks, setMetaTasks] = useState<MetaTask[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
-  const [stage, setStage] = useState<WorkflowStage>('decomposed')
+  const [stage, setStage] = useState<WorkflowStage>(WORKFLOW_STAGE.DECOMPOSED)
   const [isLoading, setIsLoading] = useState(false)
   
   // Use useRef to track initialization state to avoid duplicate initialization
@@ -62,9 +63,9 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
         // Check if agents are assigned
         const hasAssignedAgents = tasks.some(task => task.agent_id)
         if (hasAssignedAgents) {
-          setStage('agents_assigned')
+          setStage(WORKFLOW_STAGE.AGENTS_ASSIGNED)
         } else {
-          setStage('decomposed')
+          setStage(WORKFLOW_STAGE.DECOMPOSED)
         }
       }
       
@@ -85,7 +86,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
       if (response.success) {
         // Load meta tasks after decomposition
         await loadMetaTasks()
-        setStage('decomposed')
+        setStage(WORKFLOW_STAGE.DECOMPOSED)
         banner.success('Task decomposed successfully')
       } else {
         throw new Error(response.error || 'Failed to decompose task')
@@ -109,7 +110,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
       if (response.success) {
         // Refresh meta tasks to get assigned agents
         await loadMetaTasks()
-        setStage('agents_assigned')
+        setStage(WORKFLOW_STAGE.AGENTS_ASSIGNED)
         banner.success('Agents assigned successfully')
       } else {
         throw new Error(response.error || 'Failed to assign agents')
@@ -131,7 +132,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
           })
           
           if (response.success) {
-            setStage('completed')
+            setStage(WORKFLOW_STAGE.COMPLETED)
             banner.success('Workflow completed successfully')
             
             // Get updated baseTask
@@ -162,7 +163,7 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
 
       if (response.success) {
         // First set stage to running to ensure UI shows execution state
-        setStage('running')
+        setStage(WORKFLOW_STAGE.RUNNING)
         banner.success('Workflow finished running, summarizing…')
 
         // ★ Key modification: call summarize directly instead of polling
@@ -195,16 +196,16 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
   // Handle next action based on current stage
   const handleNext = useCallback(async () => {
     switch (stage) {
-      case 'decomposed':
+      case WORKFLOW_STAGE.DECOMPOSED:
         await handleAssignAgents()
         break
-      case 'agents_assigned':
+      case WORKFLOW_STAGE.AGENTS_ASSIGNED:
         await handleRunWorkflow()
         break
-      case 'running':
+      case WORKFLOW_STAGE.RUNNING:
         await handleSummarizeResults()
         break
-      case 'completed':
+      case WORKFLOW_STAGE.COMPLETED:
         // Already completed
         break
     }
@@ -213,16 +214,16 @@ export function useWorkflow({ baseTaskId, onWorkflowComplete }: UseWorkflowProps
   // Retry workflow from current stage
   const handleRetry = useCallback(async () => {
     switch (stage) {
-      case 'decomposed':
+      case WORKFLOW_STAGE.DECOMPOSED:
         await handleDecomposeTask()
         break
-      case 'agents_assigned':
+      case WORKFLOW_STAGE.AGENTS_ASSIGNED:
         await handleAssignAgents()
         break
-      case 'running':
+      case WORKFLOW_STAGE.RUNNING:
         await handleRunWorkflow()
         break
-      case 'completed':
+      case WORKFLOW_STAGE.COMPLETED:
         await handleSummarizeResults()
         break
     }

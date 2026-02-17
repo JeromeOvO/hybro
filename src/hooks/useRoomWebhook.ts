@@ -14,7 +14,7 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { Agent } from '@/lib/types/agent'
 import { useRoomSSE } from './useRoomSSE'
 import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
-import { isTerminalState, PROCESSING_STATUS, isProcessingDone } from '@/lib/types/sse'
+import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
 import { getAllActiveAgents } from '@/lib/api/agent'
@@ -364,7 +364,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         messageType: 'agent',
         content: '',
         senderName: 'HYBRO AI',
-        taskStatus: 'working' as TaskState,
+        taskStatus: TASK_STATE.WORKING,
         taskContent: 'Processing your request...',
         timestamp: new Date().toISOString(),
         isEphemeral: true,
@@ -447,7 +447,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                   messageType: 'agent',
                   content: 'Processing was stopped by the user.',
                   senderName: 'System',
-                  taskStatus: 'canceled' as TaskState,
+                  taskStatus: TASK_STATE.CANCELED,
                   taskContent: 'Processing stopped by user',
                   timestamp: new Date().toISOString(),
                   isEphemeral: true,
@@ -516,7 +516,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             content: '',
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
-            taskStatus: (sseMessage.data.status as TaskState) || 'working',
+            taskStatus: (sseMessage.data.status as TaskState) || TASK_STATE.WORKING,
             taskContent: sseMessage.data.task_content,
             stepNumber: sseMessage.data.step_number,
             totalSteps: sseMessage.data.total_steps,
@@ -574,9 +574,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               cancelTimeoutRef.current = null
             }
             if (!cancelTimedOutRef.current) {
-              if (status === 'failed') {
+              if (status === TASK_STATE.FAILED) {
                 banner.error(sseMessage.data.error || 'Task failed')
-              } else if (status === 'rejected') {
+              } else if (status === TASK_STATE.REJECTED) {
                 banner.error(sseMessage.data.error || 'Task was rejected')
               }
             }
@@ -713,7 +713,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       messageType: 'agent',
       content: '',
       senderName: 'HYBRO AI',
-      taskStatus: 'working' as TaskState,
+      taskStatus: TASK_STATE.WORKING,
       taskContent: 'Processing your request...',
       timestamp: new Date(Date.now() + 1).toISOString(),
       isEphemeral: true,
