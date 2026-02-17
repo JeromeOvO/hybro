@@ -74,7 +74,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Cancellation timeout ref (FE-3 safety net)
   const cancelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Ref for messagesQuery so SSE handler can refetch without stale closures (FE-8)
+  // Ref for messagesQuery so SSE handler can refetch without stale closures
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messagesQueryRef = useRef<any>(null)
 
@@ -433,7 +433,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     },
   })
 
-  // Keep messagesQueryRef in sync (FE-8)
+  // Keep messagesQueryRef in sync
   messagesQueryRef.current = messagesQuery
 
   const liveMessages = useMemo(
@@ -622,12 +622,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             if (sseMessage.data.message_id === currentProcessingMessageId.current) {
               currentProcessingMessageId.current = null
             }
-            // Show appropriate notification (skip if cancel timeout already fired — Issue 13)
+            // Show appropriate notification (skip if cancel timeout already fired)
             if (!cancelTimedOutRef.current) {
               if (status === PROCESSING_STATUS.CANCELED) {
                 banner.info('Processing stopped by user')
 
-                // FE-5: Insert an inline cancel confirmation message in the chat timeline
+                // Insert an inline cancel confirmation message in the chat timeline
                 const cancelConfirmationMessage: MessageData = {
                   id: `cancel-confirm-${Date.now()}`,
                   type: MESSAGE_TYPE.TASK,
@@ -639,7 +639,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 }
                 addLiveMessage(roomId, cancelConfirmationMessage)
 
-                // FE-7: Update all non-terminal task bubbles to canceled
+                // Update all non-terminal task bubbles to canceled
                 const currentLiveMessages = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
                 currentLiveMessages.forEach(msg => {
                   if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
@@ -676,7 +676,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             }
             cancelTimedOutRef.current = false
 
-            // FE-8: Reconcile with DB after processing completes (belt-and-suspenders)
+            // Reconcile with DB after processing completes (belt-and-suspenders)
             // Small delay to let backend finish any async cleanup
             setTimeout(() => {
               messagesQueryRef.current?.refetch()
@@ -812,11 +812,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               cancelTimeoutRef.current = null
             }
 
-            // Show appropriate notification (skip if cancel timeout already fired — Issue 13)
+            // Show appropriate notification (skip if cancel timeout already fired)
             // Note: 'canceled' banner is intentionally omitted here — the
             // workflow-level processing_status CANCELED handler already shows
             // "Processing stopped by user".  Showing a second banner from
-            // task_update would be a duplicate (Issue 12).
+            // task_update would be a duplicate.
             if (!cancelTimedOutRef.current) {
               if (status === 'failed') {
                 banner.error(sseMessage.data.error || 'Task failed')
@@ -1047,7 +1047,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       console.log('🛑 Cancelling message:', messageId)
       await cancelMessage(messageId, getToken)
 
-      // FE-4: Optimistic update — immediately show non-terminal task bubbles as "cancelling"
+      // Optimistic update — immediately show non-terminal task bubbles as "cancelling"
       const currentLiveMessages = useRoomUiStore.getState().liveMessagesByRoom[roomId] || []
       currentLiveMessages.forEach(msg => {
         if (msg.type === MESSAGE_TYPE.TASK && msg.task_status && !isTerminalState(msg.task_status as TaskState)) {
@@ -1075,7 +1075,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         }
       })
 
-      // Start cancellation timeout safety net (FE-3)
+      // Start cancellation timeout safety net 
       cancelTimeoutRef.current = setTimeout(() => {
         const { cancelling } = useRoomUiStore.getState()
         if (cancelling) {
