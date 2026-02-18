@@ -212,18 +212,24 @@ export function LinkifiedContent({ content }: { content: string }) {
   let lastIndex = 0
   let keyIndex = 0
 
+  const pushTextWithLineBreaks = (text: string) => {
+    const lines = text.split('\n')
+    lines.forEach((line, i) => {
+      if (i > 0) parts.push(<br key={`br-${keyIndex++}`} />)
+      if (line) parts.push(line)
+    })
+  }
+
   // Combined regex: match @mentions OR bare URLs
   const combinedRegex = /<@([^|]+)\|([^>]+)>|(https?:\/\/[^\s<>)"'\]]+)/g
   let match
 
   while ((match = combinedRegex.exec(content)) !== null) {
-    // Add text before the match
     if (match.index > lastIndex) {
-      parts.push(content.slice(lastIndex, match.index))
+      pushTextWithLineBreaks(content.slice(lastIndex, match.index))
     }
 
     if (match[1] && match[2]) {
-      // @mention match
       const agentId = match[1]
       const agentName = match[2]
 
@@ -240,7 +246,6 @@ export function LinkifiedContent({ content }: { content: string }) {
         </a>
       )
     } else if (match[3]) {
-      // URL match
       const url = match[3]
       parts.push(
         <a
@@ -258,9 +263,8 @@ export function LinkifiedContent({ content }: { content: string }) {
     lastIndex = match.index + match[0].length
   }
 
-  // Add remaining text
   if (lastIndex < content.length) {
-    parts.push(content.slice(lastIndex))
+    pushTextWithLineBreaks(content.slice(lastIndex))
   }
 
   return <>{parts.length > 0 ? parts : content}</>

@@ -67,7 +67,7 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
             {formatTimestamp(message.timestamp)}
           </span>
         </div>
-        <div className="text-sm leading-relaxed">
+        <div className="text-sm leading-relaxed whitespace-pre-wrap">
           <LinkifiedContent content={displayContent} />
         </div>
       </div>
