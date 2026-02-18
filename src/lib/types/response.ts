@@ -1,38 +1,100 @@
 /**
-/* This file was automatically generated from pydantic models by running pydantic2ts.
-/* Do not modify it by hand - just update the pydantic models and then re-run the script
-*/
+ * Response types for the backend API.
+ *
+ * A2A protocol types (AgentCard, Task, Message, Part, etc.) are imported from
+ * the canonical @a2a-js/sdk package.  Only backend-specific response wrappers
+ * and orchestration types are defined here.
+ */
 
-export type SecurityScheme =
-  | APIKeySecurityScheme
-  | HTTPAuthSecurityScheme
-  | OAuth2SecurityScheme
-  | OpenIdConnectSecurityScheme;
+// ── Re-export A2A protocol types from the SDK ────────────────────────────
+// These were previously duplicated via pydantic2ts code-gen.
+export type {
+  // Core domain
+  TaskState,
+  Part,
+  TextPart,
+  FilePart,
+  DataPart,
+  FileWithBytes,
+  FileWithUri,
+  Message,
+  Task,
+  TaskStatus,
+  Artifact,
+
+  // Agent card & related
+  AgentCard,
+  AgentCapabilities,
+  AgentExtension,
+  AgentInterface,
+  AgentProvider,
+  AgentSkill,
+  AgentCardSignature,
+
+  // Security schemes
+  SecurityScheme,
+  APIKeySecurityScheme,
+  HTTPAuthSecurityScheme,
+  OAuth2SecurityScheme,
+  OpenIdConnectSecurityScheme,
+  MutualTLSSecurityScheme,
+
+  // OAuth flows
+  OAuthFlows,
+  AuthorizationCodeOAuthFlow,
+  ClientCredentialsOAuthFlow,
+  ImplicitOAuthFlow,
+  PasswordOAuthFlow,
+
+  // JSON-RPC error types
+  JSONRPCErrorResponse,
+  JSONRPCError,
+  JSONParseError,
+  InvalidRequestError,
+  MethodNotFoundError,
+  InvalidParamsError,
+  InternalError,
+  TaskNotFoundError,
+  TaskNotCancelableError,
+  PushNotificationNotSupportedError,
+  UnsupportedOperationError,
+  ContentTypeNotSupportedError,
+  InvalidAgentResponseError,
+
+  // Streaming event types
+  TaskStatusUpdateEvent,
+  TaskArtifactUpdateEvent,
+
+  // Response union types
+  SendMessageResponse,
+  SendStreamingMessageResponse,
+  SendMessageSuccessResponse,
+  SendStreamingMessageSuccessResponse,
+} from '@a2a-js/sdk'
+
+import type {
+  AgentCard,
+  Task,
+  Message,
+  SendMessageResponse,
+  SendStreamingMessageResponse,
+} from '@a2a-js/sdk'
+
+// ── Types NOT in SDK: kept here as they originate from the backend ────────
+
 /**
  * The location of the API key.
+ * (Not exported from @a2a-js/sdk as a standalone type.)
  */
 export type In = "cookie" | "header" | "query";
-export type AgentStatus = "active" | "inactive" | "deleted";
-export type Part = TextPart | FilePart | DataPart;
+
 /**
  * Identifies the sender of the message. `user` for the client, `agent` for the service.
+ * (Not exported from @a2a-js/sdk as a standalone type.)
  */
 export type Role = "agent" | "user";
-/**
- * Defines the lifecycle states of a Task.
- */
-export type TaskState =
-  | "submitted"
-  | "working"
-  | "input-required"
-  | "completed"
-  | "canceled"
-  | "failed"
-  | "rejected"
-  | "auth-required"
-  | "unknown";
-export type SendMessageResponse = JSONRPCErrorResponse | SendMessageSuccessResponse;
-export type SendStreamingMessageResponse = JSONRPCErrorResponse | SendStreamingMessageSuccessResponse;
+
+export type AgentStatus = "active" | "inactive" | "deleted";
 
 export interface Agent {
   agent_id: string;
@@ -51,180 +113,7 @@ export interface Agent {
   /** Visibility: true = public (everyone can see/use), false = private (owner only) */
   is_public?: boolean;
 }
-/**
- * The AgentCard is a self-describing manifest for an agent. It provides essential
- * metadata including the agent's identity, capabilities, skills, supported
- * communication methods, and security requirements.
- */
-export interface AgentCard {
-  additionalInterfaces?: AgentInterface[] | null;
-  capabilities: AgentCapabilities;
-  defaultInputModes: string[];
-  defaultOutputModes: string[];
-  description: string;
-  documentationUrl?: string | null;
-  iconUrl?: string | null;
-  name: string;
-  preferredTransport?: string | null;
-  protocolVersion?: string | null;
-  provider?: AgentProvider | null;
-  security?:
-    | {
-        [k: string]: string[];
-      }[]
-    | null;
-  securitySchemes?: {
-    [k: string]: SecurityScheme;
-  } | null;
-  skills: AgentSkill[];
-  supportsAuthenticatedExtendedCard?: boolean | null;
-  url: string;
-  version: string;
-}
-/**
- * Declares a combination of a target URL and a transport protocol for interacting with the agent.
- */
-export interface AgentInterface {
-  transport: string;
-  url: string;
-  [k: string]: unknown;
-}
-/**
- * Defines optional capabilities supported by an agent.
- */
-export interface AgentCapabilities {
-  extensions?: AgentExtension[] | null;
-  pushNotifications?: boolean | null;
-  stateTransitionHistory?: boolean | null;
-  streaming?: boolean | null;
-  [k: string]: unknown;
-}
-/**
- * A declaration of a protocol extension supported by an Agent.
- */
-export interface AgentExtension {
-  description?: string | null;
-  params?: {
-    [k: string]: unknown;
-  } | null;
-  required?: boolean | null;
-  uri: string;
-  [k: string]: unknown;
-}
-/**
- * Represents the service provider of an agent.
- */
-export interface AgentProvider {
-  organization: string;
-  url: string;
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using an API key.
- */
-export interface APIKeySecurityScheme {
-  description?: string | null;
-  in: In;
-  name: string;
-  type?: "apiKey";
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using HTTP authentication.
- */
-export interface HTTPAuthSecurityScheme {
-  bearerFormat?: string | null;
-  description?: string | null;
-  scheme: string;
-  type?: "http";
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using OAuth 2.0.
- */
-export interface OAuth2SecurityScheme {
-  description?: string | null;
-  flows: OAuthFlows;
-  type?: "oauth2";
-  [k: string]: unknown;
-}
-/**
- * Defines the configuration for the supported OAuth 2.0 flows.
- */
-export interface OAuthFlows {
-  authorizationCode?: AuthorizationCodeOAuthFlow | null;
-  clientCredentials?: ClientCredentialsOAuthFlow | null;
-  implicit?: ImplicitOAuthFlow | null;
-  password?: PasswordOAuthFlow | null;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Authorization Code flow.
- */
-export interface AuthorizationCodeOAuthFlow {
-  authorizationUrl: string;
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Client Credentials flow.
- */
-export interface ClientCredentialsOAuthFlow {
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Implicit flow.
- */
-export interface ImplicitOAuthFlow {
-  authorizationUrl: string;
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  [k: string]: unknown;
-}
-/**
- * Defines configuration details for the OAuth 2.0 Resource Owner Password flow.
- */
-export interface PasswordOAuthFlow {
-  refreshUrl?: string | null;
-  scopes: {
-    [k: string]: string;
-  };
-  tokenUrl: string;
-  [k: string]: unknown;
-}
-/**
- * Defines a security scheme using OpenID Connect.
- */
-export interface OpenIdConnectSecurityScheme {
-  description?: string | null;
-  openIdConnectUrl: string;
-  type?: "openIdConnect";
-  [k: string]: unknown;
-}
-/**
- * Represents a distinct capability or function that an agent can perform.
- */
-export interface AgentSkill {
-  description: string;
-  examples?: string[] | null;
-  id: string;
-  inputModes?: string[] | null;
-  name: string;
-  outputModes?: string[] | null;
-  tags: string[];
-  [k: string]: unknown;
-}
+
 export interface AgentCenterResponse {
   agent_url?: string | null;
   agent_id?: string | null;
@@ -247,114 +136,6 @@ export interface BaseTask {
   user_name: string;
   task: Task;
   extend_info?: unknown;
-}
-/**
- * Represents a single, stateful operation or conversation between a client and an agent.
- */
-export interface Task {
-  artifacts?: Artifact[] | null;
-  contextId: string;
-  history?: Message[] | null;
-  id: string;
-  kind?: "task";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  status: TaskStatus;
-}
-/**
- * Represents a file, data structure, or other resource generated by an agent during a task.
- */
-export interface Artifact {
-  artifactId: string;
-  description?: string | null;
-  extensions?: string[] | null;
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  name?: string | null;
-  parts: Part[];
-  [k: string]: unknown;
-}
-/**
- * Represents a text segment within a message or artifact.
- */
-export interface TextPart {
-  kind?: "text";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  text: string;
-  [k: string]: unknown;
-}
-/**
- * Represents a file segment within a message or artifact. The file content can be
- * provided either directly as bytes or as a URI.
- */
-export interface FilePart {
-  file: FileWithBytes | FileWithUri;
-  kind?: "file";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a file with its content provided directly as a base64-encoded string.
- */
-export interface FileWithBytes {
-  bytes: string;
-  mimeType?: string | null;
-  name?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a file with its content located at a specific URI.
- */
-export interface FileWithUri {
-  mimeType?: string | null;
-  name?: string | null;
-  uri: string;
-  [k: string]: unknown;
-}
-/**
- * Represents a structured data segment (e.g., JSON) within a message or artifact.
- */
-export interface DataPart {
-  data: {
-    [k: string]: unknown;
-  };
-  kind?: "data";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a single message in the conversation between a user and an agent.
- */
-export interface Message {
-  contextId?: string | null;
-  extensions?: string[] | null;
-  kind?: "message";
-  messageId: string;
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  parts: Part[];
-  referenceTaskIds?: string[] | null;
-  role: Role;
-  taskId?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Represents the status of a task at a specific point in time.
- */
-export interface TaskStatus {
-  message?: Message | null;
-  state: TaskState;
-  timestamp?: string | null;
-  [k: string]: unknown;
 }
 /**
  * A ChatContext represents a chat context between a user and the multi-agent system.
@@ -480,187 +261,6 @@ export interface RoomCenterAgentMessageResponse {
   success: boolean;
   error?: string | null;
   status_code?: number;
-}
-/**
- * Represents a JSON-RPC 2.0 Error Response object.
- */
-export interface JSONRPCErrorResponse {
-  error:
-    | JSONRPCError
-    | JSONParseError
-    | InvalidRequestError
-    | MethodNotFoundError
-    | InvalidParamsError
-    | InternalError
-    | TaskNotFoundError
-    | TaskNotCancelableError
-    | PushNotificationNotSupportedError
-    | UnsupportedOperationError
-    | ContentTypeNotSupportedError
-    | InvalidAgentResponseError;
-  id?: string | number | null;
-  jsonrpc?: "2.0";
-  [k: string]: unknown;
-}
-/**
- * Represents a JSON-RPC 2.0 Error object, included in an error response.
- */
-export interface JSONRPCError {
-  code: number;
-  data?: unknown;
-  message: string;
-  [k: string]: unknown;
-}
-/**
- * An error indicating that the server received invalid JSON.
- */
-export interface JSONParseError {
-  code?: -32700;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An error indicating that the JSON sent is not a valid Request object.
- */
-export interface InvalidRequestError {
-  code?: -32600;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An error indicating that the requested method does not exist or is not available.
- */
-export interface MethodNotFoundError {
-  code?: -32601;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An error indicating that the method parameters are invalid.
- */
-export interface InvalidParamsError {
-  code?: -32602;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An error indicating an internal error on the server.
- */
-export interface InternalError {
-  code?: -32603;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating that the requested task ID was not found.
- */
-export interface TaskNotFoundError {
-  code?: -32001;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating that the task is in a state where it cannot be canceled.
- */
-export interface TaskNotCancelableError {
-  code?: -32002;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating that the agent does not support push notifications.
- */
-export interface PushNotificationNotSupportedError {
-  code?: -32003;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating that the requested operation is not supported by the agent.
- */
-export interface UnsupportedOperationError {
-  code?: -32004;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating an incompatibility between the requested
- * content types and the agent's capabilities.
- */
-export interface ContentTypeNotSupportedError {
-  code?: -32005;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * An A2A-specific error indicating that the agent returned a response that
- * does not conform to the specification for the current method.
- */
-export interface InvalidAgentResponseError {
-  code?: -32006;
-  data?: unknown;
-  message?: string | null;
-  [k: string]: unknown;
-}
-/**
- * Represents a successful JSON-RPC response for the `message/send` method.
- */
-export interface SendMessageSuccessResponse {
-  id?: string | number | null;
-  jsonrpc?: "2.0";
-  result: Task | Message;
-  [k: string]: unknown;
-}
-/**
- * Represents a successful JSON-RPC response for the `message/stream` method.
- * The server may send multiple response objects for a single request.
- */
-export interface SendStreamingMessageSuccessResponse {
-  id?: string | number | null;
-  jsonrpc?: "2.0";
-  result: Task | Message | TaskStatusUpdateEvent | TaskArtifactUpdateEvent;
-  [k: string]: unknown;
-}
-/**
- * An event sent by the agent to notify the client of a change in a task's status.
- * This is typically used in streaming or subscription models.
- */
-export interface TaskStatusUpdateEvent {
-  contextId: string;
-  final: boolean;
-  kind?: "status-update";
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  status: TaskStatus;
-  taskId: string;
-  [k: string]: unknown;
-}
-/**
- * An event sent by the agent to notify the client that an artifact has been
- * generated or updated. This is typically used in streaming models.
- */
-export interface TaskArtifactUpdateEvent {
-  append?: boolean | null;
-  artifact: Artifact;
-  contextId: string;
-  kind?: "artifact-update";
-  lastChunk?: boolean | null;
-  metadata?: {
-    [k: string]: unknown;
-  } | null;
-  taskId: string;
-  [k: string]: unknown;
 }
 export interface RoomCenterMemoryResponse {
   room_id?: string | null;

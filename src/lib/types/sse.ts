@@ -1,4 +1,11 @@
 // SSE-specific types matching the backend implementation
+
+// Re-export TaskState from the official A2A JS SDK — single source of truth.
+// This replaces the hand-maintained union type that previously used snake_case
+// variants ("input_required", "auth_required") which diverged from the A2A spec's
+// kebab-case values ("input-required", "auth-required").
+export type { TaskState } from '@a2a-js/sdk'
+import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
   type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update'
   room_id: string
@@ -41,28 +48,36 @@ export interface SSEConnectionStatus {
   status: 'active' | 'no_connections'
 }
 
-// All possible A2A task states (mirrors backend a2a.types.TaskState)
-export type TaskState = 
-  | "submitted" 
-  | "working" 
-  | "completed" 
-  | "failed" 
-  | "canceled"
-  | "input_required"
-  | "rejected"
-  | "auth_required"
+// All possible A2A task states — sourced from @a2a-js/sdk TaskState type.
+// The SDK uses kebab-case ("input-required", "auth-required") per the A2A spec.
+// Note: The SDK also includes "unknown" which we handle in our helper functions.
+
+// Named constants for individual TaskState values.
+// The SDK only exports the TaskState *type*, not a constant object, so we
+// provide one here so consumers never need bare string literals.
+export const TASK_STATE = {
+  SUBMITTED: "submitted",
+  WORKING: "working",
+  INPUT_REQUIRED: "input-required",
+  AUTH_REQUIRED: "auth-required",
+  COMPLETED: "completed",
+  CANCELED: "canceled",
+  FAILED: "failed",
+  REJECTED: "rejected",
+  UNKNOWN: "unknown",
+} as const satisfies Record<string, TaskState>
 
 // States that are still in progress
-export const PENDING_STATES: TaskState[] = ["submitted", "working"]
+export const PENDING_STATES: TaskState[] = [TASK_STATE.SUBMITTED, TASK_STATE.WORKING]
 
 // States that require user action
-export const INTERACTIVE_STATES: TaskState[] = ["input_required", "auth_required"]
+export const INTERACTIVE_STATES: TaskState[] = [TASK_STATE.INPUT_REQUIRED, TASK_STATE.AUTH_REQUIRED]
 
 // States that indicate task is done
-export const TERMINAL_STATES: TaskState[] = ["completed", "failed", "canceled", "rejected"]
+export const TERMINAL_STATES: TaskState[] = [TASK_STATE.COMPLETED, TASK_STATE.FAILED, TASK_STATE.CANCELED, TASK_STATE.REJECTED]
 
 // States that indicate task ended unsuccessfully
-export const FAILURE_STATES: TaskState[] = ["failed", "rejected", "canceled"]
+export const FAILURE_STATES: TaskState[] = [TASK_STATE.FAILED, TASK_STATE.REJECTED, TASK_STATE.CANCELED]
 
 export function isTerminalState(state: TaskState): boolean {
   return TERMINAL_STATES.includes(state)
@@ -100,8 +115,8 @@ export interface TaskUpdateEvent {
     status: TaskState
     content?: string          // Present if completed
     error?: string            // Present if failed/rejected/canceled
-    requires_input?: boolean  // True if input_required
-    requires_auth?: boolean   // True if auth_required
+    requires_input?: boolean  // True if input-required
+    requires_auth?: boolean   // True if auth-required
     status_message?: string   // Human-readable status from agent
     agent_name?: string
     agent_id?: string
@@ -130,7 +145,7 @@ export const PROCESSING_STATUS = {
 
 // Statuses that mean processing is done (clear spinner)
 export const PROCESSING_DONE_STATUSES: ProcessingStatus[] = [
-  "completed", "canceled", "failed", "rejected"
+  PROCESSING_STATUS.COMPLETED, PROCESSING_STATUS.CANCELED, PROCESSING_STATUS.FAILED, PROCESSING_STATUS.REJECTED
 ]
 
 export function isProcessingDone(status: ProcessingStatus): boolean {

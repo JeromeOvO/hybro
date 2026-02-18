@@ -46,7 +46,6 @@ export default function RoomChatPage() {
 
   const {
     room,
-    messages,
     loading,
     sending,
     processing,
@@ -317,8 +316,6 @@ export default function RoomChatPage() {
 
           <main className="flex-1 overflow-hidden">
             <RoomMessages
-              messages={messages}
-              loading={false}
               onQuote={handleQuote}
             />
           </main>

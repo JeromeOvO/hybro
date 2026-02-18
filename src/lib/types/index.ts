@@ -1,7 +1,7 @@
 // Unified export of all types
 
-import { Role } from './request'
-import { BaseTask, MetaTask } from './response'
+import type { Role } from './response'
+import type { BaseTask, MetaTask } from './response'
 
 // Core types from generated files - using explicit exports to avoid conflicts
 export type {

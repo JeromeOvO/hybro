@@ -12,7 +12,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react'
-import { type TaskState, isTerminalState, isFailureState, PROCESSING_STATUS } from '@/lib/types/sse'
+import { type TaskState, isTerminalState, isFailureState, PROCESSING_STATUS, TASK_STATE } from '@/lib/types/sse'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { MarkdownContent } from './markdown-content'
 
@@ -335,7 +335,7 @@ export function TaskStatusMessage({
   }
 
   // Input required state
-  if (status === "input_required") {
+  if (status === TASK_STATE.INPUT_REQUIRED) {
     const inputContent = statusMessage || "The agent needs additional information to continue."
     const isLong = inputContent.length > LONG_CONTENT_THRESHOLD
     return (
@@ -377,7 +377,7 @@ export function TaskStatusMessage({
   }
 
   // Auth required state
-  if (status === "auth_required") {
+  if (status === TASK_STATE.AUTH_REQUIRED) {
     const authContent = statusMessage || "Please authenticate to continue."
     const isLong = authContent.length > LONG_CONTENT_THRESHOLD
     return (
