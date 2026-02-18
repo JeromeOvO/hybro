@@ -255,7 +255,7 @@ export function DeveloperDocsContent() {
         <section className="section-divider">
           <h2 className="text-xl font-semibold mb-6">See it in action</h2>
           <VideoEmbed
-            videoId="ZUQrnlBSsLg"
+            videoId="P0kyUQAxnZg"
             title="HYBRO Demo - Multi-Agent Collaboration"
           />
         </section>
@@ -466,7 +466,7 @@ export function DeveloperDocsContent() {
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
             <a
-              href="https://youtu.be/ZUQrnlBSsLg"
+              href="https://youtu.be/P0kyUQAxnZg"
               target="_blank"
               rel="noopener noreferrer"
               className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
