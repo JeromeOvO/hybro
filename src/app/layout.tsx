@@ -8,6 +8,13 @@ import { ClerkProvider } from "@clerk/nextjs"
 import { ClerkAuthProvider } from "@/components/providers/ClerkAuthProvider"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { Toaster } from "@/components/ui/sonner"
+import { CookieBanner } from "@/components/cookie-banner"
+
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void
+  }
+}
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -24,7 +31,13 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Google tag (gtag.js) */}
+        <Script id="gtag-consent-default" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('consent', 'default', { analytics_storage: 'denied' });
+          `}
+        </Script>
         <Script
           async
           src="https://www.googletagmanager.com/gtag/js?id=G-8CX7RWH8R5"
@@ -32,8 +45,6 @@ export default function RootLayout({
         />
         <Script id="google-analytics" strategy="afterInteractive">
           {`
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
             gtag('js', new Date());
             gtag('config', 'G-8CX7RWH8R5');
           `}
@@ -47,6 +58,7 @@ export default function RootLayout({
                 {children}
               </QueryProvider>
               <Toaster richColors closeButton />
+              <CookieBanner />
             </ThemeProvider>
           </ClerkAuthProvider>
         </ClerkProvider>
