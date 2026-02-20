@@ -26,7 +26,7 @@ class SupervisorStep(BaseModel):
     """A single step in the execution plan."""
 
     step_id: str  # e.g., "step_1"
-    agent_id: str  # Which agent to delegate to
+    agent_id: str | None = None  # Which agent to delegate to (None = unresolved, needs auto-assignment)
     agent_name: str  # For display/logging
     task_description: str  # The prompt/task to send to the agent
     depends_on: list[str] = Field(default_factory=list)  # step_ids this depends on

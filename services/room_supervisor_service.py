@@ -594,7 +594,7 @@ class RoomSupervisorService:
             steps.append(
                 SupervisorStep(
                     step_id=step.get("step_id", f"step_{i+1}"),
-                    agent_id=step.get("agent_id") or "",
+                    agent_id=step.get("agent_id"),  # None if unresolved
                     agent_name=step.get("agent_name") or "Unknown",
                     task_description=step.get("task_content", ""),
                     depends_on=step.get("dependencies", []),
