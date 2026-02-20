@@ -1105,6 +1105,7 @@ class RoomServices:
         selected_agent_set: dict,
         agents: list | None,
         is_debate_mode: bool,
+        auto_assign_agents: bool,
         target_group: str | None,
         conversation_context: str | None,
         token: CancellationToken | None = None,
@@ -1124,6 +1125,7 @@ class RoomServices:
             selected_agent_set: Dict of {agent_id: agent_name}
             agents: Full Agent objects for building AgentProfiles
             is_debate_mode: Whether debate mode is enabled
+            auto_assign_agents: Whether to auto-assign agents in legacy fallback
             target_group: Target group for routing
             conversation_context: Recent conversation history
             token: Cancellation token
@@ -1157,7 +1159,7 @@ class RoomServices:
                 selected_agent_set,
                 user_message.user_id,
                 is_debate_mode,
-                auto_assign_agents=False,
+                auto_assign_agents=auto_assign_agents,
                 target_group=target_group,
                 agents=agents,
                 conversation_context=conversation_context,
@@ -1218,7 +1220,27 @@ class RoomServices:
                 extend_info=extend_info,
             )
 
-            return ParseResult(success=True) if agent_messages else ParseResult(success=False)
+            if agent_messages:
+                return ParseResult(success=True)
+
+            # Plan produced no messages (e.g., all steps had empty task_description)
+            # Fall back to legacy parser rather than silently failing
+            logger.warning(
+                "Supervisor plan produced no agent messages, falling back to legacy parser"
+            )
+            return await self.parse_user_message(
+                room.room_id,
+                user_message.message_id,
+                message_text,
+                selected_agent_set,
+                user_message.user_id,
+                is_debate_mode,
+                auto_assign_agents=auto_assign_agents,
+                target_group=target_group,
+                agents=agents,
+                conversation_context=conversation_context,
+                token=token,
+            )
 
         except SupervisorPlanningError as e:
             logger.warning(
@@ -1232,7 +1254,7 @@ class RoomServices:
                 selected_agent_set,
                 user_message.user_id,
                 is_debate_mode,
-                auto_assign_agents=True,  # Let legacy parser auto-assign
+                auto_assign_agents=auto_assign_agents,
                 target_group=target_group,
                 agents=agents,
                 conversation_context=conversation_context,
@@ -1429,6 +1451,7 @@ class RoomServices:
                 selected_agent_set=selected_agent_set,
                 agents=agents,
                 is_debate_mode=is_debate_mode,
+                auto_assign_agents=auto_assign,
                 target_group=target_group,
                 conversation_context=conversation_context,
                 token=token,
