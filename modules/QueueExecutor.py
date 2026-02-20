@@ -181,6 +181,7 @@ class QueueExecutor:
         quoted_text: str | None = None,
         supervisor_plan: SupervisorPlan | None = None,
         completed_step_results: list[StepResult] | None = None,
+        step_retry_counts: dict[str, int] | None = None,
     ) -> QueueResult:
         """Process all messages in the queue sequentially.
 
@@ -228,7 +229,8 @@ class QueueExecutor:
         step_results: list[StepResult] = list(completed_step_results or [])
 
         # Track retry counts per step_id to enforce max_retries limit
-        step_retry_counts: dict[str, int] = {}
+        # Use provided counts (from continuation) or start fresh
+        retry_counts: dict[str, int] = dict(step_retry_counts or {})
 
         # Tracks the message_id of the last message popped from the queue.
         # Used by _managed_queue to cancel DB-only descendants on early exit.
@@ -325,6 +327,9 @@ class QueueExecutor:
                             user_message_id=user_message_id,
                             request_user_id=request_user_id,
                             current_agent=agent,
+                            supervisor_plan=supervisor_plan,
+                            step_results=step_results,
+                            step_retry_counts=retry_counts,
                         )
                         logger.info(
                             "QueueExecutor: Queue paused for message %s with %d remaining",
@@ -364,7 +369,7 @@ class QueueExecutor:
                     response_text=result.response_text,
                     message_queue=message_queue,
                     step_results=step_results,
-                    step_retry_counts=step_retry_counts,
+                    step_retry_counts=retry_counts,
                     room_id=room_id,
                     user_message_id=user_message_id,
                     user_id=request_user_id,
@@ -700,14 +705,18 @@ class QueueExecutor:
         user_message_id: str,
         request_user_id: str | None,
         current_agent: Agent,
+        supervisor_plan: SupervisorPlan | None = None,
+        step_results: list[StepResult] | None = None,
+        step_retry_counts: dict[str, int] | None = None,
     ) -> None:
         """Save queue continuation state for a push notification task.
 
         This allows the queue to be resumed when the task completes via webhook.
+        Includes Supervisor state so review continues after resume.
         """
         serialized_queue = [msg.model_dump(mode="json") for msg in message_queue]
 
-        continuation_data = {
+        continuation_data: dict = {
             "remaining_queue": serialized_queue,
             "room_id": room_id,
             "user_message_id": user_message_id,
@@ -715,6 +724,16 @@ class QueueExecutor:
             "current_agent_id": current_agent.agent_id,
             "current_agent_name": current_agent.agent_card.name,
         }
+
+        # Include Supervisor state for review continuity after resume
+        if supervisor_plan:
+            continuation_data["supervisor_plan"] = supervisor_plan.model_dump(mode="json")
+        if step_results:
+            continuation_data["completed_step_results"] = [
+                r.model_dump(mode="json") for r in step_results
+            ]
+        if step_retry_counts:
+            continuation_data["step_retry_counts"] = step_retry_counts
 
         success = await self.database_service.save_continuation_on_message(
             message_id, continuation_data
@@ -734,6 +753,7 @@ class QueueExecutor:
         """Resume queue processing after a push notification task completes.
 
         Called from the webhook handler when a task reaches a terminal state.
+        Restores Supervisor state so review continues after resume.
 
         Returns a ``ResumeResult`` indicating whether the caller should trigger
         post-completion logic (coordinator + COMPLETED SSE status).
@@ -772,6 +792,33 @@ class QueueExecutor:
             )
             return ResumeResult(success=False)
 
+        # Restore Supervisor state
+        supervisor_plan: SupervisorPlan | None = None
+        completed_step_results: list[StepResult] | None = None
+        step_retry_counts: dict[str, int] | None = None
+
+        plan_data = continuation.get("supervisor_plan")
+        if plan_data:
+            try:
+                supervisor_plan = SupervisorPlan.model_validate(plan_data)
+            except Exception as e:
+                logger.warning(
+                    "QueueExecutor: Failed to restore supervisor_plan: %s", e
+                )
+
+        results_data = continuation.get("completed_step_results")
+        if results_data:
+            try:
+                completed_step_results = [
+                    StepResult.model_validate(r) for r in results_data
+                ]
+            except Exception as e:
+                logger.warning(
+                    "QueueExecutor: Failed to restore completed_step_results: %s", e
+                )
+
+        step_retry_counts = continuation.get("step_retry_counts")
+
         if task_result_text:
             current_agent_id = continuation.get("current_agent_id")
             current_agent_name = continuation.get("current_agent_name", "Agent")
@@ -793,6 +840,9 @@ class QueueExecutor:
                 user_message_id,
                 token=token,
                 request_user_id=request_user_id,
+                supervisor_plan=supervisor_plan,
+                completed_step_results=completed_step_results,
+                step_retry_counts=step_retry_counts,
             )
 
             if queue_result == QueueResult.PAUSED:
@@ -923,6 +973,8 @@ class QueueExecutor:
         elif review.action == ReviewAction.REVISE and review.revised_steps:
             await self._handle_revise_action(
                 review.revised_steps,
+                supervisor_plan,
+                completed_step_ids,
                 message_queue,
                 room_id,
                 user_message_id,
@@ -980,13 +1032,19 @@ class QueueExecutor:
     async def _handle_revise_action(
         self,
         revised_steps: list[SupervisorStep],
+        supervisor_plan: SupervisorPlan,
+        completed_step_ids: set[str],
         message_queue: deque,
         room_id: str,
         user_message_id: str,
         user_id: str | None,
         current_message: RoomAgentMessage,
     ) -> None:
-        """Handle Supervisor "revise" action by replacing remaining queue."""
+        """Handle Supervisor "revise" action by replacing remaining queue.
+
+        Also updates supervisor_plan.steps in-place so that subsequent
+        _find_step_for_message calls return the correct revised step.
+        """
         logger.info(
             "QueueExecutor: Supervisor revised plan with %d new steps",
             len(revised_steps),
@@ -999,6 +1057,15 @@ class QueueExecutor:
             )
         message_queue.clear()
 
+        # Update supervisor_plan.steps in-place:
+        # Keep completed steps, replace remaining with revised steps
+        completed_steps = [s for s in supervisor_plan.steps if s.step_id in completed_step_ids]
+        supervisor_plan.steps[:] = completed_steps + revised_steps
+
+        # Calculate step numbering: completed steps + revised steps
+        base_step_number = len(completed_steps)
+        total_steps = len(supervisor_plan.steps)
+
         # Generate new agent messages from revised steps
         for i, step in enumerate(revised_steps):
             new_message = self.room_services._generate_new_agent_message(
@@ -1007,8 +1074,8 @@ class QueueExecutor:
                 agent_id=step.agent_id,
                 content=step.task_description,
                 user_id=user_id,
-                step_number=i + 1,
-                total_steps=len(revised_steps),
+                step_number=base_step_number + i + 1,
+                total_steps=total_steps,
             )
 
             success = await self.database_service.add_room_agent_message(new_message)
