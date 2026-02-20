@@ -60,6 +60,15 @@ class QueueResult(str, Enum):
 
 
 @dataclass
+class QueueProcessingResult:
+    """Extended result of queue processing with Supervisor state."""
+
+    result: QueueResult
+    step_results: list[StepResult] | None = None
+    supervisor_plan: SupervisorPlan | None = None
+
+
+@dataclass
 class ProcessingResult:
     """Result of message processing with optional metadata."""
 
@@ -81,6 +90,8 @@ class ResumeResult:
     needs_completion: bool = False
     room_id: str | None = None
     user_message_id: str | None = None
+    step_results: list[StepResult] | None = None
+    supervisor_plan: SupervisorPlan | None = None
 
 
 # ------------------------------------------------------------------
@@ -182,7 +193,7 @@ class QueueExecutor:
         supervisor_plan: SupervisorPlan | None = None,
         completed_step_results: list[StepResult] | None = None,
         step_retry_counts: dict[str, int] | None = None,
-    ) -> QueueResult:
+    ) -> QueueProcessingResult:
         """Process all messages in the queue sequentially.
 
         Uses a two-phase approach to guarantee persist-before-notify ordering:
@@ -214,6 +225,10 @@ class QueueExecutor:
             Optional SupervisorPlan for review hook integration.
         completed_step_results:
             Optional list of already-completed step results (for resume).
+
+        Returns
+        -------
+        QueueProcessingResult with result status, step_results, and supervisor_plan.
         """
         logger.info(
             "QueueExecutor: Starting to process message queue with %d messages",
@@ -410,7 +425,11 @@ class QueueExecutor:
         if queue_result == QueueResult.COMPLETED:
             logger.info("QueueExecutor: Finished processing message queue")
 
-        return queue_result
+        return QueueProcessingResult(
+            result=queue_result,
+            step_results=step_results if step_results else None,
+            supervisor_plan=supervisor_plan,
+        )
 
     # ------------------------------------------------------------------
     # Agent resolution / rate-limit helpers (delegated from queue loop)
@@ -834,7 +853,7 @@ class QueueExecutor:
             if token is None:
                 token = self.sse_manager.create_token(user_message_id)
 
-            queue_result = await self.process_queue(
+            queue_processing_result = await self.process_queue(
                 remaining_queue,
                 room_id,
                 user_message_id,
@@ -845,15 +864,25 @@ class QueueExecutor:
                 step_retry_counts=step_retry_counts,
             )
 
-            if queue_result == QueueResult.PAUSED:
+            if queue_processing_result.result == QueueResult.PAUSED:
                 return ResumeResult(success=True)
-            if queue_result == QueueResult.FAILED:
+            if queue_processing_result.result == QueueResult.FAILED:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.ERROR, user_message_id
                 )
                 return ResumeResult(success=False)
-            if queue_result == QueueResult.CANCELED:
+            if queue_processing_result.result == QueueResult.CANCELED:
                 return ResumeResult(success=True)
+
+            # Pass step_results for synthesis
+            return ResumeResult(
+                success=True,
+                needs_completion=True,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                step_results=queue_processing_result.step_results,
+                supervisor_plan=queue_processing_result.supervisor_plan,
+            )
 
         # COMPLETED (or empty remaining queue) — caller should trigger
         # coordinator + COMPLETED SSE status.
@@ -862,6 +891,8 @@ class QueueExecutor:
             needs_completion=True,
             room_id=room_id,
             user_message_id=user_message_id,
+            step_results=completed_step_results,
+            supervisor_plan=supervisor_plan,
         )
 
     # ------------------------------------------------------------------
@@ -912,6 +943,7 @@ class QueueExecutor:
                 step_id=current_step.step_id,
                 agent_id=current_step.agent_id or current_message.agent_id or "",
                 agent_name=current_step.agent_name,
+                task_description=current_step.task_description,
                 response_text=response_text or "",
                 success=True,
             )

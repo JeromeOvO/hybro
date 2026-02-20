@@ -4,8 +4,9 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
+from models.supervisor import RoomConfig, StepResult, SupervisorPlan
 from modules.AgentDispatcher import AgentDispatcher
-from modules.QueueExecutor import QueueExecutor, QueueResult
+from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
 from modules.TaskStateManager import TaskStateManager
 from services.a2a_constants import SSEProcessingStatus
@@ -181,7 +182,7 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
-        queue_result = await self.queue_executor.process_queue(
+        queue_processing_result = await self.queue_executor.process_queue(
             message_queue,
             room_id,
             room_user_message_id,
@@ -191,7 +192,7 @@ class RoomMessageCenter:
             supervisor_plan=supervisor_plan,
         )
 
-        if queue_result == QueueResult.FAILED:
+        if queue_processing_result.result == QueueResult.FAILED:
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -204,7 +205,7 @@ class RoomMessageCenter:
                 status_code=500,
             )
 
-        if queue_result == QueueResult.PAUSED:
+        if queue_processing_result.result == QueueResult.PAUSED:
             # Queue paused for push notification — do NOT trigger summary or
             # COMPLETED yet. The webhook handler will resume and trigger
             # summary when the agent finishes.
@@ -212,7 +213,7 @@ class RoomMessageCenter:
                 room_id=room_id, success=True, error=None, status_code=200
             )
 
-        if queue_result == QueueResult.CANCELED:
+        if queue_processing_result.result == QueueResult.CANCELED:
             # CANCELED status was already sent to the frontend inside the queue
             # processor. Return early — do NOT send COMPLETED or trigger summary.
             return OrchestrationResponse(
@@ -222,11 +223,11 @@ class RoomMessageCenter:
             )
 
         # QueueResult.COMPLETED — proceed with summary + completion.
-        # Let the local room coordinator perform any post-processing logic
-        # such as generating debate summaries. Coordination failures should
-        # not break the main message processing flow.
-        await self.room_coordinator_service.on_room_user_message_completed(
-            room_id, room_user_message_id
+        await self._handle_completion(
+            room_id=room_id,
+            room_user_message_id=room_user_message_id,
+            supervisor_plan=queue_processing_result.supervisor_plan,
+            step_results=queue_processing_result.step_results,
         )
 
         # Send completion status
@@ -261,6 +262,64 @@ class RoomMessageCenter:
 
         return None
 
+    async def _handle_completion(
+        self,
+        room_id: str,
+        room_user_message_id: str,
+        supervisor_plan: SupervisorPlan | None,
+        step_results: list[StepResult] | None,
+    ) -> None:
+        """Handle completion: use Supervisor synthesis or fall back to coordinator.
+
+        If a SupervisorPlan exists and has multiple step results, use the
+        Supervisor's synthesize_results() for a guided synthesis.
+        Otherwise, fall back to the legacy RoomCoordinatorService.
+        """
+        # Use Supervisor synthesis if we have a plan and multiple results
+        if supervisor_plan and step_results and len(step_results) >= 2:
+            try:
+                # Get room config for synthesis
+                room = await self.database_service.get_room_by_room_id(room_id)
+                is_debate_mode = False
+                if room and room.extend_info and isinstance(room.extend_info, dict):
+                    is_debate_mode = bool(room.extend_info.get("debateMode", False))
+
+                room_config = RoomConfig(is_debate_mode=is_debate_mode)
+
+                # Convert list to dict for synthesize_results
+                step_results_dict = {r.step_id: r for r in step_results}
+
+                synthesis_text = await room_supervisor_service.synthesize_results(
+                    plan=supervisor_plan,
+                    step_results=step_results_dict,
+                    room_config=room_config,
+                )
+
+                if synthesis_text:
+                    # Emit synthesis as a summary message
+                    await self.room_coordinator_service._create_and_emit_summary_message(
+                        room_id=room_id,
+                        room_user_message_id=room_user_message_id,
+                        summary_text=synthesis_text,
+                        coordinator_agent_id="supervisor_synthesis",
+                    )
+                    logger.info(
+                        "RoomMessageCenter: Supervisor synthesis completed for %s",
+                        room_user_message_id,
+                    )
+                    return
+
+            except Exception as e:
+                logger.warning(
+                    "RoomMessageCenter: Supervisor synthesis failed, falling back to coordinator: %s",
+                    e,
+                )
+
+        # Fall back to legacy coordinator
+        await self.room_coordinator_service.on_room_user_message_completed(
+            room_id, room_user_message_id
+        )
+
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
     # ------------------------------------------------------------------
@@ -273,7 +332,7 @@ class RoomMessageCenter:
         """Resume queue processing after a push notification task completes.
 
         Delegates the actual queue mechanics to ``QueueExecutor`` and handles
-        the post-completion logic (coordinator + COMPLETED SSE status) here.
+        the post-completion logic (synthesis + COMPLETED SSE status) here.
 
         Returns ``True`` if the queue was resumed successfully.
         """
@@ -285,9 +344,12 @@ class RoomMessageCenter:
         if not result.success:
             return False
 
-        if result.needs_completion:
-            await self.room_coordinator_service.on_room_user_message_completed(
-                result.room_id, result.user_message_id
+        if result.needs_completion and result.room_id and result.user_message_id:
+            await self._handle_completion(
+                room_id=result.room_id,
+                room_user_message_id=result.user_message_id,
+                supervisor_plan=result.supervisor_plan,
+                step_results=result.step_results,
             )
             await self.sse_manager.send_processing_status(
                 result.room_id, SSEProcessingStatus.COMPLETED, result.user_message_id
