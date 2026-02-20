@@ -553,6 +553,101 @@ class RoomSupervisorService:
         return "\n\n".join(lines)
 
     # =========================================================================
+    # Legacy Conversion
+    # =========================================================================
+
+    def convert_parsed_result_to_plan(self, parsed_result: dict) -> SupervisorPlan:
+        """Convert a legacy parsed result to a SupervisorPlan.
+
+        This method allows the system to use SupervisorPlan-based processing
+        even when the legacy parser was used (e.g., as a fallback).
+
+        Args:
+            parsed_result: Output from openai_service.parse_user_message_by_llm()
+                {
+                    "message_type": str,
+                    "original_text": str,
+                    "needs_decomposition": bool,
+                    "task_steps": [
+                        {
+                            "step_id": str,
+                            "agent_id": str | None,
+                            "agent_name": str | None,
+                            "task_content": str,
+                            "dependencies": [step_id, ...]
+                        }
+                    ]
+                }
+
+        Returns:
+            SupervisorPlan equivalent to the parsed result
+        """
+        message_type = parsed_result.get("message_type", "")
+        task_steps = parsed_result.get("task_steps", [])
+
+        # Determine strategy based on message_type and task structure
+        strategy = self._infer_strategy_from_parsed_result(parsed_result)
+
+        # Convert task_steps to SupervisorSteps
+        steps = []
+        for i, step in enumerate(task_steps):
+            steps.append(
+                SupervisorStep(
+                    step_id=step.get("step_id", f"step_{i+1}"),
+                    agent_id=step.get("agent_id") or "",
+                    agent_name=step.get("agent_name") or "Unknown",
+                    task_description=step.get("task_content", ""),
+                    depends_on=step.get("dependencies", []),
+                    context_from_steps=[],  # Legacy parser doesn't track this
+                    priority=0,
+                    max_retries=1,
+                )
+            )
+
+        # Determine synthesis instruction based on strategy
+        synthesis_instruction = None
+        if len(steps) > 1:
+            if "DEBATE" in message_type:
+                synthesis_instruction = (
+                    "Compare and contrast the different agent perspectives. "
+                    "Highlight areas of agreement and disagreement."
+                )
+            else:
+                synthesis_instruction = (
+                    "Combine the agent responses into a unified, coherent answer."
+                )
+
+        return SupervisorPlan(
+            strategy=strategy,
+            reasoning=f"Converted from legacy parser (message_type={message_type})",
+            steps=steps,
+            synthesis_instruction=synthesis_instruction,
+        )
+
+    def _infer_strategy_from_parsed_result(self, parsed_result: dict) -> str:
+        """Infer the Supervisor strategy from a legacy parsed result."""
+        message_type = parsed_result.get("message_type", "")
+        task_steps = parsed_result.get("task_steps", [])
+
+        # Check for debate mode
+        if "DEBATE" in message_type:
+            return "debate"
+
+        # Single step = direct
+        if len(task_steps) <= 1:
+            return "direct"
+
+        # Check for dependencies to determine sequential vs parallel
+        has_dependencies = any(
+            step.get("dependencies") for step in task_steps
+        )
+
+        if has_dependencies:
+            return "sequential"
+        else:
+            return "parallel"
+
+    # =========================================================================
     # LLM Helpers (delegate to openai_service)
     # =========================================================================
 
