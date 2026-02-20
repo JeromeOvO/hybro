@@ -1455,4 +1455,88 @@ Decide which agent(s) should handle this message and why."""
             }
 
 
+    # =========================================================================
+    # Supervisor LLM Methods
+    # =========================================================================
+
+    async def call_supervisor_llm_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str | None = None,
+    ) -> dict:
+        """Call the Supervisor LLM and return JSON response.
+
+        Uses a fast model (gpt-4o-mini) for low latency.
+
+        Args:
+            system_prompt: The system prompt for the LLM
+            user_prompt: The user prompt for the LLM
+            model: Optional model override
+
+        Returns:
+            Parsed JSON response as dict
+
+        Raises:
+            ValueError: If response is empty or invalid JSON
+        """
+        messages = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=user_prompt),
+        ]
+
+        llm_model = model or os.getenv("SUPERVISOR_MODEL") or os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini"
+
+        response = await self.client.chat.completions.create(
+            model=llm_model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.3,  # Lower temperature for consistent structured output
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from Supervisor LLM")
+
+        return json.loads(content)
+
+    async def call_supervisor_llm_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str | None = None,
+    ) -> str:
+        """Call the Supervisor LLM and return text response (for synthesis).
+
+        Args:
+            system_prompt: The system prompt for the LLM
+            user_prompt: The user prompt for the LLM
+            model: Optional model override
+
+        Returns:
+            Text response string
+
+        Raises:
+            ValueError: If response is empty
+        """
+        messages = [
+            ChatCompletionSystemMessageParam(role="system", content=system_prompt),
+            ChatCompletionUserMessageParam(role="user", content=user_prompt),
+        ]
+
+        llm_model = model or os.getenv("SUPERVISOR_MODEL") or os.getenv("LEAD_AI_MODEL") or "gpt-4o-mini"
+
+        response = await self.client.chat.completions.create(
+            model=llm_model,
+            messages=messages,
+            temperature=0.5,
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from Supervisor LLM")
+
+        return content
+
+
 openai_service = OpenAIService()
