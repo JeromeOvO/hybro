@@ -985,6 +985,114 @@ class RoomServices:
 
         return agent_messages
 
+    async def _generate_agent_messages_from_plan(
+        self,
+        plan: "SupervisorPlan",
+        user_message_id: str,
+        room_id: str,
+        user_id: str | None = None,
+        extend_info: dict | None = None,
+    ) -> list[RoomAgentMessage]:
+        """
+        Generate agent messages from a SupervisorPlan.
+
+        This method converts SupervisorPlan.steps to RoomAgentMessage records,
+        following the same pattern as _generate_agent_messages_based_on_parsed_result().
+
+        Args:
+            plan: SupervisorPlan from the Supervisor service
+            user_message_id: User message ID (root for dependency chain)
+            room_id: Room ID
+            user_id: Optional user ID
+            extend_info: Optional additional info (allowed_agent_ids, target_group, etc.)
+
+        Returns:
+            list[RoomAgentMessage]: Generated agent messages
+        """
+        from models.supervisor import SupervisorPlan
+
+        agent_messages = []
+        steps = plan.steps
+
+        if not steps:
+            logger.warning("No steps in SupervisorPlan")
+            return agent_messages
+
+        # Direct strategy with single step shouldn't echo task in status bubble
+        is_direct = plan.strategy == "direct" and len(steps) == 1
+
+        # Calculate total steps for progress tracking
+        total_steps = len(steps)
+
+        # Map step_id to generated agent_message_id for dependency resolution
+        step_to_message_id: dict[str, str] = {}
+
+        for step_index, step in enumerate(steps, start=1):
+            step_id = step.step_id
+            agent_id = step.agent_id
+            task_description = step.task_description
+            depends_on = step.depends_on
+
+            # Skip if no task description
+            if not task_description:
+                logger.warning(f"Step {step_id} has no task_description, skipping")
+                continue
+
+            # Resolve related_message_id based on dependencies
+            if not depends_on:
+                # No dependencies: relate directly to user message
+                related_message_id = user_message_id
+            else:
+                # Has dependencies: relate to the last dependency's agent message
+                last_dependency_step_id = depends_on[-1]
+                related_message_id = step_to_message_id.get(
+                    last_dependency_step_id,
+                    user_message_id,  # Fallback if dependency not found
+                )
+
+                if last_dependency_step_id not in step_to_message_id:
+                    logger.warning(
+                        f"Step {step_id} depends on {last_dependency_step_id}, "
+                        f"but it's not found. Using user message as fallback."
+                    )
+
+            # Create agent message with step tracking info
+            agent_message = self._generate_new_agent_message(
+                room_id,
+                related_message_id,
+                agent_id,
+                task_description,
+                user_id=user_id,
+                extend_info=extend_info,
+                step_number=step_index,
+                total_steps=total_steps,
+            )
+
+            # In direct mode, clear task_content to avoid echoing user message
+            if is_direct:
+                agent_message.task_content = None
+
+            agent_messages.append(agent_message)
+
+            # Store mapping for dependency resolution
+            step_to_message_id[step_id] = agent_message.message_id
+
+            # Save to database
+            agent_message_success = await self.database_service.add_room_agent_message(
+                agent_message
+            )
+            if not agent_message_success:
+                logger.warning(
+                    f"Failed to add agent message {agent_message.message_id}"
+                )
+
+            logger.info(
+                f"Generated agent message {agent_message.message_id} from plan "
+                f"step {step_id} ({step_index}/{total_steps}), agent={step.agent_name}"
+            )
+
+        return agent_messages
+
     async def parse_user_message(
         self,
         room_id: str,
