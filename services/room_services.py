@@ -1,6 +1,7 @@
 import re
 import uuid
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from a2a.types import (
@@ -55,6 +56,9 @@ from services.memory_service import room_memory_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
+
+if TYPE_CHECKING:
+    from models.supervisor import SupervisorPlan
 
 logger = get_logger(__name__)
 
@@ -1093,6 +1097,148 @@ class RoomServices:
 
         return agent_messages
 
+    async def _parse_with_supervisor(
+        self,
+        room: Room,
+        user_message: RoomUserMessage,
+        message_text: str,
+        selected_agent_set: dict,
+        agents: list | None,
+        is_debate_mode: bool,
+        target_group: str | None,
+        conversation_context: str | None,
+        token: CancellationToken | None = None,
+    ) -> ParseResult:
+        """
+        Parse user message using the Supervisor pattern.
+
+        Creates an execution plan via the Supervisor LLM, stores it in the user
+        message's extend_info, and generates agent messages from the plan.
+
+        Falls back to the legacy parser if Supervisor fails.
+
+        Args:
+            room: The room object
+            user_message: The user message to process
+            message_text: The message text
+            selected_agent_set: Dict of {agent_id: agent_name}
+            agents: Full Agent objects for building AgentProfiles
+            is_debate_mode: Whether debate mode is enabled
+            target_group: Target group for routing
+            conversation_context: Recent conversation history
+            token: Cancellation token
+
+        Returns:
+            ParseResult with success/canceled flags
+        """
+        from models.supervisor import AgentProfile, RoomConfig
+        from services.room_supervisor_service import (
+            SupervisorPlanningError,
+            room_supervisor_service,
+        )
+
+        # Check for cancellation
+        if token and token.is_cancelled:
+            logger.info(
+                "RoomServices: Message parsing cancelled for %s",
+                user_message.message_id,
+            )
+            self.sse_manager.clear_cancellation(user_message.message_id)
+            return ParseResult(success=False, canceled=True)
+
+        # Direct chat fast-path: single agent + no debate = skip Supervisor
+        direct_chat = not is_debate_mode and len(selected_agent_set) == 1
+        if direct_chat:
+            logger.info("Direct chat mode: skipping Supervisor for single agent")
+            return await self.parse_user_message(
+                room.room_id,
+                user_message.message_id,
+                message_text,
+                selected_agent_set,
+                user_message.user_id,
+                is_debate_mode,
+                auto_assign_agents=False,
+                target_group=target_group,
+                agents=agents,
+                conversation_context=conversation_context,
+                token=token,
+            )
+
+        # Build agent profiles for Supervisor
+        agent_registry = []
+        if agents:
+            for agent in agents:
+                agent_registry.append(AgentProfile.from_agent(agent))
+        else:
+            # Fallback: create minimal profiles from selected_agent_set
+            for agent_id, agent_name in selected_agent_set.items():
+                agent_registry.append(
+                    AgentProfile(
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        description="",
+                    )
+                )
+
+        # Build room config
+        room_config = RoomConfig(
+            is_debate_mode=is_debate_mode,
+            room_agent_set=selected_agent_set,
+        )
+
+        try:
+            # Create execution plan via Supervisor
+            plan = await room_supervisor_service.create_plan(
+                message_text=message_text,
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+            )
+
+            # Store plan in user message extend_info for auditability
+            if user_message.extend_info is None:
+                user_message.extend_info = {}
+            user_message.extend_info["supervisor_plan"] = plan.model_dump(mode="json")
+
+            # Update user message in database with the plan
+            await self.database_service.update_room_user_message(user_message)
+
+            # Generate agent messages from plan
+            extend_info = {
+                "allowed_agent_ids": list(selected_agent_set.keys()),
+                "target_group": target_group,
+                "is_direct_chat": False,
+            }
+
+            agent_messages = await self._generate_agent_messages_from_plan(
+                plan=plan,
+                user_message_id=user_message.message_id,
+                room_id=room.room_id,
+                user_id=user_message.user_id,
+                extend_info=extend_info,
+            )
+
+            return ParseResult(success=True) if agent_messages else ParseResult(success=False)
+
+        except SupervisorPlanningError as e:
+            logger.warning(
+                f"Supervisor planning failed, falling back to legacy parser: {e}"
+            )
+            # Fall back to legacy parser
+            return await self.parse_user_message(
+                room.room_id,
+                user_message.message_id,
+                message_text,
+                selected_agent_set,
+                user_message.user_id,
+                is_debate_mode,
+                auto_assign_agents=True,  # Let legacy parser auto-assign
+                target_group=target_group,
+                agents=agents,
+                conversation_context=conversation_context,
+                token=token,
+            )
+
     async def parse_user_message(
         self,
         room_id: str,
@@ -1237,6 +1383,11 @@ class RoomServices:
             room.extend_info.get("debateMode", False) if room.extend_info else False
         )
 
+        # Check if Supervisor pattern is enabled for this room
+        use_supervisor = (
+            room.extend_info.get("use_supervisor", False) if room.extend_info else False
+        )
+
         message_text = user_message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
@@ -1269,21 +1420,36 @@ class RoomServices:
                     max_turns=5,
                 )
 
-        parse_user_message_success = await self.parse_user_message(
-            request.room_id,
-            user_message.message_id,
-            message_text,
-            selected_agent_set,
-            user_message.user_id,
-            is_debate_mode,
-            auto_assign_agents=auto_assign,
-            target_group=target_group,
-            agents=agents,
-            conversation_context=conversation_context,
-            token=token,
-        )
-        if not parse_user_message_success.success:
-            if parse_user_message_success.canceled:
+        # Use Supervisor pattern if enabled, otherwise fall back to legacy parser
+        if use_supervisor:
+            parse_result = await self._parse_with_supervisor(
+                room=room,
+                user_message=user_message,
+                message_text=message_text,
+                selected_agent_set=selected_agent_set,
+                agents=agents,
+                is_debate_mode=is_debate_mode,
+                target_group=target_group,
+                conversation_context=conversation_context,
+                token=token,
+            )
+        else:
+            parse_result = await self.parse_user_message(
+                request.room_id,
+                user_message.message_id,
+                message_text,
+                selected_agent_set,
+                user_message.user_id,
+                is_debate_mode,
+                auto_assign_agents=auto_assign,
+                target_group=target_group,
+                agents=agents,
+                conversation_context=conversation_context,
+                token=token,
+            )
+
+        if not parse_result.success:
+            if parse_result.canceled:
                 await self.sse_manager.send_processing_status(
                     request.room_id, SSEProcessingStatus.CANCELED, user_message.message_id
                 )
@@ -1295,9 +1461,9 @@ class RoomServices:
             return RoomCenterUserMessageResponse(
                 message_id=user_message.message_id,
                 message=user_message,
-                success=parse_user_message_success.canceled,
-                error="Failed to parse user message" if not parse_user_message_success.canceled else None,
-                status_code=200 if parse_user_message_success.canceled else 500,
+                success=parse_result.canceled,
+                error="Failed to parse user message" if not parse_result.canceled else None,
+                status_code=200 if parse_result.canceled else 500,
             )
 
         return RoomCenterUserMessageResponse(
