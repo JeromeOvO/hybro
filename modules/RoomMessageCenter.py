@@ -18,6 +18,7 @@ from services.notification_service import notification_service
 from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.room_services import room_services
+from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
 
@@ -56,6 +57,7 @@ class RoomMessageCenter:
             debate_service=debate_service,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
+            supervisor_service=room_supervisor_service,
         )
 
     # ------------------------------------------------------------------
@@ -105,8 +107,19 @@ class RoomMessageCenter:
 
         # Extract quoted context from user message extend_info (set when user quotes text)
         quoted_text: str | None = None
+        supervisor_plan = None
         if user_message and isinstance(user_message.extend_info, dict):
             quoted_text = user_message.extend_info.get("quoted_text") or None
+            # Extract SupervisorPlan if present (set by _parse_with_supervisor)
+            plan_data = user_message.extend_info.get("supervisor_plan")
+            if plan_data:
+                from models.supervisor import SupervisorPlan
+                try:
+                    supervisor_plan = SupervisorPlan.model_validate(plan_data)
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Failed to parse supervisor_plan: %s", e
+                    )
 
         # Create a CancellationToken for this message pipeline (A-3).
         # The token is pre-signalled if cancel_message() was called before
@@ -175,6 +188,7 @@ class RoomMessageCenter:
             token=token,
             request_user_id=user_id,
             quoted_text=quoted_text,
+            supervisor_plan=supervisor_plan,
         )
 
         if queue_result == QueueResult.FAILED:

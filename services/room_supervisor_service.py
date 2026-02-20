@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING
 from common.utils.logger import get_logger
 from models.supervisor import (
     AgentProfile,
+    ReviewAction,
     RoomConfig,
     StepResult,
     SupervisorPlan,
     SupervisorReview,
     SupervisorStep,
+    SupervisorStrategy,
 )
 
 if TYPE_CHECKING:
@@ -332,6 +334,47 @@ class RoomSupervisorService:
     # Review Phase
     # =========================================================================
 
+    def _should_review_step(
+        self,
+        plan: SupervisorPlan,
+        completed_step: SupervisorStep,
+    ) -> bool:
+        """Decide whether to invoke the Supervisor review after a step.
+
+        The review step adds latency (~300-800ms per LLM call). It should be
+        skipped when unnecessary to optimize performance.
+
+        Returns True if review should be performed, False to skip.
+        """
+        total_steps = len(plan.steps)
+
+        # Skip review for single-step plans (nothing to adjust)
+        if total_steps <= 1:
+            return False
+
+        # Find the step index
+        step_index = next(
+            (i for i, s in enumerate(plan.steps) if s.step_id == completed_step.step_id),
+            -1,
+        )
+
+        # Skip review for the last step (nothing remaining to adjust)
+        if step_index >= total_steps - 1:
+            return False
+
+        # Check if downstream steps depend on this step's output
+        has_dependencies = any(
+            completed_step.step_id in s.context_from_steps
+            for s in plan.steps[step_index + 1:]
+        )
+
+        # Always review if downstream steps depend on this step
+        if has_dependencies:
+            return True
+
+        # For independent steps, skip review to reduce latency
+        return False
+
     async def review_step(
         self,
         plan: SupervisorPlan,
@@ -389,7 +432,7 @@ class RoomSupervisorService:
         except Exception as e:
             logger.warning(f"Supervisor review failed, defaulting to continue: {e}")
             return SupervisorReview(
-                action="continue",
+                action=ReviewAction.CONTINUE,
                 reasoning=f"Review failed ({e}), proceeding with plan",
             )
 
@@ -624,18 +667,18 @@ class RoomSupervisorService:
             synthesis_instruction=synthesis_instruction,
         )
 
-    def _infer_strategy_from_parsed_result(self, parsed_result: dict) -> str:
+    def _infer_strategy_from_parsed_result(self, parsed_result: dict) -> SupervisorStrategy:
         """Infer the Supervisor strategy from a legacy parsed result."""
         message_type = parsed_result.get("message_type", "")
         task_steps = parsed_result.get("task_steps", [])
 
         # Check for debate mode
         if "DEBATE" in message_type:
-            return "debate"
+            return SupervisorStrategy.DEBATE
 
         # Single step = direct
         if len(task_steps) <= 1:
-            return "direct"
+            return SupervisorStrategy.DIRECT
 
         # Check for dependencies to determine sequential vs parallel
         has_dependencies = any(
@@ -643,9 +686,9 @@ class RoomSupervisorService:
         )
 
         if has_dependencies:
-            return "sequential"
+            return SupervisorStrategy.SEQUENTIAL
         else:
-            return "parallel"
+            return SupervisorStrategy.PARALLEL
 
     # =========================================================================
     # LLM Helpers (delegate to openai_service)

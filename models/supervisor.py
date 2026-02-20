@@ -11,7 +11,8 @@ See docs/SUPERVISOR_PATTERN_DESIGN.md for full architecture details.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -20,6 +21,25 @@ from common.utils.time import utcnow
 
 if TYPE_CHECKING:
     from models.agent import Agent, AgentStatus
+
+
+class SupervisorStrategy(StrEnum):
+    """Execution strategy for the Supervisor plan."""
+
+    DIRECT = "direct"  # Single agent, direct response
+    PARALLEL = "parallel"  # Multiple agents, independent tasks
+    SEQUENTIAL = "sequential"  # Multiple agents, dependent tasks
+    DEBATE = "debate"  # Multiple agents, contrasting perspectives
+    CLARIFY = "clarify"  # Need more information from user
+
+
+class ReviewAction(StrEnum):
+    """Action to take after reviewing a completed step."""
+
+    CONTINUE = "continue"  # Proceed with the next step
+    REVISE = "revise"  # Replace remaining steps with revised plan
+    RETRY = "retry"  # Re-execute the current step with refinement
+    SKIP = "skip"  # Skip remaining steps, proceed to synthesis
 
 
 class SupervisorStep(BaseModel):
@@ -44,7 +64,7 @@ class SupervisorPlan(BaseModel):
     """
 
     plan_id: str = Field(default_factory=lambda: uuid4().hex)
-    strategy: Literal["direct", "parallel", "sequential", "debate", "clarify"]
+    strategy: SupervisorStrategy
     reasoning: str  # Why this strategy was chosen (for logging only)
     steps: list[SupervisorStep]
     synthesis_instruction: str | None = None  # How to combine results at the end
@@ -58,7 +78,7 @@ class SupervisorReview(BaseModel):
     or skip remaining steps.
     """
 
-    action: Literal["continue", "revise", "retry", "skip"]
+    action: ReviewAction
     reasoning: str
     revised_steps: list[SupervisorStep] | None = None  # Only if action == "revise"
     retry_with_refinement: str | None = None  # Refined prompt if action == "retry"

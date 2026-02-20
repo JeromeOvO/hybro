@@ -1013,7 +1013,7 @@ class RoomServices:
         Returns:
             list[RoomAgentMessage]: Generated agent messages
         """
-        from models.supervisor import SupervisorPlan
+        from models.supervisor import SupervisorPlan, SupervisorStrategy
 
         agent_messages = []
         steps = plan.steps
@@ -1023,7 +1023,7 @@ class RoomServices:
             return agent_messages
 
         # Direct strategy with single step shouldn't echo task in status bubble
-        is_direct = plan.strategy == "direct" and len(steps) == 1
+        is_direct = plan.strategy == SupervisorStrategy.DIRECT and len(steps) == 1
 
         # Calculate total steps for progress tracking
         total_steps = len(steps)

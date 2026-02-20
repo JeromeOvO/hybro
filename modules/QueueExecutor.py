@@ -5,6 +5,10 @@ save/resume for webhook-paused queues, per-item dispatch to the
 ``ResponseProcessor``, and queue chaining (``_queue_next_messages``).
 
 Agent assignment is delegated to the injected ``AgentDispatcher``.
+
+Supervisor review hook: After each successful step, if a SupervisorPlan
+is active, the Supervisor reviews the result and may revise, retry, or
+skip remaining steps.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
 from models.memory import MemoryContent
 from models.room import RoomAgentMessage
+from models.supervisor import ReviewAction, StepResult, SupervisorPlan, SupervisorStep
 from modules.AgentDispatcher import AgentDispatcher
 from modules.ResponseProcessor import ProcessingStatus, ResponseProcessor
 from modules.TaskStateManager import TaskStateManager, get_task
@@ -34,6 +39,7 @@ if TYPE_CHECKING:
     from services.memory_service import RoomMemoryService
     from services.rate_limit_service import RateLimitService
     from services.room_services import RoomServices
+    from services.room_supervisor_service import RoomSupervisorService
     from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
@@ -98,6 +104,7 @@ class QueueExecutor:
         debate_service: DebateService,
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
+        supervisor_service: RoomSupervisorService | None = None,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -109,6 +116,7 @@ class QueueExecutor:
         self.debate_service = debate_service
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
+        self.supervisor_service = supervisor_service
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -171,6 +179,8 @@ class QueueExecutor:
         token: CancellationToken | None = None,
         request_user_id: str | None = None,
         quoted_text: str | None = None,
+        supervisor_plan: SupervisorPlan | None = None,
+        completed_step_results: list[StepResult] | None = None,
     ) -> QueueResult:
         """Process all messages in the queue sequentially.
 
@@ -199,6 +209,10 @@ class QueueExecutor:
             The user ID making the request (for rate limiting).
         quoted_text:
             Text the user highlighted and quoted from a previous message.
+        supervisor_plan:
+            Optional SupervisorPlan for review hook integration.
+        completed_step_results:
+            Optional list of already-completed step results (for resume).
         """
         logger.info(
             "QueueExecutor: Starting to process message queue with %d messages",
@@ -209,6 +223,9 @@ class QueueExecutor:
         # Deferred SSE: (status, should_clear_cancellation)
         # None means caller handles SSE (FAILED, COMPLETED) or no SSE needed (PAUSED)
         deferred_sse: tuple[SSEProcessingStatus, bool] | None = None
+
+        # Track completed step results for Supervisor review and synthesis
+        step_results: list[StepResult] = list(completed_step_results or [])
 
         # Tracks the message_id of the last message popped from the queue.
         # Used by _managed_queue to cancel DB-only descendants on early exit.
@@ -335,6 +352,28 @@ class QueueExecutor:
                         agent_name=agent.agent_card.name if agent else "Agent",
                         response_text=result.response_text,
                     )
+
+                # --- Supervisor review hook ---
+                review_action = await self._supervisor_review_step(
+                    supervisor_plan=supervisor_plan,
+                    current_message=current_message,
+                    agent=agent,
+                    response_text=result.response_text,
+                    message_queue=message_queue,
+                    step_results=step_results,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                    user_id=request_user_id,
+                    is_direct_chat=is_direct_chat,
+                )
+
+                if review_action == ReviewAction.SKIP:
+                    logger.info(
+                        "QueueExecutor: Supervisor review returned SKIP, draining queue"
+                    )
+                    message_queue.clear()
+                    last_popped.clear()
+                    break
 
                 # Queue up next messages in the chain (skip for direct chat)
                 if not is_direct_chat:
@@ -770,6 +809,235 @@ class QueueExecutor:
             room_id=room_id,
             user_message_id=user_message_id,
         )
+
+    # ------------------------------------------------------------------
+    # Supervisor review hook
+    # ------------------------------------------------------------------
+
+    async def _supervisor_review_step(
+        self,
+        supervisor_plan: SupervisorPlan | None,
+        current_message: RoomAgentMessage,
+        agent: Agent,
+        response_text: str,
+        message_queue: deque,
+        step_results: list[StepResult],
+        room_id: str,
+        user_message_id: str,
+        user_id: str | None,
+        is_direct_chat: bool,
+    ) -> ReviewAction:
+        """Run Supervisor review after a successful step.
+
+        Returns the review action (ReviewAction enum).
+        For direct chat or when no supervisor is configured, returns CONTINUE.
+
+        Side effects:
+        - Appends a StepResult to step_results
+        - May modify message_queue (for REVISE action)
+        - May re-queue current step (for RETRY action)
+        """
+        # Skip review for direct chat or when supervisor is not configured
+        if is_direct_chat or not supervisor_plan or not self.supervisor_service:
+            return ReviewAction.CONTINUE
+
+        # Find the SupervisorStep corresponding to this message
+        current_step = self._find_step_for_message(supervisor_plan, current_message)
+        if not current_step:
+            logger.warning(
+                "QueueExecutor: Could not find SupervisorStep for message %s",
+                current_message.message_id,
+            )
+            return ReviewAction.CONTINUE
+
+        # Record the step result
+        step_results.append(
+            StepResult(
+                step_id=current_step.step_id,
+                agent_id=current_step.agent_id or current_message.agent_id or "",
+                agent_name=current_step.agent_name,
+                response_text=response_text or "",
+                success=True,
+            )
+        )
+
+        # Determine remaining steps
+        completed_step_ids = {r.step_id for r in step_results}
+        remaining_steps = [
+            s for s in supervisor_plan.steps if s.step_id not in completed_step_ids
+        ]
+
+        # Skip review if this is the last step (nothing to revise/skip)
+        if not remaining_steps:
+            logger.debug(
+                "QueueExecutor: Last step completed, skipping Supervisor review"
+            )
+            return ReviewAction.CONTINUE
+
+        # Check if review should be skipped for this step
+        if not self.supervisor_service._should_review_step(
+            supervisor_plan, current_step
+        ):
+            return ReviewAction.CONTINUE
+
+        # Call Supervisor review
+        try:
+            review = await self.supervisor_service.review_step(
+                plan=supervisor_plan,
+                completed_step=current_step,
+                agent_result=response_text or "",
+                remaining_steps=remaining_steps,
+                retries_left=current_step.max_retries,
+            )
+        except Exception as e:
+            logger.error(
+                "QueueExecutor: Supervisor review failed for step %s: %s",
+                current_step.step_id,
+                e,
+            )
+            return ReviewAction.CONTINUE
+
+        logger.info(
+            "QueueExecutor: Supervisor review for step %s: action=%s, reasoning=%s",
+            current_step.step_id,
+            review.action,
+            review.reasoning[:100] if review.reasoning else "",
+        )
+
+        if review.action == ReviewAction.CONTINUE:
+            return ReviewAction.CONTINUE
+
+        elif review.action == ReviewAction.SKIP:
+            return ReviewAction.SKIP
+
+        elif review.action == ReviewAction.REVISE and review.revised_steps:
+            await self._handle_revise_action(
+                review.revised_steps,
+                message_queue,
+                room_id,
+                user_message_id,
+                user_id,
+                current_message,
+            )
+            return ReviewAction.CONTINUE
+
+        elif review.action == ReviewAction.RETRY:
+            await self._handle_retry_action(
+                current_step,
+                review.reasoning,
+                message_queue,
+                room_id,
+                user_message_id,
+                user_id,
+                current_message,
+            )
+            return ReviewAction.CONTINUE
+
+        return ReviewAction.CONTINUE
+
+    def _find_step_for_message(
+        self,
+        plan: SupervisorPlan,
+        message: RoomAgentMessage,
+    ) -> SupervisorStep | None:
+        """Find the SupervisorStep that corresponds to a RoomAgentMessage.
+
+        Matches by step_number (1-indexed) to step index in plan.steps.
+        """
+        if message.step_number is None:
+            return None
+
+        step_index = message.step_number - 1
+        if 0 <= step_index < len(plan.steps):
+            return plan.steps[step_index]
+
+        return None
+
+    async def _handle_revise_action(
+        self,
+        revised_steps: list[SupervisorStep],
+        message_queue: deque,
+        room_id: str,
+        user_message_id: str,
+        user_id: str | None,
+        current_message: RoomAgentMessage,
+    ) -> None:
+        """Handle Supervisor "revise" action by replacing remaining queue."""
+        logger.info(
+            "QueueExecutor: Supervisor revised plan with %d new steps",
+            len(revised_steps),
+        )
+
+        # Clear existing queue
+        for msg in message_queue:
+            await self.tsm.transition_task(
+                msg, TaskState.canceled, persist=True, notify=False
+            )
+        message_queue.clear()
+
+        # Generate new agent messages from revised steps
+        for i, step in enumerate(revised_steps):
+            new_message = self.room_services._generate_new_agent_message(
+                room_id=room_id,
+                related_message_id=current_message.message_id,
+                agent_id=step.agent_id,
+                content=step.task_description,
+                user_id=user_id,
+                step_number=i + 1,
+                total_steps=len(revised_steps),
+            )
+
+            success = await self.database_service.add_room_agent_message(new_message)
+            if success:
+                message_queue.append(new_message)
+            else:
+                logger.error(
+                    "QueueExecutor: Failed to save revised step message %s",
+                    new_message.message_id,
+                )
+
+    async def _handle_retry_action(
+        self,
+        step: SupervisorStep,
+        retry_reasoning: str,
+        message_queue: deque,
+        room_id: str,
+        user_message_id: str,
+        user_id: str | None,
+        current_message: RoomAgentMessage,
+    ) -> None:
+        """Handle Supervisor "retry" action by re-queuing the step."""
+        logger.info(
+            "QueueExecutor: Supervisor requested retry for step %s: %s",
+            step.step_id,
+            retry_reasoning[:100] if retry_reasoning else "",
+        )
+
+        # Create a refined task description with retry context
+        refined_task = (
+            f"{step.task_description}\n\n"
+            f"[Retry requested: {retry_reasoning}]"
+        )
+
+        retry_message = self.room_services._generate_new_agent_message(
+            room_id=room_id,
+            related_message_id=current_message.related_message_id or user_message_id,
+            agent_id=step.agent_id,
+            content=refined_task,
+            user_id=user_id,
+            step_number=current_message.step_number,
+            total_steps=current_message.total_steps,
+        )
+
+        success = await self.database_service.add_room_agent_message(retry_message)
+        if success:
+            # Insert at front of queue so it's processed next
+            message_queue.appendleft(retry_message)
+        else:
+            logger.error(
+                "QueueExecutor: Failed to save retry message for step %s",
+                step.step_id,
+            )
 
     # ------------------------------------------------------------------
     # Queue chaining
