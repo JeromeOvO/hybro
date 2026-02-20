@@ -36,6 +36,20 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
+# Exceptions
+# =============================================================================
+
+
+class SupervisorPlanningError(Exception):
+    """Raised when Supervisor fails to create a valid execution plan.
+
+    Callers should catch this and fall back to the legacy parser.
+    """
+
+    pass
+
+
+# =============================================================================
 # System Prompts
 # =============================================================================
 
@@ -180,43 +194,51 @@ class RoomSupervisorService:
             SupervisorPlan with strategy and steps
 
         Raises:
-            Exception: If LLM call fails (caller should fall back to legacy parser)
+            SupervisorPlanningError: If LLM call fails or returns invalid response.
+                Callers should catch this and fall back to the legacy parser.
         """
-        # Build agent registry string for the prompt
-        agent_registry_str = self._format_agent_registry(agent_registry)
+        try:
+            # Build agent registry string for the prompt
+            agent_registry_str = self._format_agent_registry(agent_registry)
 
-        # Build the system prompt
-        system_prompt = SUPERVISOR_PLANNING_SYSTEM_PROMPT.format(
-            agent_registry=agent_registry_str
-        )
+            # Build the system prompt
+            system_prompt = SUPERVISOR_PLANNING_SYSTEM_PROMPT.format(
+                agent_registry=agent_registry_str
+            )
 
-        # Build the user prompt
-        user_prompt = self._build_planning_user_prompt(
-            message_text=message_text,
-            room_config=room_config,
-            conversation_context=conversation_context,
-        )
+            # Build the user prompt
+            user_prompt = self._build_planning_user_prompt(
+                message_text=message_text,
+                room_config=room_config,
+                conversation_context=conversation_context,
+            )
 
-        # Call the LLM
-        response_json = await self._call_supervisor_llm(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+            # Call the LLM
+            response_json = await self._call_supervisor_llm(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
 
-        # Parse and validate the response
-        plan = self._parse_plan_response(response_json)
+            # Parse and validate the response
+            plan = self._parse_plan_response(response_json)
 
-        logger.info(
-            "Supervisor plan created",
-            extra={
-                "strategy": plan.strategy,
-                "num_steps": len(plan.steps),
-                "agents": [s.agent_id for s in plan.steps],
-                "reasoning": plan.reasoning,
-            },
-        )
+            logger.info(
+                "Supervisor plan created",
+                extra={
+                    "strategy": plan.strategy,
+                    "num_steps": len(plan.steps),
+                    "agents": [s.agent_id for s in plan.steps],
+                    "reasoning": plan.reasoning,
+                },
+            )
 
-        return plan
+            return plan
+
+        except SupervisorPlanningError:
+            raise
+        except Exception as e:
+            logger.error(f"Supervisor planning failed: {e}")
+            raise SupervisorPlanningError(f"Failed to create execution plan: {e}") from e
 
     def _format_agent_registry(self, agents: list[AgentProfile]) -> str:
         """Format agent profiles for the Supervisor prompt."""
@@ -252,27 +274,59 @@ class RoomSupervisorService:
         return "\n".join(parts)
 
     def _parse_plan_response(self, response_json: dict) -> SupervisorPlan:
-        """Parse and validate the LLM response into a SupervisorPlan."""
-        steps = [
-            SupervisorStep(
-                step_id=step.get("step_id", f"step_{i+1}"),
-                agent_id=step["agent_id"],
-                agent_name=step["agent_name"],
-                task_description=step["task_description"],
-                depends_on=step.get("depends_on", []),
-                context_from_steps=step.get("context_from_steps", []),
-                priority=step.get("priority", 0),
-                max_retries=step.get("max_retries", 1),
-            )
-            for i, step in enumerate(response_json.get("steps", []))
-        ]
+        """Parse and validate the LLM response into a SupervisorPlan.
 
-        return SupervisorPlan(
-            strategy=response_json["strategy"],
-            reasoning=response_json.get("reasoning", ""),
-            steps=steps,
-            synthesis_instruction=response_json.get("synthesis_instruction"),
-        )
+        Raises:
+            SupervisorPlanningError: If the response is missing required fields.
+        """
+        try:
+            # Validate required top-level field
+            if "strategy" not in response_json:
+                raise SupervisorPlanningError(
+                    f"Supervisor LLM returned invalid plan: missing 'strategy' field. "
+                    f"Response keys: {list(response_json.keys())}"
+                )
+
+            steps = []
+            for i, step in enumerate(response_json.get("steps", [])):
+                # Validate required step fields
+                missing_fields = [
+                    f for f in ("agent_id", "agent_name", "task_description")
+                    if f not in step
+                ]
+                if missing_fields:
+                    raise SupervisorPlanningError(
+                        f"Supervisor LLM returned invalid plan: step {i+1} missing "
+                        f"required fields {missing_fields}. Step data: {step}"
+                    )
+
+                steps.append(
+                    SupervisorStep(
+                        step_id=step.get("step_id", f"step_{i+1}"),
+                        agent_id=step["agent_id"],
+                        agent_name=step["agent_name"],
+                        task_description=step["task_description"],
+                        depends_on=step.get("depends_on", []),
+                        context_from_steps=step.get("context_from_steps", []),
+                        priority=step.get("priority", 0),
+                        max_retries=step.get("max_retries", 1),
+                    )
+                )
+
+            return SupervisorPlan(
+                strategy=response_json["strategy"],
+                reasoning=response_json.get("reasoning", ""),
+                steps=steps,
+                synthesis_instruction=response_json.get("synthesis_instruction"),
+            )
+
+        except SupervisorPlanningError:
+            raise
+        except Exception as e:
+            raise SupervisorPlanningError(
+                f"Supervisor LLM returned invalid plan: {e}. "
+                f"Response: {response_json}"
+            ) from e
 
     # =========================================================================
     # Review Phase
