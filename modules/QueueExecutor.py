@@ -227,6 +227,9 @@ class QueueExecutor:
         # Track completed step results for Supervisor review and synthesis
         step_results: list[StepResult] = list(completed_step_results or [])
 
+        # Track retry counts per step_id to enforce max_retries limit
+        step_retry_counts: dict[str, int] = {}
+
         # Tracks the message_id of the last message popped from the queue.
         # Used by _managed_queue to cancel DB-only descendants on early exit.
         # Empty list = nothing popped yet; on normal completion this is harmless
@@ -361,6 +364,7 @@ class QueueExecutor:
                     response_text=result.response_text,
                     message_queue=message_queue,
                     step_results=step_results,
+                    step_retry_counts=step_retry_counts,
                     room_id=room_id,
                     user_message_id=user_message_id,
                     user_id=request_user_id,
@@ -822,6 +826,7 @@ class QueueExecutor:
         response_text: str,
         message_queue: deque,
         step_results: list[StepResult],
+        step_retry_counts: dict[str, int],
         room_id: str,
         user_message_id: str,
         user_id: str | None,
@@ -836,6 +841,7 @@ class QueueExecutor:
         - Appends a StepResult to step_results
         - May modify message_queue (for REVISE action)
         - May re-queue current step (for RETRY action)
+        - Updates step_retry_counts when RETRY is triggered
         """
         # Skip review for direct chat or when supervisor is not configured
         if is_direct_chat or not supervisor_plan or not self.supervisor_service:
@@ -880,6 +886,10 @@ class QueueExecutor:
         ):
             return ReviewAction.CONTINUE
 
+        # Calculate retries left for this step
+        retries_used = step_retry_counts.get(current_step.step_id, 0)
+        retries_left = max(0, current_step.max_retries - retries_used)
+
         # Call Supervisor review
         try:
             review = await self.supervisor_service.review_step(
@@ -887,7 +897,7 @@ class QueueExecutor:
                 completed_step=current_step,
                 agent_result=response_text or "",
                 remaining_steps=remaining_steps,
-                retries_left=current_step.max_retries,
+                retries_left=retries_left,
             )
         except Exception as e:
             logger.error(
@@ -922,6 +932,20 @@ class QueueExecutor:
             return ReviewAction.CONTINUE
 
         elif review.action == ReviewAction.RETRY:
+            # Check if retries are exhausted
+            if retries_left <= 0:
+                logger.warning(
+                    "QueueExecutor: Supervisor requested RETRY for step %s but "
+                    "retries exhausted (max_retries=%d, used=%d). Continuing instead.",
+                    current_step.step_id,
+                    current_step.max_retries,
+                    retries_used,
+                )
+                return ReviewAction.CONTINUE
+
+            # Increment retry counter
+            step_retry_counts[current_step.step_id] = retries_used + 1
+
             await self._handle_retry_action(
                 current_step,
                 review.reasoning,
