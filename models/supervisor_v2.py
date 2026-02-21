@@ -1,10 +1,8 @@
 """Supervisor V2 Data Models — adaptive loop orchestration.
 
 These models support the V2 Supervisor's step-at-a-time adaptive loop.
-They are intentionally separate from V1 models in ``models/supervisor.py``
-to avoid conflicts during the migration period (Phases 1–4).
-
-V1 models are removed in Phase 5 when V1 is deprecated.
+Since Phase 5, V1 models have been removed and this is the sole supervisor
+model module.
 
 See docs/SUPERVISOR_V2_DESIGN.md for full architecture details.
 """
@@ -13,12 +11,57 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
+
+if TYPE_CHECKING:
+    from models.agent import Agent, AgentStatus
+
+
+# =========================================================================
+# Shared models (formerly in models/supervisor.py)
+# =========================================================================
+
+
+class AgentProfile(BaseModel):
+    """Compact agent description for the Supervisor's context window.
+
+    Contains only the information the Supervisor needs to make routing decisions.
+    """
+
+    agent_id: str
+    agent_name: str
+    description: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    success_rate: float = 1.0
+    is_healthy: bool = True
+
+    @classmethod
+    def from_agent(cls, agent: "Agent") -> "AgentProfile":
+        """Create an AgentProfile from a full Agent model."""
+        from models.agent import AgentStatus
+
+        card = agent.agent_card
+        total = agent.call_count or 1
+        return cls(
+            agent_id=agent.agent_id,
+            agent_name=card.name,
+            description=card.description or "",
+            capabilities=[s.id for s in (card.skills or [])],
+            success_rate=agent.call_success_count / total,
+            is_healthy=agent.agent_status == AgentStatus.active,
+        )
+
+
+class RoomConfig(BaseModel):
+    """Room configuration relevant to the Supervisor."""
+
+    is_debate_mode: bool = False
+    room_agent_set: dict[str, str] = Field(default_factory=dict)
 
 
 # =========================================================================
@@ -69,11 +112,7 @@ class StepStatus(StrEnum):
 
 
 class V2StepResult(BaseModel):
-    """Result of a completed (or paused) agent delegation.
-
-    Named ``V2StepResult`` to avoid import conflicts with V1's ``StepResult``
-    in ``models/supervisor.py`` during the migration period.
-    """
+    """Result of a completed (or paused) agent delegation."""
 
     step_number: int
     agent_id: str

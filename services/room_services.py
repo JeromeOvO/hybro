@@ -1,7 +1,6 @@
 import re
 import uuid
 from datetime import timedelta
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from a2a.types import (
@@ -56,9 +55,6 @@ from services.memory_service import room_memory_service
 from services.openai_service import openai_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
-
-if TYPE_CHECKING:
-    from models.supervisor import SupervisorPlan
 
 logger = get_logger(__name__)
 
@@ -1014,127 +1010,13 @@ class RoomServices:
 
         return agent_messages
 
-    async def _generate_agent_messages_from_plan(
-        self,
-        plan: "SupervisorPlan",
-        user_message_id: str,
-        room_id: str,
-        user_id: str | None = None,
-        extend_info: dict | None = None,
-    ) -> list[RoomAgentMessage]:
-        """
-        Generate agent messages from a SupervisorPlan.
-
-        This method converts SupervisorPlan.steps to RoomAgentMessage records,
-        following the same pattern as _generate_agent_messages_based_on_parsed_result().
-
-        Args:
-            plan: SupervisorPlan from the Supervisor service
-            user_message_id: User message ID (root for dependency chain)
-            room_id: Room ID
-            user_id: Optional user ID
-            extend_info: Optional additional info (allowed_agent_ids, target_group, etc.)
-
-        Returns:
-            list[RoomAgentMessage]: Generated agent messages
-        """
-        from models.supervisor import SupervisorPlan, SupervisorStrategy
-
-        agent_messages = []
-        steps = plan.steps
-
-        if not steps:
-            logger.warning("No steps in SupervisorPlan")
-            return agent_messages
-
-        # Direct strategy with single step shouldn't echo task in status bubble
-        is_direct = plan.strategy == SupervisorStrategy.DIRECT and len(steps) == 1
-
-        # Calculate total steps for progress tracking
-        total_steps = len(steps)
-
-        # Map step_id to generated agent_message_id for dependency resolution
-        step_to_message_id: dict[str, str] = {}
-
-        # TODO: step.context_from_steps is populated by the Supervisor LLM
-        # but not yet consumed here. The intent is to inject the referenced steps'
-        # response_text into this agent's task prompt so downstream agents can build
-        # on prior results. This requires access to completed step results at message
-        # generation time, which is not yet available in this method.
-
-        for step_index, step in enumerate(steps, start=1):
-            step_id = step.step_id
-            agent_id = step.agent_id
-            task_description = step.task_description
-            depends_on = step.depends_on
-
-            # Skip if no task description
-            if not task_description:
-                logger.warning(f"Step {step_id} has no task_description, skipping")
-                continue
-
-            # Resolve related_message_id based on dependencies
-            if not depends_on:
-                # No dependencies: relate directly to user message
-                related_message_id = user_message_id
-            else:
-                # Has dependencies: relate to the last dependency's agent message
-                last_dependency_step_id = depends_on[-1]
-                related_message_id = step_to_message_id.get(
-                    last_dependency_step_id,
-                    user_message_id,  # Fallback if dependency not found
-                )
-
-                if last_dependency_step_id not in step_to_message_id:
-                    logger.warning(
-                        f"Step {step_id} depends on {last_dependency_step_id}, "
-                        f"but it's not found. Using user message as fallback."
-                    )
-
-            # Create agent message with step tracking info
-            agent_message = self._generate_new_agent_message(
-                room_id,
-                related_message_id,
-                agent_id,
-                task_description,
-                user_id=user_id,
-                extend_info=extend_info,
-                step_number=step_index,
-                total_steps=total_steps,
-            )
-
-            # In direct mode, clear task_content to avoid echoing user message
-            if is_direct:
-                agent_message.task_content = None
-
-            agent_messages.append(agent_message)
-
-            # Store mapping for dependency resolution
-            step_to_message_id[step_id] = agent_message.message_id
-
-            # Save to database
-            agent_message_success = await self.database_service.add_room_agent_message(
-                agent_message
-            )
-            if not agent_message_success:
-                logger.warning(
-                    f"Failed to add agent message {agent_message.message_id}"
-                )
-
-            logger.info(
-                f"Generated agent message {agent_message.message_id} from plan "
-                f"step {step_id} ({step_index}/{total_steps}), agent={step.agent_name}"
-            )
-
-        return agent_messages
-
     @staticmethod
     def _build_agent_registry(
         agents: list | None,
         selected_agent_set: dict,
     ) -> list:
         """Build an ``AgentProfile`` list from resolved agents or the agent set."""
-        from models.supervisor import AgentProfile
+        from models.supervisor_v2 import AgentProfile
 
         registry: list[AgentProfile] = []
         if agents:
@@ -1162,18 +1044,17 @@ class RoomServices:
         conversation_context: str | None,
         token: CancellationToken | None = None,
     ) -> ParseResult:
-        """Prepare extend_info for V2 supervisor execution.
+        """Prepare extend_info for supervisor execution.
 
-        Unlike ``_parse_with_supervisor`` (V1), this method:
+        This method:
         - Does NOT call the supervisor LLM
         - Does NOT create any ``RoomAgentMessage`` records
-        - Does NOT build a ``SupervisorPlan``
         - ONLY stores the data needed for ``SupervisorExecutor.run()``
 
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
-        from models.supervisor import RoomConfig
+        from models.supervisor_v2 import RoomConfig
 
         if token and token.is_cancelled:
             logger.info(
@@ -1234,8 +1115,7 @@ class RoomServices:
         Returns ``False`` if the pending clarification is stale, missing, or
         otherwise invalid — the caller should fall through to a fresh V2 run.
         """
-        from models.supervisor import RoomConfig
-        from models.supervisor_v2 import SupervisorTrajectory
+        from models.supervisor_v2 import RoomConfig, SupervisorTrajectory
 
         original_msg = (
             await self.database_service.get_room_user_message_by_message_id(
@@ -1349,175 +1229,6 @@ class RoomServices:
             room.extend_info.pop("pending_clarification_message_id", None)
             await self.database_service.update_room_by_room_id(
                 room.room_id, room
-            )
-
-    async def _parse_with_supervisor(
-        self,
-        room: Room,
-        user_message: RoomUserMessage,
-        message_text: str,
-        selected_agent_set: dict,
-        agents: list | None,
-        is_debate_mode: bool,
-        auto_assign_agents: bool,
-        target_group: str | None,
-        conversation_context: str | None,
-        token: CancellationToken | None = None,
-    ) -> ParseResult:
-        """
-        Parse user message using the Supervisor pattern.
-
-        Creates an execution plan via the Supervisor LLM, stores it in the user
-        message's extend_info, and generates agent messages from the plan.
-
-        Falls back to the legacy parser if Supervisor fails.
-
-        Args:
-            room: The room object
-            user_message: The user message to process
-            message_text: The message text
-            selected_agent_set: Dict of {agent_id: agent_name}
-            agents: Full Agent objects for building AgentProfiles
-            is_debate_mode: Whether debate mode is enabled
-            auto_assign_agents: Whether to auto-assign agents in legacy fallback
-            target_group: Target group for routing
-            conversation_context: Recent conversation history
-            token: Cancellation token
-
-        Returns:
-            ParseResult with success/canceled flags
-        """
-        from models.supervisor import AgentProfile, RoomConfig
-        from services.room_supervisor_service import (
-            SupervisorPlanningError,
-            room_supervisor_service,
-        )
-
-        # Check for cancellation
-        if token and token.is_cancelled:
-            logger.info(
-                "RoomServices: Message parsing cancelled for %s",
-                user_message.message_id,
-            )
-            self.sse_manager.clear_cancellation(user_message.message_id)
-            return ParseResult(success=False, canceled=True)
-
-        # Direct chat fast-path: single agent + no debate = skip Supervisor
-        direct_chat = not is_debate_mode and len(selected_agent_set) == 1
-        if direct_chat:
-            logger.info("Direct chat mode: skipping Supervisor for single agent")
-            return await self.parse_user_message(
-                room.room_id,
-                user_message.message_id,
-                message_text,
-                selected_agent_set,
-                user_message.user_id,
-                is_debate_mode,
-                auto_assign_agents=auto_assign_agents,
-                target_group=target_group,
-                agents=agents,
-                conversation_context=conversation_context,
-                token=token,
-            )
-
-        # Build agent profiles for Supervisor
-        agent_registry = []
-        if agents:
-            for agent in agents:
-                agent_registry.append(AgentProfile.from_agent(agent))
-        else:
-            # Fallback: create minimal profiles from selected_agent_set
-            for agent_id, agent_name in selected_agent_set.items():
-                agent_registry.append(
-                    AgentProfile(
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        description="",
-                    )
-                )
-
-        # Build room config
-        room_config = RoomConfig(
-            is_debate_mode=is_debate_mode,
-            room_agent_set=selected_agent_set,
-        )
-
-        try:
-            # Create execution plan via Supervisor
-            plan = await room_supervisor_service.create_plan(
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                conversation_context=conversation_context,
-            )
-
-            # Store plan in user message extend_info for auditability
-            if user_message.extend_info is None:
-                user_message.extend_info = {}
-            user_message.extend_info["supervisor_plan"] = plan.model_dump(mode="json")
-
-            # Update user message in database with the plan
-            await self.database_service.update_room_user_message(user_message)
-
-            # Generate agent messages from plan
-            extend_info = {
-                "allowed_agent_ids": list(selected_agent_set.keys()),
-                "target_group": target_group,
-                "is_direct_chat": False,
-                # Store agent profiles for room awareness (avoids DB lookups later)
-                "agent_profiles": [
-                    (p.agent_id, p.agent_name, p.description or "")
-                    for p in agent_registry
-                ],
-            }
-
-            agent_messages = await self._generate_agent_messages_from_plan(
-                plan=plan,
-                user_message_id=user_message.message_id,
-                room_id=room.room_id,
-                user_id=user_message.user_id,
-                extend_info=extend_info,
-            )
-
-            if agent_messages:
-                return ParseResult(success=True)
-
-            # Plan produced no messages (e.g., all steps had empty task_description)
-            # Fall back to legacy parser rather than silently failing
-            logger.warning(
-                "Supervisor plan produced no agent messages, falling back to legacy parser"
-            )
-            return await self.parse_user_message(
-                room.room_id,
-                user_message.message_id,
-                message_text,
-                selected_agent_set,
-                user_message.user_id,
-                is_debate_mode,
-                auto_assign_agents=auto_assign_agents,
-                target_group=target_group,
-                agents=agents,
-                conversation_context=conversation_context,
-                token=token,
-            )
-
-        except SupervisorPlanningError as e:
-            logger.warning(
-                f"Supervisor planning failed, falling back to legacy parser: {e}"
-            )
-            # Fall back to legacy parser
-            return await self.parse_user_message(
-                room.room_id,
-                user_message.message_id,
-                message_text,
-                selected_agent_set,
-                user_message.user_id,
-                is_debate_mode,
-                auto_assign_agents=auto_assign_agents,
-                target_group=target_group,
-                agents=agents,
-                conversation_context=conversation_context,
-                token=token,
             )
 
     async def parse_user_message(
@@ -1668,20 +1379,13 @@ class RoomServices:
         use_supervisor = (
             room.extend_info.get("use_supervisor", False) if room.extend_info else False
         )
-        use_supervisor_v2 = (
-            room.extend_info.get("supervisor_v2", False) if room.extend_info else False
-        )
 
         message_text = user_message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
         if mentions:
-            # If there's a pending V2 clarification, clear it — the user chose
-            # to @mention an agent directly instead of answering the clarify
-            # question, so the pending flag would otherwise block future messages.
             if (
                 use_supervisor
-                and use_supervisor_v2
                 and isinstance(room.extend_info, dict)
                 and room.extend_info.get("pending_clarification_message_id")
             ):
@@ -1715,10 +1419,8 @@ class RoomServices:
                 )
 
         # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
-        if use_supervisor and use_supervisor_v2:
-            # --- Clarify resume check (Phase 4, §7.4) ---
-            # If a previous supervisor run returned CLARIFY and the user is now
-            # replying, resume the trajectory instead of starting a fresh run.
+        if use_supervisor:
+            # --- Clarify resume check (§7.4) ---
             clarify_resume_prepared = False
             pending_clarify_msg_id = (
                 room.extend_info.get("pending_clarification_message_id")
@@ -1750,19 +1452,6 @@ class RoomServices:
                     conversation_context=conversation_context,
                     token=token,
                 )
-        elif use_supervisor:
-            parse_result = await self._parse_with_supervisor(
-                room=room,
-                user_message=user_message,
-                message_text=message_text,
-                selected_agent_set=selected_agent_set,
-                agents=agents,
-                is_debate_mode=is_debate_mode,
-                auto_assign_agents=auto_assign,
-                target_group=target_group,
-                conversation_context=conversation_context,
-                token=token,
-            )
         else:
             parse_result = await self.parse_user_message(
                 request.room_id,

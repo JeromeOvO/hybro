@@ -1,8 +1,8 @@
 """SupervisorExecutor — adaptive step-at-a-time orchestration (V2).
 
-Replaces ``QueueExecutor`` for supervisor-enabled rooms that have the
-``supervisor_v2`` flag set.  ``QueueExecutor`` continues to serve legacy
-rooms and fast-path cases unchanged.
+The sole orchestration executor for supervisor-enabled rooms (``use_supervisor``).
+``QueueExecutor`` continues to serve non-supervisor rooms and fast-path cases
+(direct chat, @mention routing).
 
 Responsibilities:
 - Drive the decide → dispatch → record cycle
@@ -23,10 +23,11 @@ from typing import TYPE_CHECKING
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from models.supervisor import AgentProfile, RoomConfig
 from models.supervisor_v2 import (
     ActionType,
+    AgentProfile,
     DelegateTarget,
+    RoomConfig,
     RunStatus,
     StepStatus,
     SupervisorAction,
