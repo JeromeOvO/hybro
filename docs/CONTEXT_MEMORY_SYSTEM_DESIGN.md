@@ -626,6 +626,7 @@ async def upsert_full_content(
     Uses update_one(upsert=True) on the unique (room_id, turn_id) index.
     If a document already exists for this turn (e.g., from a previous crashed
     compaction run), returns its existing _id without creating a duplicate.
+    TODO: Create a new method in db services for it and use it from db services
     """
     result = await db.conversation_content.update_one(
         {"room_id": room_id, "turn_id": turn_id},   # filter on unique key
@@ -644,6 +645,7 @@ async def upsert_full_content(
     # For an update (already existed): fetch the existing _id
     if result.upserted_id:
         return str(result.upserted_id)
+    # TODO: Create a new method in db services for it and use it from db services
     existing = await db.conversation_content.find_one(
         {"room_id": room_id, "turn_id": turn_id}, {"_id": 1}
     )
@@ -678,6 +680,7 @@ async def expand_turn_content(turn: ConversationTurn) -> str:
         ContentExpiredError: If the stored document is missing (TTL, deletion, etc.)
         ValueError: If the turn is compact but has no content_ref.
     """
+    # TODO: For turn representation, we can create a enum in the data model.
     if turn.representation == "full":
         return turn.content
 
@@ -686,6 +689,7 @@ async def expand_turn_content(turn: ConversationTurn) -> str:
 
     ref = turn.content_ref
 
+    # TODO: Create a enum for storage tyep.
     if ref.storage_type == "mongodb":
         doc = await db.conversation_content.find_one({"_id": ref.document_id})
         if doc is None:
