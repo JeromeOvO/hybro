@@ -4,8 +4,9 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
+from models.supervisor import RoomConfig, StepResult, SupervisorPlan
 from modules.AgentDispatcher import AgentDispatcher
-from modules.QueueExecutor import QueueExecutor, QueueResult
+from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
 from modules.TaskStateManager import TaskStateManager
 from services.a2a_constants import SSEProcessingStatus
@@ -18,6 +19,7 @@ from services.notification_service import notification_service
 from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
 from services.room_services import room_services
+from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
 
@@ -56,6 +58,7 @@ class RoomMessageCenter:
             debate_service=debate_service,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
+            supervisor_service=room_supervisor_service,
         )
 
     # ------------------------------------------------------------------
@@ -105,8 +108,19 @@ class RoomMessageCenter:
 
         # Extract quoted context from user message extend_info (set when user quotes text)
         quoted_text: str | None = None
+        supervisor_plan = None
         if user_message and isinstance(user_message.extend_info, dict):
             quoted_text = user_message.extend_info.get("quoted_text") or None
+            # Extract SupervisorPlan if present (set by _parse_with_supervisor)
+            plan_data = user_message.extend_info.get("supervisor_plan")
+            if plan_data:
+                from models.supervisor import SupervisorPlan
+                try:
+                    supervisor_plan = SupervisorPlan.model_validate(plan_data)
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Failed to parse supervisor_plan: %s", e
+                    )
 
         # Create a CancellationToken for this message pipeline (A-3).
         # The token is pre-signalled if cancel_message() was called before
@@ -168,16 +182,17 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
-        queue_result = await self.queue_executor.process_queue(
+        queue_processing_result = await self.queue_executor.process_queue(
             message_queue,
             room_id,
             room_user_message_id,
             token=token,
             request_user_id=user_id,
             quoted_text=quoted_text,
+            supervisor_plan=supervisor_plan,
         )
 
-        if queue_result == QueueResult.FAILED:
+        if queue_processing_result.result == QueueResult.FAILED:
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -190,7 +205,7 @@ class RoomMessageCenter:
                 status_code=500,
             )
 
-        if queue_result == QueueResult.PAUSED:
+        if queue_processing_result.result == QueueResult.PAUSED:
             # Queue paused for push notification — do NOT trigger summary or
             # COMPLETED yet. The webhook handler will resume and trigger
             # summary when the agent finishes.
@@ -198,7 +213,7 @@ class RoomMessageCenter:
                 room_id=room_id, success=True, error=None, status_code=200
             )
 
-        if queue_result == QueueResult.CANCELED:
+        if queue_processing_result.result == QueueResult.CANCELED:
             # CANCELED status was already sent to the frontend inside the queue
             # processor. Return early — do NOT send COMPLETED or trigger summary.
             return OrchestrationResponse(
@@ -208,11 +223,11 @@ class RoomMessageCenter:
             )
 
         # QueueResult.COMPLETED — proceed with summary + completion.
-        # Let the local room coordinator perform any post-processing logic
-        # such as generating debate summaries. Coordination failures should
-        # not break the main message processing flow.
-        await self.room_coordinator_service.on_room_user_message_completed(
-            room_id, room_user_message_id
+        await self._handle_completion(
+            room_id=room_id,
+            room_user_message_id=room_user_message_id,
+            supervisor_plan=queue_processing_result.supervisor_plan,
+            step_results=queue_processing_result.step_results,
         )
 
         # Send completion status
@@ -247,6 +262,77 @@ class RoomMessageCenter:
 
         return None
 
+    async def _handle_completion(
+        self,
+        room_id: str,
+        room_user_message_id: str,
+        supervisor_plan: SupervisorPlan | None,
+        step_results: list[StepResult] | None,
+    ) -> None:
+        """Handle completion: use Supervisor synthesis or fall back to coordinator.
+
+        If a SupervisorPlan exists:
+        - For 2+ step results: use Supervisor's synthesize_results() for guided synthesis
+        - For 1 step result: skip synthesis entirely (single agent doesn't need summary)
+
+        If no SupervisorPlan: fall back to legacy RoomCoordinatorService.
+        """
+        # If Supervisor was used, it owns the completion logic
+        if supervisor_plan:
+            # Only synthesize if we have multiple results
+            if step_results and len(step_results) >= 2:
+                try:
+                    # Get room config for synthesis
+                    room = await self.database_service.get_room_by_room_id(room_id)
+                    is_debate_mode = False
+                    if room and room.extend_info and isinstance(room.extend_info, dict):
+                        is_debate_mode = bool(room.extend_info.get("debateMode", False))
+
+                    room_config = RoomConfig(is_debate_mode=is_debate_mode)
+
+                    # Convert list to dict for synthesize_results
+                    step_results_dict = {r.step_id: r for r in step_results}
+
+                    synthesis_text = await room_supervisor_service.synthesize_results(
+                        plan=supervisor_plan,
+                        step_results=step_results_dict,
+                        room_config=room_config,
+                    )
+
+                    if synthesis_text:
+                        await self.room_coordinator_service.emit_synthesis_message(
+                            room_id=room_id,
+                            room_user_message_id=room_user_message_id,
+                            synthesis_text=synthesis_text,
+                            coordinator_agent_id="supervisor_synthesis",
+                        )
+                        logger.info(
+                            "RoomMessageCenter: Supervisor synthesis completed for %s",
+                            room_user_message_id,
+                        )
+                    return  # Success: synthesis emitted or empty (no summary needed)
+
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Supervisor synthesis failed, "
+                        "falling back to coordinator: %s",
+                        e,
+                    )
+                    # Fall through to coordinator below
+
+                # Supervisor synthesis failed — fall back to legacy coordinator
+                await self.room_coordinator_service.on_room_user_message_completed(
+                    room_id, room_user_message_id
+                )
+                return
+
+            return
+
+        # No supervisor_plan: use legacy coordinator
+        await self.room_coordinator_service.on_room_user_message_completed(
+            room_id, room_user_message_id
+        )
+
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
     # ------------------------------------------------------------------
@@ -259,7 +345,7 @@ class RoomMessageCenter:
         """Resume queue processing after a push notification task completes.
 
         Delegates the actual queue mechanics to ``QueueExecutor`` and handles
-        the post-completion logic (coordinator + COMPLETED SSE status) here.
+        the post-completion logic (synthesis + COMPLETED SSE status) here.
 
         Returns ``True`` if the queue was resumed successfully.
         """
@@ -271,9 +357,12 @@ class RoomMessageCenter:
         if not result.success:
             return False
 
-        if result.needs_completion:
-            await self.room_coordinator_service.on_room_user_message_completed(
-                result.room_id, result.user_message_id
+        if result.needs_completion and result.room_id and result.user_message_id:
+            await self._handle_completion(
+                room_id=result.room_id,
+                room_user_message_id=result.user_message_id,
+                supervisor_plan=result.supervisor_plan,
+                step_results=result.step_results,
             )
             await self.sse_manager.send_processing_status(
                 result.room_id, SSEProcessingStatus.COMPLETED, result.user_message_id

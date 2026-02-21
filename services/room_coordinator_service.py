@@ -206,6 +206,31 @@ class RoomCoordinatorService:
 
         return "".join(text_parts) if text_parts else ""
 
+    async def emit_synthesis_message(
+        self,
+        room_id: str,
+        room_user_message_id: str,
+        synthesis_text: str,
+        coordinator_agent_id: str = "supervisor_synthesis",
+    ) -> None:
+        """Emit a synthesis/summary message to the room.
+
+        Public API for emitting synthesis messages from external callers
+        (e.g., RoomMessageCenter using Supervisor synthesis).
+
+        Args:
+            room_id: The room ID
+            room_user_message_id: The user message ID this synthesis relates to
+            synthesis_text: The synthesis text content
+            coordinator_agent_id: The agent ID to use for the message
+        """
+        await self._create_and_emit_summary_message(
+            room_id=room_id,
+            room_user_message_id=room_user_message_id,
+            summary_text=synthesis_text,
+            coordinator_agent_id=coordinator_agent_id,
+        )
+
     async def _create_and_emit_summary_message(
         self,
         room_id: str,
