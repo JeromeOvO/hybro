@@ -28,6 +28,8 @@ from models.memory import MemoryContent
 from models.room import RoomAgentMessage
 from models.supervisor import ReviewAction, StepResult, SupervisorPlan, SupervisorStep
 from modules.AgentDispatcher import AgentDispatcher
+from modules.AgentMessageProcessor import AgentMessageProcessor
+from modules.AgentMessageProcessor import ProcessingResult  # re-export for callers
 from modules.ResponseProcessor import ProcessingStatus, ResponseProcessor
 from modules.TaskStateManager import TaskStateManager, get_task
 from services.a2a_constants import SSEProcessingStatus
@@ -69,15 +71,6 @@ class QueueProcessingResult:
 
 
 @dataclass
-class ProcessingResult:
-    """Result of message processing with optional metadata."""
-
-    status: ProcessingStatus
-    response_text: str = ""
-    message_id: str | None = None
-
-
-@dataclass
 class ResumeResult:
     """Returned by ``QueueExecutor.resume_from_continuation``.
 
@@ -116,6 +109,7 @@ class QueueExecutor:
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
         supervisor_service: RoomSupervisorService | None = None,
+        agent_message_processor: AgentMessageProcessor | None = None,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -128,6 +122,7 @@ class QueueExecutor:
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self.supervisor_service = supervisor_service
+        self._agent_message_processor = agent_message_processor
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -590,9 +585,46 @@ class QueueExecutor:
     ) -> ProcessingResult:
         """Process a single agent message with streaming support.
 
-        Delegates the actual agent communication (streaming/sync) to the
-        ``ResponseProcessor``, keeping orchestration logic here.
+        Delegates to ``AgentMessageProcessor`` if available, otherwise
+        falls back to the inline implementation for backward compatibility.
         """
+        if self._agent_message_processor is not None:
+            return await self._agent_message_processor.process_single_message(
+                current_message,
+                room_id,
+                agent,
+                user_message_id,
+                token=token,
+                step_number=step_number,
+                total_steps=total_steps,
+                quoted_text=quoted_text,
+            )
+
+        # Inline fallback (kept for backward compatibility during migration)
+        return await self._process_single_message_inline(
+            current_message,
+            room_id,
+            agent,
+            user_message_id,
+            token=token,
+            step_number=step_number,
+            total_steps=total_steps,
+            quoted_text=quoted_text,
+        )
+
+    async def _process_single_message_inline(
+        self,
+        current_message: RoomAgentMessage,
+        room_id: str,
+        agent: Agent,
+        user_message_id: str,
+        *,
+        token: CancellationToken | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        quoted_text: str | None = None,
+    ) -> ProcessingResult:
+        """Original inline implementation — kept as fallback during migration."""
         from models.request import RoomCenterAgentMessageRequest
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)

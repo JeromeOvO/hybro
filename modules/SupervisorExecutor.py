@@ -1,0 +1,597 @@
+"""SupervisorExecutor — adaptive step-at-a-time orchestration (V2).
+
+Replaces ``QueueExecutor`` for supervisor-enabled rooms that have the
+``supervisor_v2`` flag set.  ``QueueExecutor`` continues to serve legacy
+rooms and fast-path cases unchanged.
+
+Responsibilities:
+- Drive the decide → dispatch → record cycle
+- Create ``RoomAgentMessage`` records one at a time (no pre-generation)
+- Handle push notification pauses (serialize trajectory for resume)
+- Enforce cancellation, rate limits, and step budget
+- Dispatch concurrent targets via ``asyncio.gather``
+
+See docs/SUPERVISOR_V2_DESIGN.md §6.2–§6.3 for design details.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import TYPE_CHECKING
+
+from common.utils.cancellation import CancellationToken
+from common.utils.logger import get_logger
+from common.utils.time import utcnow
+from models.supervisor import AgentProfile, RoomConfig
+from models.supervisor_v2 import (
+    ActionType,
+    DelegateTarget,
+    RunStatus,
+    StepStatus,
+    SupervisorAction,
+    SupervisorRunResult,
+    SupervisorTrajectory,
+    TrajectoryEntry,
+    V2StepResult,
+)
+from modules.ResponseProcessor import ProcessingStatus
+
+if TYPE_CHECKING:
+    from modules.AgentDispatcher import AgentDispatcher
+    from modules.AgentMessageProcessor import AgentMessageProcessor
+    from modules.TaskStateManager import TaskStateManager
+    from services.database_service import DatabaseService
+    from services.memory_service import RoomMemoryService
+    from services.rate_limit_service import RateLimitService
+    from services.room_coordinator_service import RoomCoordinatorService
+    from services.room_services import RoomServices
+    from services.room_supervisor_service import RoomSupervisorService
+    from services.sse_services import SSEManager
+
+logger = get_logger(__name__)
+
+
+class SupervisorExecutor:
+    """Executes the Supervisor's adaptive loop for a single user message."""
+
+    MAX_STEPS: int = int(os.environ.get("SUPERVISOR_MAX_STEPS", "8"))
+
+    def __init__(
+        self,
+        *,
+        supervisor_service: RoomSupervisorService,
+        room_services: RoomServices,
+        tsm: TaskStateManager,
+        sse_manager: SSEManager,
+        database_service: DatabaseService,
+        room_memory_service: RoomMemoryService,
+        rate_limit_service: RateLimitService,
+        agent_dispatcher: AgentDispatcher,
+        agent_message_processor: AgentMessageProcessor,
+        room_coordinator_service: RoomCoordinatorService,
+    ) -> None:
+        self.supervisor_service = supervisor_service
+        self.room_services = room_services
+        self.tsm = tsm
+        self.sse_manager = sse_manager
+        self.database_service = database_service
+        self.room_memory_service = room_memory_service
+        self.rate_limit_service = rate_limit_service
+        self.agent_dispatcher = agent_dispatcher
+        self.agent_message_processor = agent_message_processor
+        self.room_coordinator_service = room_coordinator_service
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    async def run(
+        self,
+        room_id: str,
+        user_message_id: str,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None = None,
+        token: CancellationToken | None = None,
+        request_user_id: str | None = None,
+        quoted_text: str | None = None,
+        resumed_trajectory: SupervisorTrajectory | None = None,
+    ) -> SupervisorRunResult:
+        """Execute the full supervisor loop for a user message."""
+        trajectory = resumed_trajectory or SupervisorTrajectory()
+        step_number = len(trajectory.entries)
+
+        logger.info(
+            "supervisor_run_started",
+            extra={
+                "room_id": room_id,
+                "trajectory_id": trajectory.trajectory_id,
+                "resumed": resumed_trajectory is not None,
+                "step_offset": step_number,
+            },
+        )
+
+        while step_number < self.MAX_STEPS:
+
+            # --- Cancellation check ---
+            if token and token.is_cancelled:
+                trajectory.status = "failed"
+                logger.info(
+                    "supervisor_run_canceled",
+                    extra={
+                        "room_id": room_id,
+                        "trajectory_id": trajectory.trajectory_id,
+                        "step_number": step_number,
+                    },
+                )
+                return SupervisorRunResult(
+                    status=RunStatus.CANCELED, trajectory=trajectory
+                )
+
+            logger.info(
+                "supervisor_loop_iteration",
+                extra={
+                    "room_id": room_id,
+                    "trajectory_id": trajectory.trajectory_id,
+                    "step_number": step_number,
+                    "total_supervisor_calls": trajectory.total_supervisor_calls,
+                },
+            )
+
+            # --- Debate mode fast-path (§8.13) ---
+            if room_config.is_debate_mode and step_number == 0:
+                healthy_agents = [a for a in agent_registry if a.is_healthy]
+                action = SupervisorAction(
+                    action=ActionType.DELEGATE,
+                    reasoning="Debate mode: delegating to all agents concurrently",
+                    targets=[
+                        DelegateTarget(
+                            agent_id=a.agent_id,
+                            agent_name=a.agent_name,
+                            task=message_text,
+                        )
+                        for a in healthy_agents
+                    ],
+                )
+            else:
+                # --- Ask supervisor for next action ---
+                action = await self.supervisor_service.decide_next(
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    trajectory=trajectory,
+                    conversation_context=conversation_context,
+                    max_steps=self.MAX_STEPS,
+                )
+                trajectory.total_supervisor_calls += 1
+
+            logger.info(
+                "supervisor_action_decided",
+                extra={
+                    "room_id": room_id,
+                    "trajectory_id": trajectory.trajectory_id,
+                    "step_number": step_number,
+                    "action_type": action.action,
+                    "reasoning": action.reasoning[:100] if action.reasoning else "",
+                    "target_count": len(action.targets),
+                    "target_agents": [t.agent_name for t in action.targets],
+                },
+            )
+
+            # --- Execute the action ---
+            match action.action:
+
+                case ActionType.DELEGATE:
+                    entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=action,
+                        started_at=utcnow(),
+                    )
+                    results = await self._dispatch_targets(
+                        targets=action.targets,
+                        agent_registry=agent_registry,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        step_number=step_number + 1,
+                        token=token,
+                        request_user_id=request_user_id,
+                        quoted_text=quoted_text,
+                    )
+
+                    # Check for PAUSED (push notification agent)
+                    paused = [r for r in results if r.status == StepStatus.PAUSED]
+                    if paused:
+                        entry.results = [
+                            r for r in results if r.status != StepStatus.PAUSED
+                        ]
+                        trajectory.entries.append(entry)
+                        trajectory.status = "running"
+                        await self._save_pause_state(
+                            trajectory=trajectory,
+                            paused_results=paused,
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            request_user_id=request_user_id,
+                            message_text=message_text,
+                            agent_registry=agent_registry,
+                            room_config=room_config,
+                            conversation_context=conversation_context,
+                        )
+                        return SupervisorRunResult(
+                            status=RunStatus.PAUSED, trajectory=trajectory
+                        )
+
+                    entry.results = results
+                    entry.completed_at = utcnow()
+                    trajectory.entries.append(entry)
+
+                    for result in results:
+                        if result.response_text:
+                            await self.room_memory_service.add_agent_response_to_memory(
+                                room_id=room_id,
+                                agent_id=result.agent_id,
+                                agent_name=result.agent_name,
+                                response_text=result.response_text,
+                            )
+
+                    # Debate mode: after all agents respond, done (no synthesis)
+                    if room_config.is_debate_mode and step_number == 0:
+                        done_entry = TrajectoryEntry(
+                            step_number=step_number + 2,
+                            action=SupervisorAction(
+                                action=ActionType.DONE,
+                                reasoning="Debate mode complete",
+                            ),
+                            started_at=utcnow(),
+                            completed_at=utcnow(),
+                        )
+                        trajectory.entries.append(done_entry)
+                        trajectory.status = "completed"
+                        logger.info(
+                            "supervisor_run_completed",
+                            extra={
+                                "room_id": room_id,
+                                "trajectory_id": trajectory.trajectory_id,
+                                "status": RunStatus.COMPLETED,
+                                "total_steps": len(trajectory.entries),
+                                "total_supervisor_calls": trajectory.total_supervisor_calls,
+                                "debate_mode": True,
+                            },
+                        )
+                        return SupervisorRunResult(
+                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        )
+
+                case ActionType.SYNTHESIZE:
+                    entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=action,
+                        started_at=utcnow(),
+                    )
+
+                    completed_results = [
+                        r
+                        for e in trajectory.entries
+                        for r in e.results
+                        if r.success
+                    ]
+                    if not completed_results:
+                        logger.warning(
+                            "Supervisor returned SYNTHESIZE with no agent results — treating as DONE"
+                        )
+                        entry.completed_at = utcnow()
+                        trajectory.entries.append(entry)
+                        trajectory.status = "completed"
+                        return SupervisorRunResult(
+                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        )
+
+                    synthesis = await self.supervisor_service.synthesize_v2(
+                        trajectory=trajectory,
+                        synthesis_instruction=action.synthesis_instruction or "",
+                    )
+                    entry.completed_at = utcnow()
+                    trajectory.entries.append(entry)
+                    trajectory.status = "completed"
+                    return SupervisorRunResult(
+                        status=RunStatus.COMPLETED,
+                        trajectory=trajectory,
+                        synthesis_text=synthesis,
+                    )
+
+                case ActionType.CLARIFY:
+                    entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=action,
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                    )
+                    trajectory.entries.append(entry)
+                    trajectory.status = "clarifying"
+                    return SupervisorRunResult(
+                        status=RunStatus.CLARIFYING,
+                        trajectory=trajectory,
+                        clarification_question=action.clarification_question,
+                    )
+
+                case ActionType.DONE:
+                    entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=action,
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                    )
+                    trajectory.entries.append(entry)
+                    trajectory.status = "completed"
+                    return SupervisorRunResult(
+                        status=RunStatus.COMPLETED, trajectory=trajectory
+                    )
+
+            step_number += 1
+
+        # Budget exhausted — force synthesis from whatever we have
+        logger.warning(
+            "supervisor_budget_exhausted",
+            extra={
+                "room_id": room_id,
+                "trajectory_id": trajectory.trajectory_id,
+                "max_steps": self.MAX_STEPS,
+            },
+        )
+        if trajectory.entries:
+            synthesis = await self.supervisor_service.synthesize_v2(
+                trajectory=trajectory,
+                synthesis_instruction="Budget exhausted. Synthesize available results.",
+            )
+            trajectory.status = "completed"
+            return SupervisorRunResult(
+                status=RunStatus.COMPLETED,
+                trajectory=trajectory,
+                synthesis_text=synthesis,
+            )
+
+        trajectory.status = "failed"
+        return SupervisorRunResult(
+            status=RunStatus.FAILED, trajectory=trajectory
+        )
+
+    # ------------------------------------------------------------------
+    # Concurrent agent dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_targets(
+        self,
+        targets: list[DelegateTarget],
+        agent_registry: list[AgentProfile],
+        room_id: str,
+        user_message_id: str,
+        step_number: int,
+        token: CancellationToken | None,
+        request_user_id: str | None,
+        quoted_text: str | None,
+    ) -> list[V2StepResult]:
+        """Dispatch one or more agents, concurrently if multiple targets."""
+        valid_ids = {a.agent_id for a in agent_registry}
+
+        async def dispatch_one(target: DelegateTarget) -> V2StepResult:
+            try:
+                # Validate agent_id against registry before any DB writes
+                if target.agent_id not in valid_ids:
+                    logger.warning(
+                        "Supervisor hallucinated agent_id=%s (valid: %s)",
+                        target.agent_id,
+                        valid_ids,
+                    )
+                    return V2StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Agent ID not in registry (hallucinated)",
+                    )
+
+                agent = await self.agent_dispatcher.resolve_agent(
+                    target.agent_id, room_id
+                )
+                if not agent:
+                    logger.warning(
+                        "dispatch_one: agent %s not found or inactive",
+                        target.agent_id,
+                    )
+                    return V2StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=False,
+                        status=StepStatus.FAILED,
+                        error_message="Agent not found or inactive",
+                    )
+
+                # Rate limit check
+                if request_user_id:
+                    rate_result = await self.rate_limit_service.check_rate_limit(
+                        agent_id=agent.agent_id,
+                        user_id=request_user_id,
+                        rate_limit_per_user=agent.rate_limit_per_user_per_hour,
+                        rate_limit_system=agent.rate_limit_system_per_hour,
+                    )
+                    if not rate_result.allowed:
+                        return V2StepResult(
+                            step_number=step_number,
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                            task=target.task,
+                            response_text="",
+                            success=False,
+                            status=StepStatus.FAILED,
+                            error_message=f"Rate limited: {rate_result.reason}",
+                        )
+
+                # Create RoomAgentMessage only after validation passes
+                message = self.room_services._generate_new_agent_message(  # noqa: SLF001
+                    room_id=room_id,
+                    related_message_id=user_message_id,
+                    agent_id=target.agent_id,
+                    content=target.task,
+                    user_id=request_user_id,
+                    step_number=step_number,
+                    total_steps=None,
+                    task_content=target.task,
+                )
+                await self.database_service.add_room_agent_message(message)
+
+                logger.info(
+                    "supervisor_agent_dispatching",
+                    extra={
+                        "room_id": room_id,
+                        "step_number": step_number,
+                        "agent_id": target.agent_id,
+                        "agent_name": target.agent_name,
+                        "agent_message_id": message.message_id,
+                    },
+                )
+
+                result = await self.agent_message_processor.process_single_message(
+                    message,
+                    room_id,
+                    agent,
+                    user_message_id,
+                    token=token,
+                    step_number=step_number,
+                    total_steps=None,
+                    quoted_text=quoted_text,
+                )
+
+                if result.status == ProcessingStatus.PAUSED:
+                    return V2StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=True,
+                        status=StepStatus.PAUSED,
+                        paused_message_id=result.message_id,
+                        agent_message_id=message.message_id,
+                    )
+
+                if result.status == ProcessingStatus.SUCCESS and request_user_id:
+                    await self.rate_limit_service.record_request(
+                        agent_id=agent.agent_id,
+                        user_id=request_user_id,
+                    )
+
+                is_success = result.status == ProcessingStatus.SUCCESS
+                step_result = V2StepResult(
+                    step_number=step_number,
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text=result.response_text,
+                    success=is_success,
+                    status=StepStatus.SUCCESS if is_success else StepStatus.FAILED,
+                    error_message=(
+                        "Agent processing failed"
+                        if not is_success
+                        else None
+                    ),
+                    agent_message_id=message.message_id,
+                )
+
+                logger.info(
+                    "supervisor_agent_dispatched",
+                    extra={
+                        "room_id": room_id,
+                        "step_number": step_number,
+                        "agent_id": target.agent_id,
+                        "agent_name": target.agent_name,
+                        "success": step_result.success,
+                        "status": step_result.status,
+                        "error_message": step_result.error_message,
+                        "agent_message_id": step_result.agent_message_id,
+                    },
+                )
+
+                return step_result
+
+            except Exception as e:
+                logger.exception(
+                    "dispatch_one failed for agent %s: %s", target.agent_id, e
+                )
+                return V2StepResult(
+                    step_number=step_number,
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message=f"Unexpected error: {e}",
+                )
+
+        if len(targets) == 1:
+            return [await dispatch_one(targets[0])]
+
+        return list(
+            await asyncio.gather(*(dispatch_one(t) for t in targets))
+        )
+
+    # ------------------------------------------------------------------
+    # Push notification pause persistence
+    # ------------------------------------------------------------------
+
+    async def _save_pause_state(
+        self,
+        trajectory: SupervisorTrajectory,
+        paused_results: list[V2StepResult],
+        room_id: str,
+        user_message_id: str,
+        request_user_id: str | None,
+        message_text: str,
+        agent_registry: list[AgentProfile],
+        room_config: RoomConfig,
+        conversation_context: str | None,
+    ) -> None:
+        """Serialize the trajectory + inputs for webhook resume."""
+        for pr in paused_results:
+            if not pr.paused_message_id:
+                continue
+
+            pause_state = {
+                "supervisor_v2": True,
+                "trajectory": trajectory.model_dump(mode="json"),
+                "room_id": room_id,
+                "user_message_id": user_message_id,
+                "message_text": message_text,
+                "agent_registry": [
+                    p.model_dump(mode="json") for p in agent_registry
+                ],
+                "room_config": room_config.model_dump(mode="json"),
+                "conversation_context": conversation_context,
+                "request_user_id": request_user_id,
+            }
+
+            success = await self.database_service.save_continuation_on_message(
+                pr.paused_message_id, pause_state
+            )
+            if not success:
+                logger.error(
+                    "SupervisorExecutor: Failed to save pause state for message %s",
+                    pr.paused_message_id,
+                )
+            else:
+                logger.info(
+                    "supervisor_pause_saved",
+                    extra={
+                        "room_id": room_id,
+                        "paused_message_id": pr.paused_message_id,
+                        "trajectory_id": trajectory.trajectory_id,
+                    },
+                )

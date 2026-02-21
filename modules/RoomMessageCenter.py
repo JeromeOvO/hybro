@@ -6,6 +6,7 @@ from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.supervisor import RoomConfig, StepResult, SupervisorPlan
 from modules.AgentDispatcher import AgentDispatcher
+from modules.AgentMessageProcessor import AgentMessageProcessor
 from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
 from modules.TaskStateManager import TaskStateManager
@@ -47,6 +48,14 @@ class RoomMessageCenter:
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
         )
+        self.agent_message_processor = AgentMessageProcessor(
+            tsm=self.tsm,
+            sse_manager=self.sse_manager,
+            response_processor=self.response_processor,
+            a2a_service=a2a_service,
+            room_services=self.room_services,
+            database_service=self.database_service,
+        )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
@@ -59,6 +68,7 @@ class RoomMessageCenter:
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             supervisor_service=room_supervisor_service,
+            agent_message_processor=self.agent_message_processor,
         )
 
     # ------------------------------------------------------------------
