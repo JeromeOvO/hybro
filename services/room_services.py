@@ -1031,6 +1031,12 @@ class RoomServices:
         # Map step_id to generated agent_message_id for dependency resolution
         step_to_message_id: dict[str, str] = {}
 
+        # TODO: step.context_from_steps is populated by the Supervisor LLM
+        # but not yet consumed here. The intent is to inject the referenced steps'
+        # response_text into this agent's task prompt so downstream agents can build
+        # on prior results. This requires access to completed step results at message
+        # generation time, which is not yet available in this method.
+
         for step_index, step in enumerate(steps, start=1):
             step_id = step.step_id
             agent_id = step.agent_id

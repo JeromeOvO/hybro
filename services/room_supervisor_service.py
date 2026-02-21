@@ -599,6 +599,12 @@ class RoomSupervisorService:
     # Legacy Conversion
     # =========================================================================
 
+    # TODO: Wire convert_parsed_result_to_plan into the fallback paths in
+    # _parse_with_supervisor so that SupervisorPlanningError and empty-message
+    # fallbacks also produce a SupervisorPlan. This enables Phase 3 review and
+    # Phase 4 synthesis to work even when the Supervisor LLM fails.
+    # Currently not called — both fallback paths use parse_user_message() directly.
+
     def convert_parsed_result_to_plan(self, parsed_result: dict) -> SupervisorPlan:
         """Convert a legacy parsed result to a SupervisorPlan.
 
