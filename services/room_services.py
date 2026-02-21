@@ -1922,6 +1922,65 @@ class RoomServices:
             status_code=200,
         )
 
+    async def _build_room_awareness(
+        self,
+        room_id: str,
+        current_agent_id: str,
+        task_description: str | None = None,
+    ) -> str | None:
+        """
+        Build room awareness context for an agent.
+
+        This gives the agent awareness of other agents in the room and their roles,
+        enabling better collaboration in multi-agent scenarios.
+
+        Args:
+            room_id: The room ID
+            current_agent_id: The ID of the agent receiving the context
+            task_description: Optional specific task description for this agent
+
+        Returns:
+            Room awareness context string, or None if not applicable
+        """
+        try:
+            room = await self.database_service.get_room_by_room_id(room_id)
+            if not room or not room.room_agent_set:
+                return None
+
+            # Skip room awareness for single-agent rooms
+            if len(room.room_agent_set) <= 1:
+                return None
+
+            # Build list of other agents in the room
+            other_agents: list[str] = []
+            for agent_id, agent_name in room.room_agent_set.items():
+                if agent_id != current_agent_id:
+                    # Try to get agent description for richer context
+                    agent = await self.database_service.get_agent_by_agent_id(agent_id)
+                    if agent and agent.agent_card and agent.agent_card.description:
+                        other_agents.append(
+                            f"- {agent_name}: {agent.agent_card.description}"
+                        )
+                    else:
+                        other_agents.append(f"- {agent_name}")
+
+            if not other_agents:
+                return None
+
+            # Build the room awareness context
+            parts = ["[Room Context]"]
+            parts.append("You are working in a team with these other agents:")
+            parts.extend(other_agents)
+
+            if task_description:
+                parts.append(f"\nYour specific role in this task: {task_description}")
+
+            return "\n".join(parts)
+
+        except Exception as e:
+            logger.warning(f"Failed to build room awareness: {e}")
+            return None
+
     async def process_agent_message(
         self,
         request: RoomCenterAgentMessageRequest,
@@ -1982,6 +2041,13 @@ class RoomServices:
         agent = await self.database_service.get_agent_by_agent_id(agent_id)
         agent_name = agent.agent_card.name if agent else None
 
+        # Build room awareness context (other agents in the team)
+        room_awareness = await self._build_room_awareness(
+            room_id=message.room_id,
+            current_agent_id=agent_id,
+            task_description=message.task_content,
+        )
+
         # Build context using ChatGPT/Claude-style conversation history
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
@@ -1996,6 +2062,7 @@ class RoomServices:
                         agent_name=agent_name,
                         include_system_instruction=True,
                         quoted_text=quoted_text,
+                        room_awareness=room_awareness,
                     )
                 elif (
                     isinstance(room_memory_content, str) and room_memory_content.strip()
@@ -2008,9 +2075,13 @@ class RoomServices:
                             f'The user is referencing the following specific content:\n'
                             f'"{quoted_text}"\n\n'
                         )
+                    room_awareness_section = ""
+                    if room_awareness:
+                        room_awareness_section = f"{room_awareness}\n\n"
                     context = (
                         f"[Context]\n{room_memory_content}\n\n"
                         f"{quoted_section}"
+                        f"{room_awareness_section}"
                         f"[Current request]\nUser: {original_text}"
                     )
                     if agent_name:
@@ -2027,7 +2098,10 @@ class RoomServices:
                             f'The user is referencing the following specific content:\n'
                             f'"{quoted_text}"\n\n'
                         )
-                    context = f"{quoted_section}[Current request]\nUser: {original_text}"
+                    room_awareness_section = ""
+                    if room_awareness:
+                        room_awareness_section = f"{room_awareness}\n\n"
+                    context = f"{quoted_section}{room_awareness_section}[Current request]\nUser: {original_text}"
                     if agent_name:
                         context += (
                             f"\n\nYou are {agent_name}. "

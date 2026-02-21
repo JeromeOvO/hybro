@@ -159,6 +159,7 @@ def build_context_for_agent(
     agent_name: str | None = None,
     include_system_instruction: bool = True,
     quoted_text: str | None = None,
+    room_awareness: str | None = None,
 ) -> str:
     """
     Build context string for an agent request (ChatGPT/Claude style).
@@ -168,7 +169,8 @@ def build_context_for_agent(
     2. Lists recent conversation turns clearly
     3. Presents quoted context (if the user quoted a specific message)
     4. Presents the current task/request
-    5. Optionally adds agent-specific instructions
+    5. Optionally adds room awareness (other agents in the team)
+    6. Optionally adds agent-specific instructions
 
     Args:
         memory_content: The room's MemoryContent with conversation history
@@ -176,6 +178,7 @@ def build_context_for_agent(
         agent_name: Name of the agent receiving context (for personalization)
         include_system_instruction: Whether to add agent instructions at the end
         quoted_text: Text the user highlighted and quoted from a previous message
+        room_awareness: Optional room context describing other agents and this agent's role
 
     Returns:
         Formatted context string ready to send to agent
@@ -206,11 +209,16 @@ def build_context_for_agent(
         parts.append(f'"{quoted_text}"')
         parts.append("")
 
-    # 4. Current task/request
+    # 4. Room awareness (other agents in the team and this agent's role)
+    if room_awareness:
+        parts.append(room_awareness)
+        parts.append("")
+
+    # 5. Current task/request
     parts.append("[Current request]")
     parts.append(f"User: {current_task}")
 
-    # 5. Agent instruction (optional)
+    # 6. Agent instruction (optional)
     if include_system_instruction and agent_name:
         parts.append("")
         instruction = (
