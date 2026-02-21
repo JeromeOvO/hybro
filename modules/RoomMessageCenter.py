@@ -271,51 +271,56 @@ class RoomMessageCenter:
     ) -> None:
         """Handle completion: use Supervisor synthesis or fall back to coordinator.
 
-        If a SupervisorPlan exists and has multiple step results, use the
-        Supervisor's synthesize_results() for a guided synthesis.
-        Otherwise, fall back to the legacy RoomCoordinatorService.
+        If a SupervisorPlan exists:
+        - For 2+ step results: use Supervisor's synthesize_results() for guided synthesis
+        - For 1 step result: skip synthesis entirely (single agent doesn't need summary)
+
+        If no SupervisorPlan: fall back to legacy RoomCoordinatorService.
         """
-        # Use Supervisor synthesis if we have a plan and multiple results
-        if supervisor_plan and step_results and len(step_results) >= 2:
-            try:
-                # Get room config for synthesis
-                room = await self.database_service.get_room_by_room_id(room_id)
-                is_debate_mode = False
-                if room and room.extend_info and isinstance(room.extend_info, dict):
-                    is_debate_mode = bool(room.extend_info.get("debateMode", False))
+        # If Supervisor was used, it owns the completion logic
+        if supervisor_plan:
+            # Only synthesize if we have multiple results
+            if step_results and len(step_results) >= 2:
+                try:
+                    # Get room config for synthesis
+                    room = await self.database_service.get_room_by_room_id(room_id)
+                    is_debate_mode = False
+                    if room and room.extend_info and isinstance(room.extend_info, dict):
+                        is_debate_mode = bool(room.extend_info.get("debateMode", False))
 
-                room_config = RoomConfig(is_debate_mode=is_debate_mode)
+                    room_config = RoomConfig(is_debate_mode=is_debate_mode)
 
-                # Convert list to dict for synthesize_results
-                step_results_dict = {r.step_id: r for r in step_results}
+                    # Convert list to dict for synthesize_results
+                    step_results_dict = {r.step_id: r for r in step_results}
 
-                synthesis_text = await room_supervisor_service.synthesize_results(
-                    plan=supervisor_plan,
-                    step_results=step_results_dict,
-                    room_config=room_config,
-                )
-
-                if synthesis_text:
-                    # Emit synthesis as a summary message
-                    await self.room_coordinator_service._create_and_emit_summary_message(
-                        room_id=room_id,
-                        room_user_message_id=room_user_message_id,
-                        summary_text=synthesis_text,
-                        coordinator_agent_id="supervisor_synthesis",
+                    synthesis_text = await room_supervisor_service.synthesize_results(
+                        plan=supervisor_plan,
+                        step_results=step_results_dict,
+                        room_config=room_config,
                     )
-                    logger.info(
-                        "RoomMessageCenter: Supervisor synthesis completed for %s",
-                        room_user_message_id,
+
+                    if synthesis_text:
+                        await self.room_coordinator_service.emit_synthesis_message(
+                            room_id=room_id,
+                            room_user_message_id=room_user_message_id,
+                            synthesis_text=synthesis_text,
+                            coordinator_agent_id="supervisor_synthesis",
+                        )
+                        logger.info(
+                            "RoomMessageCenter: Supervisor synthesis completed for %s",
+                            room_user_message_id,
+                        )
+
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Supervisor synthesis failed: %s", e
                     )
-                    return
 
-            except Exception as e:
-                logger.warning(
-                    "RoomMessageCenter: Supervisor synthesis failed, falling back to coordinator: %s",
-                    e,
-                )
+            # For 1-step Supervisor plans, no synthesis needed - just return
+            # Do NOT fall through to legacy coordinator
+            return
 
-        # Fall back to legacy coordinator
+        # Fall back to legacy coordinator (only when no supervisor_plan)
         await self.room_coordinator_service.on_room_user_message_completed(
             room_id, room_user_message_id
         )
