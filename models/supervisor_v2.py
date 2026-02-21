@@ -118,7 +118,7 @@ class SupervisorTrajectory(BaseModel):
 
     trajectory_id: str = Field(default_factory=lambda: uuid4().hex)
     entries: list[TrajectoryEntry] = Field(default_factory=list)
-    status: Literal["running", "completed", "failed", "clarifying"] = "running"
+    status: Literal["running", "completed", "failed", "canceled", "clarifying"] = "running"
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 

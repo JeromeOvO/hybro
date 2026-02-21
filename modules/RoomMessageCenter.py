@@ -4,11 +4,13 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
-from models.supervisor import RoomConfig, StepResult, SupervisorPlan
+from models.supervisor import AgentProfile, RoomConfig, StepResult, SupervisorPlan
+from models.supervisor_v2 import RunStatus
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
-from modules.QueueExecutor import QueueExecutor, QueueProcessingResult, QueueResult
+from modules.QueueExecutor import QueueExecutor, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
+from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
 from services.a2a_constants import SSEProcessingStatus
 from services.a2a_service import a2a_service
@@ -69,6 +71,18 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             supervisor_service=room_supervisor_service,
             agent_message_processor=self.agent_message_processor,
+        )
+        self.supervisor_executor = SupervisorExecutor(
+            supervisor_service=room_supervisor_service,
+            room_services=self.room_services,
+            tsm=self.tsm,
+            sse_manager=self.sse_manager,
+            database_service=self.database_service,
+            room_memory_service=room_memory_service,
+            rate_limit_service=rate_limit_service,
+            agent_dispatcher=self.agent_dispatcher,
+            agent_message_processor=self.agent_message_processor,
+            room_coordinator_service=self.room_coordinator_service,
         )
 
     # ------------------------------------------------------------------
@@ -140,6 +154,27 @@ class RoomMessageCenter:
         token = self.sse_manager.get_token(room_user_message_id)
         if token is None:
             token = self.sse_manager.create_token(room_user_message_id)
+
+        # --- V2 Supervisor branch ---
+        # If the user message was prepared via _prepare_for_supervisor_v2, the
+        # extend_info contains supervisor_v2=True plus the data needed for the
+        # adaptive loop.  Skip the legacy queue path entirely.
+        is_supervisor_v2 = (
+            user_message
+            and isinstance(user_message.extend_info, dict)
+            and user_message.extend_info.get("supervisor_v2", False)
+        )
+        if is_supervisor_v2:
+            return await self._process_supervisor_v2(
+                user_message=user_message,
+                room_id=room_id,
+                room_user_message_id=room_user_message_id,
+                user_id=user_id,
+                quoted_text=quoted_text,
+                token=token,
+            )
+
+        # --- V1 / legacy path (unchanged) ---
 
         # Query agent messages to process
         query_response = (
@@ -344,6 +379,237 @@ class RoomMessageCenter:
         )
 
     # ------------------------------------------------------------------
+    # V2 Supervisor adaptive loop
+    # ------------------------------------------------------------------
+
+    async def _process_supervisor_v2(
+        self,
+        user_message,
+        room_id: str,
+        room_user_message_id: str,
+        user_id: str | None,
+        quoted_text: str | None,
+        token,
+    ) -> OrchestrationResponse:
+        """Execute the V2 supervisor adaptive loop for a user message.
+
+        Deserializes ``agent_registry``, ``room_config``, and
+        ``conversation_context`` from the user message's ``extend_info``
+        (set by ``_prepare_for_supervisor_v2`` in ``RoomServices``), then
+        delegates to ``SupervisorExecutor.run()``.
+
+        Handles all 5 ``RunStatus`` variants.
+        """
+        from services.room_supervisor_service import SupervisorPlanningError
+
+        extend = user_message.extend_info
+        try:
+            agent_registry = [
+                AgentProfile(**p) for p in extend["agent_registry"]
+            ]
+            room_config = RoomConfig(**extend["room_config"])
+        except (KeyError, TypeError) as e:
+            logger.error(
+                "RoomMessageCenter: V2 extend_info missing required keys: %s",
+                e,
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+                details="V2 supervisor data corrupted or incomplete",
+            )
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=f"V2 supervisor data corrupted: {e}",
+                status_code=500,
+            )
+        conversation_context = extend.get("conversation_context")
+
+        try:
+            result = await self.supervisor_executor.run(
+                room_id=room_id,
+                user_message_id=room_user_message_id,
+                message_text=user_message.message_content.message_text or "",
+                agent_registry=agent_registry,
+                room_config=room_config,
+                conversation_context=conversation_context,
+                token=token,
+                request_user_id=user_id,
+                quoted_text=quoted_text,
+            )
+        except SupervisorPlanningError:
+            logger.warning(
+                "RoomMessageCenter: V2 supervisor first decide_next failed, "
+                "falling back to V1 queue path for message %s",
+                room_user_message_id,
+            )
+            return await self._fallback_to_v1_queue(
+                room_id=room_id,
+                room_user_message_id=room_user_message_id,
+                user_id=user_id,
+                quoted_text=quoted_text,
+                token=token,
+            )
+
+        # Persist trajectory for all terminal statuses (auditability)
+        if result.status in (
+            RunStatus.COMPLETED,
+            RunStatus.CLARIFYING,
+            RunStatus.FAILED,
+            RunStatus.CANCELED,
+        ):
+            user_message.extend_info["supervisor_trajectory"] = (
+                result.trajectory.model_dump(mode="json")
+            )
+            await self.database_service.update_room_user_message_by_message_id(
+                room_user_message_id, user_message
+            )
+
+        match result.status:
+            case RunStatus.COMPLETED:
+                if result.synthesis_text:
+                    try:
+                        await self.room_coordinator_service.emit_synthesis_message(
+                            room_id=room_id,
+                            room_user_message_id=room_user_message_id,
+                            synthesis_text=result.synthesis_text,
+                            coordinator_agent_id="supervisor_synthesis",
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "RoomMessageCenter: Failed to emit synthesis message: %s",
+                            e,
+                            exc_info=True,
+                        )
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
+                )
+
+            case RunStatus.PAUSED:
+                pass
+
+            case RunStatus.CLARIFYING:
+                room = await self.database_service.get_room_by_room_id(room_id)
+                if room:
+                    if room.extend_info is None:
+                        room.extend_info = {}
+                    room.extend_info["pending_clarification_message_id"] = (
+                        room_user_message_id
+                    )
+                    await self.database_service.update_room_by_room_id(
+                        room_id, room
+                    )
+
+                if result.clarification_question:
+                    try:
+                        await self.room_coordinator_service.emit_synthesis_message(
+                            room_id=room_id,
+                            room_user_message_id=room_user_message_id,
+                            synthesis_text=result.clarification_question,
+                            coordinator_agent_id="supervisor_clarify",
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "RoomMessageCenter: Failed to emit clarification message: %s",
+                            e,
+                            exc_info=True,
+                        )
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
+                )
+
+            case RunStatus.CANCELED:
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.CANCELED, room_user_message_id
+                )
+                self.sse_manager.clear_cancellation(room_user_message_id)
+
+            case RunStatus.FAILED:
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+                    details="Supervisor V2 execution failed",
+                )
+
+        await self._log_room_memory_stats(room_id)
+
+        is_failure = result.status in (RunStatus.FAILED,)
+        return OrchestrationResponse(
+            room_id=room_id,
+            success=not is_failure,
+            error="Supervisor V2 execution failed" if is_failure else None,
+            status_code=500 if is_failure else 200,
+        )
+
+    async def _fallback_to_v1_queue(
+        self,
+        room_id: str,
+        room_user_message_id: str,
+        user_id: str | None,
+        quoted_text: str | None,
+        token,
+    ) -> OrchestrationResponse:
+        """Fall back to the V1 QueueExecutor path when the first V2 decide_next fails."""
+        query_response = (
+            await self.room_services.inquiry_agent_messages_by_related_message_id(
+                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
+            )
+        )
+        if not query_response.success:
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=query_response.error,
+                status_code=500,
+            )
+
+        message_queue = (
+            deque(query_response.message_list)
+            if query_response.message_list is not None
+            else deque()
+        )
+
+        if not message_queue:
+            await self.sse_manager.send_processing_status(
+                room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+                details="V2 fallback: no pre-generated agent messages found",
+            )
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error="V2 supervisor failed and no V1 agent messages available",
+                status_code=500,
+            )
+
+        queue_processing_result = await self.queue_executor.process_queue(
+            message_queue,
+            room_id,
+            room_user_message_id,
+            token=token,
+            request_user_id=user_id,
+            quoted_text=quoted_text,
+        )
+
+        if queue_processing_result.result == QueueResult.COMPLETED:
+            await self._handle_completion(
+                room_id=room_id,
+                room_user_message_id=room_user_message_id,
+                supervisor_plan=queue_processing_result.supervisor_plan,
+                step_results=queue_processing_result.step_results,
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
+            )
+        elif queue_processing_result.result == QueueResult.FAILED:
+            await self.sse_manager.send_processing_status(
+                room_id, SSEProcessingStatus.FAILED, room_user_message_id,
+                details="V2 fallback queue failed",
+            )
+
+        return OrchestrationResponse(
+            room_id=room_id, success=True, error=None, status_code=200
+        )
+
+    # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
     # ------------------------------------------------------------------
 
@@ -357,8 +623,56 @@ class RoomMessageCenter:
         Delegates the actual queue mechanics to ``QueueExecutor`` and handles
         the post-completion logic (synthesis + COMPLETED SSE status) here.
 
+        For V2 supervisor rooms, the continuation data contains
+        ``supervisor_v2: True``. Full V2 resume is implemented in Phase 3.
+        Until then, V2 continuations are detected and reported as unsupported.
+
         Returns ``True`` if the queue was resumed successfully.
         """
+        # Peek at the continuation data to detect V2 before QueueExecutor
+        # consumes it (get_and_clear is destructive). The V2 flag is checked
+        # first; if present, we handle it here instead of delegating to the
+        # V1 QueueExecutor path.
+        continuation = (
+            await self.database_service.get_and_clear_continuation_on_message(
+                message_id
+            )
+        )
+        if not continuation:
+            logger.debug(
+                "RoomMessageCenter: No continuation found for message %s",
+                message_id,
+            )
+            return False
+
+        if continuation.get("supervisor_v2"):
+            # Phase 3 TODO: reconstruct trajectory, append push notification
+            # result, refresh agent registry from DB, and call
+            # supervisor_executor.run(..., resumed_trajectory=...).
+            logger.error(
+                "RoomMessageCenter: V2 supervisor resume not yet implemented "
+                "(Phase 3). message_id=%s, room_id=%s. The paused execution "
+                "cannot be continued.",
+                message_id,
+                continuation.get("room_id"),
+            )
+            room_id = continuation.get("room_id")
+            user_message_id = continuation.get("user_message_id")
+            if room_id and user_message_id:
+                await self.sse_manager.send_processing_status(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    user_message_id,
+                    details="V2 supervisor push notification resume not yet implemented",
+                )
+            return False
+
+        # V1 path: re-save the continuation so QueueExecutor can read it
+        # (we already consumed it with get_and_clear above).
+        await self.database_service.save_continuation_on_message(
+            message_id, continuation
+        )
+
         result = await self.queue_executor.resume_from_continuation(
             message_id,
             task_result_text,

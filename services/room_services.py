@@ -869,6 +869,31 @@ class RoomServices:
             or content,  # Use task_content if provided, else content
         )
 
+    def create_agent_message(
+        self,
+        room_id: str,
+        related_message_id: str,
+        agent_id: str,
+        content: str,
+        user_id: str | None = None,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+        task_content: str | None = None,
+    ) -> RoomAgentMessage:
+        """Public wrapper around ``_generate_new_agent_message`` for use by
+        ``SupervisorExecutor`` and other external callers that need to create
+        individual agent messages without accessing a private method."""
+        return self._generate_new_agent_message(
+            room_id=room_id,
+            related_message_id=related_message_id,
+            agent_id=agent_id,
+            content=content,
+            user_id=user_id,
+            step_number=step_number,
+            total_steps=total_steps,
+            task_content=task_content,
+        )
+
     async def _generate_agent_messages_based_on_parsed_result(
         self,
         parsed_result: dict,
@@ -1102,6 +1127,77 @@ class RoomServices:
             )
 
         return agent_messages
+
+    async def _prepare_for_supervisor_v2(
+        self,
+        room: Room,
+        user_message: RoomUserMessage,
+        message_text: str,
+        agents: list | None,
+        selected_agent_set: dict,
+        is_debate_mode: bool,
+        conversation_context: str | None,
+        token: CancellationToken | None = None,
+    ) -> ParseResult:
+        """Prepare extend_info for V2 supervisor execution.
+
+        Unlike ``_parse_with_supervisor`` (V1), this method:
+        - Does NOT call the supervisor LLM
+        - Does NOT create any ``RoomAgentMessage`` records
+        - Does NOT build a ``SupervisorPlan``
+        - ONLY stores the data needed for ``SupervisorExecutor.run()``
+
+        Agent messages are created one at a time inside
+        ``SupervisorExecutor._dispatch_targets``.
+        """
+        from models.supervisor import AgentProfile, RoomConfig
+
+        if token and token.is_cancelled:
+            logger.info(
+                "RoomServices: Message parsing cancelled (V2) for %s",
+                user_message.message_id,
+            )
+            self.sse_manager.clear_cancellation(user_message.message_id)
+            return ParseResult(success=False, canceled=True)
+
+        agent_registry: list[AgentProfile] = []
+        if agents:
+            for agent in agents:
+                agent_registry.append(AgentProfile.from_agent(agent))
+        else:
+            for agent_id, agent_name in selected_agent_set.items():
+                agent_registry.append(
+                    AgentProfile(
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        description="",
+                    )
+                )
+
+        room_config = RoomConfig(
+            is_debate_mode=is_debate_mode,
+            room_agent_set=selected_agent_set,
+        )
+
+        if user_message.extend_info is None:
+            user_message.extend_info = {}
+        user_message.extend_info.update({
+            "supervisor_v2": True,
+            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
+            "room_config": room_config.model_dump(mode="json"),
+            "conversation_context": conversation_context,
+        })
+        await self.database_service.update_room_user_message_by_message_id(
+            user_message.message_id, user_message
+        )
+
+        logger.info(
+            "RoomServices: V2 supervisor data prepared for message %s (%d agents)",
+            user_message.message_id,
+            len(agent_registry),
+        )
+
+        return ParseResult(success=True)
 
     async def _parse_with_supervisor(
         self,
@@ -1420,6 +1516,9 @@ class RoomServices:
         use_supervisor = (
             room.extend_info.get("use_supervisor", False) if room.extend_info else False
         )
+        use_supervisor_v2 = (
+            room.extend_info.get("supervisor_v2", False) if room.extend_info else False
+        )
 
         message_text = user_message.message_content.message_text
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
@@ -1453,8 +1552,19 @@ class RoomServices:
                     max_turns=5,
                 )
 
-        # Use Supervisor pattern if enabled, otherwise fall back to legacy parser
-        if use_supervisor:
+        # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
+        if use_supervisor and use_supervisor_v2:
+            parse_result = await self._prepare_for_supervisor_v2(
+                room=room,
+                user_message=user_message,
+                message_text=message_text,
+                agents=agents,
+                selected_agent_set=selected_agent_set,
+                is_debate_mode=is_debate_mode,
+                conversation_context=conversation_context,
+                token=token,
+            )
+        elif use_supervisor:
             parse_result = await self._parse_with_supervisor(
                 room=room,
                 user_message=user_message,

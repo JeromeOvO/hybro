@@ -117,17 +117,12 @@ class SupervisorExecutor:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
-                trajectory.status = "failed"
-                logger.info(
-                    "supervisor_run_canceled",
-                    extra={
-                        "room_id": room_id,
-                        "trajectory_id": trajectory.trajectory_id,
-                        "step_number": step_number,
-                    },
-                )
-                return SupervisorRunResult(
-                    status=RunStatus.CANCELED, trajectory=trajectory
+                trajectory.status = "canceled"
+                return self._log_and_return(
+                    room_id, trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.CANCELED, trajectory=trajectory
+                    ),
                 )
 
             logger.info(
@@ -143,6 +138,21 @@ class SupervisorExecutor:
             # --- Debate mode fast-path (§8.13) ---
             if room_config.is_debate_mode and step_number == 0:
                 healthy_agents = [a for a in agent_registry if a.is_healthy]
+                if not healthy_agents:
+                    logger.warning(
+                        "supervisor_debate_no_healthy_agents",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                        },
+                    )
+                    trajectory.status = "failed"
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.FAILED, trajectory=trajectory
+                        ),
+                    )
                 action = SupervisorAction(
                     action=ActionType.DELEGATE,
                     reasoning="Debate mode: delegating to all agents concurrently",
@@ -179,6 +189,21 @@ class SupervisorExecutor:
                     "target_agents": [t.agent_name for t in action.targets],
                 },
             )
+
+            # --- Guard: DELEGATE with empty targets is a no-op ---
+            if action.action == ActionType.DELEGATE and not action.targets:
+                logger.warning(
+                    "supervisor_delegate_empty_targets",
+                    extra={
+                        "room_id": room_id,
+                        "trajectory_id": trajectory.trajectory_id,
+                        "step_number": step_number,
+                    },
+                )
+                action = SupervisorAction(
+                    action=ActionType.DONE,
+                    reasoning="DELEGATE had no targets — treating as DONE",
+                )
 
             # --- Execute the action ---
             match action.action:
@@ -219,8 +244,11 @@ class SupervisorExecutor:
                             room_config=room_config,
                             conversation_context=conversation_context,
                         )
-                        return SupervisorRunResult(
-                            status=RunStatus.PAUSED, trajectory=trajectory
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.PAUSED, trajectory=trajectory
+                            ),
                         )
 
                     entry.results = results
@@ -228,7 +256,7 @@ class SupervisorExecutor:
                     trajectory.entries.append(entry)
 
                     for result in results:
-                        if result.response_text:
+                        if result.success and result.response_text:
                             await self.room_memory_service.add_agent_response_to_memory(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
@@ -249,19 +277,12 @@ class SupervisorExecutor:
                         )
                         trajectory.entries.append(done_entry)
                         trajectory.status = "completed"
-                        logger.info(
-                            "supervisor_run_completed",
-                            extra={
-                                "room_id": room_id,
-                                "trajectory_id": trajectory.trajectory_id,
-                                "status": RunStatus.COMPLETED,
-                                "total_steps": len(trajectory.entries),
-                                "total_supervisor_calls": trajectory.total_supervisor_calls,
-                                "debate_mode": True,
-                            },
-                        )
-                        return SupervisorRunResult(
-                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.COMPLETED, trajectory=trajectory
+                            ),
+                            debate_mode=True,
                         )
 
                 case ActionType.SYNTHESIZE:
@@ -284,8 +305,11 @@ class SupervisorExecutor:
                         entry.completed_at = utcnow()
                         trajectory.entries.append(entry)
                         trajectory.status = "completed"
-                        return SupervisorRunResult(
-                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.COMPLETED, trajectory=trajectory
+                            ),
                         )
 
                     synthesis = await self.supervisor_service.synthesize_v2(
@@ -295,10 +319,13 @@ class SupervisorExecutor:
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
                     trajectory.status = "completed"
-                    return SupervisorRunResult(
-                        status=RunStatus.COMPLETED,
-                        trajectory=trajectory,
-                        synthesis_text=synthesis,
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.COMPLETED,
+                            trajectory=trajectory,
+                            synthesis_text=synthesis,
+                        ),
                     )
 
                 case ActionType.CLARIFY:
@@ -310,10 +337,13 @@ class SupervisorExecutor:
                     )
                     trajectory.entries.append(entry)
                     trajectory.status = "clarifying"
-                    return SupervisorRunResult(
-                        status=RunStatus.CLARIFYING,
-                        trajectory=trajectory,
-                        clarification_question=action.clarification_question,
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.CLARIFYING,
+                            trajectory=trajectory,
+                            clarification_question=action.clarification_question,
+                        ),
                     )
 
                 case ActionType.DONE:
@@ -325,8 +355,11 @@ class SupervisorExecutor:
                     )
                     trajectory.entries.append(entry)
                     trajectory.status = "completed"
-                    return SupervisorRunResult(
-                        status=RunStatus.COMPLETED, trajectory=trajectory
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        ),
                     )
 
             step_number += 1
@@ -346,15 +379,21 @@ class SupervisorExecutor:
                 synthesis_instruction="Budget exhausted. Synthesize available results.",
             )
             trajectory.status = "completed"
-            return SupervisorRunResult(
-                status=RunStatus.COMPLETED,
-                trajectory=trajectory,
-                synthesis_text=synthesis,
+            return self._log_and_return(
+                room_id, trajectory,
+                SupervisorRunResult(
+                    status=RunStatus.COMPLETED,
+                    trajectory=trajectory,
+                    synthesis_text=synthesis,
+                ),
             )
 
         trajectory.status = "failed"
-        return SupervisorRunResult(
-            status=RunStatus.FAILED, trajectory=trajectory
+        return self._log_and_return(
+            room_id, trajectory,
+            SupervisorRunResult(
+                status=RunStatus.FAILED, trajectory=trajectory
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -435,7 +474,7 @@ class SupervisorExecutor:
                         )
 
                 # Create RoomAgentMessage only after validation passes
-                message = self.room_services._generate_new_agent_message(  # noqa: SLF001
+                message = self.room_services.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
                     agent_id=target.agent_id,
@@ -521,7 +560,7 @@ class SupervisorExecutor:
 
                 return step_result
 
-            except Exception as e:
+            except BaseException as e:
                 logger.exception(
                     "dispatch_one failed for agent %s: %s", target.agent_id, e
                 )
@@ -544,6 +583,32 @@ class SupervisorExecutor:
         )
 
     # ------------------------------------------------------------------
+    # Logging helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _log_and_return(
+        room_id: str,
+        trajectory: SupervisorTrajectory,
+        result: SupervisorRunResult,
+        *,
+        debate_mode: bool = False,
+    ) -> SupervisorRunResult:
+        """Log ``supervisor_run_completed`` and return the result."""
+        logger.info(
+            "supervisor_run_completed",
+            extra={
+                "room_id": room_id,
+                "trajectory_id": trajectory.trajectory_id,
+                "status": result.status,
+                "total_steps": len(trajectory.entries),
+                "total_supervisor_calls": trajectory.total_supervisor_calls,
+                "debate_mode": debate_mode,
+            },
+        )
+        return result
+
+    # ------------------------------------------------------------------
     # Push notification pause persistence
     # ------------------------------------------------------------------
 
@@ -560,8 +625,15 @@ class SupervisorExecutor:
         conversation_context: str | None,
     ) -> None:
         """Serialize the trajectory + inputs for webhook resume."""
+        saved_any = False
         for pr in paused_results:
             if not pr.paused_message_id:
+                logger.error(
+                    "SupervisorExecutor: PAUSED result has no paused_message_id — "
+                    "cannot save continuation. agent=%s, agent_message_id=%s",
+                    pr.agent_id,
+                    pr.agent_message_id,
+                )
                 continue
 
             pause_state = {
@@ -587,6 +659,7 @@ class SupervisorExecutor:
                     pr.paused_message_id,
                 )
             else:
+                saved_any = True
                 logger.info(
                     "supervisor_pause_saved",
                     extra={
@@ -595,3 +668,11 @@ class SupervisorExecutor:
                         "trajectory_id": trajectory.trajectory_id,
                     },
                 )
+
+        if not saved_any:
+            logger.error(
+                "SupervisorExecutor: No pause state was saved for any paused result "
+                "— webhook resume will fail. room_id=%s, user_message_id=%s",
+                room_id,
+                user_message_id,
+            )
