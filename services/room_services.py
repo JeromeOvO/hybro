@@ -1210,6 +1210,11 @@ class RoomServices:
                 "allowed_agent_ids": list(selected_agent_set.keys()),
                 "target_group": target_group,
                 "is_direct_chat": False,
+                # Store agent profiles for room awareness (avoids DB lookups later)
+                "agent_profiles": [
+                    (p.agent_id, p.agent_name, p.description or "")
+                    for p in agent_registry
+                ],
             }
 
             agent_messages = await self._generate_agent_messages_from_plan(
@@ -1927,6 +1932,7 @@ class RoomServices:
         room_id: str,
         current_agent_id: str,
         task_description: str | None = None,
+        agent_profiles: list[tuple[str, str, str]] | None = None,
     ) -> str | None:
         """
         Build room awareness context for an agent.
@@ -1934,15 +1940,50 @@ class RoomServices:
         This gives the agent awareness of other agents in the room and their roles,
         enabling better collaboration in multi-agent scenarios.
 
+        Per design doc section 7.4 and 15: This should only be called for Supervisor-
+        orchestrated multi-agent tasks. Direct chat (single agent working alone) should
+        NOT receive room awareness to avoid misleading the agent about teammates.
+
         Args:
             room_id: The room ID
             current_agent_id: The ID of the agent receiving the context
-            task_description: Optional specific task description for this agent
+            task_description: Specific task description for this agent. If None,
+                              this indicates a direct-chat scenario and awareness
+                              will be skipped.
+            agent_profiles: Optional pre-built list of (agent_id, name, description)
+                            tuples to avoid redundant DB lookups. If not provided,
+                            will fetch from database.
 
         Returns:
             Room awareness context string, or None if not applicable
         """
+        # Skip for direct chat — only 1 agent is working, awareness is misleading.
+        # task_description=None is set precisely for direct-chat scenarios in both
+        # legacy and Supervisor paths.
+        if task_description is None:
+            return None
+
         try:
+            # If agent_profiles provided, use them directly (avoids DB calls)
+            if agent_profiles is not None:
+                other_agents: list[str] = []
+                for agent_id, name, description in agent_profiles:
+                    if agent_id != current_agent_id:
+                        if description:
+                            other_agents.append(f"- {name}: {description}")
+                        else:
+                            other_agents.append(f"- {name}")
+
+                if not other_agents:
+                    return None
+
+                parts = ["[Room Context]"]
+                parts.append("You are working in a team with these other agents:")
+                parts.extend(other_agents)
+                parts.append(f"\nYour specific role in this task: {task_description}")
+                return "\n".join(parts)
+
+            # Fallback: fetch from database (for backward compatibility)
             room = await self.database_service.get_room_by_room_id(room_id)
             if not room or not room.room_agent_set:
                 return None
@@ -1952,7 +1993,7 @@ class RoomServices:
                 return None
 
             # Build list of other agents in the room
-            other_agents: list[str] = []
+            other_agents = []
             for agent_id, agent_name in room.room_agent_set.items():
                 if agent_id != current_agent_id:
                     # Try to get agent description for richer context
@@ -1971,9 +2012,7 @@ class RoomServices:
             parts = ["[Room Context]"]
             parts.append("You are working in a team with these other agents:")
             parts.extend(other_agents)
-
-            if task_description:
-                parts.append(f"\nYour specific role in this task: {task_description}")
+            parts.append(f"\nYour specific role in this task: {task_description}")
 
             return "\n".join(parts)
 
@@ -2042,10 +2081,17 @@ class RoomServices:
         agent_name = agent.agent_card.name if agent else None
 
         # Build room awareness context (other agents in the team)
+        # Only for Supervisor-orchestrated multi-agent tasks (task_content != None)
+        # Extract pre-built agent_profiles from extend_info to avoid redundant DB lookups
+        agent_profiles = None
+        if message.extend_info and isinstance(message.extend_info, dict):
+            agent_profiles = message.extend_info.get("agent_profiles")
+
         room_awareness = await self._build_room_awareness(
             room_id=message.room_id,
             current_agent_id=agent_id,
             task_description=message.task_content,
+            agent_profiles=agent_profiles,
         )
 
         # Build context using ChatGPT/Claude-style conversation history
