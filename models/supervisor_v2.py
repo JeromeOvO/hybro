@@ -46,13 +46,14 @@ class AgentProfile(BaseModel):
         from models.agent import AgentStatus
 
         card = agent.agent_card
-        total = agent.call_count or 1
+        total = max(agent.call_count or 0, 1)
+        raw_rate = (agent.call_success_count or 0) / total
         return cls(
             agent_id=agent.agent_id,
             agent_name=card.name,
             description=card.description or "",
             capabilities=[s.id for s in (card.skills or [])],
-            success_rate=agent.call_success_count / total,
+            success_rate=max(0.0, min(1.0, raw_rate)),
             is_healthy=agent.agent_status == AgentStatus.active,
         )
 

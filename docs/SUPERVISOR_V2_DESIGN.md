@@ -454,7 +454,7 @@ class SupervisorExecutor:
                     )
                     results = await self._dispatch_targets(
                         action.targets, room_id, user_message_id,
-                        step_number + 1, len(action.targets),
+                        step_number + 1,
                         token, request_user_id, quoted_text,
                     )
 

@@ -447,6 +447,22 @@ class RoomMessageCenter:
                 "RoomMessageCenter: Supervisor first decide_next failed for %s",
                 room_user_message_id,
             )
+            try:
+                await self.room_coordinator_service.emit_synthesis_message(
+                    room_id=room_id,
+                    room_user_message_id=room_user_message_id,
+                    synthesis_text=(
+                        "Sorry, I was unable to process your request. "
+                        "The supervisor encountered an error while planning. "
+                        "Please try again."
+                    ),
+                    coordinator_agent_id="supervisor_error",
+                )
+            except Exception as emit_err:
+                logger.warning(
+                    "RoomMessageCenter: Failed to emit planning error message: %s",
+                    emit_err,
+                )
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -457,6 +473,26 @@ class RoomMessageCenter:
                 room_id=room_id,
                 success=False,
                 error="Supervisor planning failed",
+                status_code=500,
+            )
+        except Exception:
+            logger.exception(
+                "RoomMessageCenter: Unhandled error in supervisor_executor.run "
+                "for message %s",
+                room_user_message_id,
+            )
+            if resumed_trajectory and resumed_trajectory.status == "running":
+                resumed_trajectory.status = "failed"
+            await self.sse_manager.send_processing_status(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Supervisor execution failed unexpectedly",
+            )
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error="Supervisor execution failed unexpectedly",
                 status_code=500,
             )
 
@@ -633,6 +669,23 @@ class RoomMessageCenter:
         token = self.sse_manager.get_token(user_message_id)
         if token is None:
             token = self.sse_manager.create_token(user_message_id)
+
+        # Guard: if the request was already canceled during the pause,
+        # don't restart the loop.
+        if token.is_cancelled:
+            logger.info(
+                "supervisor_v2_resume_already_canceled",
+                extra={
+                    "room_id": room_id,
+                    "user_message_id": user_message_id,
+                    "paused_message_id": paused_message_id,
+                },
+            )
+            await self.sse_manager.send_processing_status(
+                room_id, SSEProcessingStatus.CANCELED, user_message_id,
+            )
+            self.sse_manager.clear_cancellation(user_message_id)
+            return True
 
         # 7. Resume the supervisor loop
         try:

@@ -226,6 +226,18 @@ class SupervisorExecutor:
                         quoted_text=quoted_text,
                     )
 
+                    # Write completed results to room memory regardless of
+                    # whether some targets are PAUSED — this ensures subsequent
+                    # agents (after resume) have cross-agent context.
+                    for result in results:
+                        if result.success and result.response_text:
+                            await self.room_memory_service.add_agent_response_to_memory(
+                                room_id=room_id,
+                                agent_id=result.agent_id,
+                                agent_name=result.agent_name,
+                                response_text=result.response_text,
+                            )
+
                     # Check for PAUSED (push notification agent)
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
@@ -255,15 +267,6 @@ class SupervisorExecutor:
                     entry.results = results
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
-
-                    for result in results:
-                        if result.success and result.response_text:
-                            await self.room_memory_service.add_agent_response_to_memory(
-                                room_id=room_id,
-                                agent_id=result.agent_id,
-                                agent_name=result.agent_name,
-                                response_text=result.response_text,
-                            )
 
                     # Debate mode: after all agents respond, done (no synthesis)
                     if room_config.is_debate_mode and step_number == 0:

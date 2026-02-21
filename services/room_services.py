@@ -1029,6 +1029,7 @@ class RoomServices:
                         agent_id=agent_id,
                         agent_name=agent_name,
                         description="",
+                        is_healthy=False,
                     )
                 )
         return registry
