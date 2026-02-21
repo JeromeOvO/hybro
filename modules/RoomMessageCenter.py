@@ -310,17 +310,25 @@ class RoomMessageCenter:
                             "RoomMessageCenter: Supervisor synthesis completed for %s",
                             room_user_message_id,
                         )
+                    return  # Success: synthesis emitted or empty (no summary needed)
 
                 except Exception as e:
                     logger.warning(
-                        "RoomMessageCenter: Supervisor synthesis failed: %s", e
+                        "RoomMessageCenter: Supervisor synthesis failed, "
+                        "falling back to coordinator: %s",
+                        e,
                     )
+                    # Fall through to coordinator below
 
-            # For 1-step Supervisor plans, no synthesis needed - just return
-            # Do NOT fall through to legacy coordinator
+                # Supervisor synthesis failed — fall back to legacy coordinator
+                await self.room_coordinator_service.on_room_user_message_completed(
+                    room_id, room_user_message_id
+                )
+                return
+
             return
 
-        # Fall back to legacy coordinator (only when no supervisor_plan)
+        # No supervisor_plan: use legacy coordinator
         await self.room_coordinator_service.on_room_user_message_completed(
             room_id, room_user_message_id
         )
