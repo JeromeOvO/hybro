@@ -1964,28 +1964,45 @@ class RoomServices:
             return None
 
         try:
-            # If agent_profiles provided, use them directly (avoids DB calls)
+            # If agent_profiles provided with descriptions, use them directly (avoids DB calls)
             if agent_profiles is not None:
-                other_agents: list[str] = []
-                for agent_id, name, description in agent_profiles:
-                    if agent_id != current_agent_id:
-                        if description:
-                            other_agents.append(f"- {name}: {description}")
-                        else:
-                            other_agents.append(f"- {name}")
+                # Check if any peer agent has a description - if all are empty,
+                # fall through to DB path for richer output
+                has_descriptions = any(
+                    description
+                    for agent_id, name, description in agent_profiles
+                    if agent_id != current_agent_id
+                )
 
-                if not other_agents:
-                    return None
+                if has_descriptions:
+                    other_agents: list[str] = []
+                    for agent_id, name, description in agent_profiles:
+                        if agent_id != current_agent_id:
+                            if description:
+                                other_agents.append(f"- {name}: {description}")
+                            else:
+                                other_agents.append(f"- {name}")
 
-                parts = ["[Room Context]"]
-                parts.append("You are working in a team with these other agents:")
-                parts.extend(other_agents)
-                parts.append(f"\nYour specific role in this task: {task_description}")
-                return "\n".join(parts)
+                    if not other_agents:
+                        return None
+
+                    parts = ["[Room Context]"]
+                    parts.append("You are working in a team with these other agents:")
+                    parts.extend(other_agents)
+                    parts.append(f"\nYour specific role in this task: {task_description}")
+                    return "\n".join(parts)
+
+                # Fall through to DB path if no descriptions available
 
             # Fallback: fetch from database (for backward compatibility)
             room = await self.database_service.get_room_by_room_id(room_id)
             if not room or not room.room_agent_set:
+                return None
+
+            # Only inject room awareness for Supervisor-enabled rooms.
+            # Legacy multi-agent rooms opted out of this feature.
+            room_extend_info = room.extend_info or {}
+            if not room_extend_info.get("use_supervisor", False):
                 return None
 
             # Skip room awareness for single-agent rooms
@@ -1993,7 +2010,7 @@ class RoomServices:
                 return None
 
             # Build list of other agents in the room
-            other_agents = []
+            other_agents: list[str] = []
             for agent_id, agent_name in room.room_agent_set.items():
                 if agent_id != current_agent_id:
                     # Try to get agent description for richer context
