@@ -811,6 +811,35 @@ class DatabaseService:
             )
             return []
 
+    async def claim_stuck_supervisor_trajectory(
+        self, message_id: str
+    ) -> bool:
+        """Atomically claim a stuck supervisor trajectory for recovery.
+
+        Returns True if this call won the claim, False otherwise.
+        """
+        try:
+            return await self.mongo.claim_stuck_supervisor_trajectory(message_id)
+        except Exception as e:
+            logger.error(
+                "Failed to claim stuck trajectory for message %s: %s",
+                message_id,
+                str(e),
+            )
+            return False
+
+    async def is_message_cancelled(self, message_id: str) -> bool:
+        """Check if a message has been cancelled (persisted in DB)."""
+        try:
+            return await self.mongo.is_message_cancelled(message_id)
+        except Exception as e:
+            logger.error(
+                "Failed to check cancellation for message %s: %s",
+                message_id,
+                str(e),
+            )
+            return False
+
     async def cancel_descendants(self, message_id: str) -> int:
         """Cancel all agent messages downstream in the related_message_id chain.
 
@@ -825,6 +854,21 @@ class DatabaseService:
             logger.error(
                 "Failed to cancel descendants of message %s: %s",
                 message_id,
+                str(e),
+            )
+            return 0
+
+    async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
+        """Cancel agent messages by their message IDs (non-terminal only).
+
+        Returns the number of messages actually modified, or 0 on error.
+        """
+        try:
+            return await self.mongo.cancel_agent_messages_by_ids(message_ids)
+        except Exception as e:
+            logger.error(
+                "Failed to cancel agent messages %s: %s",
+                message_ids,
                 str(e),
             )
             return 0

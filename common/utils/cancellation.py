@@ -129,3 +129,12 @@ class CancellationToken:
             raise CancellationError(self.message_id)
 
         return work_task.result()
+
+    def wait(self) -> asyncio.Future[None]:
+        """Return a future that resolves when cancellation is signalled.
+
+        Use this instead of accessing ``_event`` directly when you need
+        to race cancellation against multiple tasks while retaining the
+        ability to collect partial results.
+        """
+        return asyncio.ensure_future(self._event.wait())

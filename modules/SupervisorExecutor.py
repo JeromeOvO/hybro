@@ -20,7 +20,7 @@ import asyncio
 import os
 from typing import TYPE_CHECKING
 
-from common.utils.cancellation import CancellationToken
+from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.supervisor_v2 import (
@@ -99,10 +99,12 @@ class SupervisorExecutor:
         request_user_id: str | None = None,
         quoted_text: str | None = None,
         resumed_trajectory: SupervisorTrajectory | None = None,
+        user_message=None,
     ) -> SupervisorRunResult:
         """Execute the full supervisor loop for a user message."""
         trajectory = resumed_trajectory or SupervisorTrajectory()
         step_number = len(trajectory.entries)
+        _checkpoint_msg = user_message
 
         logger.info(
             "supervisor_run_started",
@@ -113,6 +115,39 @@ class SupervisorExecutor:
                 "step_offset": step_number,
             },
         )
+
+        # Debate mode resume: if all paused results have been filled in,
+        # the debate is complete — skip straight to DONE without calling
+        # decide_next (which wouldn't know about debate mode at step > 0).
+        if (
+            resumed_trajectory is not None
+            and room_config.is_debate_mode
+            and step_number > 0
+        ):
+            still_paused = any(
+                r.status == StepStatus.PAUSED
+                for entry in trajectory.entries
+                for r in entry.results
+            )
+            if not still_paused:
+                done_entry = TrajectoryEntry(
+                    step_number=len(trajectory.entries) + 1,
+                    action=SupervisorAction(
+                        action=ActionType.DONE,
+                        reasoning="Debate mode complete (resumed after push notification)",
+                    ),
+                    started_at=utcnow(),
+                    completed_at=utcnow(),
+                )
+                trajectory.entries.append(done_entry)
+                trajectory.status = "completed"
+                return self._log_and_return(
+                    room_id, trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.COMPLETED, trajectory=trajectory
+                    ),
+                    debate_mode=True,
+                )
 
         while step_number < self.MAX_STEPS:
 
@@ -136,8 +171,33 @@ class SupervisorExecutor:
                 },
             )
 
+            # --- Crash recovery: resume an in-flight DELEGATE step ---
+            # If the last entry has action=DELEGATE and empty results, the
+            # previous server instance crashed mid-dispatch.  Re-use its
+            # action instead of calling decide_next (which would produce a
+            # duplicate dispatch).
+            inflight_entry: TrajectoryEntry | None = None
+            if (
+                trajectory.entries
+                and trajectory.entries[-1].action.action == ActionType.DELEGATE
+                and not trajectory.entries[-1].results
+            ):
+                inflight_entry = trajectory.entries.pop()
+                step_number = len(trajectory.entries)
+                logger.info(
+                    "supervisor_inflight_recovery",
+                    extra={
+                        "room_id": room_id,
+                        "trajectory_id": trajectory.trajectory_id,
+                        "recovered_step": inflight_entry.step_number,
+                        "target_count": len(inflight_entry.action.targets),
+                    },
+                )
+
             # --- Debate mode fast-path (§8.13) ---
-            if room_config.is_debate_mode and step_number == 0:
+            if inflight_entry is not None:
+                action = inflight_entry.action
+            elif room_config.is_debate_mode and step_number == 0:
                 healthy_agents = [a for a in agent_registry if a.is_healthy]
                 if not healthy_agents:
                     logger.warning(
@@ -168,7 +228,7 @@ class SupervisorExecutor:
                 )
             else:
                 # --- Ask supervisor for next action ---
-                action = await self.supervisor_service.decide_next(
+                decide_coro = self.supervisor_service.decide_next(
                     message_text=message_text,
                     agent_registry=agent_registry,
                     room_config=room_config,
@@ -176,6 +236,19 @@ class SupervisorExecutor:
                     conversation_context=conversation_context,
                     max_steps=self.MAX_STEPS,
                 )
+                try:
+                    action = (
+                        await token.race(decide_coro) if token
+                        else await decide_coro
+                    )
+                except CancellationError:
+                    trajectory.status = "canceled"
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.CANCELED, trajectory=trajectory
+                        ),
+                    )
                 trajectory.total_supervisor_calls += 1
 
             logger.info(
@@ -206,6 +279,37 @@ class SupervisorExecutor:
                     reasoning="DELEGATE had no targets — treating as DONE",
                 )
 
+            # --- Guard: deduplicate identical targets (same agent + same task) ---
+            if action.action == ActionType.DELEGATE and len(action.targets) > 1:
+                seen: set[tuple[str, str]] = set()
+                deduped: list[DelegateTarget] = []
+                for t in action.targets:
+                    key = (t.agent_id, t.task)
+                    if key not in seen:
+                        seen.add(key)
+                        deduped.append(t)
+                if len(deduped) < len(action.targets):
+                    logger.warning(
+                        "supervisor_duplicate_targets_removed",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                            "original_targets": [
+                                t.agent_name for t in action.targets
+                            ],
+                            "deduped_targets": [
+                                t.agent_name for t in deduped
+                            ],
+                        },
+                    )
+                    action = SupervisorAction(
+                        action=action.action,
+                        reasoning=action.reasoning,
+                        targets=deduped,
+                        synthesis_instruction=action.synthesis_instruction,
+                        clarification_question=action.clarification_question,
+                    )
+
             # --- Execute the action ---
             match action.action:
 
@@ -215,6 +319,17 @@ class SupervisorExecutor:
                         action=action,
                         started_at=utcnow(),
                     )
+
+                    # Pre-dispatch checkpoint: persist the entry with empty
+                    # results so crash recovery can detect an in-flight step
+                    # and re-dispatch using the same action instead of calling
+                    # decide_next (which would create duplicate dispatches).
+                    trajectory.entries.append(entry)
+                    _checkpoint_msg = await self._checkpoint_trajectory(
+                        user_message_id, trajectory,
+                        cached_user_message=_checkpoint_msg,
+                    )
+
                     results = await self._dispatch_targets(
                         targets=action.targets,
                         agent_registry=agent_registry,
@@ -230,7 +345,11 @@ class SupervisorExecutor:
                     # whether some targets are PAUSED — this ensures subsequent
                     # agents (after resume) have cross-agent context.
                     for result in results:
-                        if result.success and result.response_text:
+                        if (
+                            result.status == StepStatus.SUCCESS
+                            and result.success
+                            and result.response_text
+                        ):
                             await self.room_memory_service.add_agent_response_to_memory(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
@@ -241,12 +360,9 @@ class SupervisorExecutor:
                     # Check for PAUSED (push notification agent)
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
-                        # Keep ALL results (including PAUSED) so the resume
-                        # path can match by agent_message_id.
                         entry.results = results
-                        trajectory.entries.append(entry)
                         trajectory.status = "running"
-                        await self._save_pause_state(
+                        saved = await self._save_pause_state(
                             trajectory=trajectory,
                             paused_results=paused,
                             room_id=room_id,
@@ -256,7 +372,16 @@ class SupervisorExecutor:
                             agent_registry=agent_registry,
                             room_config=room_config,
                             conversation_context=conversation_context,
+                            quoted_text=quoted_text,
                         )
+                        if not saved:
+                            trajectory.status = "failed"
+                            return self._log_and_return(
+                                room_id, trajectory,
+                                SupervisorRunResult(
+                                    status=RunStatus.FAILED, trajectory=trajectory
+                                ),
+                            )
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -266,12 +391,17 @@ class SupervisorExecutor:
 
                     entry.results = results
                     entry.completed_at = utcnow()
-                    trajectory.entries.append(entry)
+
+                    # Post-dispatch checkpoint: persist completed results.
+                    _checkpoint_msg = await self._checkpoint_trajectory(
+                        user_message_id, trajectory,
+                        cached_user_message=_checkpoint_msg,
+                    )
 
                     # Debate mode: after all agents respond, done (no synthesis)
                     if room_config.is_debate_mode and step_number == 0:
                         done_entry = TrajectoryEntry(
-                            step_number=step_number + 2,
+                            step_number=len(trajectory.entries) + 1,
                             action=SupervisorAction(
                                 action=ActionType.DONE,
                                 reasoning="Debate mode complete",
@@ -300,7 +430,7 @@ class SupervisorExecutor:
                         r
                         for e in trajectory.entries
                         for r in e.results
-                        if r.success
+                        if r.success and r.status == StepStatus.SUCCESS
                     ]
                     if not completed_results:
                         logger.warning(
@@ -316,10 +446,23 @@ class SupervisorExecutor:
                             ),
                         )
 
-                    synthesis = await self.supervisor_service.synthesize_v2(
+                    synth_coro = self.supervisor_service.synthesize_v2(
                         trajectory=trajectory,
                         synthesis_instruction=action.synthesis_instruction or "",
                     )
+                    try:
+                        synthesis = (
+                            await token.race(synth_coro) if token
+                            else await synth_coro
+                        )
+                    except CancellationError:
+                        trajectory.status = "canceled"
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.CANCELED, trajectory=trajectory
+                            ),
+                        )
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
                     trajectory.status = "completed"
@@ -378,10 +521,36 @@ class SupervisorExecutor:
             },
         )
         if trajectory.entries:
-            synthesis = await self.supervisor_service.synthesize_v2(
+            has_completed_results = any(
+                r.success and r.status == StepStatus.SUCCESS
+                for e in trajectory.entries
+                for r in e.results
+            )
+            if not has_completed_results:
+                trajectory.status = "failed"
+                return self._log_and_return(
+                    room_id, trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.FAILED, trajectory=trajectory
+                    ),
+                )
+            budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,
                 synthesis_instruction="Budget exhausted. Synthesize available results.",
             )
+            try:
+                synthesis = (
+                    await token.race(budget_synth_coro) if token
+                    else await budget_synth_coro
+                )
+            except CancellationError:
+                trajectory.status = "canceled"
+                return self._log_and_return(
+                    room_id, trajectory,
+                    SupervisorRunResult(
+                        status=RunStatus.CANCELED, trajectory=trajectory
+                    ),
+                )
             trajectory.status = "completed"
             return self._log_and_return(
                 room_id, trajectory,
@@ -564,7 +733,21 @@ class SupervisorExecutor:
 
                 return step_result
 
-            except BaseException as e:
+            except asyncio.CancelledError:
+                logger.warning(
+                    "dispatch_one cancelled for agent %s", target.agent_id
+                )
+                return V2StepResult(
+                    step_number=step_number,
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    task=target.task,
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message="Agent dispatch was cancelled",
+                )
+            except Exception as e:
                 logger.exception(
                     "dispatch_one failed for agent %s: %s", target.agent_id, e
                 )
@@ -580,11 +763,119 @@ class SupervisorExecutor:
                 )
 
         if len(targets) == 1:
+            if token:
+                work = asyncio.ensure_future(dispatch_one(targets[0]))
+                cancel_waiter = token.wait()
+                try:
+                    done, _pending = await asyncio.wait(
+                        {cancel_waiter, work},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except BaseException:
+                    cancel_waiter.cancel()
+                    work.cancel()
+                    raise
+                if work in done:
+                    cancel_waiter.cancel()
+                    return [work.result()]
+                # Cancellation won — try to salvage the result.
+                work.cancel()
+                try:
+                    await work
+                except (asyncio.CancelledError, Exception):
+                    pass
+                if work.done() and not work.cancelled():
+                    try:
+                        return [work.result()]
+                    except Exception:
+                        pass
+                return [V2StepResult(
+                    step_number=step_number,
+                    agent_id=targets[0].agent_id,
+                    agent_name=targets[0].agent_name,
+                    task=targets[0].task,
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message="Agent dispatch was cancelled",
+                )]
             return [await dispatch_one(targets[0])]
 
-        return list(
-            await asyncio.gather(*(dispatch_one(t) for t in targets))
+        if not token:
+            return list(
+                await asyncio.gather(*(dispatch_one(t) for t in targets))
+            )
+
+        # Manage individual tasks so that when cancellation fires we
+        # can still collect results (with agent_message_id) from tasks
+        # that already completed -- needed for cancel_descendants cleanup.
+        tasks = [asyncio.ensure_future(dispatch_one(t)) for t in targets]
+        cancel_waiter = token.wait()
+        all_work = asyncio.ensure_future(
+            asyncio.gather(*tasks, return_exceptions=True)
         )
+
+        try:
+            done, _pending = await asyncio.wait(
+                {cancel_waiter, all_work},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            cancel_waiter.cancel()
+            all_work.cancel()
+            raise
+
+        if all_work in done:
+            cancel_waiter.cancel()
+            # All tasks completed normally.
+            raw_results = all_work.result()
+            return [
+                r if isinstance(r, V2StepResult) else V2StepResult(
+                    step_number=step_number,
+                    agent_id=targets[i].agent_id,
+                    agent_name=targets[i].agent_name,
+                    task=targets[i].task,
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message=f"Unexpected error: {r}",
+                )
+                for i, r in enumerate(raw_results)
+            ]
+
+        # Cancellation fired first — collect whatever completed and
+        # synthesize FAILED results for the rest.
+        all_work.cancel()
+        try:
+            await all_work
+        except (asyncio.CancelledError, Exception):
+            pass
+
+        results: list[V2StepResult] = []
+        completed_ids: set[str] = set()
+        for task in tasks:
+            if task.done() and not task.cancelled():
+                try:
+                    r = task.result()
+                    results.append(r)
+                    completed_ids.add(r.agent_id)
+                except Exception:
+                    pass
+            elif not task.done():
+                task.cancel()
+        for t in targets:
+            if t.agent_id not in completed_ids:
+                results.append(V2StepResult(
+                    step_number=step_number,
+                    agent_id=t.agent_id,
+                    agent_name=t.agent_name,
+                    task=t.task,
+                    response_text="",
+                    success=False,
+                    status=StepStatus.FAILED,
+                    error_message="Agent dispatch was cancelled",
+                ))
+        return results
 
     # ------------------------------------------------------------------
     # Logging helper
@@ -613,6 +904,55 @@ class SupervisorExecutor:
         return result
 
     # ------------------------------------------------------------------
+    # Per-step trajectory checkpoint (crash recovery)
+    # ------------------------------------------------------------------
+
+    async def _checkpoint_trajectory(
+        self,
+        user_message_id: str,
+        trajectory: SupervisorTrajectory,
+        cached_user_message=None,
+    ):
+        """Persist the trajectory snapshot to the user message after each step.
+
+        This enables crash recovery: on restart, a recovery job can scan for
+        messages with ``supervisor_trajectory.status == "running"`` and
+        re-trigger ``SupervisorExecutor.run(resumed_trajectory=...)``.
+
+        Best-effort — checkpoint failures are logged but do not abort the loop.
+
+        Returns the user message object so callers can cache it across steps.
+        """
+        try:
+            user_message = cached_user_message
+            if user_message is None:
+                user_message = (
+                    await self.database_service.get_room_user_message_by_message_id(
+                        user_message_id
+                    )
+                )
+            if user_message:
+                if not isinstance(user_message.extend_info, dict):
+                    user_message.extend_info = {}
+                user_message.extend_info["supervisor_trajectory"] = (
+                    trajectory.model_dump(mode="json")
+                )
+                await self.database_service.update_room_user_message_by_message_id(
+                    user_message_id, user_message
+                )
+            return user_message
+        except Exception as e:
+            logger.warning(
+                "supervisor_checkpoint_failed",
+                extra={
+                    "user_message_id": user_message_id,
+                    "trajectory_id": trajectory.trajectory_id,
+                    "error": str(e),
+                },
+            )
+            return cached_user_message
+
+    # ------------------------------------------------------------------
     # Push notification pause persistence
     # ------------------------------------------------------------------
 
@@ -627,8 +967,13 @@ class SupervisorExecutor:
         agent_registry: list[AgentProfile],
         room_config: RoomConfig,
         conversation_context: str | None,
-    ) -> None:
-        """Serialize the trajectory + inputs for webhook resume."""
+        quoted_text: str | None = None,
+    ) -> bool:
+        """Serialize the trajectory + inputs for webhook resume.
+
+        Returns ``True`` if at least one pause state was saved successfully,
+        ``False`` if all saves failed (webhook resume will not work).
+        """
         saved_any = False
         for pr in paused_results:
             if not pr.paused_message_id:
@@ -652,6 +997,7 @@ class SupervisorExecutor:
                 "room_config": room_config.model_dump(mode="json"),
                 "conversation_context": conversation_context,
                 "request_user_id": request_user_id,
+                "quoted_text": quoted_text,
             }
 
             success = await self.database_service.save_continuation_on_message(
@@ -680,3 +1026,5 @@ class SupervisorExecutor:
                 room_id,
                 user_message_id,
             )
+
+        return saved_any

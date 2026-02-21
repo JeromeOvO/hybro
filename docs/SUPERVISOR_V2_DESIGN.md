@@ -171,9 +171,13 @@ class SupervisorTrajectory(BaseModel):
     """
     trajectory_id: str = Field(default_factory=lambda: uuid4().hex)
     entries: list[TrajectoryEntry] = []
-    status: Literal["running", "completed", "failed", "clarifying"] = "running"
+    status: Literal["running", "completed", "failed", "canceled", "clarifying"] = "running"
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
+
+    clarify_user_reply: str | None = None          # User's reply to a CLARIFY question (Phase 4)
+    clarify_original_message_id: str | None = None  # Original user_message_id that triggered CLARIFY;
+                                                     # survives pause/resume serialization
 ```
 
 ### 4.3 StepResult (new V2 model — separate from V1)
@@ -286,28 +290,72 @@ SUPERVISOR_USER_PROMPT = """## Conversation Context
 ## What should happen next?"""
 ```
 
-The `trajectory_summary` is built from `SupervisorTrajectory.entries`:
+The `trajectory_summary` is built from `SupervisorTrajectory.entries`. When the trajectory has more than `_TRAJECTORY_WINDOW` entries (default: 5), older entries are collapsed into a one-line summary to keep the prompt within reasonable token limits. The user's clarification reply (if any) is rendered as a top-level section at the end, outside the windowed loop, so it's always visible to the LLM regardless of window position.
 
 ```python
-def format_trajectory(trajectory: SupervisorTrajectory) -> str:
+_TRAJECTORY_WINDOW: int = 5
+
+@classmethod
+def _format_trajectory(cls, trajectory: SupervisorTrajectory, *, window: int | None = None) -> str:
+    if window is None:
+        window = cls._TRAJECTORY_WINDOW
     if not trajectory.entries:
         return "No actions taken yet."
 
-    lines = []
-    for entry in trajectory.entries:
+    entries = trajectory.entries
+    lines: list[str] = []
+
+    # Collapse older entries into a one-line summary
+    if len(entries) > window:
+        older = entries[: len(entries) - window]
+        summary_parts: list[str] = []
+        for e in older:
+            action_type = e.action.action.upper()
+            if e.results:
+                for r in e.results:
+                    if r.status == StepStatus.PAUSED:
+                        tag = f"{r.agent_name}(PAUSED)"
+                    elif r.success:
+                        tag = r.agent_name
+                    else:
+                        tag = f"{r.agent_name}(FAILED)"
+                    summary_parts.append(tag)
+            elif action_type == "CLARIFY":
+                summary_parts.append("CLARIFY asked")
+            elif action_type == "DONE":
+                summary_parts.append("DONE")
+            else:
+                summary_parts.append(action_type)
+        summary_text = ", ".join(summary_parts) if summary_parts else "no actions"
+        lines.append(f"Steps 1–{older[-1].step_number}: [{summary_text}]")
+        entries = entries[len(entries) - window :]
+
+    for entry in entries:
         lines.append(f"### Step {entry.step_number}: {entry.action.action.upper()}")
         if entry.action.action == ActionType.DELEGATE:
             for target in entry.action.targets:
                 lines.append(f"  Delegated to {target.agent_name}: {target.task}")
             for result in entry.results:
-                status = "SUCCESS" if result.success else f"FAILED: {result.error_message}"
-                lines.append(f"  → {result.agent_name} [{status}]: {result.response_text[:500]}")
+                if result.status == StepStatus.PAUSED:
+                    status = "PAUSED (awaiting external response)"
+                elif result.success:
+                    status = "SUCCESS"
+                else:
+                    status = f"FAILED: {result.error_message}"
+                response_preview = result.response_text[:500]
+                if len(result.response_text) > 500:
+                    response_preview += " [truncated]"
+                lines.append(f"  → {result.agent_name} [{status}]: {response_preview}")
         elif entry.action.action == ActionType.CLARIFY:
             lines.append(f"  Asked user: {entry.action.clarification_question}")
         elif entry.action.action == ActionType.SYNTHESIZE:
             lines.append(f"  Instruction: {entry.action.synthesis_instruction}")
         elif entry.action.action == ActionType.DONE:
             lines.append(f"  Reasoning: {entry.action.reasoning}")
+
+    if trajectory.clarify_user_reply:
+        lines.append(f"\n### User's Clarification Reply\n{trajectory.clarify_user_reply}")
+
     return "\n".join(lines)
 ```
 
@@ -388,7 +436,6 @@ class SupervisorExecutor:
         room_services: RoomServices,
         tsm: TaskStateManager,
         sse_manager: SSEManager,
-        response_processor: ResponseProcessor,
         database_service: DatabaseService,
         room_memory_service: RoomMemoryService,
         rate_limit_service: RateLimitService,
@@ -396,9 +443,8 @@ class SupervisorExecutor:
         agent_message_processor: AgentMessageProcessor,  # shared dispatch logic (§6.4)
         room_coordinator_service: RoomCoordinatorService,  # for synthesis/clarify message emission
     ) -> None:
-        # Note: NotificationService is NOT a direct dependency. Push notifications
-        # (mobile/desktop) fire automatically through the AgentMessageProcessor →
-        # ResponseProcessor → TSM pipeline when each agent completes. SupervisorExecutor
+        # Note: ResponseProcessor is NOT a direct dependency — it lives inside
+        # AgentMessageProcessor. NotificationService is also NOT a direct dependency.
         # does not need to call notification_service directly.
         ...
 
@@ -415,6 +461,7 @@ class SupervisorExecutor:
         quoted_text: str | None = None,
         # For resume after push notification pause:
         resumed_trajectory: SupervisorTrajectory | None = None,
+        user_message=None,  # cached RoomUserMessage for checkpoint efficiency
     ) -> SupervisorRunResult:
         """Execute the full supervisor loop for a user message.
 
@@ -423,25 +470,96 @@ class SupervisorExecutor:
         """
         trajectory = resumed_trajectory or SupervisorTrajectory()
         step_number = len(trajectory.entries)
+        _checkpoint_msg = user_message
+
+        # --- Debate mode resume: skip to DONE if all paused results filled ---
+        if (
+            resumed_trajectory is not None
+            and room_config.is_debate_mode
+            and step_number > 0
+        ):
+            still_paused = any(
+                r.status == StepStatus.PAUSED
+                for entry in trajectory.entries
+                for r in entry.results
+            )
+            if not still_paused:
+                trajectory.status = "completed"
+                return self._log_and_return(room_id, trajectory, SupervisorRunResult(
+                    status=RunStatus.COMPLETED, trajectory=trajectory
+                ), debate_mode=True)
 
         while step_number < self.MAX_STEPS:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
-                trajectory.status = "failed"
+                trajectory.status = "canceled"
                 return SupervisorRunResult(
                     status=RunStatus.CANCELED, trajectory=trajectory
                 )
 
-            # --- Ask supervisor for next action ---
-            action = await self.supervisor_service.decide_next(
-                message_text=message_text,
-                agent_registry=agent_registry,
-                room_config=room_config,
-                trajectory=trajectory,
-                conversation_context=conversation_context,
-            )
-            trajectory.total_supervisor_calls += 1
+            # --- Crash recovery: resume in-flight DELEGATE step ---
+            # If the last entry has action=DELEGATE and empty results, the
+            # previous server crashed mid-dispatch. Re-use its action.
+            inflight_entry: TrajectoryEntry | None = None
+            if (
+                trajectory.entries
+                and trajectory.entries[-1].action.action == ActionType.DELEGATE
+                and not trajectory.entries[-1].results
+            ):
+                inflight_entry = trajectory.entries.pop()
+                step_number = len(trajectory.entries)
+
+            # --- Debate mode fast-path (§8.13) ---
+            if inflight_entry is not None:
+                action = inflight_entry.action
+            elif room_config.is_debate_mode and step_number == 0:
+                # ... synthetic DELEGATE to all healthy agents (see §8.13)
+                ...
+            else:
+                # --- Ask supervisor for next action (cancellation-aware) ---
+                decide_coro = self.supervisor_service.decide_next(
+                    message_text=message_text,
+                    agent_registry=agent_registry,
+                    room_config=room_config,
+                    trajectory=trajectory,
+                    conversation_context=conversation_context,
+                    max_steps=self.MAX_STEPS,
+                )
+                try:
+                    action = (
+                        await token.race(decide_coro) if token
+                        else await decide_coro
+                    )
+                except CancellationError:
+                    trajectory.status = "canceled"
+                    return self._log_and_return(room_id, trajectory, SupervisorRunResult(
+                        status=RunStatus.CANCELED, trajectory=trajectory
+                    ))
+                trajectory.total_supervisor_calls += 1
+
+            # --- Guard: empty targets → convert to DONE ---
+            if action.action == ActionType.DELEGATE and not action.targets:
+                action = SupervisorAction(
+                    action=ActionType.DONE,
+                    reasoning="DELEGATE had no targets — treating as DONE",
+                )
+
+            # --- Guard: deduplicate identical targets (same agent_id + task) ---
+            if action.action == ActionType.DELEGATE and len(action.targets) > 1:
+                seen: set[tuple[str, str]] = set()
+                deduped: list[DelegateTarget] = []
+                for t in action.targets:
+                    key = (t.agent_id, t.task)
+                    if key not in seen:
+                        seen.add(key)
+                        deduped.append(t)
+                if len(deduped) < len(action.targets):
+                    action = SupervisorAction(
+                        action=action.action, reasoning=action.reasoning,
+                        targets=deduped, synthesis_instruction=action.synthesis_instruction,
+                        clarification_question=action.clarification_question,
+                    )
 
             # --- Execute the action ---
             match action.action:
@@ -452,36 +570,31 @@ class SupervisorExecutor:
                         action=action,
                         started_at=utcnow(),
                     )
-                    results = await self._dispatch_targets(
-                        action.targets, room_id, user_message_id,
-                        step_number + 1,
-                        token, request_user_id, quoted_text,
+
+                    # Pre-dispatch checkpoint: persist entry with empty results
+                    # so crash recovery can detect in-flight steps
+                    trajectory.entries.append(entry)
+                    _checkpoint_msg = await self._checkpoint_trajectory(
+                        user_message_id, trajectory,
+                        cached_user_message=_checkpoint_msg,
                     )
 
-                    # Check for PAUSED (push notification agent)
-                    paused = [r for r in results if r.status == StepStatus.PAUSED]
-                    if paused:
-                        # Keep ALL results (including PAUSED) so resume can
-                        # match by agent_message_id.
-                        entry.results = results
-                        trajectory.entries.append(entry)
-                        trajectory.status = "running"
-                        await self._save_pause_state(
-                            trajectory, paused, room_id, user_message_id,
-                            request_user_id, message_text, agent_registry,
-                            room_config, conversation_context,
-                        )
-                        return SupervisorRunResult(
-                            status=RunStatus.PAUSED, trajectory=trajectory
-                        )
+                    results = await self._dispatch_targets(
+                        targets=action.targets,
+                        agent_registry=agent_registry,
+                        room_id=room_id, user_message_id=user_message_id,
+                        step_number=step_number + 1,
+                        token=token, request_user_id=request_user_id,
+                        quoted_text=quoted_text,
+                    )
 
-                    entry.results = results
-                    entry.completed_at = utcnow()
-                    trajectory.entries.append(entry)
-
-                    # Store results in room memory
+                    # Store results in room memory (SUCCESS only)
                     for result in results:
-                        if result.response_text:
+                        if (
+                            result.status == StepStatus.SUCCESS
+                            and result.success
+                            and result.response_text
+                        ):
                             await self.room_memory_service.add_agent_response_to_memory(
                                 room_id=room_id,
                                 agent_id=result.agent_id,
@@ -489,83 +602,63 @@ class SupervisorExecutor:
                                 response_text=result.response_text,
                             )
 
-                case ActionType.SYNTHESIZE:
-                    entry = TrajectoryEntry(
-                        step_number=step_number + 1,
-                        action=action,
-                        started_at=utcnow(),
-                    )
-
-                    # Guard: if no agent results yet, treat as DONE (supervisor prompt error)
-                    completed_results = [
-                        r for e in trajectory.entries for r in e.results if r.success
-                    ]
-                    if not completed_results:
-                        logger.warning(
-                            "Supervisor returned SYNTHESIZE with no agent results — treating as DONE"
+                    # Check for PAUSED (push notification agent)
+                    paused = [r for r in results if r.status == StepStatus.PAUSED]
+                    if paused:
+                        entry.results = results
+                        trajectory.status = "running"
+                        saved = await self._save_pause_state(
+                            trajectory=trajectory, paused_results=paused,
+                            room_id=room_id, user_message_id=user_message_id,
+                            request_user_id=request_user_id,
+                            message_text=message_text,
+                            agent_registry=agent_registry,
+                            room_config=room_config,
+                            conversation_context=conversation_context,
+                            quoted_text=quoted_text,
                         )
-                        entry.completed_at = utcnow()
-                        trajectory.entries.append(entry)
-                        trajectory.status = "completed"
                         return SupervisorRunResult(
-                            status=RunStatus.COMPLETED, trajectory=trajectory
+                            status=RunStatus.PAUSED, trajectory=trajectory
                         )
 
-                    synthesis = await self.supervisor_service.synthesize(
-                        trajectory=trajectory,
-                        synthesis_instruction=action.synthesis_instruction or "",
-                    )
+                    entry.results = results
                     entry.completed_at = utcnow()
-                    trajectory.entries.append(entry)
-                    trajectory.status = "completed"
-                    return SupervisorRunResult(
-                        status=RunStatus.COMPLETED,
-                        trajectory=trajectory,
-                        synthesis_text=synthesis,
-                    )
+
+                case ActionType.SYNTHESIZE:
+                    # ... (unchanged from §6.2 above, but synthesis LLM call
+                    #      is also cancellation-aware via token.race)
+                    ...
 
                 case ActionType.CLARIFY:
-                    entry = TrajectoryEntry(
-                        step_number=step_number + 1,
-                        action=action,
-                        started_at=utcnow(),
-                        completed_at=utcnow(),
-                    )
-                    trajectory.entries.append(entry)
-                    trajectory.status = "clarifying"
-                    return SupervisorRunResult(
-                        status=RunStatus.CLARIFYING,
-                        trajectory=trajectory,
-                        clarification_question=action.clarification_question,
-                    )
+                    # ... (unchanged)
+                    ...
 
                 case ActionType.DONE:
-                    entry = TrajectoryEntry(
-                        step_number=step_number + 1,
-                        action=action,
-                        started_at=utcnow(),
-                        completed_at=utcnow(),
-                    )
-                    trajectory.entries.append(entry)
-                    trajectory.status = "completed"
-                    return SupervisorRunResult(
-                        status=RunStatus.COMPLETED, trajectory=trajectory
-                    )
+                    # ... (unchanged)
+                    ...
 
             step_number += 1
 
-        # Budget exhausted — force synthesis from whatever we have
+        # Budget exhausted — force synthesis (cancellation-aware)
         if trajectory.entries:
-            synthesis = await self.supervisor_service.synthesize(
+            budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,
                 synthesis_instruction="Budget exhausted. Synthesize available results.",
             )
+            try:
+                synthesis = (
+                    await token.race(budget_synth_coro) if token
+                    else await budget_synth_coro
+                )
+            except CancellationError:
+                trajectory.status = "canceled"
+                return self._log_and_return(room_id, trajectory, SupervisorRunResult(
+                    status=RunStatus.CANCELED, trajectory=trajectory
+                ))
             trajectory.status = "completed"
-            return SupervisorRunResult(
-                status=RunStatus.COMPLETED,
-                trajectory=trajectory,
-                synthesis_text=synthesis,
-            )
+            return self._log_and_return(room_id, trajectory, SupervisorRunResult(
+                status=RunStatus.COMPLETED, trajectory=trajectory, synthesis_text=synthesis,
+            ))
 
         trajectory.status = "failed"
         return SupervisorRunResult(
@@ -579,6 +672,7 @@ class SupervisorExecutor:
 async def _dispatch_targets(
     self,
     targets: list[DelegateTarget],
+    agent_registry: list[AgentProfile],
     room_id: str,
     user_message_id: str,
     step_number: int,
@@ -591,13 +685,19 @@ async def _dispatch_targets(
     Creates a RoomAgentMessage per target, dispatches via
     AgentMessageProcessor.process_single_message, and returns results.
 
+    Cancellation-aware: when a CancellationToken is provided, dispatch
+    races agent work against cancellation. If cancellation fires first,
+    already-completed results are still collected (their agent_message_ids
+    are needed for cancel_descendants cleanup). Incomplete targets get
+    synthetic FAILED results.
+
     Note on step/total_steps: V2 cannot know total steps upfront (adaptive).
     Agent messages are created with step_number but total_steps=None.
     The frontend should handle None total_steps gracefully (e.g., show
     "Step N" instead of "Step N/M").
     """
     # Validate agent IDs against registry before dispatch
-    valid_ids = {a.agent_id for a in self._agent_registry}
+    valid_ids = {a.agent_id for a in agent_registry}
     for target in targets:
         if target.agent_id not in valid_ids:
             logger.warning(
@@ -607,120 +707,71 @@ async def _dispatch_targets(
 
     async def dispatch_one(target: DelegateTarget, sub_step: int) -> StepResult:
         try:
-            # Resolve agent via new AgentDispatcher.resolve_agent method
-            agent = await self.agent_dispatcher.resolve_agent(target.agent_id, room_id)
-            if not agent:
-                logger.warning(
-                    "dispatch_one: agent %s not found or inactive", target.agent_id
-                )
-                return StepResult(
-                    step_number=step_number,
-                    agent_id=target.agent_id,
-                    agent_name=target.agent_name,
-                    task=target.task,
-                    response_text="",
-                    success=False,
-                    error_message="Agent not found or inactive",
-                )
-
-            # Rate limit check
-            if request_user_id:
-                rate_result = await self.rate_limit_service.check_rate_limit(
-                    agent_id=agent.agent_id,
-                    user_id=request_user_id,
-                    rate_limit_per_user=agent.rate_limit_per_user_per_hour,
-                    rate_limit_system=agent.rate_limit_system_per_hour,
-                )
-                if not rate_result.allowed:
-                    return StepResult(
-                        step_number=step_number,
-                        agent_id=target.agent_id,
-                        agent_name=target.agent_name,
-                        task=target.task,
-                        response_text="",
-                        success=False,
-                        error_message=f"Rate limited: {rate_result.reason}",
-                    )
-
-            # Create RoomAgentMessage (one at a time, not pre-generated)
-            # total_steps=None because V2 can't know the total upfront
-            message = self.room_services._generate_new_agent_message(
-                room_id=room_id,
-                related_message_id=user_message_id,
-                agent_id=target.agent_id,
-                content=target.task,
-                user_id=request_user_id,
-                step_number=step_number,
-                total_steps=None,
-            )
-            await self.database_service.add_room_agent_message(message)
-
-            logger.info(
-                "dispatch_one: dispatching agent %s (msg=%s, step=%d)",
-                target.agent_name, message.message_id, step_number,
-            )
-
-            # Dispatch via shared AgentMessageProcessor
-            result = await self.agent_message_processor.process_single_message(
-                message, room_id, agent, user_message_id,
-                token=token,
-                step_number=step_number,
-                total_steps=None,
-                quoted_text=quoted_text,
-            )
-
-            if result.status == ProcessingStatus.PAUSED:
-                return StepResult(
-                    step_number=step_number,
-                    agent_id=target.agent_id,
-                    agent_name=target.agent_name,
-                    task=target.task,
-                    response_text="",
-                    success=True,
-                    status=StepStatus.PAUSED,
-                    paused_message_id=result.message_id,
-                    agent_message_id=message.message_id,
-                )
-
-            # Record rate limit usage on success
-            if result.status == ProcessingStatus.SUCCESS and request_user_id:
-                await self.rate_limit_service.record_request(
-                    agent_id=agent.agent_id,
-                    user_id=request_user_id,
-                )
-
+            # ... (resolve agent, rate limit, create message, dispatch)
+            ...
+        except asyncio.CancelledError:
             return StepResult(
                 step_number=step_number,
-                agent_id=target.agent_id,
-                agent_name=target.agent_name,
-                task=target.task,
-                response_text=result.response_text,
-                success=result.status == ProcessingStatus.SUCCESS,
-                error_message=(
-                    "Agent processing failed"
-                    if result.status == ProcessingStatus.FAILED else None
-                ),
-                agent_message_id=message.message_id,
+                agent_id=target.agent_id, agent_name=target.agent_name,
+                task=target.task, response_text="", success=False,
+                status=StepStatus.FAILED,
+                error_message="Agent dispatch was cancelled",
             )
         except Exception as e:
-            logger.exception("dispatch_one failed for agent %s: %s", target.agent_id, e)
             return StepResult(
                 step_number=step_number,
-                agent_id=target.agent_id,
-                agent_name=target.agent_name,
-                task=target.task,
-                response_text="",
-                success=False,
+                agent_id=target.agent_id, agent_name=target.agent_name,
+                task=target.task, response_text="", success=False,
                 error_message=f"Unexpected error: {e}",
             )
 
-    # Single target: dispatch directly. Multiple targets: concurrent.
+    # Single target: race against cancellation token
     if len(targets) == 1:
-        return [await dispatch_one(targets[0], 1)]
+        if token:
+            work = asyncio.ensure_future(dispatch_one(targets[0]))
+            cancel_waiter = token.wait()
+            done, _pending = await asyncio.wait(
+                {cancel_waiter, work}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if work in done:
+                cancel_waiter.cancel()
+                return [work.result()]
+            # Cancellation won — try to salvage the result
+            work.cancel()
+            # ... collect partial result or return synthetic FAILED
+        return [await dispatch_one(targets[0])]
 
-    return await asyncio.gather(
-        *(dispatch_one(t, i + 1) for i, t in enumerate(targets))
+    # Multiple targets: race gather against cancellation token
+    if not token:
+        return list(await asyncio.gather(*(dispatch_one(t, i+1) for i, t in enumerate(targets))))
+
+    tasks = [asyncio.ensure_future(dispatch_one(t)) for t in targets]
+    cancel_waiter = token.wait()
+    all_work = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
+    done, _pending = await asyncio.wait(
+        {cancel_waiter, all_work}, return_when=asyncio.FIRST_COMPLETED
     )
+    if all_work in done:
+        cancel_waiter.cancel()
+        return [r if isinstance(r, V2StepResult) else ... for r in all_work.result()]
+    # Cancellation fired — collect completed results, synthesize FAILED for the rest
+    all_work.cancel()
+    results = []
+    completed_ids = set()
+    for task in tasks:
+        if task.done() and not task.cancelled():
+            r = task.result()
+            results.append(r)
+            completed_ids.add(r.agent_id)
+    for t in targets:
+        if t.agent_id not in completed_ids:
+            results.append(StepResult(
+                step_number=step_number, agent_id=t.agent_id,
+                agent_name=t.agent_name, task=t.task, response_text="",
+                success=False, status=StepStatus.FAILED,
+                error_message="Agent dispatch was cancelled",
+            ))
+    return results
 ```
 
 ### 6.4 Shared Agent Dispatch: `AgentMessageProcessor` (extracted)
@@ -1041,8 +1092,11 @@ pause_state = {
     "room_config": room_config.model_dump(mode="json"),
     "conversation_context": conversation_context,
     "request_user_id": request_user_id,
+    "quoted_text": quoted_text,
 }
 ```
+
+`_save_pause_state` returns `True` if at least one pause state was saved successfully, `False` if all saves failed (webhook resume will not work).
 
 On webhook resume, `RoomMessageCenter` detects `supervisor_v2: True` in the continuation data, reconstructs the trajectory with the push notification result appended, and calls `SupervisorExecutor.run(..., resumed_trajectory=trajectory)`. The loop picks up exactly where it left off.
 
@@ -1055,12 +1109,19 @@ trajectory = SupervisorTrajectory(**pause_state["trajectory"])
 room_id = pause_state["room_id"]
 
 # Refresh agent registry from current database state (not serialized)
-room_agents = await database_service.get_agents_by_room_id(room_id)
-agent_registry = [
-    AgentProfile.from_agent(agent)
-    for agent in room_agents
-    if agent.agent_status == AgentStatus.active
-]
+room_agents_items = list((room.room_agent_set or {}).items())
+if room_agents_items:
+    agents = await asyncio.gather(
+        *(database_service.get_agent_by_agent_id(aid) for aid, _ in room_agents_items)
+    )
+    agent_registry = []
+    for (aid, aname), agent in zip(room_agents_items, agents, strict=True):
+        if agent:
+            agent_registry.append(AgentProfile.from_agent(agent))
+        else:
+            agent_registry.append(AgentProfile(
+                agent_id=aid, agent_name=aname, description="", is_healthy=False,
+            ))
 
 # Resume with fresh registry
 result = await supervisor_executor.run(
@@ -1105,8 +1166,10 @@ Unchanged from V1. `_build_room_awareness` and `build_context_for_agent` inject 
 | `COMPLETED` | `None` (DONE) | No synthesis message. The individual agent message(s) already streamed are the response. Send `SSEProcessingStatus.COMPLETED`. |
 | `PAUSED` | — | Save pause state. Send nothing to the user yet (push notification will resume). |
 | `CLARIFYING` | — | Emit clarification question as a pseudo-agent message. Send `SSEProcessingStatus.COMPLETED`. |
-| `CANCELED` | — | Send `SSEProcessingStatus.CANCELED`. |
-| `FAILED` | — | Send `SSEProcessingStatus.FAILED`. |
+| `CANCELED` | — | Cancel all in-flight agent messages (via `cancel_agent_messages_by_ids` and `cancel_descendants`). Send `SSEProcessingStatus.CANCELED`. Clear cancellation token. |
+| `FAILED` | — | Cancel all in-flight agent messages (same cleanup as CANCELED). Send `SSEProcessingStatus.FAILED`. |
+
+**Cancellation token cleanup**: For all terminal statuses except PAUSED, `_handle_v2_run_result` calls `sse_manager.remove_token(user_message_id)` to prevent stale tokens from accumulating. PAUSED runs keep their token alive for the webhook resume path.
 
 **DONE with multiple agent results**: If the supervisor returns `DONE` after 2+ agents have responded, no synthesis is emitted. The individual agent responses are already visible to the user. This is intentional — the supervisor should only use DONE when it judges that no synthesis is needed (e.g., the agents answered different parts of the question and each response stands on its own). The prompt rules discourage this; the prompt instructs the LLM to use SYNTHESIZE when 2+ agents have responded.
 
@@ -1124,13 +1187,15 @@ Unchanged. Deterministic fan-out bypasses the supervisor.
 
 ### 8.3 Supervisor LLM Failure
 
-If `decide_next` fails (API error, timeout, malformed JSON), the service returns `ActionType.DONE` as a fail-open default. If the failure happens on the first iteration (no agents have been called yet), the system falls back to the legacy `QueueExecutor` path.
+If `decide_next` fails (API error, timeout, malformed JSON), the service returns `ActionType.DONE` as a fail-open default. If the failure happens on the first iteration (no agents have been called yet), a `SupervisorPlanningError` is raised. Since Phase 5 removed V1, this error is caught by `RoomMessageCenter._process_supervisor_v2` which emits a user-facing error synthesis message and returns `FAILED` — there is no longer a legacy `QueueExecutor` fallback.
+
+Both `decide_next` and `synthesize_v2` LLM calls have a **30-second timeout** (`timeout=30.0` on the OpenAI API call) to prevent indefinite hangs from upstream API issues.
 
 ```python
 class SupervisorPlanningError(Exception):
     """Raised by decide_next when the very first supervisor call fails.
 
-    Caught by RoomMessageCenter to trigger the legacy QueueExecutor fallback.
+    Caught by RoomMessageCenter to emit an error message and return FAILED.
     Not raised on subsequent iterations — those fail open with DONE.
     """
 
@@ -1142,7 +1207,15 @@ async def decide_next(self, ...) -> SupervisorAction:
     except Exception as e:
         logger.warning("Supervisor decide_next failed: %s", e)
         if not trajectory.entries:
-            raise SupervisorPlanningError(str(e))  # caller falls back to legacy
+            raise SupervisorPlanningError(str(e))  # caller returns FAILED
+        # If 2+ agents have succeeded, synthesize rather than silently stopping
+        completed_results = [r for e in trajectory.entries for r in e.results if r.success and r.status == StepStatus.SUCCESS]
+        if len(completed_results) >= 2:
+            return SupervisorAction(
+                action=ActionType.SYNTHESIZE,
+                reasoning=f"Supervisor failed ({e}), synthesizing available results",
+                synthesis_instruction="The supervisor encountered an error. Synthesize the available agent results into a coherent response.",
+            )
         return SupervisorAction(
             action=ActionType.DONE,
             reasoning=f"Supervisor failed ({e}), stopping with current results",
@@ -1155,7 +1228,15 @@ async def decide_next(self, ...) -> SupervisorAction:
 
 ### 8.5 Cancellation
 
-Checked at the top of every loop iteration. If the token is signaled, the executor returns `CANCELED` immediately. Any in-progress agent dispatch is not interrupted (the agent may still complete), but no further supervisor calls are made.
+Cancellation is enforced at three levels:
+
+1. **Loop iteration check**: At the top of every `while` iteration, `token.is_cancelled` is checked synchronously. If signaled, the executor returns `CANCELED` immediately.
+
+2. **LLM call racing**: `decide_next` and `synthesize_v2` calls are raced against the cancellation token via `token.race(coro)`. If cancellation fires during an LLM call, the call is abandoned and the executor returns `CANCELED` without waiting for the response.
+
+3. **Agent dispatch racing**: `_dispatch_targets` races each agent dispatch (or the `asyncio.gather` for multi-target) against `token.wait()` using `asyncio.wait(FIRST_COMPLETED)`. When cancellation wins the race, already-completed agent results are still collected — their `agent_message_id` values are needed for `cancel_descendants` cleanup in `_handle_v2_run_result`. Incomplete targets get synthetic `StepResult(success=False, status=FAILED)` entries.
+
+`CancellationToken.wait()` (new method) returns a future that resolves when cancellation is signaled, allowing it to be used with `asyncio.wait` without accessing the internal `_event` directly.
 
 ### 8.6 Rate Limiting
 
@@ -1261,6 +1342,59 @@ After all agents respond in debate mode, the executor returns `DONE` (no synthes
 
 **Cost**: 0 supervisor LLM calls for debate mode (vs. at least 1 `decide_next` if we relied on prompt instructions alone).
 
+### 8.14 Crash Recovery
+
+When the server process restarts while `SupervisorExecutor.run()` is mid-loop, per-step checkpointing and a background recovery job ensure the execution is resumed rather than silently lost.
+
+**Checkpointing** (`_checkpoint_trajectory`):
+After each DELEGATE `TrajectoryEntry` is created (but before dispatch begins), the trajectory is persisted to `user_message.extend_info.supervisor_trajectory` with `status="running"`. The entry has empty `results` at this point — this is the marker for in-flight recovery. Checkpointing is best-effort: failures are logged but don't abort the loop.
+
+```python
+async def _checkpoint_trajectory(
+    self,
+    user_message_id: str,
+    trajectory: SupervisorTrajectory,
+    cached_user_message=None,
+):
+    """Persist trajectory snapshot to user message after each step.
+
+    Returns the user message object so callers can cache it across steps.
+    """
+    user_message = cached_user_message or await self.database_service.get_room_user_message_by_message_id(...)
+    if user_message:
+        user_message.extend_info["supervisor_trajectory"] = trajectory.model_dump(mode="json")
+        await self.database_service.update_room_user_message_by_message_id(...)
+    return user_message
+```
+
+**Recovery job** (`StaleTaskChecker._recover_stuck_supervisor_trajectories`):
+Runs as part of the existing `StaleTaskChecker` periodic check cycle. Scans MongoDB for user messages where:
+- `extend_info.supervisor_trajectory.status == "running"`
+- `extend_info.supervisor_v2 == True`
+- `message_created_at < now - orphan_threshold_minutes`
+
+The age threshold prevents racing with actively-running trajectories.
+
+**Atomic claim** (`claim_stuck_supervisor_trajectory`):
+Uses MongoDB `find_one_and_update` with a status precondition (`"running"` → `"recovering"`) so only one recovery worker (even across multiple server instances) can claim a given stuck trajectory. Workers that lose the race see `False` and skip.
+
+**Cancellation awareness**: Before re-triggering, the recovery job checks `is_message_cancelled` to skip messages the user canceled during the crash window (the in-memory cancellation token was lost, but the DB record survives).
+
+**In-flight step recovery in `run()`**: When the executor detects the last trajectory entry has `action=DELEGATE` and empty `results`, it pops the entry and re-uses its `SupervisorAction` instead of calling `decide_next`. This avoids creating duplicate agent dispatches.
+
+**Failed trajectory persistence**: When `_process_supervisor_v2` catches exceptions (`SupervisorPlanningError` or general exceptions), it calls `_persist_failed_trajectory` to mark the trajectory as `"failed"` in the database. This prevents the recovery job from endlessly retrying a permanently-broken execution.
+
+**Files changed**:
+
+| File | Change |
+|---|---|
+| `modules/SupervisorExecutor.py` | `_checkpoint_trajectory` method; in-flight recovery logic in `run()` |
+| `modules/RoomMessageCenter.py` | Crash-recovery trajectory deserialization; `_persist_failed_trajectory` helper |
+| `jobs/stale_task_checker.py` | `_recover_stuck_supervisor_trajectories`, `_process_recovered_supervisor_message` |
+| `database/mongodb.py` | `claim_stuck_supervisor_trajectory` (atomic claim with `find_one_and_update`) |
+| `services/database_service.py` | `claim_stuck_supervisor_trajectory`, `is_message_cancelled` wrappers |
+| `common/utils/cancellation.py` | `CancellationToken.wait()` method |
+
 ---
 
 ## 9. Cost Analysis
@@ -1330,7 +1464,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 | Push notification / webhook flow | Unchanged (trajectory serialized in continuation) |
 | `a2a_service` (agent communication) | Unchanged |
 | `rate_limit_service` | Unchanged |
-| `stale_task_checker` | Unchanged |
+| `stale_task_checker` | Extended: new `_recover_stuck_supervisor_trajectories` method scans for V2 trajectories stuck in `"running"` status and re-triggers them (see §8.14) |
 | Frontend (`useRoomWebhook.ts`) | Unchanged |
 | Room memory (`RoomMemoryService`) | Unchanged |
 | `build_context_for_agent` / `_build_room_awareness` | Unchanged |
@@ -1346,7 +1480,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 | V1 Issue (§14) | How V2 Resolves It |
 |---|---|
 | 14.1 `context_from_steps` never consumed | Eliminated. Supervisor injects prior results into `DelegateTarget.task` directly — it has the full trajectory. |
-| 14.2 Legacy fallback produces no plan | No plan to produce. Fallback simply falls back to `QueueExecutor` (legacy path). |
+| 14.2 Legacy fallback produces no plan | No plan to produce. V2-only path returns FAILED on `SupervisorPlanningError`. |
 | 14.3 Dead `should_review_step` method | No review mechanism at all. Every iteration is an implicit review. |
 | 14.4 `supervisor_reviews` not persisted | Trajectory entries record every decision. The full trajectory is persisted in `user_message.extend_info`. |
 | 14.5 Logging missing `room_id` | `SupervisorExecutor.run` has `room_id` in scope for all logging. |
@@ -1393,7 +1527,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 
 1. ~~Add `_prepare_for_supervisor_v2()` to `RoomServices.send_message_to_room` (§7.1).~~ **Done** — lightweight method stores `agent_registry`, `room_config`, and `conversation_context` in `user_message.extend_info` without any LLM calls or pre-generated agent messages. `send_message_to_room` checks both `use_supervisor` and `supervisor_v2` flags: `use_supervisor + supervisor_v2` → V2 path, `use_supervisor` only → V1 path.
 2. ~~Add `supervisor_executor` and `agent_message_processor` to `RoomMessageCenter.__init__`.~~ **Done** — `SupervisorExecutor` constructed with all required dependencies (`supervisor_service`, `room_services`, `tsm`, `sse_manager`, `database_service`, `room_memory_service`, `rate_limit_service`, `agent_dispatcher`, `agent_message_processor`, `room_coordinator_service`).
-3. ~~Add V2 branch in `process_room_user_message` (§7.2): if `user_message.extend_info.supervisor_v2`, skip `QueueExecutor.process_queue`, call `supervisor_executor.run()`, handle all 5 `RunStatus` variants.~~ **Done** — `_process_supervisor_v2` method handles COMPLETED (with optional synthesis), PAUSED (no-op), CLARIFYING (stores trajectory + sets room-level `pending_clarification_message_id` + emits clarification message), CANCELED, and FAILED. On `SupervisorPlanningError` (first `decide_next` fails), falls back to V1 `QueueExecutor` via `_fallback_to_v1_queue`.
+3. ~~Add V2 branch in `process_room_user_message` (§7.2): if `user_message.extend_info.supervisor_v2`, skip `QueueExecutor.process_queue`, call `supervisor_executor.run()`, handle all 5 `RunStatus` variants.~~ **Done** — `_process_supervisor_v2` method handles COMPLETED (with optional synthesis), PAUSED (no-op), CLARIFYING (stores trajectory + sets room-level `pending_clarification_message_id` + emits clarification message), CANCELED, and FAILED. On `SupervisorPlanningError` (first `decide_next` fails), emits an error synthesis message and returns `FAILED`.
 4. ~~Add debate mode fast-path in `SupervisorExecutor.run()` (§8.13).~~ **Already done in Phase 1** — confirmed working.
 5. A/B test: rooms with `supervisor_v2 = true` use the new loop; rooms with `use_supervisor = true` only stay on V1. **Wiring complete** — flag checks implemented in `send_message_to_room` and `process_room_user_message`.
 6. P0 integration tests (§16.2) — deferred to manual testing.
@@ -1402,7 +1536,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 - `emit_synthesis_message` is used for both synthesis and clarification messages (with `coordinator_agent_id="supervisor_clarify"` for clarifications). A dedicated `emit_clarification_message` is not needed since the existing method handles it.
 - The `database_service.update_room_user_message` method referenced in the design pseudocode does not exist. The actual method is `update_room_user_message_by_message_id(message_id, user_message)`. Similarly, `update_room(room)` is `update_room_by_room_id(room_id, room)`.
 - The V2 branch in `process_room_user_message` skips the `inquiry_agent_messages_by_related_message_id` call entirely — V2 has no pre-generated agent messages.
-- The fallback to V1 on `SupervisorPlanningError` queries for pre-generated agent messages (which won't exist for V2-prepared messages). This means the fallback will fail with "no pre-generated agent messages found". In practice, the V2 fallback is a safety net — if the supervisor LLM is unreachable on the first call, the room should be reported as failed rather than silently degrading to a different execution model.
+- ~~The fallback to V1 on `SupervisorPlanningError` queries for pre-generated agent messages (which won't exist for V2-prepared messages). This means the fallback will fail with "no pre-generated agent messages found". In practice, the V2 fallback is a safety net — if the supervisor LLM is unreachable on the first call, the room should be reported as failed rather than silently degrading to a different execution model.~~ **Resolved in Phase 5**: The V1 fallback has been removed. `SupervisorPlanningError` now causes `_process_supervisor_v2` to emit a user-facing error synthesis message and return `FAILED`.
 
 **Post-review fixes** (February 21, 2026):
 - **Empty targets guard**: `SupervisorExecutor.run()` now guards against `DELEGATE` actions with an empty `targets` list (e.g., LLM returns `{"action": "delegate", "targets": []}` or debate mode has zero healthy agents). Empty targets are converted to a `DONE` action with a warning log. Previously, empty targets would silently burn a loop iteration via `asyncio.gather` with zero coroutines.
@@ -1416,8 +1550,8 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 - **`_process_supervisor_v2` return value correctness**: The method now returns `success=False, status_code=500` for `RunStatus.FAILED`. Previously all statuses returned `success=True, status_code=200`, which misled backend callers into thinking a failed execution had succeeded.
 - **Trajectory persisted on FAILED/CANCELED**: Trajectories are now saved to `user_message.extend_info.supervisor_trajectory` for all terminal statuses (COMPLETED, CLARIFYING, FAILED, CANCELED), not just COMPLETED and CLARIFYING. This preserves the audit log even when executions fail.
 - **`SupervisorTrajectory.status` Literal type expanded**: Added `"canceled"` to the status Literal type (`"running" | "completed" | "failed" | "canceled" | "clarifying"`). The cancellation handler now sets `trajectory.status = "canceled"` instead of `"failed"`, eliminating the status/RunStatus mismatch.
-- **Failed agent results excluded from room memory**: `SupervisorExecutor.run()` now checks `result.success and result.response_text` before writing to room memory. Previously, failed agents with partial/error text could contaminate the room memory context.
-- **`asyncio.CancelledError` safety in `_dispatch_targets`**: The `dispatch_one` catch-all was widened from `except Exception` to `except BaseException` to also catch `asyncio.CancelledError` (a `BaseException` in Python 3.9+). This prevents cancellation during `asyncio.gather` from losing all coroutine results.
+- **Failed agent results excluded from room memory**: `SupervisorExecutor.run()` now checks `result.status == StepStatus.SUCCESS and result.success and result.response_text` before writing to room memory. This explicitly excludes PAUSED and FAILED results rather than relying on `response_text` being empty.
+- **`asyncio.CancelledError` safety in `_dispatch_targets`**: `dispatch_one` now catches `asyncio.CancelledError` in a dedicated except clause (separate from the `except Exception` catch-all). This prevents cancellation during `asyncio.gather` from losing all coroutine results.
 - **KeyError guard in `_process_supervisor_v2`**: Deserialization of `extend["agent_registry"]` and `extend["room_config"]` is now wrapped in `try/except (KeyError, TypeError)`. If the keys are missing (e.g., partial write in `_prepare_for_supervisor_v2`), the method returns a clear FAILED response instead of crashing.
 - **V2 guard in `resume_queue_from_continuation`**: The method now peeks at the continuation data before delegating to `QueueExecutor`. If `supervisor_v2: True` is present, it logs an error and returns `False` with a FAILED SSE event, instead of passing V2-shaped data to the V1 resume path where it would fail silently. Full V2 resume is Phase 3 work.
 - **Public `create_agent_message` wrapper**: Added `RoomServices.create_agent_message()` as a public wrapper around `_generate_new_agent_message`. `SupervisorExecutor` now calls the public method instead of accessing the private one via `# noqa: SLF001`.
@@ -1443,7 +1577,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 - **PAUSED results preserved in trajectory**: `SupervisorExecutor.run()` no longer strips PAUSED `V2StepResult` entries from `entry.results` before serialization. Previously, paused results were excluded (`[r for r in results if r.status != StepStatus.PAUSED]`), which destroyed the `agent_message_id` needed to correlate webhook responses with the correct agent. Now all results (including PAUSED) are kept, and the resume path matches by `agent_message_id`.
 - **`_find_paused_agent` uses `paused_message_id`**: Previously accepted `paused_message_id` as a parameter but never used it — returned the first target missing a non-PAUSED result, which is wrong when multiple agents in the same multi-target DELEGATE are paused. Now matches `result.agent_message_id == paused_message_id` on PAUSED results to identify the exact agent.
 - **`_append_paused_result_to_trajectory` replaces by `agent_message_id`**: Previously scanned targets for missing results (position-based), which attributed the webhook response to the wrong agent in multi-pause scenarios. Now finds the PAUSED `V2StepResult` by `agent_message_id` and replaces it in-place with the completed result. Also only marks `entry.completed_at` when no PAUSED results remain in the entry.
-- **Continuation re-saved on V2 resume failure**: `resume_queue_from_continuation` now wraps the `_resume_supervisor_v2` call in try/except. On failure, the continuation data is re-saved to the database via `save_continuation_on_message`, so the webhook can be retried instead of permanently losing the execution state.
+- **Continuation re-saved on V2 resume failure**: `resume_queue_from_continuation` now re-saves the continuation **before** attempting `_resume_supervisor_v2`, so a process crash mid-resume doesn't permanently lose the execution state. On successful resume, the continuation is cleared. This eliminates the race window where `get_and_clear` consumed the continuation but a crash before the except-block's `save_continuation_on_message` lost it permanently.
 - **`room_config` on resume preserves all fields**: Previously reconstructed `RoomConfig` from scratch with only `is_debate_mode` and `room_agent_set`, silently defaulting any other fields. Now deserializes the full `room_config` from the serialized continuation data and selectively refreshes mutable fields (`is_debate_mode`, `room_agent_set`) from the live room state.
 
 ### Phase 4: Clarify action
@@ -1473,9 +1607,9 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 **Post-review fixes** (February 21, 2026):
 - **@mention routing clears stale clarify flag**: `send_message_to_room` now clears `pending_clarification_message_id` when the user @mentions an agent in a V2 supervisor room with a pending clarification. Previously the pending flag survived, causing the next non-mention message to incorrectly resume the old trajectory.
 - **Empty `trajectory.entries` guard in TTL check**: `_prepare_clarify_resume_v2` now explicitly rejects trajectories with no entries (possible from data corruption) instead of silently skipping the TTL check and proceeding with an empty trajectory.
-- **Clarify-resume failure restores pending flag**: When a clarify-resume triggers `SupervisorPlanningError`, the pending clarification flag is restored on the room and the trajectory status is reverted to `"clarifying"` (instead of falling through to the V1 queue path, which always fails for V2-prepared messages). The user can retry the clarification reply.
+- **Clarify-resume failure restores pending flag**: When a clarify-resume triggers `SupervisorPlanningError`, the pending clarification flag is restored on the room and the trajectory status is reverted to `"clarifying"`. The user can retry the clarification reply. The SSE status is sent as `COMPLETED` (not `FAILED`) with a "please answer the clarification question again" message so the user sees the original clarification question still needs answering.
 - **Original message trajectory updated on resume**: `_handle_v2_run_result` accepts a new `original_clarify_message_id` parameter. When set, the original message's serialized trajectory status is updated to match the final run status, preventing it from staying permanently in `"clarifying"` in the database.
-- **User reply placed inline in trajectory formatting**: `_format_trajectory` now renders `clarify_user_reply` immediately after the CLARIFY entry (as `User replied: ...`) instead of appending it as a separate section at the end of the trajectory. This improves LLM context association in long trajectories.
+- **User reply rendered as top-level section**: `_format_trajectory` renders `clarify_user_reply` as a dedicated `### User's Clarification Reply` section at the end of the trajectory summary, outside the windowed loop. This ensures the reply is always visible to the LLM regardless of how many steps have elapsed since the CLARIFY action (previous approach of rendering inline after the CLARIFY entry would lose the reply when the entry scrolled out of the trajectory window).
 - **`_build_agent_registry` shared helper**: Extracted duplicate agent registry construction logic from `_prepare_for_supervisor_v2` and `_prepare_clarify_resume_v2` into `RoomServices._build_agent_registry()`.
 
 ### Phase 5: Deprecate V1
@@ -1507,17 +1641,34 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 
 - **PAUSED trajectory persistence**: `_handle_v2_run_result` now persists the trajectory to `user_message.extend_info.supervisor_trajectory` for `RunStatus.PAUSED` as well (previously only COMPLETED, CLARIFYING, FAILED, CANCELED). The pause state is still saved via `_save_pause_state` on the continuation, but the user message now also reflects the trajectory snapshot at pause time for debugging visibility.
 
-**Files changed** (net: −1,616 lines):
+- **Cancellation token cleanup on all terminal statuses**: `_handle_v2_run_result` now calls `sse_manager.remove_token(user_message_id)` for all terminal statuses except PAUSED. Previously, tokens were only cleaned up on CANCELED via `clear_cancellation`, causing stale tokens to accumulate for COMPLETED, FAILED, and CLARIFYING runs.
+
+**Files changed** (net: −1,616 lines, then +914 lines post-Phase 5 fixes):
 
 | File | Change |
 |---|---|
 | `models/supervisor.py` | **Deleted** (143 lines) |
-| `models/supervisor_v2.py` | Added `AgentProfile`, `RoomConfig` (moved from V1); now sole supervisor model module |
+| `models/supervisor_v2.py` | Added `AgentProfile`, `RoomConfig` (moved from V1); added `clarify_original_message_id` field; now sole supervisor model module |
 | `modules/QueueExecutor.py` | Removed V1 review hook, `_supervisor_review_step`, `_handle_revise_action`, `_handle_retry_action` |
-| `modules/SupervisorExecutor.py` | Updated docstring to reflect sole-executor status |
-| `modules/RoomMessageCenter.py` | Removed V1 fallback path; added `use_supervisor` safety net; added coordinator callback for COMPLETED; added PAUSED trajectory persistence |
+| `modules/SupervisorExecutor.py` | Updated docstring to reflect sole-executor status; added `_checkpoint_trajectory`, in-flight recovery, cancellation-aware dispatch, debate-mode resume, target deduplication |
+| `modules/RoomMessageCenter.py` | Removed V1 fallback path; added `use_supervisor` safety net; added coordinator callback for COMPLETED; added PAUSED trajectory persistence; crash-recovery resume; `_persist_failed_trajectory` helper; SSE token cleanup; continuation re-save before V2 resume |
 | `services/room_services.py` | Removed `_parse_with_supervisor`, `_generate_agent_messages_from_plan`; `send_message_to_room` now routes `use_supervisor` directly to V2 |
-| `services/room_supervisor_service.py` | Removed V1 methods and prompts; only V2 `decide_next`/`synthesize_v2` remain |
+| `services/room_supervisor_service.py` | Removed V1 methods and prompts; only V2 `decide_next`/`synthesize_v2` remain; `_format_trajectory` windowed with PAUSED rendering; `_parse_v2_action` malformed target logging; `decide_next` fail-open SYNTHESIZE; `_fallback_v2_synthesis` PAUSED exclusion |
+| `services/openai_service.py` | Added 30-second timeout to `decide_next` and `synthesize_v2` LLM calls |
+| `services/database_service.py` | Added `claim_stuck_supervisor_trajectory`, `is_message_cancelled`, `cancel_agent_messages_by_ids` |
+| `database/mongodb.py` | Added `cancel_agent_messages_by_ids`, `claim_stuck_supervisor_trajectory` (atomic find-and-update) |
+| `jobs/stale_task_checker.py` | Added `_recover_stuck_supervisor_trajectories`, `_process_recovered_supervisor_message` |
+| `common/utils/cancellation.py` | Added `CancellationToken.wait()` for racing cancellation against multiple tasks |
+
+**Post-Phase 5 review fixes** (February 21, 2026):
+- **PAUSED results rendered correctly in trajectory**: `_format_trajectory` now renders PAUSED results as `[PAUSED (awaiting external response)]` instead of `[SUCCESS]`. Previously, PAUSED results had `success=True` and were shown as `[SUCCESS]` with empty response text, which misled the supervisor LLM on resume into thinking the agent had responded with nothing. The collapsed summary for older entries also now tags paused agents as `AgentName(PAUSED)`.
+- **`decide_next` fail-open synthesizes when partial results exist**: When `decide_next` fails mid-loop and 2+ agents have succeeded, it now returns `SYNTHESIZE` instead of `DONE`. Previously a mid-loop LLM failure silently stopped execution with partial unsynthesized results and no explanation to the user. Single-agent results still use `DONE` (the agent's response stands on its own).
+- **Malformed targets logged in `_parse_v2_action`**: Targets missing `agent_id` are now logged at `WARNING` level instead of silently dropped. If all targets in a DELEGATE action are malformed, an additional warning is logged before the empty-targets guard converts the action to DONE. This aids debugging when the supervisor LLM returns unexpected target formats.
+- **Target deduplication uses (agent_id, task) tuple**: Previously, targets were deduplicated by `agent_id` alone, which silently dropped legitimate same-agent-different-task delegations (e.g., a search agent queried for two different things concurrently). Now only targets with identical `(agent_id, task)` pairs are deduplicated.
+- **Debate mode + push notification resume**: When a debate-mode trajectory resumes after a push notification webhook (step > 0), the executor now checks if all PAUSED results have been filled in and immediately returns DONE. Previously, the debate fast-path only fired on `step_number == 0`, so resumed debate trajectories fell through to `decide_next`, which didn't know about debate mode semantics and could make incorrect routing decisions.
+- **Design doc cancellation status corrected**: The §6.2 pseudocode showed `trajectory.status = "failed"` in the cancellation handler, contradicting the actual implementation's `"canceled"`. Fixed to match.
+- **PAUSED results excluded from `r.success`-based filters**: Three code paths used `r.success` to identify completed agent results, which incorrectly included PAUSED results (which have `success=True` but empty `response_text`): (1) `decide_next` fail-open threshold for triggering SYNTHESIZE, (2) the SYNTHESIZE handler's guard against synthesizing with zero results, (3) `_fallback_v2_synthesis` rendering. All three now also check `r.status == StepStatus.SUCCESS` to exclude PAUSED results. Without this fix, a trajectory with 1 completed agent and 1 paused agent could trigger synthesis over essentially one response plus an empty placeholder.
+- **`clarify_original_message_id` survives pause/resume**: Added `clarify_original_message_id` field to `SupervisorTrajectory`. When a clarify-resume trajectory hits a push notification pause and later resumes via the webhook path, the original clarification message ID was previously lost because `_resume_supervisor_v2` never passed it to `_handle_v2_run_result`. The original message's trajectory would stay stuck in `"clarifying"` status forever. The fix stores the ID on the trajectory itself (set by `_process_supervisor_v2` before calling `run()`), so it survives serialization through `_save_pause_state` → continuation → `_resume_supervisor_v2`. Both `_process_supervisor_v2` and `_resume_supervisor_v2` now read from `result.trajectory.clarify_original_message_id` instead of (or in addition to) the user message `extend_info`.
 
 ---
 
@@ -1535,7 +1686,7 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 
    **Why both layers**: Layer 1 is for cases where debate mode is soft (the supervisor could choose to delegate to a subset). Layer 2 is for strict debate (all agents must participate). The default in V2 is Layer 2 (code-enforced). Layer 1 becomes relevant if we later introduce a "soft debate" mode where the supervisor can exclude agents it deems irrelevant.
 
-4. **Trajectory prompt size**: The `format_trajectory` function truncates each agent response to 500 characters (§5). For long conversations with many supervisor calls, even truncated entries may push the prompt over context limits. Mitigation: cap the trajectory at the last N entries (e.g., 5) and summarize older entries as: _"Steps 1–3: [AgentA, AgentB responded successfully]."_ This should be implemented before rolling out to production rooms with high step counts.
+4. **Trajectory prompt size** (**resolved**): The `_format_trajectory` method truncates each agent response to 500 characters (§5) and uses a sliding window (default: 5 entries). Older entries are collapsed into a one-line summary that includes action types (DELEGATE agent names, CLARIFY, DONE) so the supervisor doesn't lose context about non-DELEGATE actions when they scroll out of the window.
 
 5. **Observability**: The full trajectory is stored in `user_message.extend_info.supervisor_trajectory` (persisted for all terminal statuses including PAUSED since Phase 5). For production debugging (e.g., "why did the supervisor delegate to the wrong agent?"), a dedicated `supervisor_trajectories` collection would enable cross-message queries. This is a nice-to-have for post-launch.
 
@@ -1543,11 +1694,13 @@ V2 adds ~400ms between agents (the decide call). In exchange, the supervisor see
 
 7. **Stale clarify state / TTL** (**resolved in Phase 4**): The room-level `pending_clarification_message_id` flag (§7.4) now has a 1-hour TTL enforced in `RoomServices._prepare_clarify_resume_v2`. When the user's next message arrives, the age of the last trajectory entry's `started_at` is checked against `CLARIFY_TTL_SECONDS` (3600s). If stale, the flag is cleared and the message is treated as a fresh request. This avoids the scenario where an ignored clarification blocks all subsequent messages.
 
-8. **Crash recovery / durable execution**: If the server process restarts while `SupervisorExecutor.run()` is mid-loop (between two `decide_next` calls), the in-flight execution is silently lost. The trajectory is serialized into `user_message.extend_info.supervisor_trajectory` only on explicit pause events (push notification, clarify). A mid-loop crash leaves the user's request with no response and no error signal.
+8. **Crash recovery / durable execution** (**resolved**): If the server process restarts while `SupervisorExecutor.run()` is mid-loop, the in-flight execution is recovered via per-step trajectory checkpointing + a background recovery job. See §8.14 for the full design.
 
-   Industry frameworks (LangGraph with Postgres/Redis checkpointers) solve this by snapshotting execution state after every step automatically. V2 can approximate this by persisting the trajectory to the database after every completed `TrajectoryEntry` (i.e., after each successful DELEGATE + results cycle), not just on pause. On restart, a recovery job would scan for `user_messages` with `supervisor_trajectory.status == "running"` and re-trigger `SupervisorExecutor.run(..., resumed_trajectory=...)` for each one.
+   **Per-step checkpointing**: `_checkpoint_trajectory` persists the trajectory to `user_message.extend_info.supervisor_trajectory` after each DELEGATE entry is created but before dispatch begins (pre-dispatch checkpoint). This creates a recoverable entry with empty results — crash recovery can detect it and re-dispatch using the same action. Checkpointing is best-effort; failures are logged but do not abort the loop.
 
-   **Priority**: Medium — important for production reliability. V1 fallback has been removed (Phase 5), making crash recovery more important for production deployments.
+   **Recovery job**: `StaleTaskChecker._recover_stuck_supervisor_trajectories` scans for user messages where `extend_info.supervisor_trajectory.status == "running"` and `message_created_at` is older than the orphan threshold. Each stuck trajectory is atomically claimed via `claim_stuck_supervisor_trajectory` (MongoDB `find_one_and_update` with status precondition: `"running"` → `"recovering"`) so only one worker can recover it. The recovery job re-triggers `process_room_user_message`, which detects the checkpointed trajectory and resumes via `SupervisorExecutor.run(resumed_trajectory=...)`.
+
+   **In-flight step recovery**: When `run()` detects the last trajectory entry has `action=DELEGATE` and empty results (indicating a crash mid-dispatch), it pops the entry and re-uses its action instead of calling `decide_next`. This avoids duplicate dispatches.
 
 ---
 
@@ -1574,8 +1727,8 @@ V2's core loop is **mainstream**. The design decision to abandon plan-and-execut
 
 | Gap | Framework Capability | V2 Status | Priority |
 |---|---|---|---|
-| **Crash recovery** | LangGraph checkpointers (Postgres/Redis) snapshot state after every step; execution resumes automatically on restart | V2 only persists on push notification pause; mid-loop crashes lose the request | Medium — add per-step trajectory persistence (§14.8) |
-| **Trajectory context management** | LangGraph's `SummarizationMiddleware` automatically compresses history when approaching token limits | V2 truncates at 500 chars with no automatic summarization | Medium — implement before high-step-count production rollout (§14.4) |
+| **Crash recovery** | LangGraph checkpointers (Postgres/Redis) snapshot state after every step; execution resumes automatically on restart | V2 now checkpoints the trajectory to MongoDB after each DELEGATE step and recovers stuck trajectories via `StaleTaskChecker` (§8.14). Not as seamless as LangGraph's built-in checkpointers but functionally equivalent. | ~~Medium~~ **Resolved** |
+| **Trajectory context management** | LangGraph's `SummarizationMiddleware` automatically compresses history when approaching token limits | V2 uses a sliding window (default: 5 entries) with one-line summaries for older entries (§5). Agent responses truncated to 500 chars. Not automatic summarization but effective for typical step counts. | ~~Medium~~ **Resolved** |
 | **Infrastructure-level retries** | `ToolRetryMiddleware` retries failed agent calls with exponential backoff transparently | V2 surfaces failures as `StepResult(success=False)` and burns a `decide_next` call to handle them | Low — LLM-mediated retry is workable; infra retry would reduce LLM call overhead |
 | **Visual observability** | LangGraph renders agent graphs as visual diagrams; breakpoints at specific nodes | V2 is a Python while loop; no visual topology | Low — nice-to-have for debugging; trajectory logs partially compensate |
 
@@ -1726,7 +1879,6 @@ For production monitoring, V2 should emit the following metrics. These can be im
 | `supervisor_v2_agent_dispatches_total` | `success` (true/false), `reason` (rate_limited/not_found/error/ok) | Total agent dispatch attempts |
 | `supervisor_v2_budget_exhaustions_total` | — | Times MAX_STEPS was reached |
 | `supervisor_v2_debate_fastpath_total` | — | Times debate mode fast-path was used |
-| `supervisor_v2_fallback_to_v1_total` | — | Times `SupervisorPlanningError` triggered V1 fallback |
 
 ### 18.2 Histograms
 
@@ -1755,5 +1907,7 @@ Supervisor V2 replaces the plan-then-execute architecture with an adaptive loop:
 - **True concurrency**: Multi-target delegate actions execute concurrently via `asyncio.gather`
 - **Clarify works**: The supervisor can pause and ask the user for more information
 - **Budget-bounded**: Hard cap on supervisor LLM calls prevents runaway costs
+- **Cancellation-aware**: LLM calls and agent dispatches are raced against the cancellation token; partial results are collected for cleanup
+- **Crash-recoverable**: Per-step trajectory checkpointing + a background recovery job ensure mid-loop crashes are detected and resumed
 
 The migration is complete: V1 has been deprecated and removed (Phase 5). All supervisor-enabled rooms (`use_supervisor = True`) use V2 exclusively. The `QueueExecutor` continues to serve non-supervisor rooms (direct chat, @mention routing). All existing infrastructure (agent dispatch, SSE, push notifications, room memory) is preserved.

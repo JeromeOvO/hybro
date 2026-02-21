@@ -168,6 +168,13 @@ class SupervisorTrajectory(BaseModel):
     The supervisor prompt formatter includes this so the LLM knows the
     user answered."""
 
+    clarify_original_message_id: str | None = None
+    """The ``user_message_id`` of the message that originally triggered the
+    CLARIFY action.  Carried through pause/resume so that
+    ``_handle_v2_run_result`` can update the original message's trajectory
+    status even when the clarify-resume itself gets paused by a push
+    notification and later resumes via the webhook path."""
+
 
 # =========================================================================
 # Run result

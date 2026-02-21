@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 
 from common.utils.context_utils import get_context_stats
@@ -395,6 +396,39 @@ class RoomMessageCenter:
                         e,
                     )
 
+        # Carry the original clarify message ID on the trajectory so it
+        # survives pause/resume serialization.
+        if is_clarify_resume and resumed_trajectory:
+            resumed_trajectory.clarify_original_message_id = extend.get(
+                "clarify_original_message_id"
+            )
+
+        # Crash-recovery resume: if the checkpointed trajectory has
+        # status="running" or "recovering" (set by the atomic claim in the
+        # stale task checker), a previous server instance crashed mid-loop.
+        # Resume from the checkpoint instead of starting fresh.
+        if resumed_trajectory is None and not is_clarify_resume:
+            checkpoint_data = extend.get("supervisor_trajectory")
+            if isinstance(checkpoint_data, dict) and checkpoint_data.get("status") in (
+                "running", "recovering",
+            ):
+                try:
+                    resumed_trajectory = SupervisorTrajectory(**checkpoint_data)
+                    logger.info(
+                        "supervisor_v2_crash_recovery_started",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": resumed_trajectory.trajectory_id,
+                            "checkpointed_steps": len(resumed_trajectory.entries),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: crash-recovery trajectory "
+                        "deserialization failed: %s — starting fresh run",
+                        e,
+                    )
+
         try:
             result = await self.supervisor_executor.run(
                 room_id=room_id,
@@ -407,6 +441,7 @@ class RoomMessageCenter:
                 request_user_id=user_id,
                 quoted_text=quoted_text,
                 resumed_trajectory=resumed_trajectory,
+                user_message=user_message,
             )
         except SupervisorPlanningError:
             if is_clarify_resume and resumed_trajectory:
@@ -430,11 +465,32 @@ class RoomMessageCenter:
                         await self.database_service.update_room_by_room_id(
                             room_id, room
                         )
+                    # Persist the restored trajectory on the original message
+                    # so the DB status is consistent with the room state.
+                    try:
+                        orig_msg = await self.database_service.get_room_user_message_by_message_id(
+                            original_msg_id
+                        )
+                        if orig_msg and isinstance(orig_msg.extend_info, dict):
+                            orig_msg.extend_info["supervisor_trajectory"] = (
+                                resumed_trajectory.model_dump(mode="json")
+                            )
+                            await self.database_service.update_room_user_message_by_message_id(
+                                original_msg_id, orig_msg
+                            )
+                    except Exception as persist_err:
+                        logger.warning(
+                            "RoomMessageCenter: failed to persist restored clarify "
+                            "trajectory on %s: %s",
+                            original_msg_id,
+                            persist_err,
+                        )
+                    self.sse_manager.remove_token(room_user_message_id)
                     await self.sse_manager.send_processing_status(
                         room_id,
-                        SSEProcessingStatus.FAILED,
+                        SSEProcessingStatus.COMPLETED,
                         room_user_message_id,
-                        details="Clarify resume failed — please try again",
+                        details="Clarify resume failed — please answer the clarification question again",
                     )
                     return OrchestrationResponse(
                         room_id=room_id,
@@ -446,6 +502,10 @@ class RoomMessageCenter:
             logger.error(
                 "RoomMessageCenter: Supervisor first decide_next failed for %s",
                 room_user_message_id,
+            )
+            # Persist a failed trajectory so the recovery job doesn't retry.
+            await self._persist_failed_trajectory(
+                user_message, room_user_message_id, resumed_trajectory,
             )
             try:
                 await self.room_coordinator_service.emit_synthesis_message(
@@ -463,6 +523,7 @@ class RoomMessageCenter:
                     "RoomMessageCenter: Failed to emit planning error message: %s",
                     emit_err,
                 )
+            self.sse_manager.remove_token(room_user_message_id)
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -483,6 +544,13 @@ class RoomMessageCenter:
             )
             if resumed_trajectory and resumed_trajectory.status == "running":
                 resumed_trajectory.status = "failed"
+            # Persist the failed trajectory so the recovery job
+            # (_recover_stuck_supervisor_trajectories) doesn't endlessly
+            # retry a permanently-broken execution.
+            await self._persist_failed_trajectory(
+                user_message, room_user_message_id, resumed_trajectory,
+            )
+            self.sse_manager.remove_token(room_user_message_id)
             await self.sse_manager.send_processing_status(
                 room_id,
                 SSEProcessingStatus.FAILED,
@@ -501,9 +569,8 @@ class RoomMessageCenter:
             result=result,
             room_id=room_id,
             user_message_id=room_user_message_id,
-            original_clarify_message_id=(
-                extend.get("clarify_original_message_id") if is_clarify_resume else None
-            ),
+            original_clarify_message_id=result.trajectory.clarify_original_message_id,
+            user_message=user_message,
         )
 
         await self._log_room_memory_stats(room_id)
@@ -548,6 +615,7 @@ class RoomMessageCenter:
         message_text = continuation.get("message_text", "")
         request_user_id = continuation.get("request_user_id")
         conversation_context = continuation.get("conversation_context")
+        quoted_text = continuation.get("quoted_text")
 
         if not room_id or not user_message_id:
             logger.error(
@@ -625,19 +693,26 @@ class RoomMessageCenter:
             return False
 
         agent_registry: list[AgentProfile] = []
-        for aid, aname in (room.room_agent_set or {}).items():
-            agent = await self.database_service.get_agent_by_agent_id(aid)
-            if agent:
-                agent_registry.append(AgentProfile.from_agent(agent))
-            else:
-                agent_registry.append(
-                    AgentProfile(
-                        agent_id=aid,
-                        agent_name=aname,
-                        description="",
-                        is_healthy=False,
-                    )
+        room_agent_items = list((room.room_agent_set or {}).items())
+        if room_agent_items:
+            agents = await asyncio.gather(
+                *(
+                    self.database_service.get_agent_by_agent_id(aid)
+                    for aid, _ in room_agent_items
                 )
+            )
+            for (aid, aname), agent in zip(room_agent_items, agents, strict=True):
+                if agent:
+                    agent_registry.append(AgentProfile.from_agent(agent))
+                else:
+                    agent_registry.append(
+                        AgentProfile(
+                            agent_id=aid,
+                            agent_name=aname,
+                            description="",
+                            is_healthy=False,
+                        )
+                    )
 
         if not agent_registry:
             # Fall back to serialized registry if DB refresh yields nothing
@@ -698,6 +773,7 @@ class RoomMessageCenter:
                 conversation_context=conversation_context,
                 token=token,
                 request_user_id=request_user_id,
+                quoted_text=quoted_text,
                 resumed_trajectory=trajectory,
             )
         except Exception:
@@ -718,6 +794,7 @@ class RoomMessageCenter:
             room_id=room_id,
             user_message_id=user_message_id,
             room=room,
+            original_clarify_message_id=result.trajectory.clarify_original_message_id,
         )
 
         await self._log_room_memory_stats(room_id)
@@ -823,6 +900,39 @@ class RoomMessageCenter:
                     return result.agent_id, result.agent_name
         return None, None
 
+    async def _persist_failed_trajectory(
+        self,
+        user_message,
+        user_message_id: str,
+        trajectory: SupervisorTrajectory | None,
+    ) -> None:
+        """Best-effort: mark a trajectory as failed in the DB so the recovery
+        job (``_recover_stuck_supervisor_trajectories``) does not retry it."""
+        try:
+            msg = user_message
+            if msg is None:
+                msg = await self.database_service.get_room_user_message_by_message_id(
+                    user_message_id
+                )
+            if msg and isinstance(msg.extend_info, dict):
+                traj_data = msg.extend_info.get("supervisor_trajectory")
+                if isinstance(traj_data, dict) and traj_data.get("status") == "running":
+                    traj_data["status"] = "failed"
+                elif trajectory is not None:
+                    trajectory.status = "failed"
+                    msg.extend_info["supervisor_trajectory"] = (
+                        trajectory.model_dump(mode="json")
+                    )
+                await self.database_service.update_room_user_message_by_message_id(
+                    user_message_id, msg
+                )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: failed to persist failed trajectory for %s: %s",
+                user_message_id,
+                e,
+            )
+
     async def _handle_v2_run_result(
         self,
         result: SupervisorRunResult,
@@ -830,6 +940,7 @@ class RoomMessageCenter:
         user_message_id: str,
         room=None,
         original_clarify_message_id: str | None = None,
+        user_message=None,
     ) -> None:
         """Persist trajectory and emit SSE/synthesis for a V2 run result.
 
@@ -839,11 +950,12 @@ class RoomMessageCenter:
         the original message's trajectory is also updated so it doesn't stay
         permanently in ``"clarifying"`` status.
         """
-        user_message = (
-            await self.database_service.get_room_user_message_by_message_id(
-                user_message_id
+        if user_message is None:
+            user_message = (
+                await self.database_service.get_room_user_message_by_message_id(
+                    user_message_id
+                )
             )
-        )
         if user_message and result.status in (
             RunStatus.COMPLETED,
             RunStatus.CLARIFYING,
@@ -941,18 +1053,48 @@ class RoomMessageCenter:
                 )
 
             case RunStatus.CANCELED:
+                canceled_parent_ids: list[str] = []
+                for entry in result.trajectory.entries:
+                    for step_result in entry.results:
+                        if step_result.agent_message_id:
+                            canceled_parent_ids.append(step_result.agent_message_id)
+                            await self.database_service.cancel_descendants(
+                                step_result.agent_message_id
+                            )
+                if canceled_parent_ids:
+                    await self.database_service.cancel_agent_messages_by_ids(
+                        canceled_parent_ids
+                    )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
                 self.sse_manager.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
+                failed_parent_ids: list[str] = []
+                for entry in result.trajectory.entries:
+                    for step_result in entry.results:
+                        if step_result.agent_message_id:
+                            failed_parent_ids.append(step_result.agent_message_id)
+                            await self.database_service.cancel_descendants(
+                                step_result.agent_message_id
+                            )
+                if failed_parent_ids:
+                    await self.database_service.cancel_agent_messages_by_ids(
+                        failed_parent_ids
+                    )
                 await self.sse_manager.send_processing_status(
                     room_id,
                     SSEProcessingStatus.FAILED,
                     user_message_id,
                     details="V2 supervisor execution failed",
                 )
+
+        # Clean up cancellation token for all terminal statuses.
+        # PAUSED runs keep their token alive — the webhook resume path
+        # will create/reuse it.
+        if result.status != RunStatus.PAUSED:
+            self.sse_manager.remove_token(user_message_id)
 
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
@@ -992,18 +1134,25 @@ class RoomMessageCenter:
             return False
 
         if continuation.get("supervisor_v2"):
+            # Re-save continuation before attempting resume so a process
+            # crash mid-resume doesn't permanently lose the execution state.
+            await self.database_service.save_continuation_on_message(
+                message_id, continuation
+            )
             try:
-                return await self._resume_supervisor_v2(
+                result = await self._resume_supervisor_v2(
                     continuation, message_id, task_result_text
                 )
+                # On success, clear the continuation (it was re-saved above).
+                await self.database_service.get_and_clear_continuation_on_message(
+                    message_id
+                )
+                return result
             except Exception:
                 logger.exception(
-                    "RoomMessageCenter: V2 resume failed — re-saving continuation "
+                    "RoomMessageCenter: V2 resume failed — continuation preserved "
                     "for message %s so it can be retried",
                     message_id,
-                )
-                await self.database_service.save_continuation_on_message(
-                    message_id, continuation
                 )
                 return False
 

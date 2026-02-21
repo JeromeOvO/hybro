@@ -737,6 +737,39 @@ class MongoDB:
         )
         return result.modified_count
 
+    async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
+        """Cancel agent messages by their message IDs.
+
+        Sets ``message_content.message_task.status.state`` to ``"canceled"``
+        for messages that are not already in a terminal state.
+
+        Returns the number of messages actually modified.
+        """
+        if not message_ids:
+            return 0
+        terminal_statuses = ["completed", "canceled", "failed", "rejected"]
+        result = await self.room_agent_messages_collection.update_many(
+            {
+                "message_id": {"$in": message_ids},
+                "message_content.message_task": {"$ne": None},
+                "message_content.message_task.status.state": {
+                    "$nin": terminal_statuses
+                },
+            },
+            {
+                "$set": {
+                    "message_content.message_task.status.state": "canceled",
+                }
+            },
+        )
+        if result.modified_count:
+            logger.info(
+                "cancel_agent_messages_by_ids: canceled %d of %d message(s)",
+                result.modified_count,
+                len(message_ids),
+            )
+        return result.modified_count
+
     async def update_room_agent_message_by_message_id(
         self, message_id: str, room_agent_message: RoomAgentMessage
     ) -> bool:
@@ -1294,6 +1327,37 @@ class MongoDB:
         return result.deleted_count > 0
 
     # ============== Message Cancellation Methods ==============
+
+    async def claim_stuck_supervisor_trajectory(
+        self, message_id: str
+    ) -> bool:
+        """Atomically transition a supervisor trajectory from "running" to "recovering".
+
+        Uses ``find_one_and_update`` with a status precondition so that only one
+        recovery worker (even across multiple server instances) can claim a given
+        stuck trajectory.
+
+        Returns True if this call successfully claimed the message, False if
+        another worker already claimed it or the message was not found.
+        """
+        result = await self.room_user_messages_collection.find_one_and_update(
+            {
+                "message_id": message_id,
+                "extend_info.supervisor_trajectory.status": "running",
+            },
+            {
+                "$set": {
+                    "extend_info.supervisor_trajectory.status": "recovering",
+                }
+            },
+        )
+        if result:
+            logger.info(
+                "claim_stuck_supervisor_trajectory: claimed message %s",
+                message_id,
+            )
+            return True
+        return False
 
     async def cancel_message(self, message_id: str, user_id: str) -> bool:
         """

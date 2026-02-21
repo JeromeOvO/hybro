@@ -168,6 +168,11 @@ class StaleTaskChecker:
                     exc_info=True,
                 )
 
+        # 6. Recover V2 supervisor trajectories stuck in "running" status.
+        #    This handles mid-loop crashes where the server restarted while
+        #    SupervisorExecutor.run() was in-flight.
+        await self._recover_stuck_supervisor_trajectories()
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -544,6 +549,115 @@ class StaleTaskChecker:
         except Exception as e:
             logger.error(
                 f"Exception during recovery of user message {request.room_user_message_id}: {e}"
+            )
+
+    async def _recover_stuck_supervisor_trajectories(self) -> None:
+        """Recover V2 supervisor trajectories stuck in "running" status.
+
+        When the server crashes mid-loop, ``_checkpoint_trajectory`` has
+        already persisted the trajectory with ``status="running"`` to the
+        user message's ``extend_info.supervisor_trajectory``.  On restart,
+        we scan for these and re-trigger ``process_room_user_message`` so
+        ``_process_supervisor_v2`` picks up the checkpointed trajectory.
+
+        Only messages older than ``orphan_threshold_minutes`` are recovered
+        to avoid racing with actively running trajectories.
+        """
+        from datetime import timedelta
+
+        mongo_db = await get_db()
+        user_messages_collection = mongo_db.room_user_messages
+
+        threshold = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
+
+        stuck_messages = await user_messages_collection.find(
+            {
+                "extend_info.supervisor_trajectory.status": "running",
+                "extend_info.supervisor_v2": True,
+                "message_created_at": {"$lt": threshold},
+            },
+            {"message_id": 1, "room_id": 1, "_id": 0},
+        ).to_list(length=100)
+
+        if not stuck_messages:
+            return
+
+        logger.info(
+            "supervisor_recovery: found %d stuck V2 trajectories to recover",
+            len(stuck_messages),
+        )
+
+        for doc in stuck_messages:
+            message_id = doc.get("message_id")
+            room_id = doc.get("room_id")
+            if not message_id or not room_id:
+                continue
+
+            # Atomically claim this trajectory so no other worker (or
+            # subsequent check cycle) can recover it concurrently.
+            claimed = await db_service.claim_stuck_supervisor_trajectory(message_id)
+            if not claimed:
+                logger.info(
+                    "supervisor_recovery: message %s already claimed by another worker",
+                    message_id,
+                )
+                continue
+
+            # Respect persistent cancellation: if the user canceled during
+            # the crash window, the in-memory token was lost but the
+            # cancelled_messages DB record survives.
+            if await db_service.is_message_cancelled(message_id):
+                logger.info(
+                    "supervisor_recovery: skipping message %s — cancelled by user",
+                    message_id,
+                )
+                continue
+
+            try:
+                logger.info(
+                    "supervisor_recovery: re-triggering message %s in room %s",
+                    message_id,
+                    room_id,
+                )
+                request = OrchestrationRequest(
+                    room_id=room_id,
+                    room_user_message_id=message_id,
+                    room_related_message_id="",
+                )
+                asyncio.create_task(
+                    self._process_recovered_supervisor_message(request, message_id)
+                )
+            except Exception as e:
+                logger.error(
+                    "supervisor_recovery: failed to trigger recovery for %s: %s",
+                    message_id,
+                    e,
+                )
+
+    async def _process_recovered_supervisor_message(
+        self,
+        request: OrchestrationRequest,
+        message_id: str,
+    ) -> None:
+        """Process a recovered supervisor V2 message in the background."""
+        try:
+            result = await room_message_center.process_room_user_message(request)
+            if result.success:
+                logger.info(
+                    "supervisor_recovery: successfully recovered message %s",
+                    message_id,
+                )
+            else:
+                logger.warning(
+                    "supervisor_recovery: recovery for %s completed with error: %s",
+                    message_id,
+                    result.error,
+                )
+        except Exception as e:
+            logger.error(
+                "supervisor_recovery: exception recovering message %s: %s",
+                message_id,
+                e,
             )
 
 

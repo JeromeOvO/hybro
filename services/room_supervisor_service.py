@@ -19,6 +19,7 @@ from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
     RoomConfig,
+    StepStatus,
     SupervisorAction,
     SupervisorTrajectory,
 )
@@ -234,6 +235,18 @@ class RoomSupervisorService:
             logger.warning("Supervisor V2 decide_next failed: %s", e)
             if not trajectory.entries:
                 raise SupervisorPlanningError(str(e)) from e
+            completed_results = [
+                r
+                for entry in trajectory.entries
+                for r in entry.results
+                if r.success and r.status == StepStatus.SUCCESS
+            ]
+            if len(completed_results) >= 2:
+                return SupervisorAction(
+                    action=ActionType.SYNTHESIZE,
+                    reasoning=f"Supervisor failed ({e}), synthesizing available results",
+                    synthesis_instruction="The supervisor encountered an error. Synthesize the available agent results into a coherent response.",
+                )
             return SupervisorAction(
                 action=ActionType.DONE,
                 reasoning=f"Supervisor failed ({e}), stopping with current results",
@@ -278,14 +291,59 @@ class RoomSupervisorService:
     # V2 helpers
     # -------------------------------------------------------------------------
 
-    @staticmethod
-    def _format_trajectory(trajectory: SupervisorTrajectory) -> str:
-        """Format the trajectory for inclusion in the supervisor prompt."""
+    # Maximum number of recent trajectory entries to include in full detail.
+    # Older entries are summarized to prevent the prompt from growing unbounded.
+    _TRAJECTORY_WINDOW: int = 5
+
+    @classmethod
+    def _format_trajectory(
+        cls,
+        trajectory: SupervisorTrajectory,
+        *,
+        window: int | None = None,
+    ) -> str:
+        """Format the trajectory for inclusion in the supervisor prompt.
+
+        When the trajectory has more than ``window`` entries, older entries
+        are collapsed into a one-line summary to keep the prompt within
+        reasonable token limits.
+        """
+        if window is None:
+            window = cls._TRAJECTORY_WINDOW
         if not trajectory.entries:
             return "No actions taken yet."
 
+        entries = trajectory.entries
         lines: list[str] = []
-        for entry in trajectory.entries:
+
+        if len(entries) > window:
+            older = entries[: len(entries) - window]
+            summary_parts: list[str] = []
+            for e in older:
+                action_type = e.action.action.upper()
+                if e.results:
+                    for r in e.results:
+                        if r.status == StepStatus.PAUSED:
+                            tag = f"{r.agent_name}(PAUSED)"
+                        elif r.success:
+                            tag = r.agent_name
+                        else:
+                            tag = f"{r.agent_name}(FAILED)"
+                        summary_parts.append(tag)
+                elif action_type == "CLARIFY":
+                    summary_parts.append("CLARIFY asked")
+                elif action_type == "DONE":
+                    summary_parts.append("DONE")
+                else:
+                    summary_parts.append(action_type)
+            summary_text = ", ".join(summary_parts) if summary_parts else "no actions"
+            lines.append(
+                f"Steps 1–{older[-1].step_number}: "
+                f"[{summary_text}]"
+            )
+            entries = entries[len(entries) - window :]
+
+        for entry in entries:
             lines.append(
                 f"### Step {entry.step_number}: {entry.action.action.upper()}"
             )
@@ -293,29 +351,34 @@ class RoomSupervisorService:
                 for target in entry.action.targets:
                     lines.append(f"  Delegated to {target.agent_name}: {target.task}")
                 for result in entry.results:
-                    status = (
-                        "SUCCESS"
-                        if result.success
-                        else f"FAILED: {result.error_message}"
-                    )
+                    if result.status == StepStatus.PAUSED:
+                        status = "PAUSED (awaiting external response)"
+                    elif result.success:
+                        status = "SUCCESS"
+                    else:
+                        status = f"FAILED: {result.error_message}"
+                    response_preview = result.response_text[:500]
+                    if len(result.response_text) > 500:
+                        response_preview += " [truncated]"
                     lines.append(
                         f"  → {result.agent_name} [{status}]: "
-                        f"{result.response_text[:500]}"
+                        f"{response_preview}"
                     )
             elif entry.action.action == ActionType.CLARIFY:
                 lines.append(
                     f"  Asked user: {entry.action.clarification_question}"
                 )
-                if trajectory.clarify_user_reply:
-                    lines.append(
-                        f"  User replied: {trajectory.clarify_user_reply}"
-                    )
             elif entry.action.action == ActionType.SYNTHESIZE:
                 lines.append(
                     f"  Instruction: {entry.action.synthesis_instruction}"
                 )
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
+
+        if trajectory.clarify_user_reply:
+            lines.append(
+                f"\n### User's Clarification Reply\n{trajectory.clarify_user_reply}"
+            )
 
         return "\n".join(lines)
 
@@ -334,7 +397,8 @@ class RoomSupervisorService:
             action_type = ActionType.DONE
 
         targets = []
-        for t in response_json.get("targets") or []:
+        raw_targets = response_json.get("targets") or []
+        for t in raw_targets:
             if isinstance(t, dict) and "agent_id" in t:
                 targets.append(
                     DelegateTarget(
@@ -343,6 +407,18 @@ class RoomSupervisorService:
                         task=t.get("task", ""),
                     )
                 )
+            else:
+                logger.warning(
+                    "Supervisor V2: dropping malformed target (missing agent_id): %s",
+                    t,
+                )
+
+        if action_type == ActionType.DELEGATE and raw_targets and not targets:
+            logger.warning(
+                "Supervisor V2: all %d targets were malformed, converting DELEGATE to DONE",
+                len(raw_targets),
+            )
+            action_type = ActionType.DONE
 
         return SupervisorAction(
             action=action_type,
@@ -358,7 +434,9 @@ class RoomSupervisorService:
         lines = ["Here's a summary of the agent responses:\n"]
         for entry in trajectory.entries:
             for result in entry.results:
-                if result.success:
+                if result.status == StepStatus.PAUSED:
+                    continue
+                elif result.success:
                     lines.append(
                         f"**{result.agent_name}**: {result.response_text[:500]}"
                     )
