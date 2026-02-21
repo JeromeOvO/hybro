@@ -528,6 +528,13 @@ export function RoomChatInput({
     setSelectedAgentIndex(0)
   }
 
+  // Auto-focus editor when a quote is set
+  useEffect(() => {
+    if (quote) {
+      editorRef.current?.focus()
+    }
+  }, [quote])
+
   // Update editor when message changes externally
   useEffect(() => {
     if (editorRef.current && message === '') {
