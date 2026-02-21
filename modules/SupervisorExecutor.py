@@ -228,9 +228,9 @@ class SupervisorExecutor:
                     # Check for PAUSED (push notification agent)
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
-                        entry.results = [
-                            r for r in results if r.status != StepStatus.PAUSED
-                        ]
+                        # Keep ALL results (including PAUSED) so the resume
+                        # path can match by agent_message_id.
+                        entry.results = results
                         trajectory.entries.append(entry)
                         trajectory.status = "running"
                         await self._save_pause_state(
