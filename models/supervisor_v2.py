@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -149,6 +149,17 @@ class TrajectoryEntry(BaseModel):
     completed_at: datetime | None = None
 
 
+class TrajectoryStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    CLARIFYING = "clarifying"
+    # Transient state used by the DB layer when claiming a stuck trajectory
+    # for recovery; never set by the executor itself.
+    RECOVERING = "recovering"
+
+
 class SupervisorTrajectory(BaseModel):
     """Full execution trajectory for a user message.
 
@@ -158,7 +169,7 @@ class SupervisorTrajectory(BaseModel):
 
     trajectory_id: str = Field(default_factory=lambda: uuid4().hex)
     entries: list[TrajectoryEntry] = Field(default_factory=list)
-    status: Literal["running", "completed", "failed", "canceled", "clarifying"] = "running"
+    status: TrajectoryStatus = TrajectoryStatus.RUNNING
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 

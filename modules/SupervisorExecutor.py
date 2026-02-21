@@ -36,7 +36,7 @@ from models.supervisor_v2 import (
     TrajectoryEntry,
     V2StepResult,
 )
-from modules.ResponseProcessor import ProcessingStatus
+from models.processing import ProcessingStatus
 
 if TYPE_CHECKING:
     from modules.AgentDispatcher import AgentDispatcher

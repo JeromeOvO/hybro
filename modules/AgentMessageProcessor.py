@@ -13,14 +13,17 @@ Contains zero orchestration logic — only the mechanics of:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from models.memory import MemoryContent
+from models.processing import ProcessingResult, ProcessingStatus
+from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
-from modules.ResponseProcessor import ProcessingStatus
+from modules.TaskStateManager import get_task
 
 if TYPE_CHECKING:
     from models.agent import Agent
@@ -32,15 +35,6 @@ if TYPE_CHECKING:
     from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class ProcessingResult:
-    """Result of single-message processing with optional metadata."""
-
-    status: ProcessingStatus
-    response_text: str = ""
-    message_id: str | None = None
 
 
 class AgentMessageProcessor:
@@ -82,12 +76,10 @@ class AgentMessageProcessor:
 
         Delegates the actual agent communication (streaming/sync) to the
         ``ResponseProcessor``, keeping orchestration logic in the caller.
+
+        # TODO: Refactor to reduce cyclomatic complexity (currently 11 > 10).
+        # Consider splitting streaming and sync paths into separate private methods.
         """
-        from a2a.types import TaskState
-
-        from models.request import RoomCenterAgentMessageRequest
-        from modules.TaskStateManager import get_task
-
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
         room_memory_content = (
             room_memory.memory_content if room_memory else MemoryContent()

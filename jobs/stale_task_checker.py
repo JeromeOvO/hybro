@@ -563,21 +563,9 @@ class StaleTaskChecker:
         Only messages older than ``orphan_threshold_minutes`` are recovered
         to avoid racing with actively running trajectories.
         """
-        from datetime import timedelta
-
-        mongo_db = await get_db()
-        user_messages_collection = mongo_db.room_user_messages
-
-        threshold = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
-
-        stuck_messages = await user_messages_collection.find(
-            {
-                "extend_info.supervisor_trajectory.status": "running",
-                "extend_info.supervisor_v2": True,
-                "message_created_at": {"$lt": threshold},
-            },
-            {"message_id": 1, "room_id": 1, "_id": 0},
-        ).to_list(length=100)
+        stuck_messages = await db_service.get_stuck_supervisor_trajectory_messages(
+            self.orphan_threshold_minutes
+        )
 
         if not stuck_messages:
             return

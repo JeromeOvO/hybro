@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
-from a2a.types import AgentCard, Task
+from a2a.types import AgentCard, Task, TaskState
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -14,6 +14,7 @@ from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
+from models.supervisor_v2 import TrajectoryStatus
 from models.task import BaseTask, MetaTask, TaskSession
 
 logger = logging.getLogger(__name__)
@@ -699,7 +700,12 @@ class MongoDB:
 
         Returns the number of messages actually modified.
         """
-        terminal_statuses = ["completed", "canceled", "failed", "rejected"]
+        terminal_statuses = [s.value for s in (
+            TaskState.completed,
+            TaskState.canceled,
+            TaskState.failed,
+            TaskState.rejected,
+        )]
         to_visit = [message_id]
         all_descendant_ids: list[str] = []
 
@@ -726,7 +732,7 @@ class MongoDB:
             {"message_id": {"$in": all_descendant_ids}},
             {
                 "$set": {
-                    "message_content.message_task.status.state": "canceled",
+                    "message_content.message_task.status.state": TaskState.canceled.value,
                 }
             },
         )
@@ -747,7 +753,12 @@ class MongoDB:
         """
         if not message_ids:
             return 0
-        terminal_statuses = ["completed", "canceled", "failed", "rejected"]
+        terminal_statuses = [s.value for s in (
+            TaskState.completed,
+            TaskState.canceled,
+            TaskState.failed,
+            TaskState.rejected,
+        )]
         result = await self.room_agent_messages_collection.update_many(
             {
                 "message_id": {"$in": message_ids},
@@ -758,7 +769,7 @@ class MongoDB:
             },
             {
                 "$set": {
-                    "message_content.message_task.status.state": "canceled",
+                    "message_content.message_task.status.state": TaskState.canceled.value,
                 }
             },
         )
@@ -1343,11 +1354,11 @@ class MongoDB:
         result = await self.room_user_messages_collection.find_one_and_update(
             {
                 "message_id": message_id,
-                "extend_info.supervisor_trajectory.status": "running",
+                "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
             },
             {
                 "$set": {
-                    "extend_info.supervisor_trajectory.status": "recovering",
+                    "extend_info.supervisor_trajectory.status": TrajectoryStatus.RECOVERING,
                 }
             },
         )
@@ -1358,6 +1369,27 @@ class MongoDB:
             )
             return True
         return False
+
+    async def get_stuck_supervisor_trajectory_messages(
+        self, older_than_minutes: int, limit: int = 100
+    ) -> list[dict]:
+        """Return user messages whose supervisor trajectory is stuck in ``running``.
+
+        Only messages older than ``older_than_minutes`` are returned so that
+        actively-running trajectories are not mistakenly flagged.
+
+        Each result dict contains only ``message_id`` and ``room_id``.
+        """
+        threshold = utcnow() - timedelta(minutes=older_than_minutes)
+        docs = await self.room_user_messages_collection.find(
+            {
+                "extend_info.supervisor_trajectory.status": TrajectoryStatus.RUNNING,
+                "extend_info.supervisor_v2": True,
+                "message_created_at": {"$lt": threshold},
+            },
+            {"message_id": 1, "room_id": 1, "_id": 0},
+        ).to_list(length=limit)
+        return docs
 
     async def cancel_message(self, message_id: str, user_id: str) -> bool:
         """

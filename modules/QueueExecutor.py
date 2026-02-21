@@ -25,9 +25,9 @@ from common.utils.logger import get_logger
 from models.room import RoomAgentMessage
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
-from modules.AgentMessageProcessor import ProcessingResult  # re-export for callers
-from modules.ResponseProcessor import ProcessingStatus, ResponseProcessor
+from modules.ResponseProcessor import ResponseProcessor
 from modules.TaskStateManager import TaskStateManager, get_task
+from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
 
 if TYPE_CHECKING:

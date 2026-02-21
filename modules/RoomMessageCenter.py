@@ -5,6 +5,7 @@ from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
+from models.room import CoordinatorAgentId
 from models.supervisor_v2 import (
     AgentProfile,
     RoomConfig,
@@ -12,6 +13,7 @@ from models.supervisor_v2 import (
     StepStatus,
     SupervisorRunResult,
     SupervisorTrajectory,
+    TrajectoryStatus,
 )
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
@@ -410,7 +412,7 @@ class RoomMessageCenter:
         if resumed_trajectory is None and not is_clarify_resume:
             checkpoint_data = extend.get("supervisor_trajectory")
             if isinstance(checkpoint_data, dict) and checkpoint_data.get("status") in (
-                "running", "recovering",
+                TrajectoryStatus.RUNNING, TrajectoryStatus.RECOVERING,
             ):
                 try:
                     resumed_trajectory = SupervisorTrajectory(**checkpoint_data)
@@ -453,7 +455,7 @@ class RoomMessageCenter:
                         room_user_message_id,
                         room_id,
                     )
-                    resumed_trajectory.status = "clarifying"
+                    resumed_trajectory.status = TrajectoryStatus.CLARIFYING
                     resumed_trajectory.clarify_user_reply = None
                     room = await self.database_service.get_room_by_room_id(room_id)
                     if room:
@@ -516,7 +518,7 @@ class RoomMessageCenter:
                         "The supervisor encountered an error while planning. "
                         "Please try again."
                     ),
-                    coordinator_agent_id="supervisor_error",
+                    coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_ERROR,
                 )
             except Exception as emit_err:
                 logger.warning(
@@ -542,8 +544,8 @@ class RoomMessageCenter:
                 "for message %s",
                 room_user_message_id,
             )
-            if resumed_trajectory and resumed_trajectory.status == "running":
-                resumed_trajectory.status = "failed"
+            if resumed_trajectory and resumed_trajectory.status == TrajectoryStatus.RUNNING:
+                resumed_trajectory.status = TrajectoryStatus.FAILED
             # Persist the failed trajectory so the recovery job
             # (_recover_stuck_supervisor_trajectories) doesn't endlessly
             # retry a permanently-broken execution.
@@ -916,10 +918,10 @@ class RoomMessageCenter:
                 )
             if msg and isinstance(msg.extend_info, dict):
                 traj_data = msg.extend_info.get("supervisor_trajectory")
-                if isinstance(traj_data, dict) and traj_data.get("status") == "running":
-                    traj_data["status"] = "failed"
+                if isinstance(traj_data, dict) and traj_data.get("status") == TrajectoryStatus.RUNNING:
+                    traj_data["status"] = TrajectoryStatus.FAILED
                 elif trajectory is not None:
-                    trajectory.status = "failed"
+                    trajectory.status = TrajectoryStatus.FAILED
                     msg.extend_info["supervisor_trajectory"] = (
                         trajectory.model_dump(mode="json")
                     )
@@ -1004,7 +1006,7 @@ class RoomMessageCenter:
                             room_id=room_id,
                             room_user_message_id=user_message_id,
                             synthesis_text=result.synthesis_text,
-                            coordinator_agent_id="supervisor_synthesis",
+                            coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
                         )
                     except Exception as e:
                         logger.error(
@@ -1040,7 +1042,7 @@ class RoomMessageCenter:
                             room_id=room_id,
                             room_user_message_id=user_message_id,
                             synthesis_text=result.clarification_question,
-                            coordinator_agent_id="supervisor_clarify",
+                            coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_CLARIFY,
                         )
                     except Exception as e:
                         logger.error(

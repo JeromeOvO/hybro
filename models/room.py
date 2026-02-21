@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -6,6 +7,21 @@ from a2a.types import Task
 from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
+
+
+class CoordinatorAgentId(StrEnum):
+    """Well-known synthetic agent IDs used for coordinator/system-generated messages.
+
+    These are never real agent IDs in the database; they identify the source of
+    messages produced by the orchestration layer (supervisor, debate summary, etc.).
+    """
+
+    SUPERVISOR_ERROR = "supervisor_error"
+    SUPERVISOR_SYNTHESIS = "supervisor_synthesis"
+    SUPERVISOR_CLARIFY = "supervisor_clarify"
+    DEBATE_SUMMARY = "debate_summary"
+    NON_DEBATE_SUMMARY = "non_debate_summary"
+    SYSTEM = "system"
 
 
 class Room(BaseModel):

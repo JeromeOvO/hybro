@@ -828,6 +828,24 @@ class DatabaseService:
             )
             return False
 
+    async def get_stuck_supervisor_trajectory_messages(
+        self, older_than_minutes: int, limit: int = 100
+    ) -> list[dict]:
+        """Return user messages whose supervisor trajectory is stuck in ``running``.
+
+        Only messages older than ``older_than_minutes`` are returned.
+        Each result dict contains only ``message_id`` and ``room_id``.
+        """
+        try:
+            return await self.mongo.get_stuck_supervisor_trajectory_messages(
+                older_than_minutes, limit
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to get stuck supervisor trajectory messages: %s", str(e)
+            )
+            return []
+
     async def is_message_cancelled(self, message_id: str) -> bool:
         """Check if a message has been cancelled (persisted in DB)."""
         try:

@@ -6,7 +6,6 @@ sync response handling with polling, and cancellation/error handling.
 
 import asyncio
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
 from a2a.types import (
@@ -30,7 +29,7 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
-from models.processing import ProcessingContext
+from models.processing import ProcessingContext, ProcessingStatus
 from models.room import RoomAgentMessage
 from modules.TaskStateManager import (
     TaskStateManager,
@@ -45,15 +44,6 @@ from services.a2a_constants import (
 )
 
 logger = get_logger(__name__)
-
-
-class ProcessingStatus(Enum):
-    """Status of message processing operations."""
-
-    SUCCESS = "success"
-    FAILED = "failed"
-    CANCELED = "canceled"
-    PAUSED = "paused"  # Queue paused waiting for push notification task
 
 
 @dataclass

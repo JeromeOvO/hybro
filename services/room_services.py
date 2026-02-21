@@ -39,6 +39,7 @@ from models.response import (
     RoomCenterUserMessageResponse,
 )
 from models.room import (
+    CoordinatorAgentId,
     MessageContent,
     Room,
     RoomAgentMessage,
@@ -1702,7 +1703,7 @@ class RoomServices:
         fallback_agent_message = self._generate_new_agent_message(
             room_id=request.room_id,
             related_message_id=user_message.message_id,
-            agent_id="system",
+            agent_id=CoordinatorAgentId.SYSTEM,
             content=(
                 "I couldn't find any agents for this room or via selection. "
                 "Please choose agents or a group and try again."
