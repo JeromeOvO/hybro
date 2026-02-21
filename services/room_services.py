@@ -1128,6 +1128,29 @@ class RoomServices:
 
         return agent_messages
 
+    @staticmethod
+    def _build_agent_registry(
+        agents: list | None,
+        selected_agent_set: dict,
+    ) -> list:
+        """Build an ``AgentProfile`` list from resolved agents or the agent set."""
+        from models.supervisor import AgentProfile
+
+        registry: list[AgentProfile] = []
+        if agents:
+            for agent in agents:
+                registry.append(AgentProfile.from_agent(agent))
+        else:
+            for agent_id, agent_name in selected_agent_set.items():
+                registry.append(
+                    AgentProfile(
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        description="",
+                    )
+                )
+        return registry
+
     async def _prepare_for_supervisor_v2(
         self,
         room: Room,
@@ -1150,7 +1173,7 @@ class RoomServices:
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
-        from models.supervisor import AgentProfile, RoomConfig
+        from models.supervisor import RoomConfig
 
         if token and token.is_cancelled:
             logger.info(
@@ -1160,19 +1183,7 @@ class RoomServices:
             self.sse_manager.clear_cancellation(user_message.message_id)
             return ParseResult(success=False, canceled=True)
 
-        agent_registry: list[AgentProfile] = []
-        if agents:
-            for agent in agents:
-                agent_registry.append(AgentProfile.from_agent(agent))
-        else:
-            for agent_id, agent_name in selected_agent_set.items():
-                agent_registry.append(
-                    AgentProfile(
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        description="",
-                    )
-                )
+        agent_registry = self._build_agent_registry(agents, selected_agent_set)
 
         room_config = RoomConfig(
             is_debate_mode=is_debate_mode,
@@ -1198,6 +1209,147 @@ class RoomServices:
         )
 
         return ParseResult(success=True)
+
+    # ------------------------------------------------------------------
+    # V2 Supervisor clarify-resume preparation (Phase 4, §7.4)
+    # ------------------------------------------------------------------
+
+    CLARIFY_TTL_SECONDS: int = 3600  # 1 hour
+
+    async def _prepare_clarify_resume_v2(
+        self,
+        room: Room,
+        user_message: RoomUserMessage,
+        message_text: str,
+        pending_clarify_msg_id: str,
+        agents: list | None,
+        selected_agent_set: dict,
+        is_debate_mode: bool,
+        conversation_context: str | None,
+    ) -> bool:
+        """Check whether a pending CLARIFY can be resumed and prepare extend_info.
+
+        Returns ``True`` if the user message was prepared for clarify-resume
+        (``extend_info`` updated with ``supervisor_v2_clarify_resume``).
+        Returns ``False`` if the pending clarification is stale, missing, or
+        otherwise invalid — the caller should fall through to a fresh V2 run.
+        """
+        from models.supervisor import RoomConfig
+        from models.supervisor_v2 import SupervisorTrajectory
+
+        original_msg = (
+            await self.database_service.get_room_user_message_by_message_id(
+                pending_clarify_msg_id
+            )
+        )
+        if not original_msg or not isinstance(original_msg.extend_info, dict):
+            logger.warning(
+                "RoomServices: clarify resume — original message %s not found "
+                "or missing extend_info, clearing stale flag",
+                pending_clarify_msg_id,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        traj_data = original_msg.extend_info.get("supervisor_trajectory")
+        if not traj_data:
+            logger.warning(
+                "RoomServices: clarify resume — no trajectory on message %s, "
+                "clearing stale flag",
+                pending_clarify_msg_id,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        try:
+            trajectory = SupervisorTrajectory(**traj_data)
+        except Exception as e:
+            logger.warning(
+                "RoomServices: clarify resume — failed to deserialize trajectory: %s",
+                e,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        if trajectory.status != "clarifying":
+            logger.info(
+                "RoomServices: clarify resume — trajectory status is %s (not 'clarifying'), "
+                "treating as fresh request",
+                trajectory.status,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        # TTL check: if the last entry's started_at is older than CLARIFY_TTL_SECONDS,
+        # the clarification has gone stale.
+        if not trajectory.entries:
+            logger.warning(
+                "RoomServices: clarify resume — trajectory has no entries for "
+                "message %s, clearing stale flag",
+                pending_clarify_msg_id,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        last_entry = trajectory.entries[-1]
+        age = (utcnow() - ensure_utc(last_entry.started_at)).total_seconds()
+        if age > self.CLARIFY_TTL_SECONDS:
+            logger.info(
+                "RoomServices: clarify resume — stale (%.0fs > %ds), "
+                "treating as fresh request",
+                age,
+                self.CLARIFY_TTL_SECONDS,
+            )
+            await self._clear_pending_clarification(room)
+            return False
+
+        # All checks passed — prepare the user message for clarify-resume.
+        # Set the user's reply on the trajectory so the supervisor sees it.
+        trajectory.clarify_user_reply = message_text
+        trajectory.status = "running"
+
+        agent_registry = self._build_agent_registry(agents, selected_agent_set)
+
+        room_config = RoomConfig(
+            is_debate_mode=is_debate_mode,
+            room_agent_set=selected_agent_set,
+        )
+
+        if user_message.extend_info is None:
+            user_message.extend_info = {}
+        user_message.extend_info.update({
+            "supervisor_v2": True,
+            "supervisor_v2_clarify_resume": True,
+            "clarify_original_message_id": pending_clarify_msg_id,
+            "resumed_trajectory": trajectory.model_dump(mode="json"),
+            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
+            "room_config": room_config.model_dump(mode="json"),
+            "conversation_context": conversation_context,
+        })
+        await self.database_service.update_room_user_message_by_message_id(
+            user_message.message_id, user_message
+        )
+
+        # Clear the pending flag on the room
+        await self._clear_pending_clarification(room)
+
+        logger.info(
+            "RoomServices: V2 clarify resume prepared for message %s "
+            "(original: %s, %d agents)",
+            user_message.message_id,
+            pending_clarify_msg_id,
+            len(agent_registry),
+        )
+
+        return True
+
+    async def _clear_pending_clarification(self, room: Room) -> None:
+        """Remove the ``pending_clarification_message_id`` flag from the room."""
+        if isinstance(room.extend_info, dict):
+            room.extend_info.pop("pending_clarification_message_id", None)
+            await self.database_service.update_room_by_room_id(
+                room.room_id, room
+            )
 
     async def _parse_with_supervisor(
         self,
@@ -1524,6 +1676,16 @@ class RoomServices:
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
         if mentions:
+            # If there's a pending V2 clarification, clear it — the user chose
+            # to @mention an agent directly instead of answering the clarify
+            # question, so the pending flag would otherwise block future messages.
+            if (
+                use_supervisor
+                and use_supervisor_v2
+                and isinstance(room.extend_info, dict)
+                and room.extend_info.get("pending_clarification_message_id")
+            ):
+                await self._clear_pending_clarification(room)
             return await self._handle_mentions_flow(request, user_message, mentions)
 
         selected_agent_set, auto_assign, agents = await self._resolve_agent_selection(
@@ -1554,16 +1716,40 @@ class RoomServices:
 
         # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor and use_supervisor_v2:
-            parse_result = await self._prepare_for_supervisor_v2(
-                room=room,
-                user_message=user_message,
-                message_text=message_text,
-                agents=agents,
-                selected_agent_set=selected_agent_set,
-                is_debate_mode=is_debate_mode,
-                conversation_context=conversation_context,
-                token=token,
+            # --- Clarify resume check (Phase 4, §7.4) ---
+            # If a previous supervisor run returned CLARIFY and the user is now
+            # replying, resume the trajectory instead of starting a fresh run.
+            clarify_resume_prepared = False
+            pending_clarify_msg_id = (
+                room.extend_info.get("pending_clarification_message_id")
+                if isinstance(room.extend_info, dict)
+                else None
             )
+            if pending_clarify_msg_id:
+                clarify_resume_prepared = await self._prepare_clarify_resume_v2(
+                    room=room,
+                    user_message=user_message,
+                    message_text=message_text,
+                    pending_clarify_msg_id=pending_clarify_msg_id,
+                    agents=agents,
+                    selected_agent_set=selected_agent_set,
+                    is_debate_mode=is_debate_mode,
+                    conversation_context=conversation_context,
+                )
+
+            if clarify_resume_prepared:
+                parse_result = ParseResult(success=True)
+            else:
+                parse_result = await self._prepare_for_supervisor_v2(
+                    room=room,
+                    user_message=user_message,
+                    message_text=message_text,
+                    agents=agents,
+                    selected_agent_set=selected_agent_set,
+                    is_debate_mode=is_debate_mode,
+                    conversation_context=conversation_context,
+                    token=token,
+                )
         elif use_supervisor:
             parse_result = await self._parse_with_supervisor(
                 room=room,

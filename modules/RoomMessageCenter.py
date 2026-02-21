@@ -403,6 +403,11 @@ class RoomMessageCenter:
         (set by ``_prepare_for_supervisor_v2`` in ``RoomServices``), then
         delegates to ``SupervisorExecutor.run()``.
 
+        Also handles clarify-resume: when the user message was prepared by
+        ``_prepare_clarify_resume_v2``, the ``extend_info`` contains
+        ``supervisor_v2_clarify_resume=True`` and a ``resumed_trajectory``
+        that already has ``clarify_user_reply`` set.
+
         Handles all 5 ``RunStatus`` variants.
         """
         from services.room_supervisor_service import SupervisorPlanningError
@@ -430,6 +435,34 @@ class RoomMessageCenter:
             )
         conversation_context = extend.get("conversation_context")
 
+        # Clarify-resume: deserialize the trajectory from the previous run
+        resumed_trajectory = None
+        is_clarify_resume = extend.get("supervisor_v2_clarify_resume", False)
+        if is_clarify_resume:
+            traj_data = extend.get("resumed_trajectory")
+            if traj_data:
+                try:
+                    resumed_trajectory = SupervisorTrajectory(**traj_data)
+                    logger.info(
+                        "supervisor_v2_clarify_resume_started",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": resumed_trajectory.trajectory_id,
+                            "original_message_id": extend.get(
+                                "clarify_original_message_id"
+                            ),
+                            "user_reply_len": len(
+                                resumed_trajectory.clarify_user_reply or ""
+                            ),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: clarify resume trajectory "
+                        "deserialization failed: %s — starting fresh run",
+                        e,
+                    )
+
         try:
             result = await self.supervisor_executor.run(
                 room_id=room_id,
@@ -441,8 +474,47 @@ class RoomMessageCenter:
                 token=token,
                 request_user_id=user_id,
                 quoted_text=quoted_text,
+                resumed_trajectory=resumed_trajectory,
             )
         except SupervisorPlanningError:
+            if is_clarify_resume and resumed_trajectory:
+                # Clarify-resume failed on the first decide_next.  Restore the
+                # pending clarification flag so the user can try again instead
+                # of falling through to V1 (which has no pre-generated messages
+                # for a V2-prepared message and would always fail).
+                original_msg_id = extend.get("clarify_original_message_id")
+                if original_msg_id:
+                    logger.warning(
+                        "RoomMessageCenter: clarify-resume decide_next failed "
+                        "for %s — restoring pending clarification on room %s",
+                        room_user_message_id,
+                        room_id,
+                    )
+                    resumed_trajectory.status = "clarifying"
+                    resumed_trajectory.clarify_user_reply = None
+                    room = await self.database_service.get_room_by_room_id(room_id)
+                    if room:
+                        if room.extend_info is None:
+                            room.extend_info = {}
+                        room.extend_info["pending_clarification_message_id"] = (
+                            original_msg_id
+                        )
+                        await self.database_service.update_room_by_room_id(
+                            room_id, room
+                        )
+                    await self.sse_manager.send_processing_status(
+                        room_id,
+                        SSEProcessingStatus.FAILED,
+                        room_user_message_id,
+                        details="Clarify resume failed — please try again",
+                    )
+                    return OrchestrationResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Clarify resume supervisor call failed",
+                        status_code=500,
+                    )
+
             logger.warning(
                 "RoomMessageCenter: V2 supervisor first decide_next failed, "
                 "falling back to V1 queue path for message %s",
@@ -461,6 +533,9 @@ class RoomMessageCenter:
             result=result,
             room_id=room_id,
             user_message_id=room_user_message_id,
+            original_clarify_message_id=(
+                extend.get("clarify_original_message_id") if is_clarify_resume else None
+            ),
         )
 
         await self._log_room_memory_stats(room_id)
@@ -838,10 +913,15 @@ class RoomMessageCenter:
         room_id: str,
         user_message_id: str,
         room=None,
+        original_clarify_message_id: str | None = None,
     ) -> None:
         """Persist trajectory and emit SSE/synthesis for a V2 run result.
 
         Shared by ``_process_supervisor_v2`` and ``_resume_supervisor_v2``.
+
+        When ``original_clarify_message_id`` is set (clarify-resume path),
+        the original message's trajectory is also updated so it doesn't stay
+        permanently in ``"clarifying"`` status.
         """
         user_message = (
             await self.database_service.get_room_user_message_by_message_id(
@@ -862,6 +942,30 @@ class RoomMessageCenter:
             await self.database_service.update_room_user_message_by_message_id(
                 user_message_id, user_message
             )
+
+        # Update the original clarify message's trajectory so it doesn't
+        # stay in "clarifying" status forever.
+        if original_clarify_message_id and original_clarify_message_id != user_message_id:
+            try:
+                orig_msg = (
+                    await self.database_service.get_room_user_message_by_message_id(
+                        original_clarify_message_id
+                    )
+                )
+                if orig_msg and isinstance(orig_msg.extend_info, dict):
+                    orig_traj = orig_msg.extend_info.get("supervisor_trajectory")
+                    if isinstance(orig_traj, dict):
+                        orig_traj["status"] = result.trajectory.status
+                        await self.database_service.update_room_user_message_by_message_id(
+                            original_clarify_message_id, orig_msg
+                        )
+            except Exception as e:
+                logger.warning(
+                    "RoomMessageCenter: failed to update original clarify "
+                    "message %s trajectory status: %s",
+                    original_clarify_message_id,
+                    e,
+                )
 
         match result.status:
             case RunStatus.COMPLETED:

@@ -916,12 +916,17 @@ class RoomSupervisorService:
                 lines.append(
                     f"  Asked user: {entry.action.clarification_question}"
                 )
+                if trajectory.clarify_user_reply:
+                    lines.append(
+                        f"  User replied: {trajectory.clarify_user_reply}"
+                    )
             elif entry.action.action == ActionType.SYNTHESIZE:
                 lines.append(
                     f"  Instruction: {entry.action.synthesis_instruction}"
                 )
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
+
         return "\n".join(lines)
 
     def _parse_v2_action(self, response_json: dict) -> SupervisorAction:

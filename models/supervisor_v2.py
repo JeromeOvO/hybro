@@ -122,6 +122,12 @@ class SupervisorTrajectory(BaseModel):
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 
+    clarify_user_reply: str | None = None
+    """The user's reply to a CLARIFY question.  Set by the clarify-resume
+    path before calling ``SupervisorExecutor.run(resumed_trajectory=...)``.
+    The supervisor prompt formatter includes this so the LLM knows the
+    user answered."""
+
 
 # =========================================================================
 # Run result
