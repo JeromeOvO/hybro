@@ -1,8 +1,9 @@
 # Context & Memory System Architecture Design
 
-**Date**: February 17, 2026  
-**Status**: Proposal  
-**Scope**: Unified context and memory management for multi-agent A2A rooms
+**Date**: February 21, 2026 (updated from Feb 17)  
+**Status**: Partially Implemented — compaction/search are proposals; Supervisor V2 integration is implemented  
+**Scope**: Unified context and memory management for multi-agent A2A rooms  
+**Predecessor**: [SUPERVISOR_V2_DESIGN.md](./SUPERVISOR_V2_DESIGN.md) (Phase 5 complete)
 
 ---
 
@@ -16,14 +17,21 @@ This document defines the architecture for a production-grade context and memory
 
 ### 1.1 Key References
 
-| Source                                                                                                                 | Key Lessons Applied                                               |
-| ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Source                                                                                                                  | Key Lessons Applied                                               |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [Manus Blog: Context Engineering](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus) | KV-cache optimization, lossless compaction, file system as memory |
-| [Lance Martin: Context Engineering in Manus](https://rlancemartin.github.io/2025/10/15/manus/)                         | Compaction vs compression, context isolation, context offloading  |
-| [Peak's Slides (Google Drive)](https://drive.google.com/file/d/1QGJ-BrdiTGslS71sYH4OJoidsry3Ps9g/view)                 | Detailed compaction strategy, sub-agent context sharing           |
-| [OpenClaw Multi-Agent](https://docs.openclaw.ai/concepts/multi-agent)                                                  | Agent isolation, workspace-per-agent, session routing             |
-| [OpenClaw Context](https://docs.openclaw.ai/concepts/context)                                                          | Token budgeting, system prompt structure, tool schema costs       |
-| [OpenClaw Memory](https://docs.openclaw.ai/concepts/memory)                                                            | Daily logs + MEMORY.md, vector search                             |
+| [Lance Martin: Context Engineering in Manus](https://rlancemartin.github.io/2025/10/15/manus/)                          | Compaction vs compression, context isolation, context offloading  |
+| [Peak's Slides (Google Drive)](https://drive.google.com/file/d/1QGJ-BrdiTGslS71sYH4OJoidsry3Ps9g/view)                  | Detailed compaction strategy, sub-agent context sharing           |
+| [OpenClaw Multi-Agent](https://docs.openclaw.ai/concepts/multi-agent)                                                   | Agent isolation, workspace-per-agent, session routing             |
+| [OpenClaw Context](https://docs.openclaw.ai/concepts/context)                                                           | Token budgeting, system prompt structure, tool schema costs       |
+| [OpenClaw Memory](https://docs.openclaw.ai/concepts/memory)                                                             | Daily logs + MEMORY.md, vector search                             |
+| [SYNAPSE arXiv 2601.02744 (Jan 2026)](https://arxiv.org/abs/2601.02744)                                                 | Episodic-semantic graph with spreading activation; solves "Contextual Tunneling" for multi-hop recall; 95% token reduction vs full-context |
+| [MAGMA arXiv 2601.03236 (Jan 2026)](https://arxiv.org/abs/2601.03236)                                                   | Multi-graph memory (semantic + temporal + causal + entity); policy-guided traversal; SOTA on LoCoMo/LongMemEval |
+| [Mnemis arXiv 2602.15313 (Feb 2026)](https://arxiv.org/abs/2602.15313)                                                  | Dual-route retrieval: fast similarity + deliberate hierarchical graph traversal; 93.9 LoCoMo, 91.6 LongMemEval-S |
+| [A-MEM arXiv 2502.12110 (Feb 2025)](https://arxiv.org/abs/2502.12110)                                                   | Zettelkasten note generation at write time: keywords/tags/connections stored with each turn for richer future retrieval |
+| [Focus arXiv 2601.07190 (Jan 2026)](https://arxiv.org/abs/2601.07190)                                                   | Agent-centric autonomous compression: agent decides when to consolidate to "Knowledge block" and prune; 22.7% token reduction, zero accuracy loss |
+| [AgeMem arXiv 2601.01885 (Jan 2026)](https://arxiv.org/abs/2601.01885)                                                  | Unified LTM/STM: memory ops (store/retrieve/update/summarize/discard) as tool-based actions; RL-trained |
+| [MEM1 arXiv 2506.15841 (ICLR 2026)](https://arxiv.org/abs/2506.15841)                                                   | RL-trained compact internal state updated each turn; 3.5× performance, 3.7× memory reduction vs full-context; constant context size |
 
 ### 1.2 Critical Distinction: Compaction vs Compression
 
@@ -82,6 +90,26 @@ From Manus blog:
 3. **A2A Protocol Compatibility**: Context must serialize for external agents
 4. **Horizontal Scalability**: No in-memory state that prevents scaling
 
+### 2.4 From 2026 Research: Advanced Memory Principles
+
+Five principles from Jan–Feb 2026 papers that inform the evolution of this design:
+
+1. **Write-time Note Generation** (A-MEM / Zettelkasten, arXiv 2502.12110):
+   When a turn is stored, generate structured metadata — keywords, tags, a brief entity list, and connections to related prior turns. This is cheap at write time and dramatically improves retrieval quality later. The `turn_notes` field on `ConversationTurn` (§6.2) implements this.
+
+2. **Rolling Room Summary / Knowledge Block** (Focus, arXiv 2601.07190):
+   Maintain a continuously-updated structured summary alongside raw turn history: current goal, key decisions, open questions, recent agent contributions. This "Knowledge block" eliminates the need to scan 50+ turns for context — the summary is always in-context. The `room_summary` field on `RoomMemory` (§4.2) implements this.
+   > _"Capable models can autonomously self-regulate their context when given appropriate tools and prompting."_ — Focus paper
+
+3. **Graph-Layer Retrieval for Multi-Hop Queries** (SYNAPSE/MAGMA/Mnemis, arXiv 2601.02744, 2601.03236, 2602.15313):
+   Flat vector similarity fails on temporal and causal multi-hop queries — "what led to the failure in session 3?" Vector search finds semantically similar text, not causally upstream text. A graph layer (linking turns via entity, temporal, and causal edges) is needed to solve this class of query. See §8.3 for the planned upgrade path.
+
+4. **Context Occupancy as a First-Class Metric** (production data, 2025–2026):
+   Production systems operate at a 100:1 input/output token ratio; context costs dominate. Models degrade significantly before hitting hard token limits ("context rot": GPT-4 drops from 98.1% → 64.1% accuracy based on information structure alone). Track context occupancy % per request with a soft cap (70%) and hard cap (85–90%); alert on truncation events. See §15.
+
+5. **Agent-Driven Compaction** (AgeMem/Focus, arXiv 2601.01885, 2601.07190):
+   Static threshold-based compaction (`max_turns > 20`) is suboptimal — the agent often knows which past turns are irrelevant before the threshold fires. Exposing a `compact_context(rationale)` tool lets the supervisor proactively signal compaction based on semantic relevance, not just count. This is a medium-term evolution; threshold compaction is correct to ship first.
+
 ---
 
 ## 3. Architecture Overview
@@ -136,13 +164,17 @@ class SessionContext(BaseModel):
     user_message_id: str
     created_at: datetime
 
-    # Supervisor state (if multi-agent)
-    supervisor_plan: SupervisorPlan | None = None
-    completed_steps: list[CompletedStep] = []
-    current_step_index: int = 0
+    # Supervisor V2 state (if multi-agent)
+    # NOTE: There is no SupervisorPlan — V2 uses an adaptive loop.
+    # The trajectory (all actions + results so far) is the single source of truth.
+    # It lives in user_message.extend_info.supervisor_trajectory (SupervisorTrajectory).
+    supervisor_trajectory: "SupervisorTrajectory | None" = None
 
-    # Accumulated context during execution
-    step_results: dict[str, StepResult] = {}
+    # Snapshot of room history passed to the supervisor LLM prompt.
+    # Built once in _prepare_for_supervisor_v2() and FROZEN for the loop duration.
+    # Agent results written during the loop are NOT reflected here — they come
+    # through trajectory_summary in the supervisor prompt instead.
+    conversation_context: str | None = None
 
     # Token tracking
     estimated_tokens: int = 0
@@ -151,11 +183,38 @@ class SessionContext(BaseModel):
 
 **Lifecycle**: Created when user sends message → Destroyed after all agents respond
 
+> **V1 → V2 changes**: `supervisor_plan`, `completed_steps`, `current_step_index`, and
+> `step_results` are **eliminated**. V1's `SupervisorPlan`/`SupervisorStep`/`StepResult`
+> models no longer exist. `SupervisorTrajectory` (from `models/supervisor_v2.py`) is the
+> sole execution state. See [SUPERVISOR_V2_DESIGN.md §4](./SUPERVISOR_V2_DESIGN.md).
+
 ### 4.2 Room Memory (Durable)
 
 **Purpose**: Persistent conversation history and learned context for a room.
 
 ```python
+class RoomSummary(BaseModel):
+    """
+    Rolling structured summary of the room's current state — the "Knowledge Block"
+    (Focus paper, arXiv 2601.07190). Maintained at each synthesis boundary and
+    updated incrementally as conversations progress.
+
+    Always kept FULL in context (it replaces scanning 50+ old turns).
+    This is NOT a replacement for lossless compaction — it is a structured overlay
+    that avoids the round-trip cost of fetch_turn_content for common context queries.
+    """
+    # Structured named slots (agent-maintainable)
+    current_goal: str | None = None          # What the user/room is trying to accomplish
+    key_decisions: list[str] = []            # Decisions made that should persist
+    open_questions: list[str] = []           # Unresolved questions or blockers
+    recent_agent_contributions: list[str] = []  # Last 3-5 agent result summaries
+    important_constraints: list[str] = []    # Hard constraints the user stated
+
+    # Metadata
+    last_updated_at: datetime | None = None
+    updated_after_turn_id: str | None = None  # Which turn triggered the last update
+
+
 class RoomMemory(BaseModel):
     """Durable memory for a chat room."""
     room_id: str
@@ -163,6 +222,11 @@ class RoomMemory(BaseModel):
     # Conversation history (mix of full and compact representations)
     conversation_history: list[ConversationTurn] = []
     max_history_turns: int = 100  # Total turns to keep (full + compact)
+
+    # Rolling structured summary — always in context, updated at synthesis boundaries.
+    # Replaces the need to scan 50+ compact turns for common context queries.
+    # See §2.4 "Rolling Room Summary / Knowledge Block" and §4.5.
+    room_summary: RoomSummary = Field(default_factory=RoomSummary)
 
     # Room-level learned facts (extracted from conversations)
     room_facts: list[RoomFact] = []
@@ -176,86 +240,17 @@ class RoomMemory(BaseModel):
     total_compactions: int = 0  # Number of compaction operations performed
 
 
-class ConversationTurn(BaseModel):
-    """
-    Single turn in conversation history.
-
-    Supports two representations:
-    - FULL: Complete content in context (for recent turns)
-    - COMPACT: Pointer to stored content (for older turns, lossless)
-    """
-    turn_id: str
-    role: Literal["user", "agent", "supervisor"]
-    agent_id: str | None = None
-    agent_name: str | None = None
-    timestamp: datetime
-
-    # Representation mode
-    representation: Literal["full", "compact"] = "full"
-
-    # FULL: actual content (None when compact)
-    content: str | None = None
-
-    # COMPACT: pointer to storage (None when full)
-    content_ref: ContentReference | None = None
-
-    # Content metadata
-    content_type: Literal["text", "tool_result", "agent_response", "file"] = "text"
-
-    # For agent turns
-    task_description: str | None = None
-    step_id: str | None = None
-    was_successful: bool = True
-
-    # Token estimates
-    estimated_tokens_full: int = 0  # Tokens when expanded
-    estimated_tokens_compact: int = 20  # Tokens as pointer (~20-50)
-
-    @property
-    def estimated_tokens(self) -> int:
-        """Current token cost based on representation."""
-        return self.estimated_tokens_compact if self.representation == "compact" else self.estimated_tokens_full
-
-    def to_context_string(self) -> str:
-        """Render turn for context window."""
-        if self.representation == "full":
-            return f"[{self.role.upper()}] {self.content}"
-        else:
-            return f"[{self.role.upper()}] {self.content_ref.to_compact_string()}"
-
-
-class ContentReference(BaseModel):
-    """
-    Pointer to full content in storage.
-
-    This is the key to LOSSLESS compaction - we never delete content,
-    just replace it with a pointer that can be dereferenced on demand.
-    """
-    storage_type: Literal["mongodb", "file", "url"]
-
-    # MongoDB reference
-    collection: str | None = None
-    document_id: str | None = None
-
-    # File reference
-    file_path: str | None = None
-
-    # URL reference
-    url: str | None = None
-
-    # Metadata
-    content_hash: str | None = None
-    created_at: datetime
-
-    def to_compact_string(self) -> str:
-        """Generate compact representation for context."""
-        if self.storage_type == "mongodb":
-            return f"[Stored: db/{self.collection}/{self.document_id}]"
-        elif self.storage_type == "file":
-            return f"[Stored: file/{self.file_path}]"
-        elif self.storage_type == "url":
-            return f"[Source: {self.url}]"
+# ConversationTurn and ContentReference definitions have been moved to §6.2,
+# which is the single canonical source of truth for these models.
+# See §6.2 for the full definition including representation, content_ref,
+# estimated_tokens_*, and brief_summary fields.
 ```
+
+> **See §6.2** for the canonical `ConversationTurn` and `ContentReference` definitions.
+> The code blocks that previously appeared here were stale (missing `brief_summary`,
+> wrong `content_type` literals, wrong `ContentReference.storage_type`). They have
+> been removed to avoid divergence. `RoomMemory.conversation_history` is typed as
+> `list[ConversationTurn]` using the §6.2 definition.
 
 **Storage**: MongoDB `room_memories` collection
 
@@ -264,6 +259,7 @@ class ContentReference(BaseModel):
 1. **Lossless**: Compacted turns retain pointers to full content
 2. **On-demand expansion**: Agent can request full content when needed
 3. **Token-aware**: Track both full and compact token costs
+4. **Rolling summary**: `room_summary` provides a structured in-context snapshot so the supervisor rarely needs to scan raw turn history
 
 ### 4.3 User Memory (Durable)
 
@@ -413,9 +409,17 @@ From [Lance Martin's analysis of Manus](https://rlancemartin.github.io/2025/10/1
 
 ### 6.2 Full vs Compact Representations
 
+> **Canonical model**: This is the definitive `ConversationTurn` definition. The
+> versions in §4.1 (which lacks `representation`, `content_ref`, and
+> `estimated_tokens_*`) and §4.2 (which had wrong `content_type` literals,
+> `ContentReference.storage_type: "file"` instead of `"s3"`, and no `brief_summary`)
+> are pre-compaction snapshots. The §4.2 code blocks have been removed; §4.2 now
+> redirects here. `models/memory.py` must be updated to match this definition
+> before the compaction system is implemented.
+
 ```python
 class ConversationTurn(BaseModel):
-    """Single turn in conversation history."""
+    """Single turn in conversation history. Supports full and compact representations."""
     turn_id: str
     role: Literal["user", "agent", "supervisor"]
     agent_id: str | None = None
@@ -435,8 +439,23 @@ class ConversationTurn(BaseModel):
     # Current: "text", "tool_result", "agent_response"
     # Future: "image", "file", "video", "audio" (see Section 6.8)
     content_type: Literal["text", "tool_result", "agent_response"] = "text"
-    estimated_tokens_full: int = 0  # Tokens if expanded
-    estimated_tokens_compact: int = 0  # Tokens as pointer (~20-50)
+
+    # Token estimates — populated at turn creation time via estimate_tokens(content).
+    # estimated_tokens_full MUST be set when the turn is created (not left at 0),
+    # otherwise the compaction trigger (§6.5) and budget accounting (§5.2) are dead.
+    estimated_tokens_full: int = 0   # Tokens if expanded; set at write time
+    estimated_tokens_compact: int = 20  # Tokens as pointer (~20-50); static default is fine
+
+    # Optional brief summary for very old turns (50+). Populated at compaction time
+    # as a human-readable hint alongside the pointer. Replaces CompactedTurnWithSummary.
+    # Never used instead of the full content — just a quick-scan label.
+    brief_summary: str | None = None
+
+    # Write-time structured note (Zettelkasten / A-MEM pattern, arXiv 2502.12110).
+    # Populated when the turn is first stored via extract_turn_notes(content).
+    # Enables richer retrieval without expanding compact content.
+    # Schema: {"keywords": [...], "entities": [...], "tags": [...], "one_liner": "..."}
+    turn_notes: dict | None = None
 
 
 class ContentReference(BaseModel):
@@ -477,7 +496,51 @@ class ContentReference(BaseModel):
             return f"[Content from: {self.url}]"
 ```
 
+> **`estimate_tokens` wiring requirement**: `estimated_tokens_full` MUST be populated
+> at turn creation time. Leaving it at the default `0` silently breaks the compaction
+> trigger (§6.5) and token budget accounting (§5.2). The wiring point is
+> `add_turn_to_history` in `common/utils/context_utils.py`:
+>
+> ```python
+> # In common/utils/context_utils.py → add_turn_to_history()
+> turn = ConversationTurn(
+>     ...
+>     estimated_tokens_full=estimate_tokens(content),  # REQUIRED — never leave at 0
+> )
+> ```
+>
+> This is a migration task. See §9.2 and §18 checklist.
+
+> **`turn_notes` wiring (write-time note generation, §2.4 Principle 1)**: Populate
+> `turn_notes` when each turn is stored. A lightweight LLM call (or heuristic) extracts
+> keywords, named entities, and a one-liner description. This is cheap at write time and
+> dramatically improves retrieval quality — it enables keyword/entity search on compact
+> turns without fetching their full content.
+>
+> ```python
+> # In common/utils/context_utils.py → add_turn_to_history()
+> turn = ConversationTurn(
+>     ...
+>     estimated_tokens_full=estimate_tokens(content),  # REQUIRED — never leave at 0
+>     turn_notes=extract_turn_notes(content),          # Optional but recommended
+>     # extract_turn_notes returns: {"keywords": [...], "entities": [...], "one_liner": "..."}
+>     # For short turns (<100 tokens) a heuristic extractor suffices (no LLM call).
+>     # For long agent responses, use a cheap fast model.
+> )
+> ```
+>
+> `turn_notes` is indexed in the `conversation_content` collection for fast keyword
+> lookup without expanding compact turns. See §8 for use in hybrid search.
+
 ### 6.3 Compaction Process (Lossless)
+
+> **Design constraints**:
+> 1. **Idempotent**: If the server crashes between `store_full_content` and
+>    `save_room_memory`, re-running compaction must not create duplicate documents.
+>    Achieved by using `upsert` on a **unique** `(room_id, turn_id)` index (see §6.6).
+> 2. **Trigger location matters**: This function is safe to call within the
+>    per-room processing lock (on-demand after synthesis). For background job
+>    usage, see §6.9 — a different write strategy is required.
 
 ```python
 async def compact_room_memory(room_id: str) -> CompactionResult:
@@ -490,17 +553,20 @@ async def compact_room_memory(room_id: str) -> CompactionResult:
     Process:
     1. Load room memory
     2. Identify turns to compact (older than preserve_recent_turns)
-    3. For each turn: store full content -> replace with pointer
+    3. For each turn: upsert full content (idempotent) -> replace with pointer
     4. Update room memory with compact representations
     """
     room_memory = await load_room_memory(room_id)
     preserve_count = compaction_config.preserve_recent_turns
 
-    # Identify turns to compact (keep recent turns in full)
-    turns_to_compact = [
-        t for t in room_memory.conversation_history[:-preserve_count]
-        if t.representation == "full"
-    ]
+    # Guard: preserve_count=0 means compact everything.
+    # Python's seq[:-0] == seq[:0] == [] — NOT seq[:], so we must handle this.
+    if preserve_count == 0:
+        turns_to_compact = [t for t in room_memory.conversation_history
+                            if t.representation == "full"]
+    else:
+        turns_to_compact = [t for t in room_memory.conversation_history[:-preserve_count]
+                            if t.representation == "full"]
 
     if not turns_to_compact:
         return CompactionResult(compacted_count=0, tokens_saved=0)
@@ -508,19 +574,22 @@ async def compact_room_memory(room_id: str) -> CompactionResult:
     tokens_saved = 0
 
     for turn in turns_to_compact:
-        # 1. Store full content in MongoDB
-        content_doc = await store_full_content(
+        # 1. Upsert full content to MongoDB (IDEMPOTENT via unique index on room_id+turn_id).
+        #    If a crash occurred after the previous upsert but before save_room_memory,
+        #    re-running this correctly reuses the existing document_id.
+        content_doc_id = await upsert_full_content(
             room_id=room_id,
             turn_id=turn.turn_id,
             content=turn.content,
             content_type=turn.content_type,
+            content_hash=hash_content(turn.content),
         )
 
         # 2. Create reference pointer
         turn.content_ref = ContentReference(
             storage_type="mongodb",
             collection="conversation_content",
-            document_id=content_doc.id,
+            document_id=content_doc_id,
             content_hash=hash_content(turn.content),
             created_at=utcnow(),
         )
@@ -528,7 +597,11 @@ async def compact_room_memory(room_id: str) -> CompactionResult:
         # 3. Calculate token savings
         tokens_saved += turn.estimated_tokens_full - turn.estimated_tokens_compact
 
-        # 4. Switch to compact representation
+        # 4. Optionally populate brief_summary for very old turns (>50 in history)
+        #    to give a quick-scan label alongside the pointer.
+        # (summary generation is optional and can be deferred)
+
+        # 5. Switch to compact representation
         turn.content = None  # Remove full content from context
         turn.representation = "compact"
 
@@ -538,17 +611,72 @@ async def compact_room_memory(room_id: str) -> CompactionResult:
         compacted_count=len(turns_to_compact),
         tokens_saved=tokens_saved,
     )
+
+
+async def upsert_full_content(
+    room_id: str,
+    turn_id: str,
+    content: str,
+    content_type: str,
+    content_hash: str,
+) -> str:
+    """
+    Store full content idempotently. Returns the document_id.
+
+    Uses update_one(upsert=True) on the unique (room_id, turn_id) index.
+    If a document already exists for this turn (e.g., from a previous crashed
+    compaction run), returns its existing _id without creating a duplicate.
+    """
+    result = await db.conversation_content.update_one(
+        {"room_id": room_id, "turn_id": turn_id},   # filter on unique key
+        {"$setOnInsert": {                            # only set fields on insert
+            "_id": str(uuid4()),
+            "room_id": room_id,
+            "turn_id": turn_id,
+            "content": content,
+            "content_type": content_type,
+            "content_hash": content_hash,
+            "stored_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    # For an insert: result.upserted_id is the new _id
+    # For an update (already existed): fetch the existing _id
+    if result.upserted_id:
+        return str(result.upserted_id)
+    existing = await db.conversation_content.find_one(
+        {"room_id": room_id, "turn_id": turn_id}, {"_id": 1}
+    )
+    return str(existing["_id"])
 ```
 
 ### 6.4 Content Expansion (On-Demand Retrieval)
 
 ```python
+class ContentExpiredError(Exception):
+    """Raised when a compacted turn's stored content can no longer be retrieved.
+
+    Callers should log the error and fall back to the compact pointer string
+    rather than crashing the request. This indicates a data integrity issue
+    (TTL expiry, manual deletion, or migration error) that needs investigation.
+    """
+    def __init__(self, turn_id: str, document_id: str):
+        self.turn_id = turn_id
+        self.document_id = document_id
+        super().__init__(f"Content for turn {turn_id} (doc {document_id}) not found in storage")
+
+
 async def expand_turn_content(turn: ConversationTurn) -> str:
     """
     Expand a compacted turn back to full content.
 
-    Called when the agent needs the full content of a previously compacted turn.
-    This is the key to LOSSLESS compaction - we can always get the original back.
+    Called ONLY when an agent explicitly requests the full content of a specific
+    compacted turn (e.g., via a fetch_turn_content tool call). NOT called
+    proactively during context assembly — see expand_turns_for_context below.
+
+    Raises:
+        ContentExpiredError: If the stored document is missing (TTL, deletion, etc.)
+        ValueError: If the turn is compact but has no content_ref.
     """
     if turn.representation == "full":
         return turn.content
@@ -560,48 +688,66 @@ async def expand_turn_content(turn: ConversationTurn) -> str:
 
     if ref.storage_type == "mongodb":
         doc = await db.conversation_content.find_one({"_id": ref.document_id})
+        if doc is None:
+            raise ContentExpiredError(turn.turn_id, ref.document_id)
         return doc["content"]
 
-    elif ref.storage_type == "file":
-        # For file-based content (e.g., agent sandbox files)
-        async with aiofiles.open(ref.file_path, "r") as f:
-            return await f.read()
+    elif ref.storage_type == "s3":
+        # FUTURE: S3 retrieval for binary content
+        raise NotImplementedError("S3 expansion not yet implemented")
 
     elif ref.storage_type == "url":
-        # For web content, re-fetch if needed
         async with httpx.AsyncClient() as client:
             response = await client.get(ref.url)
+            response.raise_for_status()
             return response.text
 
 
 async def expand_turns_for_context(
     turns: list[ConversationTurn],
-    query: str | None = None,
 ) -> list[ConversationTurn]:
     """
-    Selectively expand turns that are relevant to the current query.
+    Prepare turns for inclusion in a context window.
 
-    Strategy:
-    1. Recent turns: always expand (already full)
-    2. Older turns: expand only if relevant to current query
+    Strategy (recency-only — matches Manus reference design):
+    - FULL turns: included as-is.
+    - COMPACT turns: included as pointer strings (e.g., "[Agent: db/conversation_content/xyz]").
+      They are NOT expanded proactively. If an agent needs the full content of a
+      compacted turn, it must request it explicitly via the fetch_turn_content tool.
+
+    Why not expand based on query relevance?
+    - Compact turns have content=None; relevance can only be assessed from metadata
+      (agent_name, role, timestamp), which is too coarse to be useful.
+    - Proactive expansion of all turns defeats the purpose of compaction.
+    - Storing embeddings at compaction time adds API cost and latency.
+    - The Manus reference design uses recency only and lets agents request content
+      explicitly — this is simpler and correct.
+
+    Returns the turns list unchanged (full turns with content, compact turns with
+    pointer strings rendered via to_context_string()).
     """
-    expanded = []
+    return turns  # Assembly layer calls turn.to_context_string() for rendering
+```
 
-    for turn in turns:
-        if turn.representation == "full":
-            expanded.append(turn)
-        elif query and is_relevant_to_query(turn, query):
-            # Expand relevant compacted turns
-            content = await expand_turn_content(turn)
-            expanded_turn = turn.model_copy()
-            expanded_turn.content = content
-            expanded_turn.representation = "full"
-            expanded.append(expanded_turn)
-        else:
-            # Keep as compact pointer
-            expanded.append(turn)
+**`fetch_turn_content` tool (agent-facing)**:
 
-    return expanded
+When an agent needs the full content of a compacted turn, it calls a tool:
+
+```python
+async def fetch_turn_content(turn_id: str, room_id: str) -> str:
+    """
+    Tool callable by agents to retrieve full content of a compacted turn.
+
+    Returns the full content string, or a descriptive error if unavailable.
+    """
+    room_memory = await load_room_memory(room_id)
+    turn = next((t for t in room_memory.conversation_history if t.turn_id == turn_id), None)
+    if turn is None:
+        return f"[Error: Turn {turn_id} not found in room history]"
+    try:
+        return await expand_turn_content(turn)
+    except ContentExpiredError:
+        return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
 ```
 
 ### 6.5 Compaction Triggers
@@ -642,27 +788,30 @@ class StoredContent(BaseModel):
     # TTL: None (keep forever) or set retention policy
     expires_at: datetime | None = None
 
-# Index for efficient retrieval
-# db.conversation_content.create_index([("room_id", 1), ("turn_id", 1)])
+# UNIQUE index — required for idempotent upsert in compact_room_memory (§6.3).
+# unique=True ensures crashed-and-retried compaction never creates duplicate documents.
+# db.conversation_content.create_index([("room_id", 1), ("turn_id", 1)], unique=True)
+#
+# Additional index for fast room-level queries:
+# db.conversation_content.create_index([("room_id", 1), ("stored_at", -1)])
 ```
 
 ### 6.7 Compaction vs Summarization: When to Use Each
 
-| Scenario             | Approach                   | Rationale                                                |
-| -------------------- | -------------------------- | -------------------------------------------------------- |
-| Recent turns (< 10)  | Keep FULL                  | Agent needs details for current task                     |
-| Older turns (10-50)  | COMPACT (pointer)          | Can expand on demand if needed                           |
-| Very old turns (50+) | COMPACT + optional summary | Summary for quick overview, full content still available |
+| Scenario             | Approach                              | Rationale                                                |
+| -------------------- | ------------------------------------- | -------------------------------------------------------- |
+| Recent turns (< 10)  | Keep FULL                             | Agent needs details for current task                     |
+| Older turns (10-50)  | COMPACT (pointer)                     | Can expand on demand via `fetch_turn_content` tool       |
+| Very old turns (50+) | COMPACT + optional `brief_summary`    | Summary hint aids quick scan; full content still available |
 
-**Note**: Even when we generate a summary for very old content, we **never delete** the original. The summary is an additional index, not a replacement.
+**Note**: Even when we generate a `brief_summary` for very old content, we **never
+delete** the original. The summary is a human-readable hint stored on the
+`ConversationTurn.brief_summary` field — not a replacement for the stored content.
 
-```python
-class CompactedTurnWithSummary(BaseModel):
-    """For very old turns, we can add a summary while keeping the full content."""
-    turn: ConversationTurn  # Compact representation with pointer
-    summary: str | None = None  # Optional summary for quick context
-    summary_generated_at: datetime | None = None
-```
+> **`CompactedTurnWithSummary` removed**: The original design had a separate
+> `CompactedTurnWithSummary` wrapper class. This is eliminated. The `brief_summary`
+> field is instead added directly to `ConversationTurn` (see §6.2), avoiding a union
+> type in `RoomMemory.conversation_history` and keeping the list uniformly typed.
 
 ### 6.8 Future Extension: Binary Content Storage (S3)
 
@@ -843,101 +992,165 @@ class ContentStorageService:
 
 ---
 
-## 7. Supervisor Integration
+### 6.9 Compaction Trigger Locations
 
-### 7.1 Context for Planning Phase
+Where `compact_room_memory` is called determines the write safety guarantees needed:
 
-```python
-async def build_supervisor_planning_context(
-    session: SessionContext,
-    room_memory: RoomMemory,
-    agent_registry: list[AgentProfile],
-) -> str:
-    """Build context for Supervisor planning phase."""
+| Trigger | Concurrency context | Write safety | Recommended approach |
+|---|---|---|---|
+| **On-demand after synthesis** | Inside `_handle_v2_run_result`, within the per-room processing lock | Only one writer at a time for this room | Standard read-modify-write is safe. Use `compact_room_memory` directly. |
+| **Background cleanup job** | Outside the processing lock; may race with active message processing | Multiple potential writers | **Must NOT use read-modify-write.** Use MongoDB `$push` / atomic array append for the memory writes, or acquire a distributed per-room lock before running. |
 
-    context_parts = []
+**Recommended trigger order** (phase 5 implementation):
 
-    # 1. Agent registry (always first for cache stability)
-    context_parts.append(format_agent_registry(agent_registry))
+1. **Primary (on-demand)**: Call `should_compact()` + `compact_room_memory()` inside `_handle_v2_run_result` after every terminal status. This is safe because the per-room lock is still held.
+2. **Secondary (background)**: A `StaleTaskChecker`-style job for rooms that never reach synthesis (e.g., chat rooms with single agents). Requires either the `$push` pattern or a distributed lock. Implement only after the on-demand path is stable.
 
-    # 2. Room context (compaction summaries + recent history)
-    context_parts.append(format_room_context(room_memory))
+> **Why the background job is risky**: `compact_room_memory` does a full
+> read-modify-write of `conversation_history`. If a V2 loop writes a new
+> agent result to the same field concurrently, the last writer wins and one
+> write is silently lost. The on-demand trigger avoids this because the
+> processing lock serializes all room memory writes.
 
-    # 3. Current user message
-    context_parts.append(f"## Current Request\n{session.user_message}")
+---
 
-    # 4. Agent success history (helps routing decisions)
-    context_parts.append(format_agent_success_history(room_memory))
+## 7. Supervisor V2 Integration
 
-    return "\n\n".join(context_parts)
-```
+> **V1 note**: V1 had three distinct context-assembly phases: Planning (`create_plan`),
+> Review (`review_step`), and Synthesis (`synthesize_results`). **All three are
+> eliminated in V2.** The methods have been deleted from `RoomSupervisorService`.
+> This section describes the V2 integration only.
 
-### 7.2 Context for Review Phase
+V2 uses a single adaptive loop (`decide_next` → dispatch → repeat). Context flows through
+two distinct channels:
 
-```python
-async def build_supervisor_review_context(
-    session: SessionContext,
-    completed_step: CompletedStep,
-    remaining_steps: list[SupervisorStep],
-) -> str:
-    """Build context for Supervisor review phase."""
+| Channel | What it contains | When built | Who sees it |
+|---|---|---|---|
+| `conversation_context` | Room history (prior sessions) | Once, before loop starts | Supervisor LLM (all iterations) |
+| `trajectory_summary` | Actions + results in *this* loop | Grows each iteration | Supervisor LLM (all iterations) |
+| Per-agent context | Room history + current task | Just before each dispatch | Individual agents |
 
-    context_parts = []
+### 7.1 Pre-Loop Context Preparation
 
-    # 1. Original plan (for reference)
-    context_parts.append(format_plan_summary(session.supervisor_plan))
-
-    # 2. Completed step details
-    context_parts.append(format_completed_step(completed_step))
-
-    # 3. Remaining steps
-    context_parts.append(format_remaining_steps(remaining_steps))
-
-    # 4. All step results so far
-    context_parts.append(format_step_results(session.step_results))
-
-    return "\n\n".join(context_parts)
-```
-
-### 7.3 Context for Agent Execution
+`RoomServices._prepare_for_supervisor_v2()` is called once from `send_message_to_room`
+before any agents run. It builds and freezes the supervisor's conversation context:
 
 ```python
-async def build_agent_execution_context(
-    session: SessionContext,
-    room_memory: RoomMemory,
-    target_agent: Agent,
-    step: SupervisorStep,
-) -> str:
-    """Build context for agent execution."""
+async def _prepare_for_supervisor_v2(self, room, user_message, message_text, ...) -> ParseResult:
+    """Lightweight preparation — no LLM call, no pre-generated agent messages."""
 
-    context_parts = []
+    # 1. Build agent registry from the room's active agents
+    agent_registry = self._build_agent_registry(agents, selected_agent_set)
 
-    # 1. Room awareness (other agents in room)
-    peer_agents = [a for a in room_memory.agent_success_history.keys()
-                   if a != target_agent.agent_id]
-    if peer_agents:
-        context_parts.append(format_peer_awareness(peer_agents, room_memory))
-
-    # 2. Relevant conversation history
-    relevant_turns = select_relevant_turns(
-        room_memory.conversation_history,
-        step.task_description,
-        max_turns=10
+    # 2. Build RoomConfig (debate mode flag, agent set)
+    room_config = RoomConfig(
+        is_debate_mode=is_debate_mode,
+        room_agent_set=selected_agent_set,
     )
-    context_parts.append(format_conversation_history(relevant_turns))
 
-    # 3. Results from dependent steps
-    if step.context_from_steps:
-        for step_id in step.context_from_steps:
-            if step_id in session.step_results:
-                context_parts.append(
-                    format_step_result(session.step_results[step_id])
-                )
+    # 3. Build conversation_context from room memory (last 5 turns via build_minimal_context)
+    #    This snapshot is FROZEN for the entire loop — agent results written during the loop
+    #    appear in trajectory_summary, not here.
+    conversation_context = build_minimal_context(
+        room_memory.memory_content,
+        current_task=message_text,
+        max_turns=5,
+    )
 
-    # 4. Task description
-    context_parts.append(f"## Your Task\n{step.task_description}")
+    # 4. Store everything in user_message.extend_info for SupervisorExecutor.run()
+    user_message.extend_info.update({
+        "supervisor_v2": True,
+        "agent_registry": [...],
+        "room_config": {...},
+        "conversation_context": conversation_context,   # ← frozen snapshot
+    })
+```
 
-    return "\n\n".join(context_parts)
+**Important**: `conversation_context` is a snapshot of room history *before* this
+user message's agents run. It does NOT update as the loop progresses. The current
+loop's results are only visible through `trajectory_summary` in the prompt.
+
+### 7.2 Supervisor Prompt Structure (All Iterations)
+
+The same two-part prompt is used for every `decide_next` call:
+
+```
+SYSTEM: [instructions] + [agent registry]     ← identical across all iterations
+USER:   ## Conversation Context
+        {conversation_context}                 ← frozen snapshot, identical across iterations
+        ## User Message
+        {message_text}                         ← fixed
+        ## Execution So Far
+        {trajectory_summary}                   ← grows each iteration (windowed, 500-char truncation)
+        ## What should happen next?
+```
+
+The stable portions (system prompt + `conversation_context` + `message_text`) are
+always at the prompt prefix. The only changing part (`trajectory_summary`) is always
+appended last. This structure maximizes **OpenAI prompt cache** hits across iterations:
+iterations 2–8 pay ~50% of the token cost for the prefix. See §12.3 for the
+optimization to move `conversation_context` to the system prompt to further extend
+cache lifetime.
+
+### 7.3 Agent Execution Context
+
+Per-agent context is assembled inside `_process_single_message` →
+`build_context_for_agent()`, independently from the supervisor's `conversation_context`:
+
+```python
+# Agents get: room history (all turns, not just 5) + current task + room awareness
+context = build_context_for_agent(
+    memory_content=room_memory.memory_content,
+    current_task=target.task,          # ← supervisor's tailored task, not raw user message
+    agent_name=agent.agent_name,
+    room_awareness=room_awareness_str,
+)
+```
+
+**Key point**: For sequential dispatch (one agent at a time), each agent sees the
+results of all previously dispatched agents in this loop via room memory — because
+`add_agent_response_to_memory()` is called after each DELEGATE completes.
+
+For **concurrent dispatch** (multi-target DELEGATE via `asyncio.gather`), agents are
+dispatched simultaneously before any results are written, so neither agent sees the
+other's result in their context. The supervisor must compensate by including relevant
+context from prior steps explicitly in each `DelegateTarget.task` description.
+
+### 7.4 Room Memory Writes During the Loop
+
+After each successful DELEGATE step, `SupervisorExecutor.run()` writes agent results
+to room memory for cross-session persistence:
+
+```python
+for result in results:
+    if result.status == StepStatus.SUCCESS and result.success and result.response_text:
+        await self.room_memory_service.add_agent_response_to_memory(
+            room_id=room_id,
+            agent_id=result.agent_id,
+            agent_name=result.agent_name,
+            response_text=result.response_text,
+        )
+```
+
+This is a **non-atomic read-modify-write** (see §8.10 of SUPERVISOR_V2_DESIGN.md).
+Room-level locking in `RoomMessageCenter` prevents races within a single loop, but
+external concurrent writers (e.g., webhook resumes from a different agent) could
+still overwrite. Medium-term mitigation: MongoDB `$push` for atomic appends.
+
+### 7.5 Synthesis Context
+
+`RoomSupervisorService.synthesize_v2()` receives the full `SupervisorTrajectory` and
+a `synthesis_instruction`. It uses a separate synthesis system prompt that renders
+the trajectory (all agent results) as the context — **not** `conversation_context`.
+The synthesis LLM is focused purely on combining what agents produced in this loop.
+
+After synthesis completes, check `should_compact()` and trigger compaction if needed —
+this is the natural boundary where the loop is fully done and room memory is stable.
+
+```python
+# After synthesize_v2() completes:
+if await compaction_service.should_compact(room_id):
+    await compaction_service.compact_room_memory(room_id)
 ```
 
 ---
@@ -1014,9 +1227,73 @@ All search parameters are loaded from environment variables (see Section 14.1):
 | MMR lambda     | `MEMORY_SEARCH_MMR_LAMBDA`     | 0.7     | Diversity vs relevance tradeoff |
 | Max results    | `MEMORY_SEARCH_MAX_RESULTS`    | 10      | Maximum results returned        |
 
----
+### 8.3 `turn_notes` Integration in Hybrid Search
 
-## 9. Data Models Summary
+With `turn_notes` populated at write time (§6.2), the hybrid search gains a cheap keyword
+index over **compact turns** — without fetching their full content:
+
+```python
+async def _keyword_search(self, query: str, room_id: str) -> list[MemorySearchResult]:
+    """
+    BM25 keyword search over conversation_content collection.
+
+    For FULL turns: searches full `content` text.
+    For COMPACT turns: searches `turn_notes.keywords` + `turn_notes.entities` +
+                       `turn_notes.one_liner` — no content expansion needed.
+    """
+    # MongoDB text index on: content, turn_notes.keywords, turn_notes.entities, turn_notes.one_liner
+    results = await db.conversation_content.find(
+        {"room_id": room_id, "$text": {"$search": query}},
+        {"score": {"$meta": "textScore"}, "turn_id": 1, "turn_notes": 1},
+    ).sort([("score", {"$meta": "textScore"})]).to_list(50)
+    ...
+```
+
+This is the primary short-term improvement to hybrid search before the graph layer is built.
+
+### 8.4 Future: Graph-Based Retrieval (Dual-Route)
+
+> **Status**: Future design; implement after Phase 4 hybrid search is stable.  
+> **Motivation**: Flat vector similarity fails on temporal and causal multi-hop queries:
+> - "What led to the failure in session 3?" (causal chain)
+> - "What did we decide about X before Y happened?" (temporal ordering)
+> - "Summarize all decisions about topic T across sessions" (entity-centric aggregation)
+
+**Problem — Contextual Tunneling**: Vector search retrieves the most semantically similar
+text, but the *causally upstream* or *temporally adjacent* content may have low surface
+similarity to the query. SYNAPSE (arXiv 2601.02744) names this "Contextual Tunneling" and
+demonstrates that spreading activation on a memory graph solves it. Mnemis (arXiv
+2602.15313) achieves SOTA (93.9 LoCoMo) via dual-route: System-1 (fast similarity) +
+System-2 (deliberate hierarchical traversal).
+
+**Planned architecture**:
+
+```
+Query
+  │
+  ├── Route 1 (System-1, fast): Vector similarity + BM25 on turn_notes ← current §8.1
+  │                              Returns: semantically similar turns
+  │
+  └── Route 2 (System-2, deliberate): Entity graph traversal            ← §8.4 future
+                     │
+                     ├── Entity nodes: extracted from turn_notes.entities
+                     ├── Temporal edges: turn sequence (derived from timestamps)
+                     ├── Causal edges: "because of" / "led to" links (LLM-extracted)
+                     └── Returns: causally/temporally connected turns missing from Route 1
+
+Final result: merge(Route 1, Route 2) → deduplicate → MMR re-rank
+```
+
+**Minimal viable graph** (Phase 4B, after basic hybrid search ships):
+
+| Graph element | Source | Storage |
+|---|---|---|
+| Entity nodes | `turn_notes.entities` (populated at write time) | MongoDB `memory_entities` collection |
+| Temporal edges | Turn sequence (implicit from timestamps) | No extra storage; derived at query time |
+| Causal edges | LLM extraction from synthesis output | MongoDB `memory_edges` collection |
+
+The full multi-graph (MAGMA: semantic + temporal + causal + entity) is a longer-term
+evolution. Temporal edges alone already recover much multi-hop recall at near-zero cost.
 
 ### 9.1 New Collections
 
@@ -1028,15 +1305,26 @@ All search parameters are loaded from environment variables (see Section 14.1):
 | `agent_memories`       | Agent performance history                        | `agent_id` (unique)                 |
 | `room_facts`           | Extracted durable facts                          | `room_id`, `created_at`             |
 
-### 9.2 Model Files to Create
+### 9.2 Model Files to Create/Update
 
 ```
 models/
 ├── context.py          # SessionContext, TokenBudget
-├── memory.py           # (extend existing) RoomMemory, UserMemory, AgentMemory
-├── compaction.py       # ConversationTurn, ContentReference, StoredContent
+├── memory.py           # (UPDATE existing) RoomMemory, UserMemory, AgentMemory
+│                       #   → ConversationTurn must be replaced with §6.2 canonical shape
+│                       #     (add turn_id, representation, content_ref, estimated_tokens_*,
+│                       #     brief_summary; change content from required str to str | None)
+├── compaction.py       # ContentReference, StoredContent, CompactionResult
 └── search.py           # MemorySearchConfig, MemorySearchResult
 ```
+
+> **`models/memory.py` migration note**: The current `ConversationTurn` in
+> `models/memory.py` is the active runtime model. It is missing all fields required
+> for the compaction system: `turn_id`, `representation`, `content_ref`,
+> `estimated_tokens_full`, `estimated_tokens_compact`, and `brief_summary`. It also
+> has `content: str` (required) instead of `content: str | None = None`.
+> This file must be updated before any compaction code can be wired in.
+> The §6.2 definition is the migration target. See §18 checklist for the task.
 
 ---
 
@@ -1079,79 +1367,88 @@ MemorySearchService
 
 ---
 
-## 11. Integration with Supervisor Pattern
+## 11. Integration with Supervisor V2
 
-### 11.1 Planning Phase Integration
+> **V1 note**: The original §11 described wiring context assembly into `create_plan()`,
+> `review_step()`, and `synthesize_results()`. All three methods are deleted in V2
+> (Phase 5 complete). This section describes the V2 integration points.
+
+### 11.1 Pre-Loop: Supervisor Prompt Context
+
+The `ContextAssemblyService` should be wired into `_prepare_for_supervisor_v2()` to
+replace the current raw `build_minimal_context()` call with a budget-aware assembly:
 
 ```python
-# In RoomSupervisorService.create_plan()
-async def create_plan(self, ...) -> SupervisorPlan:
-    # Build planning context using Context Assembly Engine
-    context = await context_assembly_service.build_supervisor_planning_context(
-        session=session,
-        room_memory=room_memory,
-        agent_registry=agent_registry,
-    )
+# In RoomServices._prepare_for_supervisor_v2()
+# CURRENT (simple):
+conversation_context = build_minimal_context(
+    room_memory.memory_content, current_task=message_text, max_turns=5
+)
 
-    # Call Supervisor LLM with assembled context
-    plan = await self._call_supervisor_llm(context, ...)
-
-    return plan
+# FUTURE (Context Assembly Engine):
+conversation_context = await context_assembly_service.build_supervisor_context(
+    room_memory=room_memory,
+    agent_registry=agent_registry,
+    current_task=message_text,
+    max_tokens=SUPERVISOR_CONTEXT_TOKEN_BUDGET,  # leaves room for trajectory growth
+)
 ```
 
-### 11.2 Review Phase Integration
+This is the only place `conversation_context` is built for the supervisor. It is
+passed unchanged through all `decide_next` iterations. No re-assembly occurs mid-loop.
+
+### 11.2 During Loop: Agent Execution Context
+
+The `ContextAssemblyService` should be wired into `_process_single_message` to build
+per-agent context. The key difference from V1: there is no `context_from_steps` field
+to inject — the supervisor already embedded relevant prior results in `DelegateTarget.task`.
 
 ```python
-# In RoomSupervisorService.review_step()
-async def review_step(self, ...) -> SupervisorReview:
-    # Build review context
-    context = await context_assembly_service.build_supervisor_review_context(
-        session=session,
-        completed_step=completed_step,
-        remaining_steps=remaining_steps,
-    )
-
-    # Call review LLM
-    review = await self._call_review_llm(context, ...)
-
-    # Update memory with step result
-    await memory_service.record_step_result(
-        room_id=session.room_id,
-        step=completed_step,
-        result=agent_result,
-    )
-
-    return review
+# In _process_single_message() / build_context_for_agent()
+context = await context_assembly_service.build_agent_execution_context(
+    room_memory=room_memory,
+    current_task=target.task,       # supervisor's tailored task (may include prior results)
+    agent_name=agent.agent_name,
+    room_awareness=room_awareness_str,
+    max_tokens=AGENT_CONTEXT_TOKEN_BUDGET,
+)
 ```
 
-### 11.3 Synthesis Phase Integration
+**Concurrent dispatch note**: When multiple agents are dispatched simultaneously
+(multi-target DELEGATE), all their contexts are built from the same room memory
+snapshot (before any of them write results). The supervisor compensates by including
+relevant inter-agent context in each `DelegateTarget.task` string directly.
+
+### 11.3 Post-Loop: Synthesis and Compaction Trigger
+
+`RoomSupervisorService.synthesize_v2(trajectory, synthesis_instruction)` is the sole
+synthesis method. After it completes, trigger compaction if needed:
 
 ```python
-# In RoomSupervisorService.synthesize_results()
-async def synthesize_results(self, ...) -> str:
-    # Build synthesis context
-    context = await context_assembly_service.build_synthesis_context(
-        session=session,
-        step_results=step_results,
-        room_memory=room_memory,
-    )
-
-    # Generate synthesis
-    synthesis = await self._call_synthesis_llm(context, ...)
-
-    # Update room memory with final result
+# In RoomMessageCenter._handle_v2_run_result() after synthesis is emitted:
+if result.synthesis_text:
+    # Add synthesis to room memory
     await memory_service.add_synthesis_to_history(
-        room_id=session.room_id,
-        synthesis=synthesis,
-        step_results=step_results,
+        room_id=room_id,
+        synthesis=result.synthesis_text,
+        trajectory=result.trajectory,
     )
 
-    # Check if compaction needed
-    if await compaction_service.should_compact(session.room_id):
-        await compaction_service.compact_room_memory(session.room_id)
-
-    return synthesis
+    # Check if compaction needed (natural boundary — loop is done, memory is stable)
+    if await compaction_service.should_compact(room_id):
+        await compaction_service.compact_room_memory(room_id)
 ```
+
+For `RunStatus.DONE` (no synthesis), agent results were already written to room memory
+during the loop by `add_agent_response_to_memory()`. The compaction check should still
+run on any terminal status.
+
+### 11.4 Trajectory as Working Memory (No Assembly Needed)
+
+Within a single user message's loop, the `SupervisorTrajectory` acts as working memory
+for the supervisor. The `_format_trajectory()` method in `RoomSupervisorService`
+handles windowing and truncation automatically — the `ContextAssemblyService` does NOT
+need to manage this. Trajectory rendering is internal to the supervisor service.
 
 ---
 
@@ -1231,6 +1528,53 @@ class ContextSerializer:
         )
 ```
 
+### 12.3 OpenAI Prompt Caching for the Supervisor Loop
+
+In V2, `decide_next` is called 3–8 times per user message. Each call constructs
+the same system prompt + `conversation_context` + `message_text` prefix, with only
+`trajectory_summary` appended at the end. OpenAI automatically caches prompt prefixes
+≥1024 tokens that are reused within a short window, at **50% token cost + lower latency**.
+
+The V2 prompt structure already satisfies the cache conditions — the changing content
+(`trajectory_summary`) is always last. To maximize cache lifetime across the full
+supervisor loop, move `conversation_context` from the user prompt into the **system
+prompt**:
+
+```python
+# CURRENT structure — conversation_context in user prompt
+SUPERVISOR_V2_SYSTEM_PROMPT = """...instructions... {agent_registry}..."""
+SUPERVISOR_V2_USER_PROMPT = """
+## Conversation Context
+{conversation_context}         ← changes user-turn prefix, shorter cache window
+
+## User Message
+{message_text}
+## Execution So Far
+{trajectory_summary}           ← grows each iteration
+"""
+
+# OPTIMIZED structure — conversation_context in system prompt
+SUPERVISOR_V2_SYSTEM_PROMPT = """...instructions... {agent_registry}...
+
+## Room Conversation Background
+{conversation_context}         ← now in system prompt → cached up to 1 hour
+"""
+SUPERVISOR_V2_USER_PROMPT = """
+## User Message
+{message_text}
+## Execution So Far
+{trajectory_summary}           ← only this changes per iteration
+"""
+```
+
+**Effect**: System-prompt cache entries are shared across multiple user messages in
+the same room (as long as the room's agent registry and conversation_context haven't
+changed). This gives cross-message caching, not just within-message caching.
+
+**Prerequisite**: Ensure the system prompt is ≥1024 tokens to qualify. For rooms with
+sparse history (`conversation_context = "No prior conversation."`), add padding via
+agent registry descriptions or extended instructions.
+
 ---
 
 ## 13. Migration Plan
@@ -1264,12 +1608,19 @@ class ContextSerializer:
 3. Implement hybrid search with temporal decay
 4. Integration tests for search
 
-### Phase 5: Supervisor Integration (Week 5)
+### Phase 5: Supervisor V2 Integration (Week 5)
 
-1. Wire context assembly into Supervisor planning
-2. Wire context assembly into Supervisor review
-3. Wire context assembly into agent execution
-4. End-to-end tests with Supervisor pattern
+> **Note**: Supervisor V2 itself is **complete** (Phase 5 of SUPERVISOR_V2_DESIGN.md,
+> Feb 21 2026). What remains here is wiring the **Context Assembly Engine** (Phases 2–3
+> above) into V2's integration points. The V1 methods (`create_plan`, `review_step`,
+> `synthesize_results`) are deleted and must not be referenced.
+
+1. Wire `ContextAssemblyService.build_supervisor_context()` into `_prepare_for_supervisor_v2()` to replace `build_minimal_context()` (see §11.1)
+2. Wire `ContextAssemblyService.build_agent_execution_context()` into `_process_single_message` / `build_context_for_agent()` (see §11.2)
+3. Wire compaction trigger into `_handle_v2_run_result()` after terminal statuses (see §11.3)
+4. Wire `add_synthesis_to_history()` into `_handle_v2_run_result()` for `SYNTHESIZE` results
+5. End-to-end tests with Supervisor V2 loop
+6. Performance benchmarks: measure `conversation_context` token size per iteration, cache hit rate
 
 ---
 
@@ -1513,6 +1864,8 @@ memory_search_config = MemorySearchConfig()
 # Context assembly metrics
 context_assembly_duration_ms: Histogram
 context_tokens_used: Histogram
+context_occupancy_pct: Gauge        # tokens_used / model_context_window — PRIMARY HEALTH SIGNAL
+context_truncation_events: Counter  # Incremented when hard cap fires; alert if non-zero
 cache_prefix_hit_rate: Gauge
 
 # Compaction metrics
@@ -1526,6 +1879,19 @@ search_results_count: Histogram
 vector_search_score: Histogram
 ```
 
+**Context occupancy thresholds** (see §2.4 Principle 4):
+
+| Occupancy | Signal | Action |
+|---|---|---|
+| < 70% | Healthy | None |
+| 70–85% | Soft warning | Log; consider triggering early compaction |
+| 85–90% | Hard cap zone | Truncate history; fire `context_truncation_events` counter |
+| > 90% | Emergency | Hard truncate + alert on-call; investigate verbose agent |
+
+> **Production context rot**: Studies show GPT-4 accuracy drops from 98.1% → 64.1%
+> based solely on information placement within the context window. Staying under 70%
+> occupancy is not just a cost concern — it is a correctness concern.
+
 ### 15.2 Logging
 
 ```python
@@ -1535,9 +1901,11 @@ logger.info(
         "room_id": room_id,
         "session_id": session_id,
         "total_tokens": total_tokens,
+        "occupancy_pct": round(total_tokens / model_context_window * 100, 1),
         "full_turns": full_turn_count,
         "compact_turns": compact_turn_count,
         "cache_prefix_tokens": prefix_tokens,
+        "truncated": truncated,  # True if hard cap fired
     }
 )
 
@@ -1563,10 +1931,10 @@ This architecture provides:
 3. **Lossless compaction**: Pointer-based compaction preserves all original content
 4. **On-demand expansion**: Agent can retrieve full content when needed
 5. **Hybrid search**: Vector + keyword with temporal decay and MMR diversity
-6. **Supervisor integration**: Context assembly for planning, review, and synthesis phases
+6. **Supervisor V2 integration**: Context assembly for the adaptive loop (`decide_next`), per-agent dispatch, and synthesis
 7. **Horizontal scalability**: All state in MongoDB/Pinecone, no in-memory dependencies
 
-The design draws from production lessons at Manus (lossless compaction, KV-cache optimization) and OpenClaw (multi-layer memory, hybrid search) while adapting to Hybro's multi-agent A2A architecture and upcoming Supervisor pattern.
+The design draws from production lessons at Manus (lossless compaction, KV-cache optimization) and OpenClaw (multi-layer memory, hybrid search) while adapting to Hybro's multi-agent A2A architecture and Supervisor V2 (adaptive loop, Phase 5 complete Feb 21 2026).
 
 ---
 
@@ -1574,13 +1942,13 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 
 ### 17.1 Strengths
 
-| Aspect                     | Assessment                                                  |
-| -------------------------- | ----------------------------------------------------------- |
-| **Scalability**            | ✅ All state in MongoDB/Pinecone; no in-memory dependencies |
-| **Supervisor Integration** | ✅ Clear integration points for planning, review, synthesis |
-| **KV-Cache Optimization**  | ✅ Stable prefix + append-only suffix pattern               |
-| **Configuration**          | ✅ All tunable params via environment variables             |
-| **Lossless Compaction**    | ✅ Pointer-based, original content always retrievable       |
+| Aspect                     | Assessment                                                          |
+| -------------------------- | ------------------------------------------------------------------- |
+| **Scalability**            | ✅ All state in MongoDB/Pinecone; no in-memory dependencies         |
+| **Supervisor V2 Integration** | ✅ Clear integration points: pre-loop context, agent dispatch, synthesis |
+| **KV-Cache Optimization**  | ✅ Stable prefix + append-only suffix pattern; prompt caching ready |
+| **Configuration**          | ✅ All tunable params via environment variables                     |
+| **Lossless Compaction**    | ⚠️ Designed as pointer-based; **current implementation is lossy summarization** (see §20) |
 
 ### 17.2 Identified Gaps & Mitigations
 
@@ -1591,19 +1959,27 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 | **Token estimation accuracy**      | Budget allocation may be off                        | Use tiktoken for accurate counts; add 10% buffer                  |
 | **Storage growth**                 | Full content storage grows unbounded                | TTL policy on `conversation_content`; archive old rooms           |
 | **Expansion latency**              | Fetching full content adds latency                  | Cache recently expanded content; batch expansions                 |
+| **`MAX_CONTEXT_CHARS` not enforced** | Silent context overflow for verbose agents        | **Immediate fix**: enforce hard cap in `build_context_for_agent`; add `context_truncation_events` counter |
+| **Flat turn list — no graph layer** | Multi-hop temporal/causal queries return wrong or missing results ("Contextual Tunneling") | Short-term: `turn_notes` entity extraction at write time; Medium-term: dual-route retrieval (§8.4) |
+| **No rolling room summary**        | Supervisor must scan 20+ compact turns to reconstruct current state; expensive and error-prone | **Short-term**: populate `RoomMemory.room_summary` at each synthesis boundary (§2.4 Principle 2) |
+| **Threshold-based compaction only** | Agent continues appending irrelevant turns until threshold fires; wastes tokens in early-to-mid sessions | Medium-term: expose `compact_context(rationale)` tool for agent-driven compaction (§2.4 Principle 5) |
+| **No turn_notes extraction pipeline** | Keyword search on compact turns requires full content expansion | Short-term: implement `extract_turn_notes()` wired into `add_turn_to_history` (§6.2) |
 
 ### 17.3 Comparison with Reference Systems
 
-| Feature                | Manus                        | OpenClaw               | Hybro (This Design)                     |
-| ---------------------- | ---------------------------- | ---------------------- | --------------------------------------- |
-| Memory layers          | File system (sandbox)        | Daily logs + MEMORY.md | Session + Room + User + Agent           |
-| Compaction             | **Lossless (pointer-based)** | Summarization          | **Lossless (pointer-based)**            |
-| Full content storage   | Sandbox filesystem           | N/A                    | MongoDB `conversation_content`          |
-| On-demand expansion    | ✅ (file read)               | N/A                    | ✅ (DB fetch)                           |
-| Search                 | glob + grep                  | Hybrid (vector + BM25) | Hybrid (vector + BM25 + temporal decay) |
-| KV-cache optimization  | ✅ Explicit                  | ✅ Implicit            | ✅ Explicit (stable prefix pattern)     |
-| Multi-agent awareness  | Sub-agent isolation          | Per-agent isolation    | Peer awareness injection                |
-| Supervisor integration | Planner + Executor           | N/A                    | ✅ Planning, review, synthesis          |
+| Feature                | Manus                        | OpenClaw               | SYNAPSE/MAGMA/Mnemis (2026)          | Hybro (This Design)                          |
+| ---------------------- | ---------------------------- | ---------------------- | ------------------------------------ | -------------------------------------------- |
+| Memory layers          | File system (sandbox)        | Daily logs + MEMORY.md | Episodic + Semantic graph nodes      | Session + Room + User + Agent                |
+| Compaction             | **Lossless (pointer-based)** | Summarization          | Continuous RL-based state update     | **Designed: lossless; Current: lossy summary** |
+| Full content storage   | Sandbox filesystem           | N/A                    | N/A (always-compressed state)        | MongoDB `conversation_content` (designed)    |
+| On-demand expansion    | ✅ (file read)               | N/A                    | N/A                                  | ✅ (DB fetch) — designed, not yet built      |
+| Retrieval              | glob + grep                  | Hybrid (vector + BM25) | Graph spreading activation + vector  | Hybrid (vector + BM25 + temporal decay) → §8.4 graph layer planned |
+| Multi-hop recall       | ❌ (grep-only)               | ❌ (no graph)          | ✅ (graph traversal)                 | ❌ short-term; ✅ planned (§8.4)             |
+| Write-time enrichment  | ❌                           | ❌                     | ✅ (structured notes + linking)      | ✅ `turn_notes` (§6.2)                       |
+| Rolling summary        | ✅ (todo.md rewrite)         | ✅ (MEMORY.md)         | ✅ (compact internal state)          | ✅ `room_summary` (§4.2)                     |
+| KV-cache optimization  | ✅ Explicit                  | ✅ Implicit            | N/A                                  | ✅ Explicit (stable prefix + prompt caching) |
+| Multi-agent awareness  | Sub-agent isolation          | Per-agent isolation    | N/A                                  | Peer awareness injection                     |
+| Supervisor integration | Planner + Executor           | N/A                    | N/A                                  | ✅ Adaptive loop (decide_next), dispatch, synthesis |
 
 ### 17.4 Open Questions
 
@@ -1611,15 +1987,18 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 2. **Cross-agent memory**: Should agents share learned facts? (Proposed: Opt-in per room)
 3. **Memory search scope**: Search room-only or include user memory? (Proposed: Room-first, user as fallback)
 4. **Compaction frequency**: Background job vs on-demand? (Proposed: On-demand after synthesis, background cleanup)
+5. **`turn_notes` extraction cost**: LLM call vs heuristic extractor? (Proposed: heuristic for turns <100 tokens, cheap fast model for long agent responses; never block the main write path — run async)
+6. **`room_summary` update granularity**: Update after every synthesis, or only when goal/decisions change? (Proposed: Always update `recent_agent_contributions`; update `key_decisions`/`open_questions`/`current_goal` only if changed — use a short LLM diff check)
+7. **Graph layer trigger**: At what point does multi-hop retrieval failure become a user-visible problem? (Proposed: Instrument "context miss" events via user feedback; build §8.4 graph layer when miss rate exceeds 5%)
 
 ### 17.5 Dependencies on Other Systems
 
-| Dependency         | Status      | Notes                                                      |
-| ------------------ | ----------- | ---------------------------------------------------------- |
-| Supervisor Pattern | 📋 Planned  | Context assembly integrates with planning/review/synthesis |
-| Pinecone           | ✅ Existing | Reuse `agentmatch` infra, add `room-memory` index          |
-| MongoDB            | ✅ Existing | Add new collections with indexes                           |
-| OpenAI             | ✅ Existing | Embeddings + compaction summarization                      |
+| Dependency         | Status                    | Notes                                                                |
+| ------------------ | ------------------------- | -------------------------------------------------------------------- |
+| Supervisor V2      | ✅ Implemented (Feb 2026) | Phase 5 complete; adaptive loop replaces plan/review/synthesis       |
+| Pinecone           | ✅ Existing               | Reuse `agentmatch` infra, add `room-memory` index                    |
+| MongoDB            | ✅ Existing               | Add new collections with indexes                                     |
+| OpenAI             | ✅ Existing               | Embeddings + token estimation (tiktoken)                             |
 
 ### 17.6 Risk Assessment
 
@@ -1636,12 +2015,23 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 
 ### Phase 1: Data Models & Storage
 
+- [ ] **Update `models/memory.py` `ConversationTurn` to §6.2 canonical shape** — add
+  `turn_id`, `representation`, `content_ref`, `estimated_tokens_full`,
+  `estimated_tokens_compact`, `brief_summary`, `turn_notes`; change `content: str` to
+  `content: str | None = None` (precondition for all compaction work)
 - [ ] Create `models/context.py` with `SessionContext`, `TokenBudget`
-- [ ] Create `models/compaction.py` with `ConversationTurn`, `ContentReference`, `StoredContent`
+- [ ] Create `models/compaction.py` with `ContentReference`, `StoredContent`, `CompactionResult`
 - [ ] Create `models/search.py` with `MemorySearchConfig`, `MemorySearchResult`
-- [ ] Extend `models/memory.py` with `UserMemory`, `AgentMemory`, `RoomFact`
+- [ ] Extend `models/memory.py` with `UserMemory`, `AgentMemory`, `RoomFact`, **`RoomSummary`**
+- [ ] **Wire `estimate_tokens(content)` into `add_turn_to_history()`** in
+  `common/utils/context_utils.py` — set `estimated_tokens_full` at turn creation
+  time (not left at 0) so compaction triggers and budget accounting work correctly
+- [ ] **Wire `extract_turn_notes(content)` into `add_turn_to_history()`** — populate
+  `turn_notes` at write time (keywords, entities, one_liner). Use heuristic for short
+  turns; fast LLM for long agent responses; always run async to avoid blocking writes
 - [ ] Add env variables to `config/settings.py`
-- [ ] Create MongoDB `conversation_content` collection with indexes
+- [ ] Create MongoDB `conversation_content` collection with indexes (add text index on
+  `turn_notes.keywords`, `turn_notes.entities`, `turn_notes.one_liner` for §8.3)
 - [ ] Migration script for existing `room_memories`
 
 ### Phase 2: Context Assembly Engine
@@ -1668,13 +2058,27 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 - [ ] Implement MMR re-ranking
 - [ ] Integration tests for search accuracy
 
-### Phase 5: Supervisor Integration
+### Phase 5: Supervisor V2 Integration
 
-- [ ] Wire context assembly into `RoomSupervisorService.create_plan()`
-- [ ] Wire context assembly into `RoomSupervisorService.review_step()`
-- [ ] Wire context assembly into agent execution
-- [ ] End-to-end tests with Supervisor pattern
-- [ ] Performance benchmarks
+- [ ] Wire `ContextAssemblyService.build_supervisor_context()` into `_prepare_for_supervisor_v2()` (replaces `build_minimal_context(max_turns=5)`)
+- [ ] Wire `ContextAssemblyService.build_agent_execution_context()` into `_process_single_message` / `build_context_for_agent()`
+- [ ] Wire compaction trigger into `_handle_v2_run_result()` (after all terminal statuses)
+- [ ] Wire `add_synthesis_to_history()` into `_handle_v2_run_result()` for `SYNTHESIZE` results
+- [ ] **Wire `update_room_summary()` into `_handle_v2_run_result()` after synthesis** — update `RoomMemory.room_summary` (current_goal, key_decisions, open_questions, recent_agent_contributions) at each synthesis boundary
+- [ ] Move `conversation_context` into system prompt for OpenAI prompt cache optimization (see §12.3)
+- [ ] Enforce `MAX_CONTEXT_CHARS` (currently defined but not checked in `build_context_for_agent`); emit `context_truncation_events` counter when fired
+- [ ] Add `context_occupancy_pct` logging to every `build_context_for_agent` call (see §15)
+- [ ] End-to-end tests with Supervisor V2 loop
+- [ ] Performance benchmarks: conversation_context token size per iteration, cache hit rate
+
+### Phase 4B: Graph-Based Retrieval (Future, after Phase 4 ships)
+
+- [ ] Design `extract_turn_notes()` — keyword/entity extraction at write time (§6.2, §8.3)
+- [ ] Add MongoDB text index on `turn_notes` fields in `conversation_content`
+- [ ] Implement `memory_entities` collection: index entity nodes from `turn_notes.entities`
+- [ ] Implement temporal edge resolution at query time (order turns by timestamp for sequential traversal)
+- [ ] Implement dual-route search in `MemorySearchService` (§8.4): merge Route-1 vector results with Route-2 entity-graph traversal results
+- [ ] Evaluate on internal multi-hop recall test cases before rolling to production
 
 ---
 
@@ -1728,4 +2132,127 @@ def apply_temporal_decay(
     decay_factor = math.exp(-decay_constant * age_days)
 
     return score * decay_factor
+```
+
+---
+
+## 20. Implementation Reality vs. Design
+
+This section documents the gap between the current implementation (as of Feb 21, 2026)
+and the design described in this document. It serves as an honest changelog for
+engineering prioritization.
+
+### 20.1 What Is Implemented
+
+| Component | Status | Location |
+|---|---|---|
+| Room memory CRUD (`RoomMemoryService`) | ✅ Implemented | `services/memory_service.py` |
+| Conversation history (sliding window, 20 turns) | ✅ Implemented | `common/utils/context_utils.py` |
+| `add_turn_to_history` / `build_context_for_agent` | ✅ Implemented | `common/utils/context_utils.py` |
+| `build_minimal_context` for supervisor | ✅ Implemented | `common/utils/context_utils.py` |
+| `add_agent_response_to_memory` (V2 loop writes) | ✅ Implemented | `services/memory_service.py` |
+| Legacy memory migration (`memory_text` → `summary`) | ✅ Implemented | `context_utils.migrate_legacy_memory` |
+| Per-agent context via `get_context_for_agent` | ✅ Implemented | `services/memory_service.py` |
+| Supervisor V2 adaptive loop | ✅ Implemented | `modules/SupervisorExecutor.py` |
+
+### 20.2 What Is NOT Implemented (Design vs. Reality)
+
+| Design Element | Reality | Impact |
+|---|---|---|
+| **Lossless compaction** (pointer-based, §6) | Current: lossy summarization. Turns >20 are truncated to 150 chars and moved to a `summary` string. Original content is discarded. | Cannot expand compacted turns. Historical context is permanently lossy. |
+| **`conversation_content` MongoDB collection** | Does not exist. No `ContentReference`, no `StoredContent`. | Lossless compaction cannot be implemented without this first. |
+| **Token budget enforcement** (`MAX_CONTEXT_CHARS = 12000`) | Constant is defined in `context_utils.py` but **never checked** in any code path. | Context can silently exceed limits for verbose agents/long rooms. |
+| **Context Assembly Engine** (`ContextAssemblyService`) | Does not exist. `build_context_for_agent` is a direct function call, not a service. | No budget-aware assembly, no KV-cache optimization at the service level. |
+| **Memory Search** (`MemorySearchService`, Pinecone) | Does not exist. | No hybrid search, no semantic recall across sessions. |
+| **User Memory / Agent Memory** | Does not exist. | No cross-room preferences, no agent performance history. |
+| **Room Facts extraction** | Does not exist. | No durable fact extraction from conversations. |
+| **Prompt caching optimization** (§12.3) | `conversation_context` is in user prompt, not system prompt. Cache window is shorter. | Missing 50% cost reduction on `decide_next` iterations 2–8. |
+
+### 20.3 Known Behavioral Gaps in the V2 Loop
+
+These are not design omissions — they are observable behaviors of the current
+implementation that engineers should be aware of:
+
+| Behavior | Root Cause | Consequence |
+|---|---|---|
+| `conversation_context` is a **frozen snapshot** built before the loop starts | `_prepare_for_supervisor_v2` runs once; no re-assembly per iteration | Supervisor never sees current-loop agent results in its room history view — it sees them only in `trajectory_summary`. This is **correct by design** but must be understood. |
+| Concurrent agents don't see each other's results in per-agent context | `asyncio.gather` dispatches all agents before any write to room memory | For multi-target DELEGATE, agents have no awareness of sibling results. Supervisor must compensate via `DelegateTarget.task`. |
+| Current user message appears **twice** in supervisor prompt | `initialize_or_update_room_memory` runs before `_prepare_for_supervisor_v2`, so current message is in room history AND in `## User Message` section | Minor redundancy; does not affect correctness. |
+| `MAX_CONTEXT_CHARS` is defined but **never enforced** | Dead constant in `context_utils.py` | No hard cap on `build_context_for_agent` output size. |
+
+### 20.4 Priority Order for Closing Gaps
+
+1. **Enforce `MAX_CONTEXT_CHARS`** in `build_context_for_agent` — trivial fix, eliminates the latent overflow risk.
+2. **Move `conversation_context` to system prompt** (§12.3) — small change to two string templates, immediate cost/latency improvement.
+3. **Build `ContextAssemblyService`** with token budget awareness (Phase 2 of §13).
+4. **Build lossless compaction** (Phase 3 of §13) — requires `conversation_content` collection first.
+5. **Build Memory Search** (Phase 4 of §13) — long-term recall.
+
+---
+
+## 21. 2026 SOTA Alignment & Future Evolution
+
+This section documents how the design aligns with state-of-the-art research as of Feb 2026,
+and the planned evolution path. Researched Feb 21, 2026.
+
+### 21.1 Alignment Assessment
+
+| SOTA Concept | Paper(s) | This Design | Status |
+|---|---|---|---|
+| **Lossless pointer-based compaction** | Manus (production) | §6 Compaction System | ✅ Designed; ⚠️ not yet implemented |
+| **KV-cache stable prefix** | Manus, production guides | §12 KV-Cache Optimization | ✅ Designed and implemented |
+| **Hybrid vector + keyword search** | OpenClaw, MAGMA | §8.1 Search Architecture | ✅ Designed; not yet implemented |
+| **Temporal decay in retrieval** | OpenClaw, production guides | §8.1 temporal decay | ✅ Designed |
+| **Write-time note generation** | A-MEM (arXiv 2502.12110) | `turn_notes` field §6.2 | ✅ Designed; not yet implemented |
+| **Rolling structured summary ("Knowledge Block")** | Focus (arXiv 2601.07190), Manus todo.md | `room_summary` §4.2 | ✅ Designed; not yet implemented |
+| **Context occupancy monitoring** | Production guides 2025–2026 | §15.1 metrics | ✅ Designed; not yet implemented |
+| **Multi-hop graph retrieval** | SYNAPSE/MAGMA/Mnemis (2026) | §8.4 Future | 🔵 Planned (Phase 4B) |
+| **Agent-driven compaction (tool)** | Focus, AgeMem (2026) | §2.4 Principle 5 | 🔵 Planned (post-Phase 4) |
+| **RL-trained memory consolidation** | MEM1 (ICLR 2026) | Not in roadmap | ⬜ Research-stage; monitor for viability |
+
+### 21.2 What the 2026 Research Validates
+
+The following design choices are directly validated by 2026 SOTA:
+
+1. **Lossless over lossy**: MEM1 and Focus both show that agents need recoverable context. The design's insistence on pointer-based compaction (not summarization) is correct.
+
+2. **Token cost dominates**: Production data shows 100:1 input/output ratio. Context engineering is cost engineering. The KV-cache optimization in §12 is a high-leverage investment.
+
+3. **Recency bias is not enough**: SYNAPSE demonstrates that temporal/causal multi-hop queries fail with flat vector similarity. The `turn_notes` entity index (§8.3) is the right intermediate step before a full graph layer.
+
+4. **Structured context beats raw transcripts**: The "Knowledge Block" in Focus and "MEMORY.md" in OpenClaw both show that a compact, structured summary maintained in context dramatically reduces turn-scanning overhead. The `room_summary` field (§4.2) implements this.
+
+5. **Write-time enrichment pays off**: A-MEM's core insight is that the cost of enriching memory at write time (Zettelkasten notes) is small compared to the retrieval quality improvement. `turn_notes` is the direct application.
+
+### 21.3 What the 2026 Research Challenges
+
+1. **Threshold-based compaction is suboptimal**: AgeMem/Focus show that agent-controlled compaction outperforms fixed thresholds. The threshold approach (`max_turns > 20`) is correct to ship first, but should be augmented with a `compact_context(rationale)` supervisor tool in a later phase.
+
+2. **Flat sequential list is insufficient for long-horizon rooms**: Rooms with 10+ sessions and multi-topic threads will see degraded recall on temporal/causal queries with the flat `list[ConversationTurn]` architecture. The §8.4 graph layer is the long-term fix; the `turn_notes` entity index (§8.3) is the near-term mitigation.
+
+3. **"Context rot" is real and underestimated**: Studies confirm GPT-4 accuracy degrades from ~98% to ~64% based solely on information placement in the context window. This means the design's §5 token budget allocation (history at 60%) may concentrate too much irrelevant content in the middle of context. The `room_summary` (always near the front) and KV-cache stable prefix (static content first) partially mitigate this.
+
+### 21.4 Recommended Evolution Sequence
+
+Based on research alignment and implementation reality (§20):
+
+```
+Immediate (days, no new architecture):
+  1. Enforce MAX_CONTEXT_CHARS  →  eliminate silent overflow
+  2. Move conversation_context to system prompt  →  50% cost reduction on V2 loop
+  3. Add context_occupancy_pct logging  →  visibility before fixes
+
+Short-term (weeks, within current architecture):
+  4. Wire estimate_tokens in add_turn_to_history  →  compaction triggers work
+  5. Wire extract_turn_notes in add_turn_to_history  →  richer retrieval for free
+  6. Populate room_summary at synthesis boundary  →  Knowledge Block in context
+  7. Build ContextAssemblyService (Phase 2)  →  budget-aware context
+
+Medium-term (1–2 months):
+  8. Build lossless compaction (Phase 3)  →  correctness, not just efficiency
+  9. Build Memory Search with turn_notes integration (Phase 4 + §8.3)  →  recall
+
+Long-term (3+ months, research-validated):
+  10. Dual-route graph retrieval (§8.4)  →  multi-hop recall for long-horizon rooms
+  11. Agent-driven compaction tool  →  semantic-relevance-based pruning
 ```
