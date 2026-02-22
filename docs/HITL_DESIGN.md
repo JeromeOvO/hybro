@@ -166,8 +166,8 @@ the previous CLARIFY implementation. Two compatibility rules apply:
 2. **`send_message_to_room` shim**: If a room document still has
    `pending_clarification_message_id` set (in-flight legacy CLARIFY), route that specific
    reply via the old clarify-resume path so in-flight sessions are not broken. Remove this
-   shim after one full `task_expiry_hours` cycle (all legacy CLARIFY requests will have
-   timed out by then).
+   shim **7 days after Phase 2 deployment** (all legacy CLARIFY requests will have timed
+   out well within that window regardless of `task_expiry_hours` configuration).
 
 ---
 
@@ -358,6 +358,7 @@ class HITLRequest(BaseModel):
     # Response (populated when status == "responded")
     user_input: str | None = None
     responded_at: datetime | None = None
+    responded_by_user_id: str | None = None  # Who responded (for audit / future multi-user rooms)
 ```
 
 ### 5.2 HITLResponse
@@ -368,7 +369,7 @@ The payload for the user's reply (REST request body, not persisted separately).
 class HITLResponseRequest(BaseModel):
     """REST request body for POST /rooms/{room_id}/hitl/respond."""
     request_id: str
-    user_input: str
+    user_input: str = Field(..., min_length=1, max_length=10_000)
 ```
 
 ### 5.3 Supervisor V2 Model Extensions
@@ -494,6 +495,13 @@ if isinstance(checkpoint_data, dict):
 > `ProcessingStatus.AWAITING_INPUT` in the queue loop are **only needed for
 > non-supervisor (legacy) rooms**. Supervisor V2 rooms use `StepStatus` and
 > `RunStatus` from `models/supervisor_v2.py` instead.
+>
+> **Scope note**: HITL Phase 1 targets **V2 supervisor rooms only**. The V1 model
+> extensions below (`ProcessingStatus.AWAITING_INPUT`, `QueueResult.AWAITING_INPUT`)
+> are defined for forward-compatibility but are **not wired** in Phase 1. V1
+> non-supervisor rooms that encounter `input_required` will continue to treat it
+> as `PAUSED` (existing behavior). A future phase will add the full V1 HITL flow
+> (queue pause → `HITLService` → `reply_to_task` → queue resume) if needed.
 
 **For V2 supervisor rooms** — additions to `models/supervisor_v2.py`:
 
@@ -510,7 +518,8 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELED = "canceled"
     PAUSED = "paused"
-    CLARIFYING = "clarifying"
+    # CLARIFYING is removed — replaced by AWAITING_INPUT (see §5.3).
+    # Legacy "clarifying" trajectory status is handled by the backward-compat guard.
     AWAITING_INPUT = "awaiting_input" # NEW: see §5.3
 ```
 
@@ -564,9 +573,22 @@ class QueueResult(str, Enum):
     "data": {
         "request_id": "abc123",
         "status": "responded",           # or "expired", "canceled"
+        "error_message": null,           # populated on expiry/cancel with user-facing reason
     }
 }
 ```
+
+**Expiry flow:** When the HITL expiry job detects an expired request:
+1. Update `HITLRequest.status` to `EXPIRED`
+2. Clear `pending_continuation` on the associated message
+3. Fail the parent trajectory with status `"failed"`
+4. Emit `hitl_status_update` SSE with `status: "expired"` and `error_message: "Request expired after 24 hours without a response"`
+5. Emit `processing_status: "failed"` SSE so the frontend clears the processing indicator
+
+**Frontend handling:** When the frontend receives `hitl_status_update` with `status: "expired"`:
+- Remove the inline reply form from the task card
+- Display the `error_message` in the card
+- Transition the card to a failed/terminal state
 
 ### 5.6 SSEProcessingStatus Extension
 
@@ -644,6 +666,16 @@ interrupted_state = {
     "hitl_request_id": request.request_id,  # links to HITLRequest document
 }
 ```
+
+> **Staleness note (conversation_context):** The `conversation_context` snapshot is
+> serialized at interrupt time.  For `PUSH_NOTIFICATION` pauses (typically seconds to
+> minutes), this is acceptable.  For HITL pauses that may last **hours**, the snapshot
+> could be stale — new room memory entries (compaction cycles, cross-room updates) are
+> not reflected.  **Decision**: on resume, `_resume_supervisor_v2()` should **re-fetch**
+> `conversation_context` from `room_memory_service` rather than using the serialized
+> snapshot.  The serialized `conversation_context` remains in the payload as a fallback
+> if `room_memory_service` is unavailable.  The `agent_registry` should also be refreshed
+> on resume (agents may have been added/removed/health-changed during the pause).
 
 **Where the continuation is saved:**
 
@@ -774,6 +806,7 @@ class HITLService:
             status=HITLStatus.RESPONDED,
             user_input=user_input,
             responded_at=utcnow(),
+            responded_by_user_id=user_id,
         )
 
         # 4. Emit status update SSE
@@ -924,6 +957,10 @@ async def reply_to_task(
         # direct reply to the original task.  Compliant agents that support
         # in-place continuation ignore it; agents that start a new task per round
         # use it to pull in the prior task's context.  Including it is safe for all.
+        #
+        # NOTE: referenceTaskIds is a convention/extension used by this system,
+        # not a guaranteed part of the A2A protocol spec.  Agents that don't
+        # recognize it will simply ignore it — no harm done.
         reference_task_ids=[task_id],
     )
 
@@ -1060,11 +1097,23 @@ elif interrupt_kind == "hitl_supervisor":
     # No webhook result — the user's reply is already patched onto the
     # trajectory by HITLService._handle_supervisor_response() before
     # calling resume_queue_from_continuation().
-    # trajectory.hitl_user_reply is populated; include it in conversation_context:
+    # trajectory.hitl_user_reply is populated; include it in conversation_context.
+    #
+    # Re-fetch conversation_context from room memory to avoid staleness (see §5.7 note).
+    refreshed_context = await room_memory_service.build_conversation_context(room_id)
+    if refreshed_context:
+        conversation_context = refreshed_context
+
     if trajectory.hitl_user_reply:
+        # Include the original question alongside the reply so the supervisor
+        # retains full context about what was asked.
+        original_question = _extract_clarify_question(trajectory)
+        hitl_block = ""
+        if original_question:
+            hitl_block += f"[Supervisor asked the user]: {original_question}\n"
+        hitl_block += f"[User replied]: {trajectory.hitl_user_reply}"
         conversation_context = (
-            f"{conversation_context or ''}\n\n"
-            f"[User replied to your question]: {trajectory.hitl_user_reply}"
+            f"{conversation_context or ''}\n\n{hitl_block}"
         ).strip()
 ```
 
@@ -1117,6 +1166,19 @@ if result.status == ProcessingStatus.AWAITING_INPUT:
 
 **Step 3 — `SupervisorExecutor.run()` handles `AWAITING_INPUT` results:**
 
+> **Concurrency constraint**: When multiple agents return `input_required` in the same
+> dispatch round, only **one** HITL request is created — for the **first** awaiting agent.
+> The remaining awaiting agents are treated as `PAUSED` (their results are kept on the
+> trajectory entry, but no HITL prompt is emitted for them yet). When the first agent's
+> HITL cycle completes and the loop resumes, the supervisor re-evaluates: it may
+> re-dispatch the same agents (which may or may not return `input_required` again) or
+> adjust the plan. This avoids the race condition where multiple concurrent continuations
+> carry stale trajectory snapshots that overwrite each other's results on resume.
+>
+> **Rationale**: The same single-agent-at-a-time constraint already applies to
+> `PUSH_NOTIFICATION` pauses — only one paused agent's continuation is active per
+> dispatch round.  HITL follows the same pattern.
+
 ```python
 # In the DELEGATE case, after _dispatch_targets():
 awaiting = [r for r in results if r.status == StepStatus.AWAITING_INPUT]
@@ -1124,43 +1186,42 @@ if awaiting:
     entry.results = results
     trajectory.status = "awaiting_input"
 
-    # Unified: save one interrupted state per awaiting agent (same as push-notification,
-    # but with kind=HITL_AGENT and hitl_request_id added after HITLService creates it).
-    # We save first (without hitl_request_id), create the HITL request, then update.
-    # Alternatively: create HITL requests first, then save with request IDs.
-    for ar in awaiting:
-        request = await hitl_service.request_input(
-            room_id=room_id,
-            user_message_id=user_message_id,
-            source="agent",
-            prompt=ar.status_message or "The agent needs additional information.",
-            agent_id=ar.agent_id,
-            agent_name=ar.agent_name,
-            a2a_task_id=ar.a2a_task_id,
-            a2a_context_id=ar.a2a_context_id,
-            continuation_message_id=ar.paused_message_id,
+    # Only create HITL for the FIRST awaiting agent to avoid trajectory race conditions.
+    # Remaining awaiting agents stay on the trajectory as AWAITING_INPUT results;
+    # they'll be re-evaluated when the loop resumes after this HITL cycle.
+    ar = awaiting[0]
+    request = await hitl_service.request_input(
+        room_id=room_id,
+        user_message_id=user_message_id,
+        source="agent",
+        prompt=ar.status_message or "The agent needs additional information.",
+        agent_id=ar.agent_id,
+        agent_name=ar.agent_name,
+        a2a_task_id=ar.a2a_task_id,
+        a2a_context_id=ar.a2a_context_id,
+        continuation_message_id=ar.paused_message_id,
+    )
+    # Unified save — InterruptKind.HITL_AGENT
+    saved = await self._save_interrupted_state(
+        kind=InterruptKind.HITL_AGENT,
+        trajectory=trajectory,
+        message_id=ar.paused_message_id,
+        room_id=room_id,
+        user_message_id=user_message_id,
+        message_text=message_text,
+        agent_registry=agent_registry,
+        room_config=room_config,
+        conversation_context=conversation_context,
+        request_user_id=request_user_id,
+        quoted_text=quoted_text,
+        hitl_request_id=request.request_id if request else None,
+    )
+    if not saved:
+        trajectory.status = "failed"
+        return self._log_and_return(
+            room_id, trajectory,
+            SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
         )
-        # Unified save — InterruptKind.HITL_AGENT
-        saved = await self._save_interrupted_state(
-            kind=InterruptKind.HITL_AGENT,
-            trajectory=trajectory,
-            message_id=ar.paused_message_id,
-            room_id=room_id,
-            user_message_id=user_message_id,
-            message_text=message_text,
-            agent_registry=agent_registry,
-            room_config=room_config,
-            conversation_context=conversation_context,
-            request_user_id=request_user_id,
-            quoted_text=quoted_text,
-            hitl_request_id=request.request_id if request else None,
-        )
-        if not saved:
-            trajectory.status = "failed"
-            return self._log_and_return(
-                room_id, trajectory,
-                SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
-            )
 
     await self.sse_manager.send_processing_status(
         room_id, SSEProcessingStatus.AWAITING_INPUT, user_message_id
@@ -1222,6 +1283,17 @@ case ActionType.CLARIFY:
 
     # Unified save — InterruptKind.HITL_SUPERVISOR
     # Saves on user_message_id (no agent message to resume from)
+    #
+    # ATOMICITY NOTE: request_input() and _save_interrupted_state() are two
+    # independent MongoDB writes.  If the process crashes between them:
+    #   - HITL request exists in DB but no continuation → user replies, but
+    #     _handle_supervisor_response() finds no continuation → 502 error.
+    #   - The HITL expiry job will eventually cancel the orphaned request.
+    # Mitigation: the stale task checker / HITL expiry job should detect
+    # orphaned HITL requests (status=PENDING but no matching continuation on
+    # the message) and cancel them with a log warning.  A full MongoDB
+    # transaction is preferred but not required for Phase 1 given the low
+    # probability and the self-healing expiry path.
     saved = await self._save_interrupted_state(
         kind=InterruptKind.HITL_SUPERVISOR,
         trajectory=trajectory,
@@ -1283,8 +1355,8 @@ The old `CLARIFY` case in `SupervisorExecutor.run()` emitted a synthesis message
 `pending_clarification_message_id` on the room. That path is **removed**. For rooms that
 have `pending_clarification_message_id` still set (in-flight legacy sessions), keep a shim
 in `send_message_to_room` that detects the legacy field and routes the next message as a
-clarify-resume using the old `clarify_user_reply` field. Remove the shim after one full
-`task_expiry_hours` cycle.
+clarify-resume using the old `clarify_user_reply` field. Remove the shim **7 days after
+Phase 2 deployment** (see §3 backward-compat note).
 
 ```python
 # In send_message_to_room — LEGACY SHIM (remove after migration window):
@@ -1346,6 +1418,20 @@ async def cancel_hitl_request(
     await hitl_service.cancel_request(request_id, room_id=room_id)
     return {"status": "canceled"}
 ```
+
+**Endpoint hardening (required before production):**
+
+1. **Rate limiting**: Apply the same per-user rate limiter used by `sendMessage` endpoints
+   to all three HITL endpoints. The `/respond` endpoint is the most critical — a
+   tight limit (e.g., 10 requests/minute per room) prevents accidental double-submits
+   and deliberate abuse.
+2. **Input validation**: `HITLResponseRequest.user_input` is capped at 10,000 characters
+   via the Pydantic `max_length` constraint (see §5.2). The endpoint should also reject
+   empty strings (enforced by `min_length=1`).
+3. **Idempotency**: The `handle_response()` method checks `request.status != PENDING`
+   and returns 409 on duplicate submissions. This is sufficient for Phase 1 because
+   the status transition is atomic (single MongoDB update). If the routing step fails
+   (502), the request stays PENDING and the user can retry.
 
 ### 7.5 Cancellation Integration
 
@@ -1524,7 +1610,7 @@ When the agent completes, the standard `task_update` SSE event arrives and the c
 ### 8.6 Why Inline (Not the Chat Input Bar)
 
 1. **Clarity of intent** — the submit button is physically attached to the question. No ambiguity about what the user is replying to.
-2. **Multiple concurrent HITL** — if two agents both return `input_required`, the timeline shows two cards with independent reply forms.
+2. **Future concurrent HITL** — if the single-agent-at-a-time constraint is relaxed in the future, the timeline can show multiple cards with independent reply forms.
 3. **Separate channel** — the reply hits `POST /hitl/respond`, not `POST /sendMessage`. No Supervisor planning, no new agent messages created.
 4. **Semantic difference** — an HITL reply is a scoped interaction with one agent, not a top-level chat message. Keeping it inline reflects that.
 
@@ -1534,6 +1620,14 @@ The `useRoomWebhook.ts` processing-placeholder logic has a 2-minute stale check 
 skips showing the generic "AI Agents Processing..." placeholder if the triggering user
 message is older than 2 minutes. This check does **not** affect rendered `TaskStatusMessage`
 cards — those manage their own state independently.
+
+> **Processing indicator overlap (<2 min):** When the HITL prompt arrives within 2
+> minutes of the original message, the user may briefly see both the "AI Agents
+> Processing..." spinner and the HITL prompt. To fix: the SSE handler for
+> `hitl_input_requested` should set `processingStatus = 'awaiting_input'` on the room
+> state, and the processing-placeholder renderer should **not** show the generic spinner
+> when `processingStatus === 'awaiting_input'`.  This ensures a clean transition:
+> spinner → HITL prompt (never both simultaneously).
 
 > **Verify before implementing**: There is currently no confirmed 10-minute task-card
 > auto-fail timer in `useRoomWebhook.ts`. The existing staleness logic applies only to
@@ -1885,6 +1979,299 @@ except ValueError:
 | 9 | IDOR on HITL endpoints (no room ownership check) | HIGH | Mitigated: `verify_room_ownership()` on all HITL endpoints |
 | 10 | `auth_required` uses wrong reply mechanism | HIGH | Mitigated: Phase 1 scoped to `input_required` only; `auth_required` stays on existing push-notification/PAUSED path |
 | 11 | `interrupt_kind` is load-bearing routing field | MEDIUM | Mitigated: Validate on read, default to `PUSH_NOTIFICATION`, structured logging |
+| 12 | Non-atomic HITL request + continuation save | MEDIUM-HIGH | Mitigated: Expiry job detects orphans; Phase 2+ adds MongoDB transaction |
+| 13 | Stale `conversation_context` on resume after long HITL pause | MEDIUM | Mitigated: Re-fetch context on resume; serialized value is fallback only |
+| 14 | No observability / metrics for HITL lifecycle | MEDIUM | Mitigated: Metrics + alerting specified in §12 |
+| 15 | SSE transport coupling limits future horizontal scaling | LOW-MEDIUM | Noted: Abstract event emission behind interface when refactoring SSE |
+
+### Risk 12: Non-Atomic HITL Request + Continuation Save
+
+**Severity: MEDIUM-HIGH**
+
+`hitl_service.request_input()` (MongoDB write + SSE emit) and `_save_interrupted_state()` (MongoDB write) are two independent operations. If the process crashes between them, either:
+- **HITL request exists but no continuation**: user responds, `_handle_supervisor_response` finds no continuation, returns 502. The orphaned HITL request eventually expires.
+- **Continuation exists but no HITL request**: no prompt is ever shown to the user; the supervisor loop stays paused until the stale task checker cleans it up.
+
+**Mitigations:**
+
+1. The HITL expiry job (Phase 5) should detect and cancel orphaned HITL requests (status=PENDING but no matching continuation on the message document).
+2. The stale task checker should detect continuations with `hitl_request_id` pointing to a non-existent or already-expired HITL request, and fail them with a log warning.
+3. **Phase 2+**: wrap both operations in a MongoDB multi-document transaction for full atomicity.
+
+### Risk 13: Stale `conversation_context` on Resume After Long HITL Pause
+
+**Severity: MEDIUM**
+
+The continuation payload serializes `conversation_context` at interrupt time. For HITL pauses lasting hours (up to 24h expiry), the snapshot may be stale — compaction cycles, memory updates, or room configuration changes are not reflected.
+
+**Mitigation:**
+
+On resume, `_resume_supervisor_v2()` should re-fetch `conversation_context` from `room_memory_service` and `agent_registry` from the database, using the serialized values only as fallbacks. See the staleness note in §5.7.
+
+### Risk 14: No Observability / Metrics for HITL Lifecycle
+
+**Severity: MEDIUM**
+
+HITL introduces a new async interaction pattern with potentially long wait times (up to 24h). Without metrics, degradation is invisible until users complain.
+
+**Mitigation:**
+
+Add the metrics and alerting described in §12 (Observability & Metrics).
+
+### Risk 15: SSE Transport Coupling Limits Future Scaling
+
+**Severity: LOW-MEDIUM → HIGH (upgraded)**
+
+`SYSTEM_DESIGN_REVIEW.md` (§2.1) identifies the in-memory `SSEManager` as a critical horizontal scaling bottleneck. The HITL design adds more SSE event types and relies on SSE for the full interaction lifecycle. Migration to WebSockets or a pub/sub backend (Redis Streams, etc.) would require touching every `sse_manager.send_hitl_event()` call site.
+
+**Critical cross-instance issue:** In a multi-instance deployment, if User A is connected to Instance A but the HITL request is created on Instance B, the `hitl_input_requested` SSE event **never reaches User A**. The catch-up endpoint (`GET /hitl/pending`) only helps on reconnect, not on initial delivery failure.
+
+**Mitigation:**
+
+1. **Phase 1 blocker consideration:** HITL should either (a) block on the SSE horizontal scaling fix (Redis Pub/Sub) from `SYSTEM_DESIGN_REVIEW.md`, or (b) implement a polling fallback where the frontend periodically calls `GET /hitl/pending` while a room is in processing state.
+2. `HITLService` should emit events through an abstraction layer (e.g., an `EventEmitter` interface) rather than directly calling `sse_manager`. This allows swapping the transport later without modifying business logic.
+
+### Risk 16: Resume Processing is Fire-and-Forget
+
+**Severity: MEDIUM-HIGH**
+
+When `_handle_supervisor_response()` calls `resume_queue_from_continuation()`, this spawns background work via `asyncio.create_task` that can be lost on crash. The design mentions "persist-first, emit-second" for HITL requests, but the **resume processing** itself is still fire-and-forget.
+
+**Impact:** If the server crashes after marking the HITL request as `RESPONDED` but before the supervisor loop completes, the user's reply is recorded but never acted upon. The user sees "Processing your reply..." indefinitely.
+
+**Mitigation:**
+
+The stale task checker should detect HITL requests with `status=RESPONDED` whose continuation still exists (indicating the resume never completed). Recovery action: re-trigger `resume_queue_from_continuation()` for these orphaned responses.
+
+```python
+# In stale_task_checker.py, add to periodic check:
+async def _recover_orphaned_hitl_responses(self):
+    """Detect RESPONDED HITL requests whose resume failed."""
+    responded_requests = await db_service.get_hitl_requests_by_status(
+        HITLStatus.RESPONDED,
+        responded_before=utcnow() - timedelta(minutes=5),  # grace period
+    )
+    for req in responded_requests:
+        continuation = await db_service.get_pending_continuation_on_message(
+            req.continuation_message_id
+        )
+        if continuation:
+            logger.warning(
+                "Orphaned HITL response detected — resume failed",
+                extra={"hitl_request_id": req.request_id},
+            )
+            # Re-trigger resume
+            await room_message_center.resume_queue_from_continuation(
+                message_id=req.continuation_message_id,
+                task_result_text=None,
+            )
+```
+
+### Risk 17: httpx Client Leak in `reply_to_task()`
+
+**Severity: MEDIUM**
+
+The new `reply_to_task()` method (§6.2) calls `self._get_a2a_client(agent_url)` which creates a new `httpx.AsyncClient` per call. This inherits the same connection leak issue identified in `SYSTEM_DESIGN_REVIEW.md` §2.3.
+
+**Mitigation:**
+
+The `reply_to_task()` implementation must use the shared client pool (once implemented per the System Design Review recommendations) or wrap the client in `async with httpx.AsyncClient() as client:` to ensure cleanup.
+
+### Risk 18: Multi-User Room Authorization Undefined
+
+**Severity: MEDIUM**
+
+The `HITLRequest` model has `responded_by_user_id` "for audit / future multi-user rooms" but the design doesn't specify authorization rules:
+- Who can respond to an HITL request in a multi-user room?
+- Can any room member respond, or only the original message sender?
+- What happens if User A's message triggers HITL but User B responds?
+
+**Mitigation:**
+
+For Phase 1, add explicit authorization: only the user who sent the original message (`user_message_id` owner) can respond to HITL requests triggered by that message. This is enforced in `HITLService.handle_response()`:
+
+```python
+async def handle_response(self, room_id, request_id, user_input, user_id):
+    request = await self.database_service.get_hitl_request(request_id)
+    # ... existing validation ...
+
+    # NEW: Verify responder is the original message sender
+    original_message = await self.database_service.get_room_user_message_by_message_id(
+        request.user_message_id
+    )
+    if original_message.user_id != user_id:
+        raise HTTPException(
+            403,
+            "Only the original message sender can respond to this request",
+        )
+```
+
+### Risk 19: No Timeout After HITL Reply Submitted
+
+**Severity: MEDIUM**
+
+After the user submits an HITL reply, the agent processes it and sends a webhook. But what if the agent never responds?
+- The HITL request is marked `RESPONDED`
+- The continuation still exists
+- The stale task checker's HITL-specific timeout (24h) doesn't apply because the HITL request is no longer `PENDING`
+
+**Impact:** The user sees "Processing your reply..." indefinitely with no timeout.
+
+**Mitigation:**
+
+Add a separate timeout for the post-HITL-reply waiting period. Track via `responded_at` on the HITL request:
+
+```python
+# In stale_task_checker.py:
+HITL_RESPONSE_TIMEOUT = timedelta(minutes=30)
+
+async def _check_hitl_response_timeouts(self):
+    """Fail HITL requests where agent never responded after user reply."""
+    stale_responses = await db_service.get_hitl_requests_by_status(
+        HITLStatus.RESPONDED,
+        responded_before=utcnow() - HITL_RESPONSE_TIMEOUT,
+    )
+    for req in stale_responses:
+        continuation = await db_service.get_pending_continuation_on_message(
+            req.continuation_message_id
+        )
+        if continuation:
+            logger.error(
+                "HITL response timeout — agent never completed after user reply",
+                extra={"hitl_request_id": req.request_id},
+            )
+            # Fail the task
+            await self._mark_task_failed(
+                req.continuation_message_id,
+                error="Agent did not respond within 30 minutes after receiving your input.",
+            )
+            await db_service.update_hitl_request(
+                req.request_id, status=HITLStatus.EXPIRED
+            )
+```
+
+### Risk 20: `auth_required` User Experience is Broken
+
+**Severity: MEDIUM**
+
+The design explicitly scopes Phase 1 to `input_required` only (Risk 10), but `auth_required` tasks fall through to the `PAUSED` path and eventually time out after 4 hours. The user sees "Auth required" but has no way to provide auth, and the task silently fails.
+
+**Mitigation:**
+
+Emit a distinct SSE event for `auth_required` that tells the frontend to display a helpful message rather than a dead-end prompt:
+
+```python
+# In AgentMessageProcessor, when detecting auth_required:
+if response_type == "task" and response.get("status") == "auth_required":
+    await sse_manager.send_task_update(
+        room_id=room_id,
+        message_id=message_id,
+        task_status="auth_required",
+        status_message=(
+            "This agent requires authentication. "
+            "Please contact the agent developer for setup instructions."
+        ),
+    )
+    # Continue with existing PAUSED handling
+```
+
+### Risk 21: Continuation Payload Size Unbounded
+
+**Severity: LOW-MEDIUM**
+
+The continuation payload (§5.7) serializes the full trajectory, agent registry, room config, and conversation context. For long conversations or rooms with many agents, this could approach MongoDB's 16MB document limit.
+
+**Mitigation:**
+
+Add a size check before saving. If too large, truncate `conversation_context` (it's re-fetched on resume anyway per §5.7 staleness note):
+
+```python
+MAX_CONTINUATION_SIZE = 4 * 1024 * 1024  # 4MB safety margin
+
+async def _save_interrupted_state(self, kind, *, trajectory, ...):
+    interrupted_state = { ... }
+    payload_json = json.dumps(interrupted_state)
+
+    if len(payload_json) > MAX_CONTINUATION_SIZE:
+        logger.warning(
+            "Continuation payload too large (%d bytes), truncating context",
+            len(payload_json),
+        )
+        interrupted_state["conversation_context"] = (
+            interrupted_state["conversation_context"][:10000] + "\n[truncated]"
+            if interrupted_state.get("conversation_context")
+            else None
+        )
+        interrupted_state["_context_truncated"] = True
+```
+
+### Risk 22: Frontend HITL Event Ordering Race
+
+**Severity: LOW-MEDIUM**
+
+The design relies on `replaceLiveMessage()` to merge HITL data onto existing messages. If the `hitl_input_requested` SSE arrives before the `task_update` SSE that created the message, the `existingMessage` lookup fails and the HITL prompt is dropped.
+
+**Mitigation:**
+
+Add a pending-HITL buffer in the frontend SSE handler:
+
+```typescript
+// In useRoomWebhook.ts:
+const pendingHitlEvents = useRef<Map<string, HITLEventData>>(new Map())
+
+case 'hitl_input_requested': {
+    const { message_id, ...hitlData } = sseMessage.data
+    const existingMessage = liveMessagesByRoom[roomId]?.find(m => m.id === message_id)
+
+    if (existingMessage) {
+        replaceLiveMessage(roomId, message_id, { ...existingMessage, ...hitlData })
+    } else {
+        // Buffer for later — will be applied when task_update arrives
+        pendingHitlEvents.current.set(message_id, hitlData)
+    }
+    break
+}
+
+case 'task_update': {
+    // ... existing logic to add/update message ...
+
+    // Check for buffered HITL event
+    const bufferedHitl = pendingHitlEvents.current.get(message_id)
+    if (bufferedHitl) {
+        replaceLiveMessage(roomId, message_id, { ...newMessage, ...bufferedHitl })
+        pendingHitlEvents.current.delete(message_id)
+    }
+    break
+}
+```
+
+### Risk Summary
+
+| # | Risk | Severity | Status |
+|---|------|----------|--------|
+| 1 | Stale checker auto-fails HITL tasks | CRITICAL | Mitigated: HITL-specific timeout + cleanup |
+| 1a | `TrajectoryStatus.AWAITING_INPUT` absent — crash recovery re-runs HITL-paused trajectories | HIGH | Mitigated: new enum value + exclusion guard |
+| 2 | Parallel queue corrupts memory | HIGH | Mitigated: unified HITL+CLARIFY block in `send_message_to_room` |
+| 3 | SSE drop loses HITL prompt | HIGH | Mitigated: Persist-first + catch-up endpoint |
+| 4 | Multi-round notification suppressed | MEDIUM-HIGH | Mitigated: Reset `last_notified_state` on reply |
+| 5 | No A2A reply-to-task method | MEDIUM | Mitigated: New `reply_to_task` method |
+| 6 | Processing indicator overlap | MEDIUM | Mitigated: New `awaiting_input` status; `processing_message_id` kept set |
+| 7 | Cancel doesn't reach paused HITL | MEDIUM | Mitigated: Cancel handler clears HITL |
+| 8 | External agent HITL misbehavior | LOW-MEDIUM | Mitigated: Max rounds + per-round timeout |
+| 9 | IDOR on HITL endpoints (no room ownership check) | HIGH | Mitigated: `verify_room_ownership()` on all HITL endpoints |
+| 10 | `auth_required` uses wrong reply mechanism | HIGH | Mitigated: Phase 1 scoped to `input_required` only; `auth_required` stays on existing push-notification/PAUSED path |
+| 11 | `interrupt_kind` is load-bearing routing field | MEDIUM | Mitigated: Validate on read, default to `PUSH_NOTIFICATION`, structured logging |
+| 12 | Non-atomic HITL request + continuation save | MEDIUM-HIGH | Mitigated: Expiry job detects orphans; Phase 2+ adds MongoDB transaction |
+| 13 | Stale `conversation_context` on resume after long HITL pause | MEDIUM | Mitigated: Re-fetch context on resume; serialized value is fallback only |
+| 14 | No observability / metrics for HITL lifecycle | MEDIUM | Mitigated: Metrics + alerting specified in §12 |
+| 15 | SSE cross-instance delivery fails in multi-instance deployment | HIGH | **Blocker consideration**: Requires Redis Pub/Sub or polling fallback |
+| 16 | Resume processing is fire-and-forget | MEDIUM-HIGH | Mitigated: Stale checker detects orphaned RESPONDED requests |
+| 17 | httpx client leak in `reply_to_task()` | MEDIUM | Mitigated: Use shared pool or context manager |
+| 18 | Multi-user room authorization undefined | MEDIUM | Mitigated: Only original message sender can respond |
+| 19 | No timeout after HITL reply submitted | MEDIUM | Mitigated: 30-minute post-reply timeout |
+| 20 | `auth_required` UX is broken | MEDIUM | Mitigated: Emit helpful message instead of dead-end |
+| 21 | Continuation payload size unbounded | LOW-MEDIUM | Mitigated: Size check + context truncation |
+| 22 | Frontend HITL event ordering race | LOW-MEDIUM | Mitigated: Pending-HITL buffer in SSE handler |
 
 ---
 
@@ -1893,7 +2280,7 @@ except ValueError:
 > **Unified CLARIFY note:** Phase 1 now also removes the `pending_clarification_message_id`
 > chat-input path as part of the refactor. `CLARIFY` cases use `HITLService` and the inline
 > form. A backward-compat shim in `send_message_to_room` handles rooms with in-flight legacy
-> CLARIFY sessions; the shim is removed after one `task_expiry_hours` cycle.
+> CLARIFY sessions; the shim is removed **7 days after Phase 2 deployment**.
 
 ### Phase 1: Unified Interrupt Foundation + Backend Models (Non-Breaking Refactor)
 
@@ -1929,8 +2316,8 @@ except ValueError:
 3. Add `a2a_task_id`, `a2a_context_id`, `status_message` fields to `V2StepResult`
 4. In `SupervisorExecutor._dispatch_targets()`, map `ProcessingStatus.AWAITING_INPUT` → `V2StepResult(status=StepStatus.AWAITING_INPUT)` — skip for `auth_required`
 5. In `SupervisorExecutor.run()` DELEGATE case, detect `StepStatus.AWAITING_INPUT` results:
-   - Call `hitl_service.request_input()` to get `HITLRequest` (and `request_id`)
-   - Call `_save_interrupted_state(kind=InterruptKind.HITL_AGENT, hitl_request_id=...)` per awaiting agent
+   - Call `hitl_service.request_input()` for the **first** awaiting agent only (single-agent-at-a-time; see §7.2 concurrency constraint)
+   - Call `_save_interrupted_state(kind=InterruptKind.HITL_AGENT, hitl_request_id=...)` for that agent
    - Return `RunStatus.AWAITING_INPUT`
 6. In `RoomMessageCenter._resume_supervisor_v2()`, add `HITL_AGENT` branch (same as `PUSH_NOTIFICATION` — appends webhook result)
 7. Test: Agent returns `input_required` → state saved with `HITL_AGENT` kind → HITLRequest created → SSE emitted
@@ -1949,6 +2336,9 @@ except ValueError:
 4. Extend `cancelMessage` handler to also cancel pending HITL requests
 5. Add HITL expiry job (or extend stale task checker) to clean up unanswered requests; expiry must also clear `pending_continuation` and emit `hitl_input_expired` SSE
 6. Add `interrupt_kind` validation on read with structured logging (Risk 11 mitigation)
+7. Add orphaned HITL request reconciliation: detect PENDING requests whose continuation is missing, and cancel them with a log warning (Risk 12 mitigation)
+8. Add rate limiting to HITL endpoints consistent with other room endpoints (see §7.4 hardening note)
+9. Add HITL lifecycle metrics and structured logging (see §12)
 
 ### Phase 6: Frontend
 
@@ -1961,7 +2351,7 @@ except ValueError:
 7. Add SSE reconnect catch-up via `GET /hitl/pending`
 8. Verify any staleness auto-fail timer; exempt interactive states (see §8.7)
 9. Add HITL reply API call function in `src/lib/api/room.ts`
-10. Map `awaiting_input` processing status to "Waiting for your input to continue" UI
+10. Map `awaiting_input` processing status to "Waiting for your input to continue" UI; suppress generic processing spinner when `processingStatus === 'awaiting_input'` (see §8.7 overlap note)
 11. Remove the chat-input placeholder that previously told users to "reply in the chat box" for CLARIFY questions — the inline form replaces it
 
 ### Phase 7: HITL Turn Recording in Room Memory
@@ -1972,7 +2362,7 @@ except ValueError:
 
 ### Phase 8: Legacy Shim Removal
 
-1. Remove the `pending_clarification_message_id` shim from `send_message_to_room` (after one `task_expiry_hours` cycle has passed since Phase 2 deployment — all in-flight legacy CLARIFY sessions will have timed out)
+1. Remove the `pending_clarification_message_id` shim from `send_message_to_room` (**7 days after Phase 2 deployment** — all in-flight legacy CLARIFY sessions will have timed out well within that window)
 2. Remove `clarify_user_reply` / `clarify_original_message_id` backward-compat read fallback from resume code
 
 ---
@@ -2040,7 +2430,7 @@ await room_memory_service.add_turns_to_memory(
 | `SupervisorExecutor._save_pause_state()` | **Renamed/refactored** → `_save_interrupted_state(kind=PUSH_NOTIFICATION, ...)` (same behavior, unified signature) |
 | `SupervisorExecutor._checkpoint_trajectory()` | Unchanged — best-effort per-step crash-recovery checkpoint; separate from interrupt state |
 | `RoomMessageCenter._resume_supervisor_v2()` | Minimal change — reads `interrupt_kind` and branches; `PUSH_NOTIFICATION` branch is existing code |
-| `QueueExecutor` / V1 queue loop | Unchanged for supervisor rooms; gains V1-only `AWAITING_INPUT` case for non-supervisor rooms |
+| `QueueExecutor` / V1 queue loop | Unchanged for supervisor rooms; V1-only `AWAITING_INPUT` enums defined but **not wired** in Phase 1 (V1 rooms treat `input_required` as `PAUSED`) |
 | SSE streaming infrastructure | Unchanged (new event types use existing broadcast mechanism) |
 | Push notification / webhook flow | Unchanged (HITL_AGENT resumes via same webhook → `_resume_supervisor_v2()` path as PUSH_NOTIFICATION) |
 | `a2a_service` (existing methods) | Unchanged (new `reply_to_task()` method added, existing methods untouched) |
@@ -2052,7 +2442,62 @@ await room_memory_service.add_turns_to_memory(
 
 ---
 
-## 12. Summary
+## 12. Observability & Metrics
+
+HITL introduces an async interaction pattern where latency is measured in **minutes to
+hours** rather than seconds.  Without dedicated metrics and alerting, degradation is
+invisible until users complain.
+
+### 12.1 Key Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `hitl_requests_created_total` | Counter | Total HITL requests created, by `source` (agent/supervisor) and `prompt_type` |
+| `hitl_requests_responded_total` | Counter | Total HITL requests that received a user response |
+| `hitl_requests_expired_total` | Counter | Total HITL requests that expired without a response |
+| `hitl_requests_canceled_total` | Counter | Total HITL requests canceled (by user or system) |
+| `hitl_response_latency_seconds` | Histogram | Time from HITL request creation to user response (buckets: 30s, 1m, 5m, 15m, 1h, 4h, 24h) |
+| `hitl_pending_requests` | Gauge | Current number of pending HITL requests, by room |
+| `hitl_rounds_per_task` | Histogram | Number of HITL rounds per agent task (for multi-round detection) |
+| `hitl_routing_errors_total` | Counter | Failures in `_handle_agent_response` or `_handle_supervisor_response` |
+| `hitl_orphaned_requests_total` | Counter | Orphaned HITL requests detected by the expiry job (Risk 12 indicator) |
+
+### 12.2 Structured Logging
+
+All HITL lifecycle events should include these structured fields:
+
+```python
+{
+    "hitl_request_id": request.request_id,
+    "hitl_source": request.source,           # "agent" | "supervisor"
+    "hitl_prompt_type": request.prompt_type,
+    "room_id": request.room_id,
+    "interrupt_kind": kind.value,            # for save/resume events
+    "hitl_status": request.status,           # for status transitions
+}
+```
+
+### 12.3 Suggested Alerts
+
+| Alert | Condition | Severity |
+|---|---|---|
+| High HITL expiry rate | `expired / (responded + expired) > 30%` over 24h | WARNING |
+| HITL routing failure spike | `hitl_routing_errors_total` > 5 in 15 minutes | CRITICAL |
+| Long-pending HITL requests | Any request pending > 4 hours | WARNING |
+| Orphaned HITL requests | `hitl_orphaned_requests_total` > 0 in any job run | WARNING |
+
+### 12.4 Dashboard
+
+A dedicated HITL dashboard should show:
+- Pending requests by room (real-time gauge)
+- Response latency P50/P95/P99 over time
+- Expiry rate trend
+- Routing error rate
+- HITL rounds distribution (to detect agents that loop excessively)
+
+---
+
+## 13. Summary
 
 The HITL design adds an **event-driven human interaction channel** to the Supervisor V2
 Pattern, enabling two scenarios:
@@ -2077,7 +2522,10 @@ Pattern, enabling two scenarios:
 | `SSEProcessingStatus.AWAITING_INPUT` excluded from `PROCESSING_DONE_STATUSES` | Keeps `processing_message_id` on the room so cancel still works and page-refresh can show pending HITL prompt |
 | Phase 1 scoped to `input_required` only | `auth_required` requires a different (out-of-band) protocol flow; designing it separately avoids baking wrong assumptions into `HITLRequest` |
 | HITL exchanges recorded in room memory | Future supervisor loops see the full HITL Q&A in `conversation_context`; prevents agents from being confused about information they already obtained |
-| `referenceTaskIds` included in `reply_to_task` | Hybrid-mode agents that model continuations as new tasks use this to pull prior context; harmless for agents that do in-place continuation |
+| `referenceTaskIds` included in `reply_to_task` | Hybrid-mode agents that model continuations as new tasks use this to pull prior context; harmless for agents that do in-place continuation (convention, not guaranteed A2A spec) |
+| Single-agent-at-a-time HITL in DELEGATE | Avoids trajectory race condition where multiple concurrent continuations carry stale snapshots that overwrite each other's results; same constraint as `PUSH_NOTIFICATION` pauses |
+| Re-fetch `conversation_context` on resume | Serialized context can be hours stale for HITL pauses; re-fetching from room memory ensures supervisor sees current state; serialized value kept as fallback |
+| V1 rooms out of scope for Phase 1 | V1 non-supervisor rooms lack the trajectory mechanism needed for HITL; V1 `AWAITING_INPUT` enums are defined for forward-compat but not wired |
 
 ### New Components
 
