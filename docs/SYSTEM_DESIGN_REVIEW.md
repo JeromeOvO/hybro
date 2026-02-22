@@ -1,6 +1,6 @@
 # System Design Review: Hybro Frontend + Multi-Agents Backend
 
-**Date**: February 10, 2026
+**Date**: February 22, 2026 (updated from Feb 10)
 **Scope**: Full-stack architecture review covering `hybro-frontend` and `multi-agents-backend`
 
 ---
@@ -79,6 +79,8 @@ class SSEManager:
 - A single-process failure drops all SSE connections. Clients reconnect via `EventSource` auto-reconnect, but any in-flight events emitted during the disconnect window are permanently lost.
 - The `cancelled_messages` set is also in-memory; while the MongoDB change stream propagates cancellations cross-instance, the core `room_connections` dict has no such mechanism.
 
+**Downstream dependency**: The HITL (Human-in-the-Loop) design (`HITL_DESIGN.md`) adds new SSE event types (`hitl_input_requested`, `hitl_status_update`) and relies on SSE for the full HITL interaction lifecycle. In a multi-instance deployment, HITL prompts may never reach users if the request is created on a different instance than the user's SSE connection. HITL should either block on this fix or implement a polling fallback.
+
 **Recommendation**: Introduce Redis Pub/Sub, NATS, or a similar message broker for cross-instance SSE event fan-out. Each backend instance subscribes to room-level channels and relays events to its local SSE connections. This decouples event production from event delivery.
 
 ---
@@ -122,6 +124,11 @@ async def create_a2a_client(self, agent_card: AgentCard) -> A2AClient:
 **Impact**:
 - Each call leaks an HTTP connection. Under load, this exhausts file descriptors and OS-level connection limits.
 - With the 600-second timeout, connections remain open far longer than necessary.
+- The same pattern repeats in `get_agent_card_from_url` and `get_a2a_client`.
+
+**Downstream dependency**: The HITL design adds a new `reply_to_task()` method that calls `_get_a2a_client()`, inheriting this leak. The fix must be applied before or alongside HITL implementation.
+
+**Recommendation**:
 - The same pattern repeats in `get_agent_card_from_url` and `get_a2a_client`.
 
 **Recommendation**:
@@ -290,6 +297,8 @@ Room memory accumulates the full conversation history. As rooms have longer conv
 
 **Recommendation**: Implement a sliding-window strategy (keep last N turns) combined with periodic summarization. The `MemoryContent` model already has a `summary` field — ensure it is actively used to replace older conversation history.
 
+> **Cross-reference**: See [CONTEXT_MEMORY_SYSTEM_DESIGN.md](./CONTEXT_MEMORY_SYSTEM_DESIGN.md) for the comprehensive memory architecture design, including lossless compaction (§6), rolling room summaries (§4.2), and token budget strategies (§5.2).
+
 ---
 
 ### 2.12 LOW-MEDIUM: Overly Permissive CORS Configuration
@@ -388,3 +397,296 @@ When an external A2A agent is down or slow, every user message targeting that ag
 - Improve optimistic update deduplication.
 - Tighten CORS configuration.
 - Cap concurrent orphan recovery tasks.
+
+---
+
+## 4. Issue Status Tracking
+
+This section tracks the resolution status of each identified issue. Updated as fixes are implemented.
+
+| #    | Issue                                            | Status       | Resolution Notes                                                                 |
+| ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
+| 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — HITL design (§3) depends on this fix; requires Redis Pub/Sub |
+| 2.2  | No durable task queue, all in-process             | 🔴 Open      | Production blocker; no work started                                              |
+| 2.3  | httpx client leak (connections never closed)       | 🔴 Open      | **Blocker for HITL** — `reply_to_task()` inherits this leak (HITL Risk 17)       |
+| 2.4  | Sequential agent processing                       | 🟡 Partial   | Supervisor V2 supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
+| 2.5  | Potential double-processing race condition         | 🔴 Open      | No idempotency guard implemented                                                 |
+| 2.6  | JWT token in SSE query parameter                   | 🔴 Open      | Security risk; no work started                                                   |
+| 2.7  | Unbounded `cancelled_messages` set                 | 🔴 Open      | Memory leak; no TTL cleanup implemented                                          |
+| 2.8  | No MongoDB transactions for multi-step ops         | 🔴 Open      | Consistency risk; no work started                                                |
+| 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
+| 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
+| 2.11 | Unbounded conversation memory                      | 🟡 Partial   | Context Memory design (§4.2, §6) addresses this; implementation in progress      |
+| 2.12 | Overly permissive CORS                             | 🔴 Open      | Low priority; no work started                                                    |
+| 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
+| 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
+
+**Legend:**
+- 🔴 Open — Not started or blocked
+- 🟡 Partial — Work in progress or partially addressed
+- 🟢 Resolved — Fix implemented and verified
+
+---
+
+## 5. Unified Implementation Dependency Graph
+
+This section maps dependencies across all three design documents:
+- **SYSTEM_DESIGN_REVIEW.md** (this document) — Infrastructure issues
+- **CONTEXT_MEMORY_SYSTEM_DESIGN.md** — Memory and context architecture
+- **HITL_DESIGN.md** — Human-in-the-loop interactions
+
+### 5.1 Cross-Document Dependency Map
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                    UNIFIED IMPLEMENTATION DEPENDENCY GRAPH                       │
+│                                                                                  │
+│  Legend:                                                                         │
+│    ───▶  Hard dependency (must complete before)                                  │
+│    - - ▶ Soft dependency (benefits from, not blocked)                            │
+│    [SDR] SYSTEM_DESIGN_REVIEW.md issue                                           │
+│    [CM]  CONTEXT_MEMORY_SYSTEM_DESIGN.md phase                                   │
+│    [HITL] HITL_DESIGN.md phase                                                   │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  LAYER 0: INFRASTRUCTURE BLOCKERS (must fix first)                               │
+│  ════════════════════════════════════════════════                                │
+│                                                                                  │
+│  ┌──────────────────────┐         ┌──────────────────────┐                       │
+│  │ [SDR 2.1] Redis      │         │ [SDR 2.3] httpx      │                       │
+│  │ Pub/Sub for SSE      │         │ Client Lifecycle     │                       │
+│  │ (horizontal scaling) │         │ (connection leak)    │                       │
+│  └──────────┬───────────┘         └──────────┬───────────┘                       │
+│             │                                │                                   │
+│             │ ◀─────────────────────────────▶│                                   │
+│             │      (independent, parallel)   │                                   │
+│             │                                │                                   │
+│             ▼                                ▼                                   │
+│  ┌──────────────────────────────────────────────────────────────────┐            │
+│  │                    HITL PHASE 1-4 UNBLOCKED                       │            │
+│  │  (HITL backend models, HITLService, reply_to_task, endpoints)     │            │
+│  └──────────────────────────────────────────────────────────────────┘            │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  LAYER 1: CONTEXT MEMORY FOUNDATION                                              │
+│  ═══════════════════════════════════                                             │
+│                                                                                  │
+│  ┌──────────────────────┐                                                        │
+│  │ [CM Phase 1]         │                                                        │
+│  │ Data Models &        │◀─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+│  │ Storage              │         (no hard blockers; can start immediately)      │
+│  │ • ConversationTurn   │                                                        │
+│  │ • ContentReference   │                                                        │
+│  │ • RoomSummary        │                                                        │
+│  │ • turn_notes         │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐         ┌──────────────────────┐                       │
+│  │ [CM Phase 2]         │         │ [SDR 2.11] Unbounded │                       │
+│  │ Context Assembly     │───────▶ │ Memory (PARTIAL)     │                       │
+│  │ Engine               │         │ Token budget +       │                       │
+│  │ • TokenBudget        │         │ windowing            │                       │
+│  │ • build_supervisor_  │         └──────────────────────┘                       │
+│  │   context()          │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [CM Phase 3]         │                                                        │
+│  │ Lossless Compaction  │                                                        │
+│  │ • conversation_      │                                                        │
+│  │   content collection │                                                        │
+│  │ • expand_turn_       │                                                        │
+│  │   content()          │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [CM Phase 4]         │                                                        │
+│  │ Memory Search        │                                                        │
+│  │ • Pinecone index     │                                                        │
+│  │ • Hybrid search      │                                                        │
+│  │ • Temporal decay     │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [CM Phase 5]         │                                                        │
+│  │ Supervisor V2        │                                                        │
+│  │ Integration          │                                                        │
+│  │ • Wire context       │                                                        │
+│  │   assembly           │                                                        │
+│  │ • room_summary       │                                                        │
+│  │   updates            │                                                        │
+│  └──────────────────────┘                                                        │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  LAYER 2: HITL IMPLEMENTATION                                                    │
+│  ════════════════════════════                                                    │
+│                                                                                  │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 1]       │                                                        │
+│  │ Unified Interrupt    │◀───────── [SDR 2.3] httpx fix (for reply_to_task)      │
+│  │ Foundation           │                                                        │
+│  │ • InterruptKind      │                                                        │
+│  │ • HITLRequest model  │                                                        │
+│  │ • hitl_requests      │                                                        │
+│  │   collection         │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 2]       │                                                        │
+│  │ Unified CLARIFY      │                                                        │
+│  │ via HITLService      │                                                        │
+│  │ • Replaces old       │                                                        │
+│  │   CLARIFY path       │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 3]       │                                                        │
+│  │ V2 Queue Integration │                                                        │
+│  │ • Agent input_       │                                                        │
+│  │   required handling  │                                                        │
+│  │ • AWAITING_INPUT     │                                                        │
+│  │   status             │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 4]       │                                                        │
+│  │ Response Endpoint    │                                                        │
+│  │ • POST /hitl/respond │                                                        │
+│  │ • reply_to_task()    │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐         ┌──────────────────────┐                       │
+│  │ [HITL Phase 5]       │         │ [SDR 2.1] Redis      │                       │
+│  │ Risk Mitigations     │◀────────│ Pub/Sub             │                       │
+│  │ (Backend)            │         │ (for SSE delivery)   │                       │
+│  │ • Stale task checker │         └──────────────────────┘                       │
+│  │ • HITL expiry job    │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 6]       │                                                        │
+│  │ Frontend             │                                                        │
+│  │ • SSE handlers       │                                                        │
+│  │ • Inline reply form  │                                                        │
+│  │ • awaiting_input UI  │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐         ┌──────────────────────┐                       │
+│  │ [HITL Phase 7]       │         │ [CM Phase 1]         │                       │
+│  │ HITL Turn Recording  │◀────────│ ConversationTurn     │                       │
+│  │ in Room Memory       │         │ model updates        │                       │
+│  │ • hitl_question turn │         └──────────────────────┘                       │
+│  │ • hitl_reply turn    │                                                        │
+│  └──────────┬───────────┘                                                        │
+│             │                                                                    │
+│             ▼                                                                    │
+│  ┌──────────────────────┐                                                        │
+│  │ [HITL Phase 8]       │                                                        │
+│  │ Legacy Shim Removal  │                                                        │
+│  │ (7 days post-Phase 2)│                                                        │
+│  └──────────────────────┘                                                        │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  LAYER 3: RELIABILITY & HARDENING (can proceed in parallel)                      │
+│  ══════════════════════════════════════════════════════════                      │
+│                                                                                  │
+│  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐    │
+│  │ [SDR 2.2] Durable    │  │ [SDR 2.5] Double-    │  │ [SDR 2.6] SSE JWT    │    │
+│  │ Task Queue           │  │ Processing Guard     │  │ Token Security       │    │
+│  │ (Celery/Dramatiq)    │  │ (Idempotency)        │  │ (Short-lived nonce)  │    │
+│  └──────────────────────┘  └──────────────────────┘  └──────────────────────┘    │
+│                                                                                  │
+│  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐    │
+│  │ [SDR 2.7] TTL for    │  │ [SDR 2.8] MongoDB    │  │ [SDR 2.14] Circuit   │    │
+│  │ cancelled_messages   │  │ Transactions         │  │ Breaker              │    │
+│  └──────────────────────┘  └──────────────────────┘  └──────────────────────┘    │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  LAYER 4: FUTURE EVOLUTION                                                       │
+│  ═════════════════════════                                                       │
+│                                                                                  │
+│  ┌──────────────────────┐         ┌──────────────────────┐                       │
+│  │ [CM Phase 4B]        │◀────────│ [CM Phase 4]         │                       │
+│  │ Graph-Based          │         │ Memory Search        │                       │
+│  │ Retrieval            │         │ (prerequisite)       │                       │
+│  │ • Entity graph       │         └──────────────────────┘                       │
+│  │ • Dual-route search  │                                                        │
+│  └──────────────────────┘                                                        │
+│                                                                                  │
+│  ┌──────────────────────┐                                                        │
+│  │ Agent-Driven         │                                                        │
+│  │ Compaction Tool      │                                                        │
+│  │ (post-Phase 4)       │                                                        │
+│  └──────────────────────┘                                                        │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Critical Path Analysis
+
+The **critical path** for full HITL functionality:
+
+```
+[SDR 2.1] Redis Pub/Sub ──▶ [HITL Phase 5] Risk Mitigations ──▶ [HITL Phase 6] Frontend
+         │
+         └──▶ (unblocks multi-instance SSE delivery for HITL prompts)
+
+[SDR 2.3] httpx fix ──▶ [HITL Phase 1] Foundation ──▶ [HITL Phase 4] Response Endpoint
+         │
+         └──▶ (unblocks reply_to_task() without connection leak)
+```
+
+The **critical path** for full Context Memory functionality:
+
+```
+[CM Phase 1] Data Models ──▶ [CM Phase 2] Context Assembly ──▶ [CM Phase 3] Compaction
+         │                           │
+         │                           └──▶ [SDR 2.11] Unbounded Memory (RESOLVED)
+         │
+         └──▶ [HITL Phase 7] HITL Turn Recording (depends on ConversationTurn model)
+```
+
+### 5.3 Recommended Implementation Order
+
+Based on dependency analysis and impact:
+
+| Priority | Item | Rationale |
+|----------|------|-----------|
+| **P0** | [SDR 2.1] Redis Pub/Sub | Blocks HITL multi-instance delivery; production blocker |
+| **P0** | [SDR 2.3] httpx client fix | Blocks HITL reply_to_task; resource exhaustion risk |
+| **P1** | [CM Phase 1] Data Models | Foundation for all memory work; no blockers |
+| **P1** | [HITL Phase 1-4] Core HITL | High user value; blocked only by P0 items |
+| **P2** | [CM Phase 2] Context Assembly | Enables token budget enforcement |
+| **P2** | [HITL Phase 5-6] Risk Mitigations + Frontend | Completes HITL feature |
+| **P3** | [CM Phase 3] Lossless Compaction | Correctness improvement |
+| **P3** | [HITL Phase 7] Turn Recording | Memory integration |
+| **P4** | [SDR 2.2] Durable Task Queue | Production hardening |
+| **P4** | [CM Phase 4] Memory Search | Long-term recall |
+| **P5** | Remaining SDR issues | Hardening and optimization |
+
+### 5.4 Parallel Work Streams
+
+These work streams can proceed independently:
+
+| Stream | Items | Team |
+|--------|-------|------|
+| **Infrastructure** | [SDR 2.1], [SDR 2.2], [SDR 2.3] | Platform/DevOps |
+| **Context Memory** | [CM Phase 1-5] | Backend |
+| **HITL Backend** | [HITL Phase 1-5, 7-8] | Backend |
+| **HITL Frontend** | [HITL Phase 6] | Frontend |
+| **Security** | [SDR 2.6], [SDR 2.12] | Security |
