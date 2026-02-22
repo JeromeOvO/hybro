@@ -1,9 +1,17 @@
 # Human-in-the-Loop (HITL) Design
 
-**Date**: February 12, 2026
-**Status**: Proposal
-**Scope**: Add event-driven human-in-the-loop support to the Supervisor Pattern for multi-agent chat rooms
-**Depends on**: [Supervisor Pattern Design](./SUPERVISOR_PATTERN_DESIGN.md)
+**Date**: February 22, 2026 (updated from Feb 21)
+**Status**: Proposal — updated for Supervisor V2 adaptive loop; unified interrupt mechanism replaces separate pause/resume paths
+**Scope**: Add event-driven human-in-the-loop support to the Supervisor V2 Pattern for multi-agent chat rooms
+**Depends on**: [Supervisor V2 Design](./SUPERVISOR_V2_DESIGN.md), [Context & Memory System Design](./CONTEXT_MEMORY_SYSTEM_DESIGN.md)
+
+> **Design note (Unified Interrupt):** All supervisor-level pauses — push-notification waits, agent
+> `input_required`, and supervisor `CLARIFY` (whether pre-plan or mid-loop) — share a single
+> `_save_interrupted_state(kind=...)` save method and a single `_resume_supervisor_v2()` resume path.
+> The `interrupt_kind` field in the continuation payload drives routing on resume. `CLARIFY` is the
+> single supervisor question action: it replaces the previous `ASK_USER` / `CLARIFY` split and the
+> `pending_clarification_message_id` chat-input path. All supervisor questions use `HITLService` and
+> the inline reply form regardless of when in the loop they fire.
 
 ---
 
@@ -38,181 +46,260 @@ The system correctly **detects** when an A2A agent needs user input (`input_requ
 
 1. **Event-driven** — HITL interactions use a dedicated event channel (SSE events + REST endpoint), completely separate from the normal chat message flow
 2. **Explicit identity** — every HITL interaction has a unique `request_id`, eliminating ambiguity about what the user is replying to
-3. **Zero impact on normal chat** — `send_message_to_room` is never modified; HITL replies go through a dedicated endpoint
-4. **Reuse existing infrastructure** — queue pause/resume (`_save_queue_continuation` / `resume_queue_from_continuation`), SSE broadcasting, webhook-triggered resume
-5. **Support all three HITL scenarios** — agent-initiated (`input_required`), Supervisor-initiated (mid-plan question), and pre-plan clarification
+3. **Zero impact on normal chat** — `send_message_to_room` is never modified for HITL replies; HITL replies go through a dedicated endpoint
+4. **Unified interrupt mechanism** — all supervisor-level pauses (push-notification, agent `input_required`, supervisor `CLARIFY`) use a single `_save_interrupted_state(kind=...)` / `_resume_supervisor_v2()` pair; adding a new pause kind in the future requires one enum value and one branch, not a new save+resume pair
+5. **Support both HITL scenarios** — agent-initiated (`input_required`) and supervisor-initiated (`CLARIFY`, whether pre-plan or mid-loop); these are the only two semantic cases
 6. **Resilient to disconnection** — HITL state is persisted to MongoDB; prompts survive SSE drops and page refreshes
+7. **Single supervisor question type** — `CLARIFY` replaces the previous `CLARIFY` + `ASK_USER` split; supervisor questions use the same `HITLService` path and inline reply form regardless of when in the loop they fire; the `pending_clarification_message_id` chat-input path is retired
 
 ---
 
 ## 3. Architecture Overview
 
+> **V2 Note**: All supervisor-enabled rooms use the **Supervisor V2 adaptive loop**
+> (`SupervisorExecutor` → `decide_next` → `dispatch` → `record`). The queue-based
+> execution path (`QueueExecutor`) is only used for non-supervisor rooms. Architecture
+> and integration points below reflect the V2 path.
+
 ```
-                    HITL TRIGGER
+                    INTERRUPT TRIGGER
                     (Agent returns input_required
-                     OR Supervisor asks user)
+                     OR Supervisor action == CLARIFY
+                     OR Agent returns push-notification PAUSED)
                             │
                             ▼
             ┌───────────────────────────────┐
-            │  Queue loop detects pause      │
-            │  _save_queue_continuation()    │
-            │  (includes a2a_task_id,        │
-            │   a2a_context_id, request_id)  │
+            │  SupervisorExecutor detects    │
+            │  pause condition               │
+            │  _save_interrupted_state(      │
+            │    kind=InterruptKind.*)       │
+            │  (trajectory serialized with   │
+            │   interrupt_kind, status,      │
+            │   and kind-specific fields)    │
             └──────────────┬────────────────┘
                            │
-                           ▼
-            ┌───────────────────────────────┐
-            │  HITLService.request_input()   │
-            │                                │
-            │  1. Create HITLRequest record   │
-            │  2. Persist to MongoDB          │
-            │  3. Emit SSE event:             │
-            │     hitl_input_requested        │
-            └──────────────┬────────────────┘
-                           │
-                  (SSE to frontend)
-                           │
-                           ▼
-            ┌───────────────────────────────┐
-            │  Frontend renders inline       │
-            │  reply form inside amber card  │
-            └──────────────┬────────────────┘
-                           │
-                  (User types reply)
-                           │
-                           ▼
-            ┌───────────────────────────────┐
-            │  POST /rooms/{room_id}/hitl/   │
-            │       respond                  │
-            │  { request_id, user_input }    │
-            └──────────────┬────────────────┘
-                           │
-                           ▼
-            ┌───────────────────────────────┐
-            │  HITLService.handle_response() │
-            │                                │
-            │  Branch on source:             │
-            │                                │
-            │  source == "agent":            │
-            │    → a2a_service.reply_to_task │
-            │    → Agent processes reply     │
-            │    → Webhook fires on complete │
-            │    → resume_queue_from_        │
-            │      continuation() [EXISTING] │
-            │                                │
-            │  source == "supervisor":       │
-            │    → Inject user answer into   │
-            │      supervisor context        │
-            │    → Resume queue directly     │
-            └───────────────────────────────┘
+              ┌────────────┴─────────────┐
+              │ HITL kinds only          │
+              ▼                          ▼ PUSH_NOTIFICATION
+            ┌─────────────────────┐     (webhook resumes directly)
+            │ HITLService         │
+            │ .request_input()    │
+            │ 1. Create record    │
+            │ 2. Persist to DB    │
+            │ 3. Emit SSE:        │
+            │   hitl_input_req'd  │
+            └──────────┬──────────┘
+                       │
+              (SSE to frontend)
+                       │
+                       ▼
+            ┌─────────────────────┐
+            │ Frontend renders    │
+            │ inline reply form   │
+            └──────────┬──────────┘
+                       │ (User types reply)
+                       ▼
+            ┌─────────────────────┐
+            │ POST /hitl/respond  │
+            │ { request_id,       │
+            │   user_input }      │
+            └──────────┬──────────┘
+                       │
+                       ▼
+            ┌─────────────────────────────────────────────┐
+            │  HITLService.handle_response()               │
+            │                                              │
+            │  HITL_AGENT:                                 │
+            │    → a2a_service.reply_to_task()             │
+            │    → Agent webhook fires on terminal state   │
+            │    → resume_queue_from_continuation()        │
+            │                                              │
+            │  HITL_SUPERVISOR:                            │
+            │    → patch trajectory.hitl_user_reply        │
+            │    → resume_queue_from_continuation()        │
+            └──────────────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────┘
+                    │  (all interrupt kinds converge here)
+                    ▼
+            ┌─────────────────────────────────────────────┐
+            │  _resume_supervisor_v2(continuation)         │
+            │                                              │
+            │  1. Deserialize trajectory                   │
+            │  2. Branch on interrupt_kind:                │
+            │     PUSH_NOTIFICATION → append webhook result│
+            │     HITL_AGENT        → append webhook result│
+            │     HITL_SUPERVISOR   → inject hitl_user_reply│
+            │  3. Re-run SupervisorExecutor.run(resumed=…) │
+            └─────────────────────────────────────────────┘
 ```
 
-### Key Insight: Different Resume Triggers by Source
+### Unified Interrupt: All Pauses, One Resume Path
 
-| HITL Source | What Resumes the Queue | New Code Needed |
-|---|---|---|
-| **Agent** (`input_required`) | The A2A webhook, when the agent reaches a terminal state after processing the user's reply | Only `a2a_service.reply_to_task()` — the existing webhook → `resume_queue_from_continuation` path handles the rest |
-| **Supervisor** (`ask_user`) | The HITL response handler directly calls `resume_queue_from_continuation()` | The resume call + context injection |
-| **Clarification** (pre-plan) | No queue to resume — the user's reply starts normal Supervisor planning | No queue changes; just a clarification message in conversation history |
+The core insight is that all three interrupt kinds share the same underlying mechanics:
+**serialize trajectory → persist → wait → deserialize → re-run loop**. The only
+differences are (a) what triggers the resume and (b) what gets injected into the
+trajectory before re-running.
+
+| Interrupt Kind | Trigger | What Gets Injected | Where Saved |
+|---|---|---|---|
+| `PUSH_NOTIFICATION` | A2A agent webhook on terminal state | Agent result text → `StepResult.response_text` | Agent message (`paused_message_id`) |
+| `HITL_AGENT` | User `POST /hitl/respond` → agent webhook | Agent result text → `StepResult.response_text` | Agent message (`paused_message_id`) |
+| `HITL_SUPERVISOR` | User `POST /hitl/respond` directly | `trajectory.hitl_user_reply` | User message (`user_message_id`) |
+
+All three converge on `resume_queue_from_continuation()` → `_resume_supervisor_v2()`.
+Adding a new interrupt kind in the future only requires one new enum value and one
+new branch in `_resume_supervisor_v2()`.
+
+`HITL_SUPERVISOR` covers **both** pre-plan clarification (supervisor asks before dispatching
+any agents) and mid-loop questions (supervisor asks between dispatch rounds). The flow is
+identical in both cases — the only difference is whether the trajectory's `entries` list is
+empty or already has prior steps.
+
+### Backward Compatibility: Legacy `"clarifying"` Trajectory Status
+
+Existing room documents may have trajectories serialized with `status == "clarifying"` from
+the previous CLARIFY implementation. Two compatibility rules apply:
+
+1. **Crash-recovery guard**: Treat `"clarifying"` the same as `AWAITING_INPUT` — do NOT
+   auto-resume it; only a user reply via `POST /hitl/respond` is valid.
+2. **`send_message_to_room` shim**: If a room document still has
+   `pending_clarification_message_id` set (in-flight legacy CLARIFY), route that specific
+   reply via the old clarify-resume path so in-flight sessions are not broken. Remove this
+   shim after one full `task_expiry_hours` cycle (all legacy CLARIFY requests will have
+   timed out by then).
 
 ---
 
-## 4. Three HITL Scenarios
+## 4. Two HITL Scenarios
 
-### Scenario 1: Pre-Plan Clarification (Supervisor Asks Before Planning)
+### Scenario 1: Supervisor CLARIFY (Pre-Plan or Mid-Loop)
 
-The Supervisor decides it can't route the message without more info. This is the `strategy="clarify"` path in the Supervisor Pattern design.
+The Supervisor decides it needs user input before proceeding — either before dispatching any agents
+(pre-plan) or between dispatch rounds (mid-loop). Both cases are handled by `ActionType.CLARIFY`
+and follow the identical flow through `HITLService`. The only difference is whether the trajectory's
+`entries` list is empty or contains prior steps.
 
 **Flow:**
-1. Supervisor returns `SupervisorPlan(strategy="clarify", steps=[])`
-2. No agent messages are created, no queue starts
-3. The Supervisor's clarification question is emitted as a pseudo-agent message (similar to coordinator summary)
-4. The system goes back to IDLE immediately
-5. When the user replies, the normal `send_message_to_room` flow starts — the Supervisor sees the original message + clarification in conversation history and can plan properly
-
-**Why this is easy:** No paused state, no queue interruption, no HITL endpoint needed. It's just a round-trip through existing chat. The Supervisor's memory of why it asked is captured naturally in conversation history.
-
-**No changes to the HITL system needed** — this scenario is fully handled by the Supervisor Pattern design.
-
-### Scenario 2: Agent Returns `input_required` (Mid-Execution)
-
-An A2A agent says "I need more info from the user to continue." This is the hard case.
-
-**Detailed flow:**
 
 ```
-Step 1: Queue processes agent step
-        → a2a_service.send_message_to_tracked_agent()
-        → Agent returns task with status = input_required
+Step 1: SupervisorExecutor calls decide_next()
+        → LLM returns SupervisorAction(action=CLARIFY,
+              clarification_question="...",
+              prompt_type="text" | "choice" | "confirmation",
+              choices=[...] | None)
 
-Step 2: Queue detects input_required
-        → Returns ProcessingResult(ProcessingStatus.AWAITING_INPUT)
-        → Queue loop saves continuation via _save_queue_continuation()
-        → Returns QueueResult.AWAITING_INPUT
+Step 2: SupervisorExecutor handles CLARIFY case
+        → Records TrajectoryEntry(action=CLARIFY)
+        → Sets trajectory.status = "awaiting_input"
+        → Creates HITL request first so we have request_id for the continuation:
+              request = await hitl_service.request_input(
+                  source="supervisor",
+                  prompt=action.clarification_question,
+                  prompt_type=action.prompt_type,
+                  choices=action.choices,
+                  continuation_message_id=user_message_id,
+              )
+        → Calls _save_interrupted_state(kind=HITL_SUPERVISOR,
+                message_id=user_message_id, hitl_request_id=request.request_id, ...)
+        → Returns SupervisorRunResult(status=RunStatus.AWAITING_INPUT)
 
-Step 3: HITLService creates request
-        → Persists HITLRequest to MongoDB (with a2a_task_id, context_id)
-        → Emits SSE: hitl_input_requested
+Step 3: RoomMessageCenter._handle_v2_run_result()
+        → Handles RunStatus.AWAITING_INPUT
+          (persists trajectory; does NOT emit COMPLETED)
 
-Step 4: Frontend renders inline reply form
-        → User sees agent's question inside amber card with text input
+Step 4: HITLService emits SSE: hitl_input_requested
+        → Frontend renders inline reply form with the question
 
 Step 5: User submits reply
         → POST /rooms/{room_id}/hitl/respond { request_id, user_input }
 
 Step 6: HITLService.handle_response()
-        → Loads HITLRequest, sees source == "agent"
-        → Calls a2a_service.reply_to_task(task_id, context_id, user_input)
-        → Marks HITLRequest as "responded"
+        → Loads HITLRequest, sees source == "supervisor"
+        → Calls _handle_supervisor_response():
+            - Loads continuation from DB
+            - Sets trajectory.hitl_user_reply = user_input
+            - Calls resume_queue_from_continuation()
 
-Step 7: Agent processes reply
-        → Task transitions: input_required → working → completed
-        → Agent sends webhook on terminal state
-
-Step 8: Webhook handler (EXISTING)
-        → Detects terminal state
-        → Calls resume_queue_from_continuation()
-        → Queue resumes with remaining steps
+Step 7: _resume_supervisor_v2() re-runs loop
+        → interrupt_kind == "hitl_supervisor"
+        → trajectory.hitl_user_reply is injected into conversation_context
+        → Supervisor decides next action with user's answer in context
 ```
 
-Steps 7-8 are the **existing** push notification resume path — zero new queue code.
+No webhook involved — the user's API call in step 5 is the event that triggers resume.
+This flow is identical whether the CLARIFY fires at step 0 (pre-plan) or step N (mid-loop).
 
-### Scenario 3: Supervisor Asks User Mid-Execution (Between Steps)
+### Scenario 2: Agent Returns `input_required` (Mid-Execution)
 
-The Supervisor Review after step N decides: "This result is confusing. Before proceeding to step N+1, I should ask the user."
+An A2A agent says "I need more info from the user to continue." In **Supervisor V2**, agents are dispatched by `SupervisorExecutor._dispatch_targets()` via `AgentMessageProcessor.process_single_message()`.
 
 **Detailed flow:**
 
 ```
-Step 1: Agent completes step N
-        → Supervisor review runs
+Step 1: SupervisorExecutor._dispatch_targets() dispatches agent
+        → AgentMessageProcessor.process_single_message()
+        → a2a_service.send_message_to_tracked_agent()
+        → Agent returns task with status = input_required
 
-Step 2: Supervisor review returns action="ask_user"
-        with user_question="The research agent found conflicting data.
-              Should I use the 2025 or 2026 dataset?"
+Step 2: AgentMessageProcessor detects input_required
+        → Returns ProcessingStatus.AWAITING_INPUT  (NEW — distinct from PAUSED)
+        → dispatch_one() maps to V2StepResult(status=StepStatus.AWAITING_INPUT) (NEW)
 
-Step 3: Queue saves continuation
-        → _save_queue_continuation() with source="supervisor"
+Step 3: SupervisorExecutor sees AWAITING_INPUT results
+        → Calls _save_interrupted_state(kind=HITL_AGENT) (unified with push-notification pause)
+        → Saves trajectory with status="awaiting_input" to pending_continuation
+        → Supervisor_v2=True flag included, plus hitl_awaiting_input=True
+        → Returns SupervisorRunResult(status=RunStatus.AWAITING_INPUT) (NEW)
 
 Step 4: HITLService creates request
-        → Persists HITLRequest (source="supervisor", no a2a_task_id)
+        → Persists HITLRequest to MongoDB (with a2a_task_id, context_id)
         → Emits SSE: hitl_input_requested
 
-Step 5: User replies via inline form
-        → POST /hitl/respond
+Step 5: Frontend renders inline reply form
+        → User sees agent's question inside amber card with text input
 
-Step 6: HITLService.handle_response()
-        → Loads HITLRequest, sees source == "supervisor"
-        → Injects user_input into context for step N+1
-        → Calls resume_queue_from_continuation() DIRECTLY
-        → Queue resumes
+Step 6: User submits reply
+        → POST /rooms/{room_id}/hitl/respond { request_id, user_input }
+
+Step 7: HITLService.handle_response()
+        → Loads HITLRequest, sees source == "agent"
+        → Calls a2a_service.reply_to_task(task_id, context_id, user_input)
+        → Marks HITLRequest as "responded"
+
+Step 8: Agent processes reply
+        → Task transitions: input_required → working → completed
+        → Agent sends webhook on terminal state
+
+Step 9: Webhook handler (EXISTING)
+        → Calls resume_queue_from_continuation(message_id, task_result_text)
+        → RoomMessageCenter detects supervisor_v2=True in continuation
+        → _resume_supervisor_v2() appends result to trajectory
+        → SupervisorExecutor.run(resumed_trajectory=...) continues loop
 ```
 
-No webhook involved — the user's API call is the event that triggers resume.
+Steps 8-9 reuse the **existing** webhook → `_resume_supervisor_v2()` resume path, extended to handle `AWAITING_INPUT` results the same way it handles `PAUSED` results.
 
 ---
 
 ## 5. Data Models
+
+### 5.0 InterruptKind
+
+The `interrupt_kind` field in every continuation payload is the single routing signal
+for `_resume_supervisor_v2()`. Backward compatibility: if the field is absent (legacy
+push-notification continuations saved before this design), assume `PUSH_NOTIFICATION`.
+
+```python
+class InterruptKind(str, Enum):
+    PUSH_NOTIFICATION = "push_notification"
+    # Agent returned input_required — waits for user reply via HITLService,
+    # then the A2A agent's webhook re-triggers _resume_supervisor_v2().
+    HITL_AGENT        = "hitl_agent"
+    # Supervisor issued ASK_USER — waits for user reply via HITLService,
+    # which patches hitl_user_reply onto the trajectory and calls resume directly.
+    HITL_SUPERVISOR   = "hitl_supervisor"
+```
 
 ### 5.1 HITLRequest
 
@@ -284,37 +371,166 @@ class HITLResponseRequest(BaseModel):
     user_input: str
 ```
 
-### 5.3 Supervisor Model Extensions
+### 5.3 Supervisor V2 Model Extensions
+
+> **V2 Note**: The V1 `SupervisorReview` model does not exist in V2. The Supervisor V2
+> adaptive loop (`models/supervisor_v2.py`) uses `SupervisorAction` / `ActionType` and
+> `SupervisorTrajectory`. HITL requires changes to these existing V2 models.
 
 ```python
-class SupervisorReview(BaseModel):
-    """Result of the Supervisor reviewing a completed step."""
-    action: Literal["continue", "revise", "retry", "skip", "ask_user"]  # NEW: ask_user
+# models/supervisor_v2.py — changes
+
+class ActionType(StrEnum):
+    DELEGATE = "delegate"
+    SYNTHESIZE = "synthesize"
+    DONE = "done"
+    # CLARIFY now covers both pre-plan clarification and mid-loop supervisor questions.
+    # ASK_USER is removed — it was a duplicate of CLARIFY with different routing.
+    CLARIFY = "clarify"
+
+
+class SupervisorAction(BaseModel):
+    """Single next-action decision produced by the Supervisor LLM."""
+    action: ActionType
     reasoning: str
-    revised_steps: list[SupervisorStep] | None = None
-    retry_with_refinement: str | None = None
-    user_question: str | None = None   # NEW: question to ask if action == "ask_user"
-    prompt_type: HITLPromptType = HITLPromptType.TEXT  # NEW
-    choices: list[str] | None = None   # NEW: for prompt_type == "choice"
+
+    # DELEGATE fields
+    targets: list[DelegateTarget] = Field(default_factory=list)
+
+    # SYNTHESIZE fields
+    synthesis_instruction: str | None = None
+
+    # CLARIFY fields (now used for all supervisor questions, pre-plan or mid-loop)
+    clarification_question: str | None = None
+
+    # NEW: prompt options (previously only on ASK_USER; now on CLARIFY too)
+    prompt_type: HITLPromptType = HITLPromptType.TEXT
+    choices: list[str] | None = None
+
+
+class RunStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    PAUSED = "paused"
+    # CLARIFYING is removed — replaced by AWAITING_INPUT.
+    # Legacy "clarifying" trajectory status is handled by the backward-compat guard
+    # in the crash-recovery block (treat it the same as AWAITING_INPUT — do not auto-resume).
+    AWAITING_INPUT = "awaiting_input"  # NEW: paused for any HITL (agent or supervisor)
+
+
+class SupervisorTrajectory(BaseModel):
+    # ... existing fields ...
+
+    hitl_user_reply: str | None = None
+    """The user's reply to a CLARIFY question (pre-plan or mid-loop).
+    Set by _handle_supervisor_response() before calling resume_queue_from_continuation().
+    The supervisor prompt formatter includes this so the LLM sees the user's answer
+    on resume."""
+
+    hitl_original_message_id: str | None = None
+    """The user_message_id of the message whose loop was paused by CLARIFY.
+    Replaces clarify_original_message_id."""
+
+    # REMOVED: clarify_user_reply — replaced by hitl_user_reply
+    # REMOVED: clarify_original_message_id — replaced by hitl_original_message_id
+    #
+    # Backward compat: resume code must check both hitl_user_reply AND the legacy
+    # clarify_user_reply field so that in-flight trajectories serialized before
+    # the rename still resume correctly:
+    #   effective_reply = trajectory.hitl_user_reply or trajectory.clarify_user_reply
 ```
 
-### 5.4 Queue Extensions
+The `status` literal on `SupervisorTrajectory` gains `"awaiting_input"` and **removes** `"clarifying"`:
+
+```python
+status: Literal[
+    "running", "completed", "failed", "canceled", "awaiting_input"
+] = "running"
+# Note: "clarifying" is a legacy value only — new code never sets it.
+# The crash-recovery guard treats "clarifying" == "awaiting_input" (skip auto-resume).
+```
+
+`TrajectoryStatus` (the `StrEnum` used by the DB crash-recovery path in
+`RoomMessageCenter`) must gain `AWAITING_INPUT` and the backward-compat handling of
+the legacy `CLARIFYING` value:
+
+```python
+class TrajectoryStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    # CLARIFYING removed — use AWAITING_INPUT instead.
+    # Legacy "clarifying" value is handled by the crash-recovery guard (see below).
+    RECOVERING = "recovering"       # existing — used by stale-task crash recovery
+    AWAITING_INPUT = "awaiting_input"  # NEW: paused for HITL (agent or supervisor)
+```
+
+**Crash-recovery exclusion (important):** `RoomMessageCenter._process_supervisor_v2()` checks
+the checkpointed trajectory status and auto-resumes if it is `RUNNING` or `RECOVERING`.
+An `AWAITING_INPUT` trajectory must NOT be auto-resumed — the user's reply is the only
+valid resume trigger. The legacy `"clarifying"` value must also be excluded:
+
+```python
+# In RoomMessageCenter._process_supervisor_v2(), crash-recovery resume block:
+RESUMABLE_STATUSES = {TrajectoryStatus.RUNNING, TrajectoryStatus.RECOVERING}
+# "clarifying" is a legacy string value (no longer in the enum) — exclude it explicitly.
+LEGACY_NON_RESUMABLE = {"clarifying"}
+
+if isinstance(checkpoint_data, dict):
+    raw_status = checkpoint_data.get("status")
+    if (
+        raw_status not in LEGACY_NON_RESUMABLE
+        and raw_status in RESUMABLE_STATUSES
+        # NOTE: TrajectoryStatus.AWAITING_INPUT is intentionally excluded here.
+    ):
+        # ... resume ...
+```
+
+### 5.4 Executor Model Extensions
+
+> **V2 Note**: V1's `QueueResult.AWAITING_INPUT` in `QueueExecutor` and
+> `ProcessingStatus.AWAITING_INPUT` in the queue loop are **only needed for
+> non-supervisor (legacy) rooms**. Supervisor V2 rooms use `StepStatus` and
+> `RunStatus` from `models/supervisor_v2.py` instead.
+
+**For V2 supervisor rooms** — additions to `models/supervisor_v2.py`:
+
+```python
+class StepStatus(StrEnum):
+    SUCCESS = "success"
+    FAILED = "failed"
+    PAUSED = "paused"                 # Push notification task (existing)
+    AWAITING_INPUT = "awaiting_input" # NEW: agent returned input_required
+
+
+class RunStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    PAUSED = "paused"
+    CLARIFYING = "clarifying"
+    AWAITING_INPUT = "awaiting_input" # NEW: see §5.3
+```
+
+**For V1 non-supervisor rooms** — additions to `modules/ResponseProcessor.py` and `modules/QueueExecutor.py` (unchanged from original design):
 
 ```python
 class ProcessingStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     CANCELED = "canceled"
-    PAUSED = "paused"              # Queue paused for push notification task
-    AWAITING_INPUT = "awaiting_input"  # NEW: Queue paused for HITL
+    PAUSED = "paused"
+    AWAITING_INPUT = "awaiting_input"  # NEW (V1 queue only)
 
 
 class QueueResult(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
-    PAUSED = "paused"              # Webhook will resume
+    PAUSED = "paused"
     CANCELED = "canceled"
-    AWAITING_INPUT = "awaiting_input"  # NEW: HITL reply will resume
+    AWAITING_INPUT = "awaiting_input"  # NEW (V1 queue only)
 ```
 
 ### 5.5 SSE Event Types
@@ -352,28 +568,94 @@ class QueueResult(str, Enum):
 }
 ```
 
-### 5.6 Storage
+### 5.6 SSEProcessingStatus Extension
+
+`SSEProcessingStatus` in `services/a2a_constants.py` needs a new value:
+
+```python
+class SSEProcessingStatus(str, Enum):
+    PROCESSING    = "processing"
+    COMPLETED     = "completed"
+    CANCELED      = "canceled"
+    FAILED        = "failed"
+    REJECTED      = "rejected"
+    RATE_LIMITED  = "rate_limited"
+    AWAITING_INPUT = "awaiting_input"  # NEW: loop paused for HITL
+```
+
+**`AWAITING_INPUT` must NOT be added to `PROCESSING_DONE_STATUSES`.**
+
+`PROCESSING_DONE_STATUSES` controls whether `sse_services.py` clears
+`room.processing_message_id`. Keeping the message ID on the room is intentional:
+1. It lets the cancel button remain functional (cancellation checks `processing_message_id`).
+2. On page refresh, `useRoomWebhook.ts` reads `room.processing_message_id` to restore
+   state. The 2-minute staleness check will skip the generic placeholder, and the
+   pending HITL catch-up endpoint provides the correct HITL prompt instead.
+
+```python
+# services/a2a_constants.py — unchanged set (AWAITING_INPUT intentionally absent)
+PROCESSING_DONE_STATUSES = {
+    SSEProcessingStatus.COMPLETED,
+    SSEProcessingStatus.CANCELED,
+    SSEProcessingStatus.FAILED,
+    SSEProcessingStatus.REJECTED,
+    SSEProcessingStatus.RATE_LIMITED,
+    # AWAITING_INPUT is NOT here — keep processing_message_id on the room
+}
+```
+
+### 5.7 Storage
 
 HITLRequest records are stored in a new `hitl_requests` MongoDB collection, indexed by:
 - `request_id` (unique)
 - `room_id` + `status` (for pending request lookup)
 - `expires_at` + `status` (for expiry job)
 
-The continuation data in `pending_continuation` is extended with HITL context:
+#### Unified Continuation Payload
+
+All three interrupt kinds use the **same continuation schema** stored on a MongoDB
+message document. The `interrupt_kind` field is the routing key on resume.
+Backward-compatibility rule: if `interrupt_kind` is absent, treat as `PUSH_NOTIFICATION`.
 
 ```python
-continuation_data = {
-    "remaining_queue": serialized_queue,
+# Unified continuation payload (stored on RoomAgentMessage.pending_continuation
+# for PUSH_NOTIFICATION and HITL_AGENT, or on RoomUserMessage.pending_continuation
+# for HITL_SUPERVISOR)
+interrupted_state = {
+    # ── Routing ──────────────────────────────────────────────────────────────
+    "supervisor_v2": True,           # tells RoomMessageCenter → _resume_supervisor_v2()
+    "interrupt_kind": "hitl_agent",  # InterruptKind value; absent → push_notification
+
+    # ── Full trajectory snapshot ──────────────────────────────────────────────
+    "trajectory": trajectory.model_dump(mode="json"),
+    # status == "awaiting_input" for HITL kinds; "running" for PUSH_NOTIFICATION
+
+    # ── Inputs needed to re-run SupervisorExecutor.run() ─────────────────────
     "room_id": room_id,
     "user_message_id": user_message_id,
+    "message_text": message_text,
+    "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
+    "room_config": room_config.model_dump(mode="json"),
+    "conversation_context": conversation_context,
     "request_user_id": request_user_id,
-    "current_agent_id": current_agent.agent_id,
-    "current_agent_name": current_agent.agent_card.name,
-    # NEW fields for HITL:
-    "hitl_request_id": request.request_id,     # Links to HITLRequest
-    "awaiting_user_input": True,                # Distinguishes from push notification pause
+    "quoted_text": quoted_text,
+
+    # ── HITL-only fields (absent for PUSH_NOTIFICATION) ───────────────────────
+    "hitl_request_id": request.request_id,  # links to HITLRequest document
 }
 ```
+
+**Where the continuation is saved:**
+
+| Interrupt Kind | Saved on | Key |
+|---|---|---|
+| `PUSH_NOTIFICATION` | `RoomAgentMessage` | `paused_message_id` (the paused agent message) |
+| `HITL_AGENT` | `RoomAgentMessage` | `paused_message_id` (same as push-notification) |
+| `HITL_SUPERVISOR` | `RoomUserMessage` | `user_message_id` (no agent message to resume from) |
+
+> **V1 non-supervisor rooms** still use the old continuation schema with
+> `remaining_queue`, `current_agent_id`, etc. That schema gains the same two new
+> HITL fields (`hitl_request_id`, `interrupt_kind`) described above.
 
 ---
 
@@ -521,15 +803,38 @@ class HITLService:
             user_input=user_input,
         )
         # Agent will process and send webhook → resume_queue_from_continuation
+        # which routes to _resume_supervisor_v2(kind=HITL_AGENT)
 
     async def _handle_supervisor_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
-        """Resume queue with user's answer injected into Supervisor context."""
+        """Resume V2 supervisor loop with user's answer injected into trajectory.
+
+        Patches hitl_user_reply onto the serialized trajectory before calling
+        resume_queue_from_continuation(). _resume_supervisor_v2() detects
+        interrupt_kind == HITL_SUPERVISOR and injects the reply into the
+        conversation context for the next decide_next() call.
+        """
+        # Load the continuation so we can patch hitl_user_reply before resume
+        # clears it. (get_pending_continuation is a non-destructive peek.)
+        continuation = (
+            await self.database_service.get_pending_continuation_on_message(
+                request.continuation_message_id
+            )
+        )
+        if continuation and continuation.get("supervisor_v2"):
+            traj = continuation.get("trajectory", {})
+            traj["hitl_user_reply"] = user_input
+            traj["hitl_original_message_id"] = continuation.get("user_message_id")
+            continuation["trajectory"] = traj
+            await self.database_service.save_continuation_on_message(
+                request.continuation_message_id, continuation
+            )
+
+        # Single resume path — _resume_supervisor_v2 branches on interrupt_kind
         await room_message_center.resume_queue_from_continuation(
             message_id=request.continuation_message_id,
             task_result_text=None,
-            hitl_user_input=user_input,  # NEW parameter
         )
 
     async def get_pending_requests(self, room_id: str) -> list[HITLRequest]:
@@ -614,6 +919,12 @@ async def reply_to_task(
         parts=[TextPart(text=user_input)],
         task_id=task_id,        # Continue existing task
         context_id=context_id,  # Same conversation context
+        # referenceTaskIds tells hybrid-mode agents (which model continuations as
+        # new tasks rather than resuming the same task) that this message is a
+        # direct reply to the original task.  Compliant agents that support
+        # in-place continuation ignore it; agents that start a new task per round
+        # use it to pull in the prior task's context.  Including it is safe for all.
+        reference_task_ids=[task_id],
     )
 
     params = MessageSendParams(
@@ -641,97 +952,349 @@ async def reply_to_task(
 
 ## 7. Integration Points
 
-### 7.1 Queue Loop: Detecting `input_required`
+### 7.0 Unified `_save_interrupted_state()` — Replaces `_save_pause_state()` and `_save_hitl_pause_state()`
 
-In `_process_single_agent_message`, after the agent call returns:
+The previous design had two nearly identical save methods:
+- `_save_pause_state()` for push-notification pauses
+- `_save_hitl_pause_state()` for HITL pauses
+
+These are replaced by a single method. The `interrupt_kind` parameter is the only
+meaningful difference between all three interrupt scenarios.
 
 ```python
-# In _handle_sync_response_for_room, after a2a_service.send_message_to_tracked_agent:
+# In SupervisorExecutor — replaces both _save_pause_state() and _save_hitl_pause_state()
+
+async def _save_interrupted_state(
+    self,
+    kind: InterruptKind,
+    *,
+    trajectory: SupervisorTrajectory,
+    message_id: str,          # agent message for PUSH_NOTIFICATION/HITL_AGENT;
+                               # user message for HITL_SUPERVISOR
+    room_id: str,
+    user_message_id: str,
+    message_text: str,
+    agent_registry: list[AgentProfile],
+    room_config: RoomConfig,
+    conversation_context: str | None,
+    request_user_id: str | None,
+    quoted_text: str | None = None,
+    hitl_request_id: str | None = None,  # populated for HITL kinds only
+) -> bool:
+    """Serialize trajectory + run inputs for any interrupt kind.
+
+    Saves on message_id (agent message for PUSH_NOTIFICATION/HITL_AGENT,
+    user message for HITL_SUPERVISOR).  Returns True if saved successfully.
+    """
+    interrupted_state = {
+        "supervisor_v2": True,
+        "interrupt_kind": kind.value,
+        "trajectory": trajectory.model_dump(mode="json"),
+        "room_id": room_id,
+        "user_message_id": user_message_id,
+        "message_text": message_text,
+        "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
+        "room_config": room_config.model_dump(mode="json"),
+        "conversation_context": conversation_context,
+        "request_user_id": request_user_id,
+        "quoted_text": quoted_text,
+    }
+    if hitl_request_id is not None:
+        interrupted_state["hitl_request_id"] = hitl_request_id
+
+    success = await self.database_service.save_continuation_on_message(
+        message_id, interrupted_state
+    )
+    if success:
+        logger.info(
+            "supervisor_interrupted_state_saved",
+            extra={
+                "room_id": room_id,
+                "message_id": message_id,
+                "interrupt_kind": kind.value,
+                "trajectory_id": trajectory.trajectory_id,
+            },
+        )
+    else:
+        logger.error(
+            "SupervisorExecutor: Failed to save interrupted state "
+            "(kind=%s, message_id=%s)",
+            kind.value,
+            message_id,
+        )
+    return success
+```
+
+**Call sites:**
+
+| Caller | Kind | `message_id` |
+|---|---|---|
+| DELEGATE case, PAUSED results | `PUSH_NOTIFICATION` | `pr.paused_message_id` (per paused agent) |
+| DELEGATE case, AWAITING_INPUT results | `HITL_AGENT` | `ar.paused_message_id` (per awaiting agent) |
+| ASK_USER case | `HITL_SUPERVISOR` | `user_message_id` |
+
+### 7.1 Unified Resume Path — `_resume_supervisor_v2()` Branches on `interrupt_kind`
+
+`_resume_supervisor_v2()` is the **single resume entry point** for all three interrupt
+kinds. It reads `interrupt_kind` from the continuation and applies the appropriate
+pre-run injection before calling `SupervisorExecutor.run(resumed_trajectory=...)`.
+
+```python
+# In RoomMessageCenter._resume_supervisor_v2():
+# (called from resume_queue_from_continuation for all V2 continuations)
+
+interrupt_kind = continuation.get("interrupt_kind", "push_notification")
+
+if interrupt_kind in ("push_notification", "hitl_agent"):
+    # A webhook result (task_result_text) is available — append it to the
+    # trajectory entry that was waiting for this agent.
+    self._append_paused_result_to_trajectory(
+        trajectory,
+        paused_message_id=paused_message_id,
+        task_result_text=task_result_text,
+    )
+    if task_result_text and paused_agent_id:
+        await room_memory_service.add_agent_response_to_memory(...)
+
+elif interrupt_kind == "hitl_supervisor":
+    # No webhook result — the user's reply is already patched onto the
+    # trajectory by HITLService._handle_supervisor_response() before
+    # calling resume_queue_from_continuation().
+    # trajectory.hitl_user_reply is populated; include it in conversation_context:
+    if trajectory.hitl_user_reply:
+        conversation_context = (
+            f"{conversation_context or ''}\n\n"
+            f"[User replied to your question]: {trajectory.hitl_user_reply}"
+        ).strip()
+```
+
+This replaces the previous `_handle_supervisor_response()` logic that patched the
+trajectory dict before calling resume — now the resume path reads the already-patched
+trajectory directly from the continuation.
+
+### 7.2 V2: Detecting `input_required` in AgentMessageProcessor and SupervisorExecutor
+
+> **V2 Note**: In supervisor rooms the queue loop (`_process_agent_message_queue`) is
+> never invoked. The integration points are `AgentMessageProcessor` and
+> `SupervisorExecutor._dispatch_targets()` instead.
+
+**Step 1 — `AgentMessageProcessor.process_single_message()` returns a new status:**
+
+```python
+# In AgentMessageProcessor._handle_sync_response_for_room (or equivalent),
+# after a2a_service.send_message_to_tracked_agent():
 if response_type == "task" and response.get("status") == "input_required":
-    # Extract HITL context from the response
     task_data = response.get("task", {})
-    return (
-        True,                           # success
-        None,                           # no response text yet
-        message_id,                     # for continuation
-        "input_required",               # NEW: signal to queue loop
-        task_data.get("id"),            # a2a_task_id
-        task_data.get("context_id"),    # a2a_context_id
-        extract_status_message(task_data),  # agent's question
+    return ProcessingResult(
+        status=ProcessingStatus.AWAITING_INPUT,   # NEW (distinct from PAUSED)
+        message_id=message_id,
+        a2a_task_id=task_data.get("id"),
+        a2a_context_id=task_data.get("context_id"),
+        status_message=extract_status_message(task_data),
     )
 ```
 
-In `_process_agent_message_queue`:
+**Step 2 — `SupervisorExecutor._dispatch_targets()` maps to `StepStatus.AWAITING_INPUT`:**
 
 ```python
-elif result.status == ProcessingStatus.AWAITING_INPUT:
-    # HITL: Agent needs user input — save continuation and request input
-    if not is_direct_chat:
-        await self._queue_next_messages(current_message, message_queue, room_id)
+# In dispatch_one(), after process_single_message() returns:
+if result.status == ProcessingStatus.AWAITING_INPUT:
+    return V2StepResult(
+        step_number=step_number,
+        agent_id=target.agent_id,
+        agent_name=target.agent_name,
+        task=target.task,
+        response_text="",
+        success=True,
+        status=StepStatus.AWAITING_INPUT,        # NEW — distinguished from PAUSED
+        paused_message_id=result.message_id,
+        agent_message_id=message.message_id,
+        a2a_task_id=result.a2a_task_id,          # NEW field on V2StepResult
+        a2a_context_id=result.a2a_context_id,    # NEW field on V2StepResult
+        status_message=result.status_message,    # The agent's question text
+    )
+```
 
-    if result.message_id:
-        # 1. Save queue continuation (same as push notification)
-        await self._save_queue_continuation(
-            message_id=result.message_id,
-            message_queue=message_queue,
-            room_id=room_id,
-            user_message_id=user_message_id,
-            request_user_id=request_user_id,
-            current_agent=agent,
-        )
+**Step 3 — `SupervisorExecutor.run()` handles `AWAITING_INPUT` results:**
 
-        # 2. Create HITL request (NEW)
-        await hitl_service.request_input(
+```python
+# In the DELEGATE case, after _dispatch_targets():
+awaiting = [r for r in results if r.status == StepStatus.AWAITING_INPUT]
+if awaiting:
+    entry.results = results
+    trajectory.status = "awaiting_input"
+
+    # Unified: save one interrupted state per awaiting agent (same as push-notification,
+    # but with kind=HITL_AGENT and hitl_request_id added after HITLService creates it).
+    # We save first (without hitl_request_id), create the HITL request, then update.
+    # Alternatively: create HITL requests first, then save with request IDs.
+    for ar in awaiting:
+        request = await hitl_service.request_input(
             room_id=room_id,
             user_message_id=user_message_id,
             source="agent",
-            prompt=result.status_message or "The agent needs additional information.",
-            agent_id=current_message.agent_id,
-            agent_name=agent.agent_card.name if agent else "Agent",
-            a2a_task_id=result.a2a_task_id,
-            a2a_context_id=result.a2a_context_id,
-            continuation_message_id=result.message_id,
+            prompt=ar.status_message or "The agent needs additional information.",
+            agent_id=ar.agent_id,
+            agent_name=ar.agent_name,
+            a2a_task_id=ar.a2a_task_id,
+            a2a_context_id=ar.a2a_context_id,
+            continuation_message_id=ar.paused_message_id,
         )
+        # Unified save — InterruptKind.HITL_AGENT
+        saved = await self._save_interrupted_state(
+            kind=InterruptKind.HITL_AGENT,
+            trajectory=trajectory,
+            message_id=ar.paused_message_id,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            message_text=message_text,
+            agent_registry=agent_registry,
+            room_config=room_config,
+            conversation_context=conversation_context,
+            request_user_id=request_user_id,
+            quoted_text=quoted_text,
+            hitl_request_id=request.request_id if request else None,
+        )
+        if not saved:
+            trajectory.status = "failed"
+            return self._log_and_return(
+                room_id, trajectory,
+                SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
+            )
 
-    # 3. Emit AWAITING_INPUT processing status (replaces "processing" indicator)
     await self.sse_manager.send_processing_status(
-        room_id, "awaiting_input", user_message_id
+        room_id, SSEProcessingStatus.AWAITING_INPUT, user_message_id
     )
-
-    return QueueResult.AWAITING_INPUT
+    return self._log_and_return(
+        room_id, trajectory,
+        SupervisorRunResult(status=RunStatus.AWAITING_INPUT, trajectory=trajectory),
+    )
 ```
 
-### 7.2 Supervisor Review: `ask_user` Action
-
-In the Supervisor review handler (after each agent step):
+**Step 4 — `_handle_v2_run_result()` handles `RunStatus.AWAITING_INPUT`:**
 
 ```python
-review = await supervisor_service.review_step(plan, step, result, remaining)
+# In RoomMessageCenter._handle_v2_run_result(), add to the match block:
+case RunStatus.AWAITING_INPUT:
+    pass  # Continuation already saved; HITLService emits the SSE event.
+          # Token stays alive — resume path creates/reuses it.
+```
 
-if review.action == "ask_user":
-    # Save continuation
-    await self._save_queue_continuation(...)
+> **V1 non-supervisor rooms**: The original `_process_agent_message_queue` integration
+> (calling `QueueResult.AWAITING_INPUT`) still applies and is unchanged from the
+> original design.
 
-    # Create HITL request from Supervisor
-    await hitl_service.request_input(
+### 7.3 V2: Supervisor `CLARIFY` Action in `SupervisorExecutor.run()`
+
+> **V2 Note**: There is no `supervisor_service.review_step()` method. The V2 supervisor
+> produces one `SupervisorAction` per loop iteration via `decide_next()`. The `CLARIFY`
+> integration is the unified handler for all supervisor questions — it fires whether the
+> supervisor asks before dispatching any agents (pre-plan) or between dispatch rounds
+> (mid-loop). It is a `case ActionType.CLARIFY` in the `match action.action` block inside
+> `SupervisorExecutor.run()`, **replacing** the previous `CLARIFY` case that emitted a
+> synthesis message and set `pending_clarification_message_id`.
+
+```python
+# In SupervisorExecutor.run(), inside the while loop's match block:
+# (Replaces the old CLARIFY case that used pending_clarification_message_id)
+
+case ActionType.CLARIFY:
+    entry = TrajectoryEntry(
+        step_number=step_number + 1,
+        action=action,
+        started_at=utcnow(),
+        completed_at=utcnow(),
+    )
+    trajectory.entries.append(entry)
+    trajectory.status = "awaiting_input"
+
+    # Create HITL request first so we have the request_id for the continuation
+    request = await hitl_service.request_input(
         room_id=room_id,
         user_message_id=user_message_id,
         source="supervisor",
-        prompt=review.user_question,
-        prompt_type=review.prompt_type,
-        choices=review.choices,
-        source_step_id=step.step_id,
-        continuation_message_id=current_message.message_id,
+        prompt=action.clarification_question or "The supervisor needs your input.",
+        prompt_type=action.prompt_type,
+        choices=action.choices,
+        source_step_id=str(step_number + 1),
+        continuation_message_id=user_message_id,
     )
+
+    # Unified save — InterruptKind.HITL_SUPERVISOR
+    # Saves on user_message_id (no agent message to resume from)
+    saved = await self._save_interrupted_state(
+        kind=InterruptKind.HITL_SUPERVISOR,
+        trajectory=trajectory,
+        message_id=user_message_id,
+        room_id=room_id,
+        user_message_id=user_message_id,
+        message_text=message_text,
+        agent_registry=agent_registry,
+        room_config=room_config,
+        conversation_context=conversation_context,
+        request_user_id=request_user_id,
+        quoted_text=quoted_text,
+        hitl_request_id=request.request_id if request else None,
+    )
+    if not saved:
+        trajectory.status = "failed"
+        return self._log_and_return(
+            room_id, trajectory,
+            SupervisorRunResult(status=RunStatus.FAILED, trajectory=trajectory),
+        )
 
     await self.sse_manager.send_processing_status(
-        room_id, "awaiting_input", user_message_id
+        room_id, SSEProcessingStatus.AWAITING_INPUT, user_message_id
     )
-
-    return QueueResult.AWAITING_INPUT
+    return self._log_and_return(
+        room_id, trajectory,
+        SupervisorRunResult(
+            status=RunStatus.AWAITING_INPUT,
+            trajectory=trajectory,
+        ),
+    )
 ```
 
-### 7.3 REST Endpoint
+**Resume path — `_resume_supervisor_v2()` picks up `hitl_user_reply`:**
+
+When `_handle_supervisor_response()` calls `resume_queue_from_continuation()`, the
+continuation already has `trajectory.hitl_user_reply` set (patched before the call).
+`_resume_supervisor_v2()` detects `interrupt_kind == "hitl_supervisor"` and injects
+the reply into `conversation_context` before calling `SupervisorExecutor.run()`:
+
+```python
+# In RoomMessageCenter._resume_supervisor_v2():
+if interrupt_kind == "hitl_supervisor":
+    # Support both new hitl_user_reply and legacy clarify_user_reply field names
+    user_reply = trajectory.hitl_user_reply or getattr(trajectory, "clarify_user_reply", None)
+    if user_reply:
+        conversation_context = (
+            f"{conversation_context or ''}\n\n"
+            f"[User replied to your question]: {user_reply}"
+        ).strip()
+```
+
+No separate `_save_hitl_pause_state()` method exists — this is handled entirely by
+`_save_interrupted_state(kind=InterruptKind.HITL_SUPERVISOR, ...)`.
+
+**Backward compatibility with the old `CLARIFY` path:**
+
+The old `CLARIFY` case in `SupervisorExecutor.run()` emitted a synthesis message and set
+`pending_clarification_message_id` on the room. That path is **removed**. For rooms that
+have `pending_clarification_message_id` still set (in-flight legacy sessions), keep a shim
+in `send_message_to_room` that detects the legacy field and routes the next message as a
+clarify-resume using the old `clarify_user_reply` field. Remove the shim after one full
+`task_expiry_hours` cycle.
+
+```python
+# In send_message_to_room — LEGACY SHIM (remove after migration window):
+if legacy_clarify_id := room.extend_info.get("pending_clarification_message_id"):
+    # Route via old clarify path for sessions that were in-flight before unification.
+    # New CLARIFY requests go through HITLService and never set this field.
+    ...
+```
+
+### 7.4 REST Endpoint
 
 ```python
 # api/hitl.py
@@ -784,7 +1347,7 @@ async def cancel_hitl_request(
     return {"status": "canceled"}
 ```
 
-### 7.4 Cancellation Integration
+### 7.5 Cancellation Integration
 
 The existing `cancelMessage` endpoint in `sse_services.py` must also cancel any associated HITL request:
 
@@ -967,20 +1530,55 @@ When the agent completes, the standard `task_update` SSE event arrives and the c
 
 ### 8.7 Staleness Fix
 
-The frontend post-processing logic in `useRoomWebhook.ts` currently converts non-terminal tasks older than 10 minutes to "failed". This must be updated:
+The `useRoomWebhook.ts` processing-placeholder logic has a 2-minute stale check that
+skips showing the generic "AI Agents Processing..." placeholder if the triggering user
+message is older than 2 minutes. This check does **not** affect rendered `TaskStatusMessage`
+cards — those manage their own state independently.
+
+> **Verify before implementing**: There is currently no confirmed 10-minute task-card
+> auto-fail timer in `useRoomWebhook.ts`. The existing staleness logic applies only to
+> the processing placeholder, not to rendered task cards. If a task-card auto-fail timer
+> is found during implementation, apply the exemption below.
+
+If a timer is found that converts non-terminal task-status messages to `failed` locally,
+it must be updated to exempt interactive states:
 
 ```typescript
-// BEFORE: All non-terminal tasks older than 10 min → failed
-if (!isTerminalState(taskStatus) && elapsedMinutes > STALE_THRESHOLD) {
-    taskStatus = 'failed'
-}
-
-// AFTER: Exempt input_required (it's a valid waiting state, not stuck)
+// If found: exempt input-required (and auth-required) from any local auto-fail timer
 if (!isTerminalState(taskStatus)
-    && !isInteractiveState(taskStatus)  // NEW: don't auto-fail HITL tasks
+    && !isInteractiveState(taskStatus)  // don't auto-fail HITL tasks
     && elapsedMinutes > STALE_THRESHOLD) {
     taskStatus = 'failed'
 }
+```
+
+Additionally, the frontend's `SSEMessage` type union and `ProcessingStatus` type must
+gain the new HITL event names:
+
+```typescript
+// src/lib/types/sse.ts
+
+// Add to SSEMessage.type union:
+type: '...' | 'hitl_input_requested' | 'hitl_status_update'
+
+// Add to ProcessingStatus:
+export type ProcessingStatus =
+  | "processing"
+  | "completed"
+  | "canceled"
+  | "failed"
+  | "rejected"
+  | "rate_limited"
+  | "awaiting_input"   // NEW: loop paused for HITL
+
+// Add to PROCESSING_STATUS constant:
+export const PROCESSING_STATUS = {
+  ...
+  AWAITING_INPUT: "awaiting_input",
+} as const
+
+// PROCESSING_DONE_STATUSES: do NOT add awaiting_input here.
+// When the frontend sees awaiting_input, it should show the HITL prompt, not clear the spinner.
 ```
 
 ---
@@ -1023,35 +1621,56 @@ async def _mark_task_failed(self, message_id, msg, error):
 
 **Severity: HIGH**
 
-No room-level lock. If user sends a new message while HITL queue is paused, a second queue starts independently. Two problems:
+No room-level lock. If user sends a new message while HITL loop is paused, a second
+supervisor loop starts independently. Two problems:
 - `add_agent_response_to_memory` does non-atomic read-modify-write — second write overwrites the first
-- Resumed queue's agents see context from both conversations, producing confused responses
+- Resumed loop's agents see context from both conversations, producing confused responses
 
 **Mitigations:**
 
 ```python
 # 1. Add room processing state check in send_message_to_room
 async def send_message_to_room(self, request, target_group="room_team"):
-    # Check for active HITL pause
+    # Check for active HITL pause via HITLService (agent-sourced HITL)
     pending_hitl = await hitl_service.get_pending_requests(request.room_id)
     if pending_hitl:
-        # Option A: Block the message with a user-facing error
+        # Block the message with a user-facing error
         return RoomCenterUserMessageResponse(
             success=False,
             error="An agent is waiting for your input. "
                   "Please reply to the pending request before sending a new message.",
             pending_hitl_request_id=pending_hitl[0].request_id,
         )
-        # Option B: Queue the message for processing after HITL completes
-        # (more complex, requires a room-level message queue)
 
-# 2. Persist room-level processing state
-#    Extend the existing processing_message_id mechanism:
-await db_service.update_room_processing_status(
-    room_id,
-    message_id,
-    processing_state="awaiting_input",  # NEW state
-)
+    # 2. Also check the existing CLARIFY guard (covers supervisor-sourced pause
+    #    for CLARIFY and, once HITLService is in place, belt-and-suspenders for
+    #    supervisor ASK_USER — the two patterns are unified here).
+    #
+    #    NOTE on unification: CLARIFY sets room.extend_info["pending_clarification_message_id"].
+    #    Supervisor ASK_USER (HITL) uses HITLRequest records in MongoDB instead — the
+    #    check above via hitl_service.get_pending_requests() covers it.  The two guards
+    #    are intentionally separate because they serve different flows:
+    #      - pending_clarification_message_id  → user's NEXT free-text message IS the reply
+    #      - HITLRequest                       → reply goes through POST /hitl/respond only
+    #    A message blocked by the HITL guard must NOT be routed as a clarify-resume.
+    room = await db_service.get_room_by_room_id(request.room_id)
+    if room:
+        pending_clarify_msg_id = (
+            room.extend_info.get("pending_clarification_message_id")
+            if isinstance(room.extend_info, dict)
+            else None
+        )
+        if pending_clarify_msg_id:
+            pending_msg = await db_service.get_room_user_message_by_message_id(
+                pending_clarify_msg_id
+            )
+            if pending_msg and isinstance(pending_msg.extend_info, dict):
+                traj = pending_msg.extend_info.get("supervisor_trajectory", {})
+                if isinstance(traj, dict) and traj.get("status") == "awaiting_input":
+                    return RoomCenterUserMessageResponse(
+                        success=False,
+                        error="The supervisor is waiting for your input on a pending request.",
+                    )
 ```
 
 ### Risk 3: SSE Connection Loss Drops HITL Prompts
@@ -1175,74 +1794,238 @@ await verify_room_ownership(room_id, user)
 
 Additionally, the `user` parameter must be typed as `ClerkUser` (not `str`) to match `get_current_user`'s actual return type and to enable the ownership comparison.
 
+### Risk 10: `auth_required` Requires a Different Protocol Flow
+
+**Severity: HIGH**
+
+The A2A spec defines two interactive task states:
+- `input_required` — agent needs textual input from the user; client replies via `message.send` with `task_id`/`context_id`
+- `auth_required` — agent needs out-of-band authentication ("Authentication is expected to come out-of-band." — A2A proto spec)
+
+The `reply_to_task()` method (§6.2) that sends a text reply is **correct for
+`input_required` but wrong for `auth_required`**.  `auth_required` is not satisfied
+by sending a message — the agent is waiting for an OAuth redirect, token injection,
+or some other external auth event, after which it transitions itself (or the client
+polls until it does).
+
+**Decision: Scope HITL Phase 1 to `input_required` only.**
+
+`auth_required` requires a separate design covering:
+- How the frontend surfaces the auth flow (e.g., embedded OAuth popup, "copy-paste token" field)
+- How completion is signalled (agent self-transitions after polling, or client calls a separate auth-complete endpoint)
+- Whether `HITLService` handles it via a distinct `source == "auth"` branch or a separate service
+
+**Mitigation for Phase 1:**
+
+```python
+# In AgentMessageProcessor, only create HITL requests for input_required:
+if response_type == "task" and response.get("status") == "input_required":
+    return ProcessingResult(
+        status=ProcessingStatus.AWAITING_INPUT,
+        ...
+    )
+
+# auth_required falls through to the existing PAUSED path (treated as a
+# push-notification pause — the stale checker will eventually time it out or
+# the agent will self-resolve when auth is provided externally).
+```
+
+`HITLRequest.source` is typed as `Literal["agent", "supervisor"]` — do **not** add
+`"auth"` until the auth flow is designed.
+
+### Risk 11: `interrupt_kind` Is a Load-Bearing Routing Field
+
+**Severity: MEDIUM**
+
+In the unified interrupt design, `interrupt_kind` in the continuation payload is the
+sole signal that tells `_resume_supervisor_v2()` how to re-enter the supervisor loop.
+If the field is absent, wrong, or corrupted, the wrong resume branch fires:
+- A `HITL_SUPERVISOR` continuation resumed as `PUSH_NOTIFICATION` would try to append
+  a webhook result that doesn't exist, leaving `hitl_user_reply` unused and the LLM
+  without the user's answer.
+- A `PUSH_NOTIFICATION` continuation resumed as `HITL_SUPERVISOR` would inject a
+  `None` `hitl_user_reply`, producing a confusing "[User replied to your question]: None"
+  in the context.
+
+**Mitigations:**
+
+```python
+# 1. Validate interrupt_kind on read, not just on write:
+raw_kind = continuation.get("interrupt_kind", "push_notification")
+try:
+    interrupt_kind = InterruptKind(raw_kind)
+except ValueError:
+    logger.error(
+        "Unknown interrupt_kind=%r in continuation for message %s — "
+        "defaulting to PUSH_NOTIFICATION",
+        raw_kind, paused_message_id,
+    )
+    interrupt_kind = InterruptKind.PUSH_NOTIFICATION
+
+# 2. Add interrupt_kind to structured logging on every save and resume so
+#    mismatches are immediately visible in logs.
+
+# 3. The backward-compatibility default (absent → PUSH_NOTIFICATION) must be
+#    explicitly tested: a legacy continuation without the field must resume correctly.
+```
+
 ### Risk Summary
 
 | # | Risk | Severity | Status |
 |---|------|----------|--------|
 | 1 | Stale checker auto-fails HITL tasks | CRITICAL | Mitigated: HITL-specific timeout + cleanup |
-| 2 | Parallel queue corrupts memory | HIGH | Mitigated: Block new messages during HITL |
+| 1a | `TrajectoryStatus.AWAITING_INPUT` absent — crash recovery re-runs HITL-paused trajectories | HIGH | Mitigated: new enum value + exclusion guard |
+| 2 | Parallel queue corrupts memory | HIGH | Mitigated: unified HITL+CLARIFY block in `send_message_to_room` |
 | 3 | SSE drop loses HITL prompt | HIGH | Mitigated: Persist-first + catch-up endpoint |
 | 4 | Multi-round notification suppressed | MEDIUM-HIGH | Mitigated: Reset `last_notified_state` on reply |
 | 5 | No A2A reply-to-task method | MEDIUM | Mitigated: New `reply_to_task` method |
-| 6 | Processing indicator overlap | MEDIUM | Mitigated: New `awaiting_input` status |
+| 6 | Processing indicator overlap | MEDIUM | Mitigated: New `awaiting_input` status; `processing_message_id` kept set |
 | 7 | Cancel doesn't reach paused HITL | MEDIUM | Mitigated: Cancel handler clears HITL |
 | 8 | External agent HITL misbehavior | LOW-MEDIUM | Mitigated: Max rounds + per-round timeout |
 | 9 | IDOR on HITL endpoints (no room ownership check) | HIGH | Mitigated: `verify_room_ownership()` on all HITL endpoints |
+| 10 | `auth_required` uses wrong reply mechanism | HIGH | Mitigated: Phase 1 scoped to `input_required` only; `auth_required` stays on existing push-notification/PAUSED path |
+| 11 | `interrupt_kind` is load-bearing routing field | MEDIUM | Mitigated: Validate on read, default to `PUSH_NOTIFICATION`, structured logging |
 
 ---
 
 ## 10. Migration Plan
 
-### Phase 1: Backend Foundation (Non-Breaking)
+> **Unified CLARIFY note:** Phase 1 now also removes the `pending_clarification_message_id`
+> chat-input path as part of the refactor. `CLARIFY` cases use `HITLService` and the inline
+> form. A backward-compat shim in `send_message_to_room` handles rooms with in-flight legacy
+> CLARIFY sessions; the shim is removed after one `task_expiry_hours` cycle.
 
-1. Create `models/hitl.py` with `HITLRequest`, `HITLResponse`, `HITLEventType`, `HITLStatus`, `HITLPromptType`
-2. Create `hitl_requests` MongoDB collection with indexes
-3. Create `services/hitl_service.py` with `HITLService` class (persistence + SSE emission)
-4. Add `a2a_service.reply_to_task()` method
-5. Add new `ProcessingStatus.AWAITING_INPUT` and `QueueResult.AWAITING_INPUT` values
-6. Add database methods: `create_hitl_request`, `get_hitl_request`, `update_hitl_request`, `get_pending_hitl_requests`
-7. No existing code modified yet
+### Phase 1: Unified Interrupt Foundation + Backend Models (Non-Breaking Refactor)
 
-### Phase 2: Queue Integration (Agent `input_required`)
+1. Add `InterruptKind` enum to `models/supervisor_v2.py`
+2. Rename `SupervisorExecutor._save_pause_state()` → `_save_interrupted_state(kind=InterruptKind.PUSH_NOTIFICATION, ...)`, adding `interrupt_kind` to the continuation payload. **Backward compat:** if `interrupt_kind` absent on read, default to `PUSH_NOTIFICATION`.
+3. Update `_resume_supervisor_v2()` to read `interrupt_kind` and branch (initially only the `PUSH_NOTIFICATION` branch exists — all existing behavior preserved)
+4. Remove `ActionType.ASK_USER` (never shipped); remove `RunStatus.CLARIFYING` and `TrajectoryStatus.CLARIFYING` from new code. Add `RunStatus.AWAITING_INPUT` and `TrajectoryStatus.AWAITING_INPUT`.
+5. Add `prompt_type` and `choices` fields to `SupervisorAction` (now used by `CLARIFY`, replacing the ASK_USER-only plan).
+6. Replace `clarify_user_reply` / `clarify_original_message_id` on `SupervisorTrajectory` with `hitl_user_reply` / `hitl_original_message_id`. Resume code reads both field names for backward compat (see §5.3).
+7. Create `models/hitl.py` with `HITLRequest`, `HITLResponse`, `HITLEventType`, `HITLStatus`, `HITLPromptType`
+8. Create `hitl_requests` MongoDB collection with indexes
+9. Create `services/hitl_service.py` with `HITLService` class (persistence + SSE emission)
+10. Add `a2a_service.reply_to_task()` method (with `reference_task_ids`)
+11. Add `StepStatus.AWAITING_INPUT` to `models/supervisor_v2.py`
+12. Add `SSEProcessingStatus.AWAITING_INPUT`; confirm it is **not** in `PROCESSING_DONE_STATUSES`
+13. Add `ProcessingStatus.AWAITING_INPUT` and `QueueResult.AWAITING_INPUT` to V1 modules
+14. Add database methods: `create_hitl_request`, `get_hitl_request`, `update_hitl_request`, `get_pending_hitl_requests`, `get_pending_continuation_on_message`
+15. Update crash-recovery guard to exclude both `AWAITING_INPUT` and the legacy `"clarifying"` string (see §5.3)
+16. Add backward-compat shim in `send_message_to_room` for rooms with legacy `pending_clarification_message_id`
+17. No existing supervisor behavior changed yet — pure refactor + new models
 
-1. In `_handle_sync_response_for_room`, detect `input_required` status and return it to the queue loop
-2. In `_process_agent_message_queue`, handle `ProcessingStatus.AWAITING_INPUT` — save continuation + call `hitl_service.request_input()`
-3. In `process_room_user_message`, handle `QueueResult.AWAITING_INPUT` (similar to `PAUSED`)
-4. Add SSE processing status `"awaiting_input"`
-5. Test: Agent returns `input_required` → queue pauses → HITLRequest created → SSE emitted
+### Phase 2: Unified `CLARIFY` via HITLService (Replaces Old CLARIFY + Implements ASK_USER)
 
-### Phase 3: HITL Response Endpoint
+1. Replace the existing `case ActionType.CLARIFY` in `SupervisorExecutor.run()` with the unified HITLService path (§7.3) — removes the synthesis-message emission and `pending_clarification_message_id` set
+2. Add `HITL_SUPERVISOR` branch to `_resume_supervisor_v2()` — reads `hitl_user_reply` (or legacy `clarify_user_reply`) from trajectory and injects into conversation context
+3. Add `case RunStatus.AWAITING_INPUT: pass` to `RoomMessageCenter._handle_v2_run_result()`
+4. Test: Supervisor `decide_next` → `CLARIFY` (pre-plan OR mid-loop) → HITLRequest created → SSE emitted → user replies via form → loop resumes with reply in context
+
+### Phase 3: V2 Queue Integration (Agent `input_required`)
+
+1. In `ResponseProcessor.handle_sync_response()`, detect `input_required` task state
+2. In `AgentMessageProcessor.process_single_message`, propagate `AWAITING_INPUT` with `a2a_task_id`, `a2a_context_id`, `status_message`
+3. Add `a2a_task_id`, `a2a_context_id`, `status_message` fields to `V2StepResult`
+4. In `SupervisorExecutor._dispatch_targets()`, map `ProcessingStatus.AWAITING_INPUT` → `V2StepResult(status=StepStatus.AWAITING_INPUT)` — skip for `auth_required`
+5. In `SupervisorExecutor.run()` DELEGATE case, detect `StepStatus.AWAITING_INPUT` results:
+   - Call `hitl_service.request_input()` to get `HITLRequest` (and `request_id`)
+   - Call `_save_interrupted_state(kind=InterruptKind.HITL_AGENT, hitl_request_id=...)` per awaiting agent
+   - Return `RunStatus.AWAITING_INPUT`
+6. In `RoomMessageCenter._resume_supervisor_v2()`, add `HITL_AGENT` branch (same as `PUSH_NOTIFICATION` — appends webhook result)
+7. Test: Agent returns `input_required` → state saved with `HITL_AGENT` kind → HITLRequest created → SSE emitted
+
+### Phase 4: HITL Response Endpoint
 
 1. Create `api/hitl.py` with `POST /respond`, `GET /pending`, `POST /{request_id}/cancel`
 2. Wire `handle_response` → `a2a_service.reply_to_task()` for agent source
-3. Test end-to-end: Agent `input_required` → user replies via endpoint → agent completes → webhook resumes queue
+3. Test end-to-end: Agent `input_required` → user replies via endpoint → agent completes → webhook → `_resume_supervisor_v2(kind=HITL_AGENT)` resumes loop
 
-### Phase 4: Risk Mitigations (Backend)
+### Phase 5: Risk Mitigations (Backend)
 
-1. Update stale task checker: HITL-specific timeout, clear continuation on auto-fail
+1. Update stale task checker: HITL-specific timeout; clear continuation + cancel HITL request on auto-fail
 2. Reset `last_notified_state` when sending HITL reply (multi-round fix)
-3. Add room processing state check in `send_message_to_room` to block new messages during HITL
+3. Add unified room processing state check in `send_message_to_room` to block new messages during HITL
 4. Extend `cancelMessage` handler to also cancel pending HITL requests
-5. Add HITL expiry job (or extend stale task checker) to clean up unanswered requests
-
-### Phase 5: Supervisor `ask_user` Action
-
-1. Add `ask_user` to `SupervisorReview.action` enum
-2. In Supervisor review handler, create HITL request when `action == "ask_user"`
-3. Wire `handle_response` → `resume_queue_from_continuation()` for supervisor source
-4. Test: Supervisor review → ask_user → user replies → queue resumes
+5. Add HITL expiry job (or extend stale task checker) to clean up unanswered requests; expiry must also clear `pending_continuation` and emit `hitl_input_expired` SSE
+6. Add `interrupt_kind` validation on read with structured logging (Risk 11 mitigation)
 
 ### Phase 6: Frontend
 
 1. Add `hitl_input_requested` and `hitl_status_update` SSE event handlers in `useRoomWebhook.ts`
-2. Extend `MessageData` interface with HITL fields
-3. Add `hitlRequestId` and `onHitlReply` props to `TaskStatusMessage`
-4. Build inline reply form in the `input_required` branch of `TaskStatusMessage`
-5. Add `prompt_type` variants (text, choice, confirmation)
-6. Add SSE reconnect catch-up via `GET /hitl/pending`
-7. Fix staleness logic to exempt `input_required` from auto-fail
-8. Add HITL reply API call function in `src/lib/api/room.ts`
-9. Map `awaiting_input` processing status to appropriate UI indicator
+2. Add `awaiting_input` to `ProcessingStatus` type; update `SSEMessage.type` union (NOT in `PROCESSING_DONE_STATUSES`)
+3. Add HITL fields to `MessageEntity` and `IncomingMessage` in `src/stores/message-store/types.ts` (the actual normalized store types — not the abstract `MessageData` interface)
+4. Add `hitlRequestId` and `onHitlReply` props to `TaskStatusMessage`
+5. Build inline reply form in the `input_required` branch of `TaskStatusMessage` — this now also handles supervisor `CLARIFY` prompts (same component, same form, `source` field tells the display which label to use)
+6. Add `prompt_type` variants (text, choice, confirmation)
+7. Add SSE reconnect catch-up via `GET /hitl/pending`
+8. Verify any staleness auto-fail timer; exempt interactive states (see §8.7)
+9. Add HITL reply API call function in `src/lib/api/room.ts`
+10. Map `awaiting_input` processing status to "Waiting for your input to continue" UI
+11. Remove the chat-input placeholder that previously told users to "reply in the chat box" for CLARIFY questions — the inline form replaces it
+
+### Phase 7: HITL Turn Recording in Room Memory
+
+1. After `HITLService.handle_response()` marks the request as responded, write `ConversationTurn` pair to room memory (see §10.1)
+2. Add `add_hitl_exchange_to_memory()` helper
+3. Ensure HITL exchange appears in future `conversation_context` snapshots
+
+### Phase 8: Legacy Shim Removal
+
+1. Remove the `pending_clarification_message_id` shim from `send_message_to_room` (after one `task_expiry_hours` cycle has passed since Phase 2 deployment — all in-flight legacy CLARIFY sessions will have timed out)
+2. Remove `clarify_user_reply` / `clarify_original_message_id` backward-compat read fallback from resume code
+
+---
+
+## 10.1 HITL Turn Recording in Room Memory
+
+**Context:** `CONTEXT_MEMORY_SYSTEM_DESIGN.md` defines room memory as a series of
+`ConversationTurn` records.  HITL exchanges (the agent's question and the user's
+reply) are not synthesis boundaries, so they currently bypass room memory entirely.
+Future supervisor loops and agents would have no record of what was asked or answered.
+
+**Required:** After `HITLService.handle_response()` marks the request as `responded`,
+write two turns to `RoomMemory.conversation_history`:
+
+```python
+# In HITLService.handle_response(), after successful routing:
+
+# 1. The agent's question (already displayed; record as assistant turn)
+hitl_question_turn = ConversationTurn(
+    turn_id=f"hitl_q_{request.request_id}",
+    role="assistant",
+    content=request.prompt,
+    agent_id=request.agent_id,         # None for supervisor-sourced
+    agent_name=request.agent_name,     # "Supervisor" for supervisor-sourced
+    turn_type="hitl_question",         # custom type marker
+    created_at=request.created_at,
+    was_successful=True,
+)
+
+# 2. The user's reply (record as user turn)
+hitl_reply_turn = ConversationTurn(
+    turn_id=f"hitl_r_{request.request_id}",
+    role="user",
+    content=user_input,
+    turn_type="hitl_reply",
+    created_at=utcnow(),
+    was_successful=True,
+)
+
+await room_memory_service.add_turns_to_memory(
+    room_id=request.room_id,
+    turns=[hitl_question_turn, hitl_reply_turn],
+)
+```
+
+**Why this matters:**
+- Future `conversation_context` snapshots passed to the supervisor LLM will include
+  the HITL exchange, giving the supervisor visibility into what information was requested
+  and provided.
+- The `room_summary` (Knowledge Block) is updated at synthesis boundaries; it will
+  absorb the HITL exchange as context on the next SYNTHESIZE or DONE action.
+- The `CONTEXT_MEMORY_SYSTEM_DESIGN.md` should be updated to document `hitl_question`
+  and `hitl_reply` as valid `turn_type` values.
 
 ---
 
@@ -1250,27 +2033,32 @@ Additionally, the `user` parameter must be typed as `ClerkUser` (not `str`) to m
 
 | Component | Status |
 |---|---|
-| `Room` model | Unchanged |
+| `Room` model | Unchanged (though `pending_clarification_message_id` field is retired from active use) |
 | `RoomAgentMessage` model | Unchanged (continuation data extended, not restructured) |
 | `RoomUserMessage` model | Unchanged |
-| Message queue execution loop | Unchanged (new `AWAITING_INPUT` case alongside existing `PAUSED`) |
+| `SupervisorExecutor` main loop structure | Minimal change — `CLARIFY` case replaces old chat-path behavior; `AWAITING_INPUT` detection in DELEGATE case added |
+| `SupervisorExecutor._save_pause_state()` | **Renamed/refactored** → `_save_interrupted_state(kind=PUSH_NOTIFICATION, ...)` (same behavior, unified signature) |
+| `SupervisorExecutor._checkpoint_trajectory()` | Unchanged — best-effort per-step crash-recovery checkpoint; separate from interrupt state |
+| `RoomMessageCenter._resume_supervisor_v2()` | Minimal change — reads `interrupt_kind` and branches; `PUSH_NOTIFICATION` branch is existing code |
+| `QueueExecutor` / V1 queue loop | Unchanged for supervisor rooms; gains V1-only `AWAITING_INPUT` case for non-supervisor rooms |
 | SSE streaming infrastructure | Unchanged (new event types use existing broadcast mechanism) |
-| Push notification / webhook flow | Unchanged (HITL reuses the same webhook resume path) |
-| `a2a_service` (existing methods) | Unchanged (new `reply_to_task` method added, existing methods untouched) |
-| `send_message_to_room` | Minimal change (room-level HITL block check only) |
+| Push notification / webhook flow | Unchanged (HITL_AGENT resumes via same webhook → `_resume_supervisor_v2()` path as PUSH_NOTIFICATION) |
+| `a2a_service` (existing methods) | Unchanged (new `reply_to_task()` method added, existing methods untouched) |
+| `send_message_to_room` | Minimal change (room-level HITL block check; legacy CLARIFY shim during migration window) |
 | `rate_limit_service` | Unchanged |
 | Frontend chat input / `SendMessage` | Unchanged (HITL replies use separate endpoint) |
 | `MessageBubble` component | Unchanged |
+| `CLARIFY` action name | Unchanged — the action name stays `CLARIFY`; only the routing changes (HITLService instead of chat-input path) |
 
 ---
 
 ## 12. Summary
 
-The HITL design adds an **event-driven human interaction channel** to the Supervisor Pattern, enabling three scenarios:
+The HITL design adds an **event-driven human interaction channel** to the Supervisor V2
+Pattern, enabling two scenarios:
 
-1. **Pre-plan clarification** — Supervisor asks the user before planning (handled by existing `strategy="clarify"`, no new infrastructure)
-2. **Agent `input_required`** — A2A agent needs user input mid-execution (new `HITLService` + `reply_to_task` + queue `AWAITING_INPUT`)
-3. **Supervisor `ask_user`** — Supervisor pauses between steps to ask the user (new `SupervisorReview.action` + direct queue resume)
+1. **Supervisor `CLARIFY`** — Supervisor asks the user a question, whether before dispatching any agents (pre-plan) or between dispatch rounds (mid-loop). New unified routing: `ActionType.CLARIFY` → `_save_interrupted_state(kind=HITL_SUPERVISOR)` → `HITLService` → inline reply form → `_handle_supervisor_response()` patches `hitl_user_reply` on trajectory → `_resume_supervisor_v2(kind=HITL_SUPERVISOR)` re-runs loop with user's answer in context. Replaces the previous `CLARIFY` + `ASK_USER` split and the `pending_clarification_message_id` chat-input path.
+2. **Agent `input_required`** — A2A agent needs user input mid-execution. New `ProcessingStatus.AWAITING_INPUT` → `StepStatus.AWAITING_INPUT` → `_save_interrupted_state(kind=HITL_AGENT)` → `HITLService` → `reply_to_task()` → webhook → `_resume_supervisor_v2(kind=HITL_AGENT)`.
 
 ### Key Design Decisions
 
@@ -1278,10 +2066,18 @@ The HITL design adds an **event-driven human interaction channel** to the Superv
 |---|---|
 | Dedicated HITL endpoint, not `sendMessage` | Eliminates ambiguity; supports multiple concurrent HITL requests |
 | Persist-first, emit-second | Survives SSE connection drops |
-| Reuse webhook resume for agent HITL | Zero new queue resume code; agent webhook handles it |
-| Direct resume for supervisor HITL | No agent involved; user's reply is the resume trigger |
-| Inline reply form, not chat input | Clear intent; no ambiguity; supports parallel HITL prompts |
-| `hitl_requests` collection | Queryable lifecycle; clean expiry; reconnect catch-up |
+| Unified `_save_interrupted_state(kind=...)` | Single save method for all interrupt kinds; adding a new kind requires one enum value + one branch |
+| Single `_resume_supervisor_v2()` for all interrupt kinds | All pauses share the same serialize→persist→wait→deserialize→re-run mechanics; only the pre-run injection differs |
+| `interrupt_kind` in continuation payload | Clean routing without flag proliferation; backward compat: absent → `PUSH_NOTIFICATION` |
+| `CLARIFY` unified — same path for pre-plan and mid-loop | Both cases are identical mechanically; the split was accidental complexity. One `ActionType`, one resume path, one `HITLRequest` record, one frontend component. |
+| `ASK_USER` removed | `CLARIFY` subsumes it. Having two action types for the same semantic concept (supervisor asking the user) was unnecessary duplication. |
+| `pending_clarification_message_id` chat-input path retired | One persistence mechanism (HITLRequest), one blocking guard (`get_pending_requests()`), one frontend component. Backward-compat shim handles in-flight sessions during migration. |
+| `HITLService` for request lifecycle | Persistence, SSE emission, expiry, cancel — separate from routing which lives in `_resume_supervisor_v2()` |
+| `TrajectoryStatus.AWAITING_INPUT` excluded from crash-recovery resume | HITL-paused trajectories must only resume via user reply, not server restart. Legacy `"clarifying"` status is also excluded for the same reason. |
+| `SSEProcessingStatus.AWAITING_INPUT` excluded from `PROCESSING_DONE_STATUSES` | Keeps `processing_message_id` on the room so cancel still works and page-refresh can show pending HITL prompt |
+| Phase 1 scoped to `input_required` only | `auth_required` requires a different (out-of-band) protocol flow; designing it separately avoids baking wrong assumptions into `HITLRequest` |
+| HITL exchanges recorded in room memory | Future supervisor loops see the full HITL Q&A in `conversation_context`; prevents agents from being confused about information they already obtained |
+| `referenceTaskIds` included in `reply_to_task` | Hybrid-mode agents that model continuations as new tasks use this to pull prior context; harmless for agents that do in-place continuation |
 
 ### New Components
 
@@ -1290,6 +2086,27 @@ The HITL design adds an **event-driven human interaction channel** to the Superv
 | `services/hitl_service.py` | Service | Manages HITL request/response lifecycle |
 | `api/hitl.py` | REST API | `POST /respond`, `GET /pending`, `POST /cancel` |
 | `models/hitl.py` | Models | `HITLRequest`, `HITLResponse`, event types |
-| `a2a_service.reply_to_task()` | Method | Sends follow-up message to existing A2A task |
+| `a2a_service.reply_to_task()` | Method | Sends follow-up message to existing A2A task (with `referenceTaskIds`) |
 | `hitl_requests` collection | MongoDB | Stores pending/responded/expired HITL requests |
-| Inline reply form | Frontend | Interactive form inside `TaskStatusMessage` amber card |
+| `InterruptKind` | Enum | `PUSH_NOTIFICATION` / `HITL_AGENT` / `HITL_SUPERVISOR` — routing key in continuation payload |
+| `SupervisorExecutor._save_interrupted_state()` | Method | **Replaces** `_save_pause_state()` — single save method for all interrupt kinds |
+| `RunStatus.AWAITING_INPUT` | Enum value | V2 run paused for HITL (replaces `RunStatus.CLARIFYING`) |
+| `StepStatus.AWAITING_INPUT` | Enum value | Agent step paused for `input_required` |
+| `TrajectoryStatus.AWAITING_INPUT` | Enum value | Trajectory status for HITL pause (excluded from crash-recovery resume) |
+| `SSEProcessingStatus.AWAITING_INPUT` | Enum value | Room-level processing status when HITL is active (NOT in `PROCESSING_DONE_STATUSES`) |
+| `SupervisorTrajectory.hitl_user_reply` | Field | User's answer for `HITL_SUPERVISOR` kind (replaces `clarify_user_reply`) |
+| `add_hitl_exchange_to_memory()` | Method | Records HITL Q&A as `ConversationTurn` entries in room memory |
+| Inline reply form | Frontend | Interactive form inside `TaskStatusMessage` amber card — used for both agent and supervisor HITL prompts |
+| `awaiting_input` processing status | Frontend | New `ProcessingStatus` value; maps to "Waiting for your input" UI; excluded from done-statuses |
+
+### Removed / Retired
+
+| Component | Reason |
+|---|---|
+| `ActionType.ASK_USER` | Merged into `ActionType.CLARIFY` |
+| `RunStatus.CLARIFYING` | Replaced by `RunStatus.AWAITING_INPUT` |
+| `TrajectoryStatus.CLARIFYING` | Replaced by `TrajectoryStatus.AWAITING_INPUT` |
+| `SupervisorTrajectory.clarify_user_reply` | Replaced by `hitl_user_reply` (read fallback kept for backward compat) |
+| `SupervisorTrajectory.clarify_original_message_id` | Replaced by `hitl_original_message_id` |
+| `pending_clarification_message_id` on Room | Retired; HITLRequest in `hitl_requests` is the single source of truth for pending supervisor questions |
+| `supervisor_v2_clarify_resume=True` extend_info routing | Retired; all supervisor question replies go through `POST /hitl/respond` |
