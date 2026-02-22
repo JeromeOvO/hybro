@@ -131,6 +131,27 @@ class AgentDispatcher:
         result = await self.assign_agent(current_message)
         return result.agent, result.failure_reason
 
+    async def resolve_agent(self, agent_id: str, room_id: str) -> Agent | None:
+        """Resolve an agent by ID. Returns ``None`` if not found or inactive.
+
+        Unlike ``assign_agent_for_queue``, this does NOT attempt re-assignment.
+        Used by ``SupervisorExecutor`` where the supervisor handles failures
+        via the next ``decide_next`` iteration.
+        """
+        from models.agent import AgentStatus
+
+        agent = await self.database_service.get_agent_by_agent_id(agent_id)
+        if agent is None:
+            return None
+        if agent.agent_status != AgentStatus.active:
+            logger.warning(
+                "AgentDispatcher: Agent %s is %s, returning None",
+                agent_id,
+                agent.agent_status,
+            )
+            return None
+        return agent
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

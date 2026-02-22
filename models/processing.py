@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from a2a.types import AgentCard
 
 from common.utils.cancellation import CancellationToken
 from models.room import RoomAgentMessage
+
+
+class ProcessingStatus(Enum):
+    """Status of message processing operations."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    PAUSED = "paused"  # Queue paused waiting for push notification task
+
+
+@dataclass
+class ProcessingResult:
+    """Result of single-message processing with optional metadata."""
+
+    status: ProcessingStatus
+    response_text: str = ""
+    message_id: str | None = None
 
 
 @dataclass
