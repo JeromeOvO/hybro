@@ -2414,8 +2414,8 @@ await room_memory_service.add_turns_to_memory(
   and provided.
 - The `room_summary` (Knowledge Block) is updated at synthesis boundaries; it will
   absorb the HITL exchange as context on the next SYNTHESIZE or DONE action.
-- The `CONTEXT_MEMORY_SYSTEM_DESIGN.md` should be updated to document `hitl_question`
-  and `hitl_reply` as valid `turn_type` values.
+- The `turn_type` field (`hitl_question`, `hitl_reply`) is now documented in
+  [CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2](./CONTEXT_MEMORY_SYSTEM_DESIGN.md).
 
 ---
 
@@ -2558,3 +2558,31 @@ Pattern, enabling two scenarios:
 | `SupervisorTrajectory.clarify_original_message_id` | Replaced by `hitl_original_message_id` |
 | `pending_clarification_message_id` on Room | Retired; HITLRequest in `hitl_requests` is the single source of truth for pending supervisor questions |
 | `supervisor_v2_clarify_resume=True` extend_info routing | Retired; all supervisor question replies go through `POST /hitl/respond` |
+
+---
+
+## 14. Cross-Document Dependencies
+
+This design has dependencies on and interactions with other system design documents.
+
+### 14.1 Dependency Graph
+
+See [SYSTEM_DESIGN_REVIEW.md §5](./SYSTEM_DESIGN_REVIEW.md) for the **unified implementation dependency graph** across all three design documents. Key HITL dependencies:
+
+| Dependency | Document | Impact on HITL |
+|------------|----------|----------------|
+| **[SDR 2.1] Redis Pub/Sub** | SYSTEM_DESIGN_REVIEW.md | **Blocker for Phase 5** — HITL SSE events won't reach users in multi-instance deployment without cross-instance fan-out |
+| **[SDR 2.3] httpx client fix** | SYSTEM_DESIGN_REVIEW.md | **Blocker for Phase 1** — `reply_to_task()` inherits the connection leak |
+| **[CM Phase 1] ConversationTurn model** | CONTEXT_MEMORY_SYSTEM_DESIGN.md | **Dependency for Phase 7** — HITL turn recording requires updated model with `turn_type` field |
+
+### 14.2 Memory Integration
+
+HITL exchanges are recorded in room memory per [CONTEXT_MEMORY_SYSTEM_DESIGN.md §3.1](./CONTEXT_MEMORY_SYSTEM_DESIGN.md):
+
+- **Interrupt State**: Trajectory serialized to `pending_continuation` (Session Context layer)
+- **HITL Turn Recording**: Question/reply pairs written as `ConversationTurn` entries (Room Memory layer)
+- **Context Refresh**: On resume, `conversation_context` is re-fetched to include changes during pause
+
+### 14.3 Issue Status
+
+Track HITL-related infrastructure issues in [SYSTEM_DESIGN_REVIEW.md §4](./SYSTEM_DESIGN_REVIEW.md) (Issue Status Tracking table).

@@ -86,7 +86,7 @@ From Manus blog:
 ### 2.3 Hybro-Specific Requirements
 
 1. **Multi-Agent Awareness**: Each agent needs room context + peer awareness
-2. **Supervisor Integration**: Memory feeds into planning, review, and synthesis
+2. **Supervisor Integration**: Memory feeds into the adaptive loop (`decide_next` → dispatch → synthesis)
 3. **A2A Protocol Compatibility**: Context must serialize for external agents
 4. **Horizontal Scalability**: No in-memory state that prevents scaling
 
@@ -115,34 +115,103 @@ Five principles from Jan–Feb 2026 papers that inform the evolution of this des
 ## 3. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         CONTEXT & MEMORY SYSTEM                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │   Session    │  │    Room      │  │    User      │  │   Agent      │ │
-│  │   Context    │  │   Memory     │  │   Memory     │  │   Memory     │ │
-│  │  (Ephemeral) │  │  (Durable)   │  │  (Durable)   │  │  (Durable)   │ │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘ │
-│         │                 │                 │                 │          │
-│         └────────────┬────┴────────┬────────┴────────┬────────┘          │
-│                      │             │                 │                   │
-│                      ▼             ▼                 ▼                   │
-│              ┌───────────────────────────────────────────┐               │
-│              │         Context Assembly Engine           │               │
-│              │  (Builds per-request context window)      │               │
-│              └───────────────────────────────────────────┘               │
-│                                    │                                     │
-│         ┌──────────────────────────┼──────────────────────────┐          │
-│         ▼                          ▼                          ▼          │
-│  ┌─────────────┐          ┌─────────────┐          ┌─────────────┐       │
-│  │  Supervisor │          │   Agent     │          │    A2A      │       │
-│  │   Context   │          │   Context   │          │   Context   │       │
-│  │  (Planning) │          │ (Execution) │          │  (External) │       │
-│  └─────────────┘          └─────────────┘          └─────────────┘       │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         CONTEXT & MEMORY SYSTEM                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │   Session    │  │    Room      │  │    User      │  │   Agent      │         │
+│  │   Context    │  │   Memory     │  │   Memory     │  │   Memory     │         │
+│  │  (Ephemeral) │  │  (Durable)   │  │  (Durable)   │  │  (Durable)   │         │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘         │
+│         │                 │                 │                 │                  │
+│         └────────────┬────┴────────┬────────┴────────┬────────┘                  │
+│                      │             │                 │                           │
+│                      ▼             ▼                 ▼                           │
+│              ┌───────────────────────────────────────────┐                       │
+│              │         Context Assembly Engine           │                       │
+│              │  (Builds per-request context window)      │                       │
+│              └───────────────────────────────────────────┘                       │
+│                                    │                                             │
+│         ┌──────────────────────────┼──────────────────────────┐                  │
+│         ▼                          ▼                          ▼                  │
+│  ┌─────────────┐          ┌─────────────┐          ┌─────────────┐               │
+│  │  Supervisor │          │   Agent     │          │    A2A      │               │
+│  │   Context   │          │   Context   │          │   Context   │               │
+│  │  (Adaptive  │          │ (Execution) │          │  (External) │               │
+│  │    Loop)    │          │             │          │             │               │
+│  └──────┬──────┘          └──────┬──────┘          └──────┬──────┘               │
+│         │                        │                        │                      │
+│         │    ┌───────────────────┴────────────────────────┘                      │
+│         │    │                                                                   │
+│         ▼    ▼                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐         │
+│  │                    HITL INTEGRATION LAYER                            │         │
+│  │  (Human-in-the-Loop — see HITL_DESIGN.md)                            │         │
+│  ├─────────────────────────────────────────────────────────────────────┤         │
+│  │                                                                      │         │
+│  │  Interrupt Triggers:                                                 │         │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │         │
+│  │  │ Supervisor      │  │ Agent returns   │  │ Push-notification│       │         │
+│  │  │ CLARIFY action  │  │ input_required  │  │ PAUSED state     │       │         │
+│  │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘       │         │
+│  │           │                    │                    │                │         │
+│  │           └────────────────────┼────────────────────┘                │         │
+│  │                                ▼                                     │         │
+│  │                    ┌───────────────────────┐                         │         │
+│  │                    │ _save_interrupted_    │                         │         │
+│  │                    │ state(kind=...)       │                         │         │
+│  │                    │ • Serialize trajectory│                         │         │
+│  │                    │ • Persist to MongoDB  │                         │         │
+│  │                    └───────────┬───────────┘                         │         │
+│  │                                │                                     │         │
+│  │           ┌────────────────────┼────────────────────┐                │         │
+│  │           ▼                    ▼                    ▼                │         │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │         │
+│  │  │ HITL_SUPERVISOR │  │ HITL_AGENT      │  │ PUSH_NOTIFICATION│       │         │
+│  │  │ → HITLService   │  │ → HITLService   │  │ → Webhook waits │       │         │
+│  │  │ → SSE prompt    │  │ → SSE prompt    │  │                 │       │         │
+│  │  │ → User replies  │  │ → User replies  │  │                 │       │         │
+│  │  │ → Direct resume │  │ → Agent webhook │  │ → Agent webhook │       │         │
+│  │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘       │         │
+│  │           │                    │                    │                │         │
+│  │           └────────────────────┼────────────────────┘                │         │
+│  │                                ▼                                     │         │
+│  │                    ┌───────────────────────┐                         │         │
+│  │                    │ _resume_supervisor_v2 │                         │         │
+│  │                    │ • Deserialize         │                         │         │
+│  │                    │ • Inject result/reply │                         │         │
+│  │                    │ • Re-run loop         │                         │         │
+│  │                    └───────────────────────┘                         │         │
+│  │                                                                      │         │
+│  │  Memory Integration (HITL_DESIGN.md §10.1):                          │         │
+│  │  ┌─────────────────────────────────────────────────────────────┐     │         │
+│  │  │ After HITL response, write to Room Memory:                   │     │         │
+│  │  │ • ConversationTurn(role="assistant", turn_type="hitl_question")│     │         │
+│  │  │ • ConversationTurn(role="user", turn_type="hitl_reply")       │     │         │
+│  │  │ → Future conversation_context includes HITL exchanges        │     │         │
+│  │  │ → room_summary updated at next synthesis boundary            │     │         │
+│  │  └─────────────────────────────────────────────────────────────┘     │         │
+│  │                                                                      │         │
+│  └─────────────────────────────────────────────────────────────────────┘         │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 3.1 HITL Integration Points
+
+The HITL (Human-in-the-Loop) system integrates with Context & Memory at three key points:
+
+| Integration Point | Memory Layer | Description |
+|-------------------|--------------|-------------|
+| **Interrupt State** | Session Context | Trajectory serialized with `interrupt_kind` to `pending_continuation` |
+| **HITL Turn Recording** | Room Memory | HITL question/reply pairs written as `ConversationTurn` entries |
+| **Context Refresh** | Context Assembly | On resume, `conversation_context` is re-fetched to include any changes during pause |
+
+**Cross-reference**: See [HITL_DESIGN.md](./HITL_DESIGN.md) for the full HITL architecture, including:
+- §3 Architecture Overview (unified interrupt mechanism)
+- §5.7 Continuation Payload (trajectory serialization)
+- §10.1 HITL Turn Recording in Room Memory
 
 ---
 
@@ -314,6 +383,22 @@ class AgentMemory(BaseModel):
 
 **Storage**: MongoDB `agent_memories` collection
 
+### 4.5 Storage Overview
+
+All memory-related data is stored in MongoDB. The following collections are used:
+
+| Collection | Purpose | Defined In |
+|------------|---------|------------|
+| `room_memories` | Durable room conversation history and learned context | §4.2 |
+| `user_memories` | Cross-room user preferences and interaction history | §4.3 |
+| `agent_memories` | Per-agent performance metrics and failure patterns | §4.4 |
+| `conversation_content` | Full content for compacted turns (lossless compaction) | §6.6 |
+| `hitl_requests` | Human-in-the-loop request lifecycle tracking | [HITL_DESIGN.md §5.7](./HITL_DESIGN.md) |
+
+> **Note**: The `hitl_requests` collection is defined in `HITL_DESIGN.md` and stores pending,
+> responded, expired, and canceled HITL requests. It is indexed by `request_id` (unique),
+> `room_id + status` (for pending request lookup), and `expires_at + status` (for expiry job).
+
 ---
 
 ## 5. Context Assembly Engine
@@ -439,6 +524,12 @@ class ConversationTurn(BaseModel):
     # Current: "text", "tool_result", "agent_response"
     # Future: "image", "file", "video", "audio" (see Section 6.8)
     content_type: Literal["text", "tool_result", "agent_response"] = "text"
+
+    # Turn type — semantic classification of the turn's purpose.
+    # Most turns are "message" (default). HITL interactions use "hitl_question" and
+    # "hitl_reply" to distinguish agent/supervisor questions and user responses from
+    # normal conversation flow. See HITL_DESIGN.md §10.1 for recording details.
+    turn_type: Literal["message", "hitl_question", "hitl_reply"] = "message"
 
     # Token estimates — populated at turn creation time via estimate_tokens(content).
     # estimated_tokens_full MUST be set when the turn is created (not left at 0),
@@ -1155,6 +1246,34 @@ this is the natural boundary where the loop is fully done and room memory is sta
 # After synthesize_v2() completes:
 if await compaction_service.should_compact(room_id):
     await compaction_service.compact_room_memory(room_id)
+```
+
+### 7.6 HITL Resume Context Refresh
+
+> **Cross-reference**: See [HITL_DESIGN.md §5.7 and Risk 13](./HITL_DESIGN.md) for full details.
+
+When the supervisor loop is paused for Human-in-the-Loop (HITL) interactions — either
+agent `input_required` or supervisor `CLARIFY` — the pause can last **minutes to hours**
+(up to 24h expiry). The `conversation_context` snapshot serialized at interrupt time
+may become stale: compaction cycles, new room memory entries, or agent registry changes
+are not reflected.
+
+**Requirement**: On HITL resume, `_resume_supervisor_v2()` must **re-fetch**
+`conversation_context` from `room_memory_service` and refresh `agent_registry` from
+the database, using the serialized values only as fallbacks if the services are
+unavailable.
+
+```python
+# In RoomMessageCenter._resume_supervisor_v2(), for HITL kinds:
+if interrupt_kind in ("hitl_agent", "hitl_supervisor"):
+    # Re-fetch to avoid staleness after long HITL pause
+    refreshed_context = await room_memory_service.build_conversation_context(room_id)
+    if refreshed_context:
+        conversation_context = refreshed_context
+    # Also refresh agent_registry (agents may have been added/removed/health-changed)
+    refreshed_registry = await agent_service.get_room_agents(room_id)
+    if refreshed_registry:
+        agent_registry = refreshed_registry
 ```
 
 ---
@@ -1937,8 +2056,18 @@ This architecture provides:
 5. **Hybrid search**: Vector + keyword with temporal decay and MMR diversity
 6. **Supervisor V2 integration**: Context assembly for the adaptive loop (`decide_next`), per-agent dispatch, and synthesis
 7. **Horizontal scalability**: All state in MongoDB/Pinecone, no in-memory dependencies
+8. **HITL integration**: Interrupt state serialization, HITL turn recording, context refresh on resume (see §3.1)
 
 The design draws from production lessons at Manus (lossless compaction, KV-cache optimization) and OpenClaw (multi-layer memory, hybrid search) while adapting to Hybro's multi-agent A2A architecture and Supervisor V2 (adaptive loop, Phase 5 complete Feb 21 2026).
+
+### 16.1 Cross-Document Dependencies
+
+See [SYSTEM_DESIGN_REVIEW.md §5](./SYSTEM_DESIGN_REVIEW.md) for the **unified implementation dependency graph** across all three design documents. Key Context Memory dependencies:
+
+| Dependency | Document | Impact on Context Memory |
+|------------|----------|--------------------------|
+| **[HITL Phase 7] Turn Recording** | HITL_DESIGN.md | Depends on `ConversationTurn` model updates (Phase 1) |
+| **[SDR 2.11] Unbounded Memory** | SYSTEM_DESIGN_REVIEW.md | Resolved by Phase 2 (Context Assembly) + Phase 3 (Compaction) |
 
 ---
 
@@ -1968,6 +2097,7 @@ The design draws from production lessons at Manus (lossless compaction, KV-cache
 | **No rolling room summary**        | Supervisor must scan 20+ compact turns to reconstruct current state; expensive and error-prone | **Short-term**: populate `RoomMemory.room_summary` at each synthesis boundary (§2.4 Principle 2) |
 | **Threshold-based compaction only** | Agent continues appending irrelevant turns until threshold fires; wastes tokens in early-to-mid sessions | Medium-term: expose `compact_context(rationale)` tool for agent-driven compaction (§2.4 Principle 5) |
 | **No turn_notes extraction pipeline** | Keyword search on compact turns requires full content expansion | Short-term: implement `extract_turn_notes()` wired into `add_turn_to_history` (§6.2) |
+| **SSE in-memory state (cross-doc)** | SSE events cannot reach clients connected to different backend instances; affects HITL prompts and context updates | See [SYSTEM_DESIGN_REVIEW.md §2.1](./SYSTEM_DESIGN_REVIEW.md) — requires Redis Pub/Sub or polling fallback; HITL design depends on this fix |
 
 ### 17.3 Comparison with Reference Systems
 
