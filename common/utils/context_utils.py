@@ -1,5 +1,7 @@
 """
 Context utilities for room conversation memory management.
+
+See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
 """
 
 import re
@@ -9,7 +11,14 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 if TYPE_CHECKING:
-    from models.memory import ConversationTurn, MemoryContent
+    from models.memory import (
+        ContentType,
+        ConversationTurn,
+        MemoryContent,
+        TurnRepresentation,
+        TurnRole,
+        TurnType,
+    )
 
 logger = get_logger(__name__)
 
@@ -17,6 +26,145 @@ logger = get_logger(__name__)
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
 MAX_CONTEXT_CHARS = 12000  # Approximate character limit before summarization kicks in
 SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
+
+# Token estimation constants
+CHARS_PER_TOKEN_ESTIMATE = 4  # Approximate chars per token for English text
+
+
+def estimate_tokens(text: str | None, model: str = "gpt-4") -> int:
+    """
+    Estimate token count for text.
+
+    Uses tiktoken for accuracy if available. Falls back to char/4 heuristic.
+
+    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §19 for specification.
+
+    Args:
+        text: The text to estimate tokens for
+        model: The model to use for tokenization (default: gpt-4)
+
+    Returns:
+        Estimated token count
+    """
+    if not text:
+        return 0
+
+    try:
+        import tiktoken
+
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except ImportError:
+        logger.debug("tiktoken not available, using char/4 heuristic")
+    except Exception as e:
+        logger.debug(f"tiktoken error: {e}, using char/4 heuristic")
+
+    # Fallback: ~4 chars per token for English
+    return len(text) // CHARS_PER_TOKEN_ESTIMATE
+
+
+def extract_turn_notes(content: str | None) -> dict | None:
+    """
+    Extract structured notes from turn content (Zettelkasten / A-MEM pattern).
+
+    This is a heuristic implementation that extracts:
+    - keywords: Important words/phrases
+    - entities: Named entities (people, places, things)
+    - one_liner: Brief summary of the turn
+
+    For short turns (<100 tokens), uses simple heuristics.
+    For long turns, a fast LLM could be used (not implemented in Phase 1).
+
+    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 and §8.3 for specification.
+
+    Args:
+        content: The turn content to extract notes from
+
+    Returns:
+        Dict with keywords, entities, and one_liner, or None if content is empty
+    """
+    if not content or len(content.strip()) < 10:
+        return None
+
+    # Simple heuristic extraction for Phase 1
+    words = content.split()
+
+    # Extract potential keywords (longer words, excluding common stop words)
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "shall", "can", "need", "dare",
+        "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
+        "from", "as", "into", "through", "during", "before", "after", "above",
+        "below", "between", "under", "again", "further", "then", "once", "here",
+        "there", "when", "where", "why", "how", "all", "each", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+        "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
+        "because", "until", "while", "this", "that", "these", "those", "i",
+        "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
+        "them", "my", "your", "his", "its", "our", "their", "what", "which",
+        "who", "whom", "please", "thanks", "thank", "yes", "no", "okay", "ok",
+    }
+
+    # Extract keywords (words > 4 chars, not stop words, alphanumeric)
+    keywords = []
+    seen = set()
+    for word in words:
+        clean_word = re.sub(r"[^\w]", "", word.lower())
+        if (
+            len(clean_word) > 4
+            and clean_word not in stop_words
+            and clean_word not in seen
+            and clean_word.isalpha()
+        ):
+            keywords.append(clean_word)
+            seen.add(clean_word)
+            if len(keywords) >= 10:  # Limit to 10 keywords
+                break
+
+    # Extract potential entities (capitalized words that aren't at sentence start)
+    entities = []
+    entity_seen = set()
+    for i, word in enumerate(words):
+        # Skip first word of content and words after sentence-ending punctuation
+        if i == 0:
+            continue
+        prev_word = words[i - 1] if i > 0 else ""
+        if prev_word.endswith((".", "!", "?")):
+            continue
+
+        # Check if word is capitalized (potential entity)
+        clean_word = re.sub(r"[^\w]", "", word)
+        if (
+            clean_word
+            and clean_word[0].isupper()
+            and clean_word.lower() not in stop_words
+            and clean_word not in entity_seen
+        ):
+            entities.append(clean_word)
+            entity_seen.add(clean_word)
+            if len(entities) >= 5:  # Limit to 5 entities
+                break
+
+    # Generate one-liner (first sentence or truncated content)
+    one_liner = content.strip()
+    # Find first sentence
+    for end_char in [".", "!", "?"]:
+        idx = one_liner.find(end_char)
+        if idx > 0 and idx < 150:
+            one_liner = one_liner[: idx + 1]
+            break
+    else:
+        # No sentence end found, truncate
+        if len(one_liner) > 100:
+            one_liner = one_liner[:100] + "..."
+
+    return {
+        "keywords": keywords,
+        "entities": entities,
+        "tags": [],  # Placeholder for future LLM-based tag extraction
+        "one_liner": one_liner,
+    }
 
 
 def clean_mention_format(
@@ -67,11 +215,14 @@ def extract_mentioned_agent_ids(text: str) -> list[str]:
 
 def add_turn_to_history(
     memory_content: "MemoryContent",
-    role: str,
+    role: str | "TurnRole",
     content: str,
     agent_id: str | None = None,
     agent_name: str | None = None,
     user_id: str | None = None,
+    content_type: str | "ContentType" = "text",
+    turn_type: str | "TurnType" = "message",
+    was_successful: bool | None = None,
 ) -> "MemoryContent":
     """
     Add a conversation turn to history and manage window size.
@@ -80,19 +231,39 @@ def add_turn_to_history(
     - Keeps the most recent MAX_HISTORY_TURNS turns in full
     - Older turns are summarized and moved to the summary field
 
+    IMPORTANT: This function now populates estimated_tokens_full and turn_notes
+    at turn creation time, as required by CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2.
+
     Args:
         memory_content: The MemoryContent to update
-        role: "user" or "agent"
+        role: TurnRole enum or string ("user", "agent", "supervisor")
         content: The message content (should be pre-cleaned)
-        agent_id: Agent ID (for agent messages)
-        agent_name: Agent name (for agent messages)
+        agent_id: Agent ID (for agent/supervisor messages)
+        agent_name: Agent name (for agent/supervisor messages)
         user_id: User ID (for user messages)
+        content_type: ContentType enum or string ("text", "tool_result", "agent_response")
+        turn_type: TurnType enum or string ("message", "hitl_question", "hitl_reply")
+        was_successful: Success flag for learning from failures (§2.1 Principle 4)
 
     Returns:
         Updated MemoryContent
     """
     # Import here to avoid circular imports
-    from models.memory import ConversationTurn
+    from models.memory import ContentType, ConversationTurn, TurnRole, TurnType
+
+    # Convert string to enum if needed
+    if isinstance(role, str):
+        role = TurnRole(role)
+    if isinstance(content_type, str):
+        content_type = ContentType(content_type)
+    if isinstance(turn_type, str):
+        turn_type = TurnType(turn_type)
+
+    # Estimate tokens for the content (REQUIRED - never leave at 0)
+    tokens_full = estimate_tokens(content)
+
+    # Extract turn notes for richer retrieval (heuristic for now)
+    notes = extract_turn_notes(content)
 
     turn = ConversationTurn(
         role=role,
@@ -101,6 +272,11 @@ def add_turn_to_history(
         agent_name=agent_name,
         user_id=user_id,
         timestamp=utcnow(),
+        content_type=content_type,
+        turn_type=turn_type,
+        estimated_tokens_full=tokens_full,
+        turn_notes=notes,
+        was_successful=was_successful,
     )
 
     memory_content.conversation_history.append(turn)
@@ -133,21 +309,26 @@ def add_turn_to_history(
 
 def _format_turns_for_summary(turns: list["ConversationTurn"]) -> str:
     """Format conversation turns for summary storage."""
+    from models.memory import TurnRole
+
     parts = []
     for turn in turns:
-        if turn.role == "user":
+        # Handle both full and compact turns
+        content = turn.content or turn.brief_summary or "[content unavailable]"
+
+        if turn.role == TurnRole.USER:
             preview = (
-                turn.content[:SUMMARY_PREVIEW_LENGTH] + "..."
-                if len(turn.content) > SUMMARY_PREVIEW_LENGTH
-                else turn.content
+                content[:SUMMARY_PREVIEW_LENGTH] + "..."
+                if len(content) > SUMMARY_PREVIEW_LENGTH
+                else content
             )
             parts.append(f"User: {preview}")
         else:
             speaker = turn.agent_name or "Agent"
             preview = (
-                turn.content[:SUMMARY_PREVIEW_LENGTH] + "..."
-                if len(turn.content) > SUMMARY_PREVIEW_LENGTH
-                else turn.content
+                content[:SUMMARY_PREVIEW_LENGTH] + "..."
+                if len(content) > SUMMARY_PREVIEW_LENGTH
+                else content
             )
             parts.append(f"{speaker}: {preview}")
     return "\n".join(parts)
@@ -166,7 +347,7 @@ def build_context_for_agent(
 
     This creates a clean conversation context that:
     1. Shows summarized older context if available
-    2. Lists recent conversation turns clearly
+    2. Lists recent conversation turns clearly (using to_context_string for compact support)
     3. Presents quoted context (if the user quoted a specific message)
     4. Presents the current task/request
     5. Optionally adds room awareness (other agents in the team)
@@ -193,19 +374,27 @@ def build_context_for_agent(
 
     # 2. Include recent conversation history
     if memory_content.conversation_history:
+        from models.memory import TurnRole
+
         parts.append("[Recent conversation]")
         for turn in memory_content.conversation_history:
-            if turn.role == "user":
-                parts.append(f"User: {turn.content}")
+            # Use to_context_string() if available (new ConversationTurn)
+            # Fall back to manual formatting for backward compatibility
+            if hasattr(turn, "to_context_string"):
+                parts.append(turn.to_context_string())
+            elif turn.role == TurnRole.USER or turn.role == "user":
+                content = turn.content or "[content unavailable]"
+                parts.append(f"User: {content}")
             else:
                 speaker = turn.agent_name or "Agent"
-                parts.append(f"{speaker}: {turn.content}")
+                content = turn.content or "[content unavailable]"
+                parts.append(f"{speaker}: {content}")
         parts.append("")  # Empty line before current task
 
     # 3. Quoted context (user highlighted specific text from a previous message)
     if quoted_text:
         parts.append("[Quoted context]")
-        parts.append(f"The user is referencing the following specific content:")
+        parts.append("The user is referencing the following specific content:")
         parts.append(f'"{quoted_text}"')
         parts.append("")
 
@@ -253,17 +442,24 @@ def build_minimal_context(
     Returns:
         Minimal context string
     """
+    from models.memory import TurnRole
+
     parts = []
 
     # Only include recent turns
     recent_turns = memory_content.conversation_history[-max_turns:]
     if recent_turns:
         for turn in recent_turns:
-            if turn.role == "user":
-                parts.append(f"User: {turn.content}")
+            # Use to_context_string() if available (new ConversationTurn)
+            if hasattr(turn, "to_context_string"):
+                parts.append(turn.to_context_string())
+            elif turn.role == TurnRole.USER or turn.role == "user":
+                content = turn.content or "[content unavailable]"
+                parts.append(f"User: {content}")
             else:
                 speaker = turn.agent_name or "Agent"
-                parts.append(f"{speaker}: {turn.content}")
+                content = turn.content or "[content unavailable]"
+                parts.append(f"{speaker}: {content}")
         parts.append("")
 
     parts.append(f"User: {current_task}")
@@ -278,17 +474,43 @@ def get_context_stats(memory_content: "MemoryContent") -> dict:
     Returns:
         Dict with context statistics
     """
+    from models.memory import TurnRepresentation
+
     total_chars = 0
+    total_tokens = 0
+    full_turns = 0
+    compact_turns = 0
+
     if memory_content.summary:
         total_chars += len(memory_content.summary)
+
     for turn in memory_content.conversation_history:
-        total_chars += len(turn.content)
+        # Check representation if available (new ConversationTurn)
+        if hasattr(turn, "representation"):
+            if turn.representation == TurnRepresentation.FULL or turn.representation == "full":
+                full_turns += 1
+                if turn.content:
+                    total_chars += len(turn.content)
+            else:
+                compact_turns += 1
+        else:
+            # Legacy turn
+            full_turns += 1
+            if turn.content:
+                total_chars += len(turn.content)
+
+        # Sum token estimates if available
+        if hasattr(turn, "estimated_tokens_full"):
+            total_tokens += turn.estimated_tokens_full
 
     return {
         "history_turns": len(memory_content.conversation_history),
+        "full_turns": full_turns,
+        "compact_turns": compact_turns,
         "has_summary": bool(memory_content.summary),
         "summary_length": len(memory_content.summary) if memory_content.summary else 0,
         "total_chars": total_chars,
+        "total_tokens": total_tokens,
         "has_legacy_text": bool(memory_content.memory_text),
     }
 

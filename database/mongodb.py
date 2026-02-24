@@ -217,6 +217,38 @@ class MongoDB:
             )
         return self.db.a2a_tasks
 
+    @property
+    def conversation_content_collection(self):
+        """
+        Get conversation_content collection for lossless compaction storage.
+
+        This collection stores full content for compacted conversation turns.
+        See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 for schema.
+        """
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.conversation_content
+
+    @property
+    def user_memories_collection(self):
+        """Get user_memories collection for cross-room user preferences."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.user_memories
+
+    @property
+    def agent_memories_collection(self):
+        """Get agent_memories collection for agent performance history."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_memories
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -1606,6 +1638,79 @@ class MongoDB:
             print("Task tracking indexes created successfully on room_agent_messages")
         except Exception as e:
             print(f"Error creating task tracking indexes: {e}")
+
+    async def create_context_memory_indexes(self) -> None:
+        """
+        Create indexes for context memory system collections.
+
+        This creates indexes on:
+        - conversation_content: For lossless compaction storage
+        - user_memories: For user preferences
+        - agent_memories: For agent performance history
+
+        See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 and §9.1 for schema details.
+        Should be called on application startup.
+        """
+        try:
+            # === conversation_content collection ===
+            content_coll = self.conversation_content_collection
+
+            # UNIQUE index for idempotent upsert in compact_room_memory (§6.3)
+            # Ensures crashed-and-retried compaction never creates duplicate documents
+            await content_coll.create_index(
+                [("room_id", 1), ("turn_id", 1)],
+                unique=True,
+                name="room_turn_unique",
+            )
+
+            # Fast room-level queries for content retrieval
+            await content_coll.create_index(
+                [("room_id", 1), ("stored_at", -1)],
+                name="room_stored_at",
+            )
+
+            # Text index on turn_notes for hybrid search (§8.3)
+            # Enables keyword search on compact turns without expanding content
+            await content_coll.create_index(
+                [
+                    ("turn_notes.keywords", "text"),
+                    ("turn_notes.entities", "text"),
+                    ("turn_notes.one_liner", "text"),
+                ],
+                name="turn_notes_text",
+            )
+
+            # TTL index for content expiry (if configured)
+            # Only applies to documents with expires_at set
+            await content_coll.create_index(
+                "expires_at",
+                expireAfterSeconds=0,
+                sparse=True,
+                name="content_ttl",
+            )
+
+            print("Context memory indexes created successfully on conversation_content")
+
+            # === user_memories collection ===
+            user_mem_coll = self.user_memories_collection
+            await user_mem_coll.create_index(
+                "user_id",
+                unique=True,
+                name="user_id_unique",
+            )
+            print("Context memory indexes created successfully on user_memories")
+
+            # === agent_memories collection ===
+            agent_mem_coll = self.agent_memories_collection
+            await agent_mem_coll.create_index(
+                "agent_id",
+                unique=True,
+                name="agent_id_unique",
+            )
+            print("Context memory indexes created successfully on agent_memories")
+
+        except Exception as e:
+            print(f"Error creating context memory indexes: {e}")
 
 
 mongodb = MongoDB()

@@ -1,6 +1,6 @@
 # System Design Review: Hybro Frontend + Multi-Agents Backend
 
-**Date**: February 22, 2026 (updated from Feb 10)
+**Date**: February 23, 2026 (updated from Feb 22)
 **Scope**: Full-stack architecture review covering `hybro-frontend` and `multi-agents-backend`
 
 ---
@@ -690,3 +690,89 @@ These work streams can proceed independently:
 | **HITL Backend** | [HITL Phase 1-5, 7-8] | Backend |
 | **HITL Frontend** | [HITL Phase 6] | Frontend |
 | **Security** | [SDR 2.6], [SDR 2.12] | Security |
+
+---
+
+## 6. Implementation Progress
+
+This section tracks the implementation status of the design items identified above.
+
+### 6.1 Context Memory System (CM Phases)
+
+**Reference**: `CONTEXT_MEMORY_SYSTEM_DESIGN.md`
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| **CM Phase 1: Data Models & Storage** | ✅ COMPLETED | 2026-02-23 | See details below |
+| CM Phase 2: Context Assembly Engine | 🔲 NOT STARTED | - | Depends on Phase 1 |
+| CM Phase 3: Lossless Compaction | 🔲 NOT STARTED | - | Depends on Phase 2 |
+| CM Phase 4: Memory Search | 🔲 NOT STARTED | - | Depends on Phase 3 |
+| CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 |
+
+#### CM Phase 1 Details (Completed 2026-02-23)
+
+**Files Created:**
+- `models/compaction.py` — `StorageType` enum, `ContentReference`, `StoredContent`, `CompactionResult`, `CompactionConfig`
+- `models/context.py` — `SessionContext`, `TokenBudget`
+- `models/search.py` — `MemorySourceType` enum, `MemorySearchConfig`, `MemorySearchResult`, `MemorySearchResponse`
+- `scripts/migrate_room_memories.py` — Migration script for existing data
+
+**Files Modified:**
+- `models/memory.py`:
+  - Added `TurnRole`, `TurnRepresentation`, `ContentType`, `TurnType` enums
+  - Updated `ConversationTurn` to §6.2 canonical shape (added `turn_id`, `representation`, `content_ref`, `content_type`, `turn_type`, `estimated_tokens_full`, `estimated_tokens_compact`, `brief_summary`, `turn_notes`, `was_successful`)
+  - Added `RoomSummary` (Knowledge Block)
+  - Added `RoomFact`, `AgentSuccessRecord`
+  - Added `UserMemory`, `AgentMemory`, `TaskTypeMetrics`, `FailurePattern`
+  - Updated `RoomMemory` with new fields (`conversation_history`, `room_summary`, `room_facts`, `agent_success_history`, `last_activity_at`, `total_messages`, `total_compactions`)
+
+- `common/utils/context_utils.py`:
+  - Added `estimate_tokens(text)` function (tiktoken with char/4 fallback)
+  - Added `extract_turn_notes(content)` function (heuristic extraction with `tags` placeholder)
+  - Updated `add_turn_to_history()` to populate `estimated_tokens_full`, `turn_notes`, and `was_successful` at write time
+  - Updated context building functions to handle compact turns via `to_context_string()`
+
+- `config/settings.py`:
+  - Added token budget settings (`context_model_window`, `context_system_prompt_tokens`, etc.)
+  - Added compaction settings (`compaction_enabled`, `compaction_max_full_turns`, etc.)
+  - Added memory search settings (`memory_search_enabled`, `memory_search_vector_weight`, etc.)
+
+- `database/mongodb.py`:
+  - Added `conversation_content_collection` property
+  - Added `user_memories_collection` property
+  - Added `agent_memories_collection` property
+  - Added `create_context_memory_indexes()` method
+
+**Design Principles Compliance:**
+- §2.1 Principle 4 (Preserve Errors): `was_successful` field added to `ConversationTurn`
+- §6.2 `turn_notes` schema: Now includes `tags: []` placeholder for future LLM extraction
+
+**Migration:**
+Run `python scripts/migrate_room_memories.py --execute` to migrate existing room_memories to the new schema.
+
+### 6.2 HITL Phases
+
+| Phase | Status | Date | Notes |
+|-------|--------|------|-------|
+| HITL Phase 1: Foundation | 🔲 NOT STARTED | - | |
+| HITL Phase 2: V1 Shim | 🔲 NOT STARTED | - | |
+| HITL Phase 3: V2 Queue Integration | 🔲 NOT STARTED | - | |
+| HITL Phase 4: Response Endpoint | 🔲 NOT STARTED | - | |
+| HITL Phase 5: Risk Mitigations | 🔲 NOT STARTED | - | |
+| HITL Phase 6: Frontend | 🔲 NOT STARTED | - | |
+| HITL Phase 7: Turn Recording | 🔲 NOT STARTED | - | Depends on CM Phase 1 ✅ |
+| HITL Phase 8: Legacy Shim Removal | 🔲 NOT STARTED | - | |
+
+### 6.3 SDR Issues
+
+| Issue | Status | Date | Notes |
+|-------|--------|------|-------|
+| SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker |
+| SDR 2.2: Durable Task Queue | 🔲 NOT STARTED | - | |
+| SDR 2.3: httpx client fix | 🔲 NOT STARTED | - | P0 blocker |
+| SDR 2.5: Double-Processing Guard | 🔲 NOT STARTED | - | |
+| SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
+| SDR 2.7: TTL for cancelled_messages | 🔲 NOT STARTED | - | |
+| SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
+| SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-23 | Via CM Phase 1 |
+| SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |
