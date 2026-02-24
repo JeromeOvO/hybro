@@ -704,10 +704,10 @@ This section tracks the implementation status of the design items identified abo
 | Phase | Status | Date | Notes |
 |-------|--------|------|-------|
 | **CM Phase 1: Data Models & Storage** | ✅ COMPLETED | 2026-02-23 | See details below |
-| CM Phase 2: Context Assembly Engine | 🔲 NOT STARTED | - | Depends on Phase 1 |
-| CM Phase 3: Lossless Compaction | 🔲 NOT STARTED | - | Depends on Phase 2 |
+| **CM Phase 2: Context Assembly Engine** | ✅ COMPLETED | 2026-02-23 | See details below |
+| CM Phase 3: Lossless Compaction | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
 | CM Phase 4: Memory Search | 🔲 NOT STARTED | - | Depends on Phase 3 |
-| CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 |
+| CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
 
 #### CM Phase 1 Details (Completed 2026-02-23)
 
@@ -749,6 +749,72 @@ This section tracks the implementation status of the design items identified abo
 
 **Migration:**
 Run `python scripts/migrate_room_memories.py --execute` to migrate existing room_memories to the new schema.
+
+#### CM Phase 2 Details (Completed 2026-02-23)
+
+**Files Created:**
+- `services/context_assembly_service.py` — `ContextAssemblyService` class with:
+  - `build_supervisor_context()` — Budget-aware context for Supervisor LLM (decide_next calls)
+  - `build_agent_execution_context()` — Budget-aware context for individual agent execution
+  - `TruncationReason` enum for tracking truncation causes
+  - `ContextAssemblyResult` dataclass with metrics (tokens, occupancy, truncation info)
+  - `ContextMetrics` dataclass for monitoring
+- `tests/__init__.py` — Tests package initialization
+- `tests/test_context_assembly_service.py` — Unit tests for context assembly (§18 requirement)
+
+**Files Modified:**
+- `common/utils/context_utils.py`:
+  - Updated `build_context_for_agent()` to enforce `MAX_CONTEXT_CHARS` (§17.2 gap fix)
+  - Added `context_occupancy_pct` logging to every context build call (§15 requirement)
+  - Added budget-aware turn selection (removes oldest turns first when over budget)
+  - Added `max_tokens` parameter for explicit token limit control
+  - Fixed: History budget now uses 0.6 (60%) to match §5.2 `conversation_history_pct`
+
+**Key Features Implemented:**
+- **Token Budget Allocation** (§5.2): Uses `TokenBudget` model with configurable allocations
+- **Hard Cap Enforcement** (§17.2): Truncates oldest turns when budget exceeded, logs warning
+- **Stable Prefix / Dynamic Suffix** (§12): KV-cache optimization structure
+  - Stable prefix: Room summary + agent roster + room facts (rarely changes)
+  - Dynamic suffix: Conversation history + current task (changes each request)
+  - Agent registry sorted by name for deterministic ordering (§12.1)
+- **Context Occupancy Monitoring** (§15.1): Full threshold-based logging:
+  - < 70%: Healthy (debug level)
+  - 70-85%: Soft warning (info level, "approaching limit")
+  - 85-90%: Hard cap zone (warning level, truncation)
+  - > 90%: Emergency (error level, "EMERGENCY" tag)
+- **Truncation Metrics**: Tracks `truncation_count`, `turns_truncated`, `truncation_reason`
+- **Cache Prefix Logging** (§15.2): `cache_prefix_tokens` (stable_prefix_tokens) included in all log messages
+
+**Bug Fixes Applied (2026-02-23 Review):**
+1. **Agent registry sorting** (§12.1): Now sorted by `agent_id` (with `name` fallback) for KV-cache stability
+2. **Budget percentage consistency**: Changed 0.7 → 0.6 in `context_utils.py` to match §5.2
+3. **Summary token caching**: Optimized `_select_turns_within_budget` to avoid recalculating summary tokens in loop
+4. **Over-budget edge case**: Added error logging when stable prefix alone exceeds budget
+5. **Cache prefix logging**: Added `stable_prefix_tokens` parameter to `_log_context_metrics`
+6. **Defensive room_facts handling**: Added null check for `room_facts` before iteration
+
+**Bug Fixes Applied (2026-02-23 Third Review):**
+7. **Duplicate warning logs** (Bug #1): Removed explicit `logger.warning` in `build_supervisor_context` — `_log_context_metrics` now handles all truncation logging
+8. **Hard cap enforcement in agent context** (Bug #2, §17.2): Added final hard cap check in `build_agent_execution_context` with turn truncation loop and critical error logging when stable prefix exceeds budget
+9. **Task budget enforcement** (Bug #3, §5.2): `_build_agent_dynamic_suffix` now accepts `task_budget` parameter and truncates task content if it exceeds allocation
+
+**Unit Tests:**
+- `TestTokenBudget`: Budget calculation and allocation tests
+- `TestContextAssemblyService`: Supervisor and agent context building tests
+- `TestTurnSelection`: Turn selection within budget tests
+- `TestOccupancyThresholds`: Logging level verification for each threshold
+- `TestHardCapEnforcement`: Hard cap enforcement and critical error logging tests
+- `TestTaskBudgetEnforcement`: Task budget parameter passing and truncation tests
+
+**Integration:**
+- `ContextAssemblyService` is a new service that can be used alongside existing `build_context_for_agent()`
+- Phase 5 will wire `ContextAssemblyService` into Supervisor V2 loop
+- Existing callers of `build_context_for_agent()` now get budget enforcement automatically
+
+**Known Limitations (Deferred to Future Phases):**
+- User Memory and Agent Memory loading not yet implemented (§5.1 Stage 1 partial)
+  - These memory layers are not yet populated by other parts of the system
+  - Will be added when Phase 4 (Memory Search) is implemented
 
 ### 6.2 HITL Phases
 

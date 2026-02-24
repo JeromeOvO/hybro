@@ -341,6 +341,7 @@ def build_context_for_agent(
     include_system_instruction: bool = True,
     quoted_text: str | None = None,
     room_awareness: str | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Build context string for an agent request (ChatGPT/Claude style).
@@ -353,6 +354,12 @@ def build_context_for_agent(
     5. Optionally adds room awareness (other agents in the team)
     6. Optionally adds agent-specific instructions
 
+    IMPORTANT: This function now enforces MAX_CONTEXT_CHARS and logs context_occupancy_pct
+    as required by CONTEXT_MEMORY_SYSTEM_DESIGN.md §17.2.
+
+    For budget-aware context assembly with KV-cache optimization, use
+    ContextAssemblyService.build_agent_execution_context() instead.
+
     Args:
         memory_content: The room's MemoryContent with conversation history
         current_task: The current user request/task
@@ -360,56 +367,96 @@ def build_context_for_agent(
         include_system_instruction: Whether to add agent instructions at the end
         quoted_text: Text the user highlighted and quoted from a previous message
         room_awareness: Optional room context describing other agents and this agent's role
+        max_tokens: Optional token limit (defaults to MAX_CONTEXT_CHARS / 4)
 
     Returns:
         Formatted context string ready to send to agent
     """
     parts = []
+    total_tokens = 0
+
+    # Calculate effective token limit
+    effective_max_tokens = max_tokens or (MAX_CONTEXT_CHARS // CHARS_PER_TOKEN_ESTIMATE)
 
     # 1. Include summary of older context if exists
     if memory_content.summary and memory_content.summary.strip():
-        parts.append("[Earlier conversation summary]")
-        parts.append(memory_content.summary.strip())
-        parts.append("")  # Empty line for separation
+        summary_tokens = estimate_tokens(memory_content.summary)
+        if total_tokens + summary_tokens < effective_max_tokens:
+            parts.append("[Earlier conversation summary]")
+            parts.append(memory_content.summary.strip())
+            parts.append("")  # Empty line for separation
+            total_tokens += summary_tokens
 
-    # 2. Include recent conversation history
+    # 2. Include recent conversation history (with truncation if needed)
     if memory_content.conversation_history:
         from models.memory import TurnRole
 
-        parts.append("[Recent conversation]")
-        for turn in memory_content.conversation_history:
-            # Use to_context_string() if available (new ConversationTurn)
-            # Fall back to manual formatting for backward compatibility
+        history_parts = ["[Recent conversation]"]
+        history_tokens = estimate_tokens("[Recent conversation]\n")
+
+        # Process turns from oldest to newest, but we'll reverse selection
+        turns_to_include = []
+        for turn in reversed(memory_content.conversation_history):
+            turn_str = ""
             if hasattr(turn, "to_context_string"):
-                parts.append(turn.to_context_string())
+                turn_str = turn.to_context_string()
             elif turn.role == TurnRole.USER or turn.role == "user":
                 content = turn.content or "[content unavailable]"
-                parts.append(f"User: {content}")
+                turn_str = f"User: {content}"
             else:
                 speaker = turn.agent_name or "Agent"
                 content = turn.content or "[content unavailable]"
-                parts.append(f"{speaker}: {content}")
-        parts.append("")  # Empty line before current task
+                turn_str = f"{speaker}: {content}"
+
+            turn_tokens = estimate_tokens(turn_str)
+
+            # Check if adding this turn would exceed history budget (60% per §5.2)
+            # Use 0.6 to match conversation_history_pct in TokenBudget
+            if total_tokens + history_tokens + turn_tokens < effective_max_tokens * 0.6:
+                turns_to_include.insert(0, turn_str)
+                history_tokens += turn_tokens
+            else:
+                # Budget exceeded, stop adding older turns
+                break
+
+        if turns_to_include:
+            history_parts.extend(turns_to_include)
+            history_parts.append("")  # Empty line before current task
+            parts.extend(history_parts)
+            total_tokens += history_tokens
 
     # 3. Quoted context (user highlighted specific text from a previous message)
     if quoted_text:
-        parts.append("[Quoted context]")
-        parts.append("The user is referencing the following specific content:")
-        parts.append(f'"{quoted_text}"')
-        parts.append("")
+        quoted_section = (
+            "[Quoted context]\n"
+            "The user is referencing the following specific content:\n"
+            f'"{quoted_text}"'
+        )
+        quoted_tokens = estimate_tokens(quoted_section)
+        if total_tokens + quoted_tokens < effective_max_tokens:
+            parts.append("[Quoted context]")
+            parts.append("The user is referencing the following specific content:")
+            parts.append(f'"{quoted_text}"')
+            parts.append("")
+            total_tokens += quoted_tokens
 
     # 4. Room awareness (other agents in the team and this agent's role)
     if room_awareness:
-        parts.append(room_awareness)
-        parts.append("")
+        awareness_tokens = estimate_tokens(room_awareness)
+        if total_tokens + awareness_tokens < effective_max_tokens:
+            parts.append(room_awareness)
+            parts.append("")
+            total_tokens += awareness_tokens
 
-    # 5. Current task/request
+    # 5. Current task/request (always included)
+    task_section = f"[Current request]\nUser: {current_task}"
+    task_tokens = estimate_tokens(task_section)
     parts.append("[Current request]")
     parts.append(f"User: {current_task}")
+    total_tokens += task_tokens
 
     # 6. Agent instruction (optional)
     if include_system_instruction and agent_name:
-        parts.append("")
         instruction = (
             f"You are {agent_name}. Execute the current request above and provide concrete results. "
             "Do NOT just describe or plan what should be done - actually complete the task and deliver the output. "
@@ -420,7 +467,24 @@ def build_context_for_agent(
                 " Pay special attention to the quoted context — "
                 "the user is asking about or responding to that specific content."
             )
-        parts.append(instruction)
+        instruction_tokens = estimate_tokens(instruction)
+        if total_tokens + instruction_tokens < effective_max_tokens:
+            parts.append("")
+            parts.append(instruction)
+            total_tokens += instruction_tokens
+
+    # Log context occupancy (§15 requirement)
+    occupancy_pct = (total_tokens / effective_max_tokens) * 100
+    if occupancy_pct > 85:
+        logger.warning(
+            f"Context occupancy HIGH: {occupancy_pct:.1f}% "
+            f"({total_tokens}/{effective_max_tokens} tokens)"
+        )
+    else:
+        logger.debug(
+            f"Context occupancy: {occupancy_pct:.1f}% "
+            f"({total_tokens}/{effective_max_tokens} tokens)"
+        )
 
     return "\n".join(parts)
 
