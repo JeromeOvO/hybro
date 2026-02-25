@@ -669,6 +669,177 @@ class RoomMemoryService:
             agent_name=agent_name,
         )
 
+    async def add_synthesis_to_history(
+        self,
+        room_id: str,
+        synthesis_text: str,
+        trajectory: "SupervisorTrajectory | None" = None,
+    ) -> str | None:
+        """
+        Add supervisor synthesis text to room conversation history (§11.3).
+
+        Creates a SUPERVISOR-role turn with the synthesis content, persists it,
+        and returns the new turn_id on success (needed by update_room_summary
+        to populate RoomSummary.updated_after_turn_id per §4.2).
+
+        When trajectory is provided, agent contributions are extracted into the
+        turn for richer turn_notes (forward-compatibility with Phase 4B search).
+
+        Args:
+            room_id: The room ID
+            synthesis_text: The synthesis text from the supervisor
+            trajectory: Optional trajectory for agent contribution extraction
+
+        Returns:
+            The new turn_id if successfully persisted, None otherwise
+        """
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            logger.error(
+                "RoomMemoryService.add_synthesis_to_history: "
+                "Room memory not found for room %s", room_id,
+            )
+            return None
+
+        if room_memory.memory_content:
+            room_memory.memory_content = migrate_legacy_memory(
+                room_memory.memory_content
+            )
+
+        # Enrich synthesis content with trajectory agent contributions
+        enriched_content = synthesis_text
+        if trajectory and trajectory.entries:
+            agent_contributions = []
+            for entry in trajectory.entries:
+                for result in getattr(entry, "results", []):
+                    if result.success and result.agent_name:
+                        task_summary = (result.task or "")[:100]
+                        agent_contributions.append(
+                            f"{result.agent_name}: {task_summary}"
+                        )
+            if agent_contributions:
+                contributions_text = "; ".join(agent_contributions[:5])
+                enriched_content = (
+                    f"{synthesis_text}\n\n"
+                    f"[Agent contributions: {contributions_text}]"
+                )
+
+        room_memory.memory_content = add_turn_to_history(
+            memory_content=room_memory.memory_content,
+            role="supervisor",
+            content=enriched_content,
+            turn_type="message",
+        )
+
+        # Grab the turn_id of the just-appended synthesis turn
+        synthesis_turn_id: str | None = None
+        if room_memory.memory_content and room_memory.memory_content.conversation_history:
+            synthesis_turn_id = room_memory.memory_content.conversation_history[-1].turn_id
+
+        success = await self.database_service.update_room_memory_by_room_id(
+            room_id, room_memory
+        )
+        if not success:
+            logger.error(
+                "RoomMemoryService.add_synthesis_to_history: "
+                "Failed to persist synthesis turn for room %s", room_id,
+            )
+            return None
+        return synthesis_turn_id
+
+    async def update_room_summary(
+        self,
+        room_id: str,
+        synthesis_text: str,
+        synthesis_turn_id: str | None = None,
+    ) -> bool:
+        """
+        Update RoomMemory.room_summary using LLM extraction from synthesis text (§9, §11.3).
+
+        Sends the synthesis text to a fast LLM with JSON mode to extract structured
+        room summary fields. On any failure, the existing summary is preserved.
+
+        Args:
+            room_id: The room ID
+            synthesis_text: The synthesis text to extract summary from
+            synthesis_turn_id: The turn_id of the synthesis that triggered this update
+                (populates RoomSummary.updated_after_turn_id per §4.2)
+
+        Returns:
+            True if successfully updated, False if extraction or persistence failed
+        """
+        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            logger.warning(
+                "RoomMemoryService.update_room_summary: "
+                "Room memory not found for room %s", room_id,
+            )
+            return False
+
+        extraction_prompt = (
+            "Extract structured room summary fields from the following synthesis. "
+            "Return ONLY valid JSON with these keys:\n"
+            '- "current_goal": string or null — what the user/room is trying to accomplish\n'
+            '- "key_decisions": list of strings — decisions that should persist\n'
+            '- "open_questions": list of strings — unresolved questions or blockers\n'
+            '- "recent_agent_contributions": list of strings — last 3-5 agent result summaries\n'
+            '- "important_constraints": list of strings — hard constraints stated\n\n'
+            f"Synthesis:\n{synthesis_text}"
+        )
+
+        try:
+            extracted = await self.openai_service.call_supervisor_llm_json(
+                system_prompt="You extract structured information from text. Respond with valid JSON only.",
+                user_prompt=extraction_prompt,
+                model="gpt-4o-mini",
+            )
+        except Exception as e:
+            logger.warning(
+                "RoomMemoryService.update_room_summary: "
+                "LLM extraction failed for room %s: %s", room_id, e,
+            )
+            return False
+
+        from models.memory import RoomSummary
+
+        existing = room_memory.room_summary or RoomSummary()
+        extracted_goal = extracted.get("current_goal")
+        extracted_decisions = extracted.get("key_decisions")
+        extracted_questions = extracted.get("open_questions")
+        extracted_contributions = extracted.get("recent_agent_contributions")
+        extracted_constraints = extracted.get("important_constraints")
+
+        room_memory.room_summary = RoomSummary(
+            current_goal=extracted_goal if extracted_goal is not None else existing.current_goal,
+            key_decisions=extracted_decisions if extracted_decisions is not None else existing.key_decisions,
+            open_questions=extracted_questions if extracted_questions is not None else existing.open_questions,
+            recent_agent_contributions=(
+                extracted_contributions if extracted_contributions is not None
+                else existing.recent_agent_contributions
+            ),
+            important_constraints=(
+                extracted_constraints if extracted_constraints is not None
+                else existing.important_constraints
+            ),
+            last_updated_at=utcnow(),
+            updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
+        )
+
+        success = await self.database_service.update_room_memory_by_room_id(
+            room_id, room_memory
+        )
+        if success:
+            logger.info(
+                "RoomMemoryService.update_room_summary: "
+                "Updated room summary for room %s", room_id,
+            )
+        else:
+            logger.error(
+                "RoomMemoryService.update_room_summary: "
+                "Failed to persist room summary for room %s", room_id,
+            )
+        return success
+
 
 # Singleton exports
 chat_memory_service = ChatMemoryService()

@@ -256,6 +256,10 @@ class RoomFact(BaseModel):
     expires_at: datetime | None = None  # Optional expiry for time-sensitive facts
 
 
+# Type alias: design §4.3 specifies UserFact; structurally identical to RoomFact.
+UserFact = RoomFact
+
+
 class AgentSuccessRecord(BaseModel):
     """
     Track an agent's success history in a room.
@@ -387,7 +391,7 @@ class UserMemory(BaseModel):
     communication_style: str | None = None  # Detected style
 
     # Cross-room facts
-    user_facts: list[RoomFact] = Field(default_factory=list)
+    user_facts: list[UserFact] = Field(default_factory=list)
 
     # Metadata
     created_at: datetime = Field(default_factory=utcnow)

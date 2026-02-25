@@ -1210,3 +1210,49 @@ class TestWriteBackPath:
             t.representation == TurnRepresentation.COMPACT
             for t in room_memory.memory_content.conversation_history
         )
+
+
+# =============================================================================
+# Test: Compact turn eviction by window trimming in add_turn_to_history
+# =============================================================================
+
+
+class TestCompactTurnEviction:
+    """Verify that compact turns produce meaningful summaries when evicted."""
+
+    def test_compact_turn_eviction_uses_to_context_string(self):
+        """When add_turn_to_history evicts a COMPACT turn from the window,
+        the summary should contain the brief_summary + pointer, not
+        '[content unavailable]'.
+        """
+        from common.utils.context_utils import add_turn_to_history, MAX_HISTORY_TURNS
+
+        memory = MemoryContent()
+
+        compact_turn = ConversationTurn(
+            role=TurnRole.AGENT,
+            agent_name="CodeAgent",
+            content=None,
+            representation=TurnRepresentation.COMPACT,
+            brief_summary="Implemented login flow",
+            content_ref=ContentReference(
+                storage_type=StorageType.MONGODB,
+                collection="conversation_content",
+                document_id="abc123",
+            ),
+            estimated_tokens_full=500,
+            estimated_tokens_compact=20,
+        )
+
+        memory.conversation_history = [compact_turn]
+
+        for i in range(MAX_HISTORY_TURNS):
+            add_turn_to_history(
+                memory_content=memory,
+                role="user",
+                content=f"Message {i}",
+            )
+
+        assert memory.summary is not None
+        assert "[content unavailable]" not in memory.summary
+        assert "Implemented login flow" in memory.summary

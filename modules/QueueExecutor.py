@@ -514,17 +514,13 @@ class QueueExecutor:
         quoted_text: str | None = None,
     ) -> ProcessingResult:
         """Original inline implementation — kept as fallback during migration."""
-        from models.memory import MemoryContent
         from models.request import RoomCenterAgentMessageRequest
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        room_memory_content = (
-            room_memory.memory_content if room_memory else MemoryContent()
-        )
 
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,
+            room_memory=room_memory,
             quoted_text=quoted_text,
         )
 

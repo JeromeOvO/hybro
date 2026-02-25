@@ -103,7 +103,45 @@ class CompactionService:
 
         return False
 
-    async def compact_room_memory(self, room_id: str) -> CompactionResult:
+    async def compact_if_needed(self, room_id: str) -> CompactionResult | None:
+        """Check and compact in a single pass, avoiding redundant DB loads.
+
+        Returns the CompactionResult if compaction ran, or None if it was
+        not needed (or disabled).
+        """
+        config = compaction_config
+        if not config.enabled:
+            return None
+
+        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            return None
+
+        history = room_memory.get_conversation_history()
+        if not history:
+            return None
+
+        full_turns = [
+            t for t in history if t.representation == TurnRepresentation.FULL
+        ]
+        if not full_turns:
+            return None
+
+        needs = len(full_turns) > config.max_full_turns
+        if not needs:
+            token_estimate = sum(t.estimated_tokens_full for t in full_turns)
+            needs = token_estimate > config.max_total_tokens
+
+        if not needs:
+            return None
+
+        return await self.compact_room_memory(room_id, room_memory=room_memory)
+
+    async def compact_room_memory(
+        self,
+        room_id: str,
+        room_memory: RoomMemory | None = None,
+    ) -> CompactionResult:
         """
         Compact older conversation turns by replacing full content with pointers.
 
@@ -111,7 +149,7 @@ class CompactionService:
         and can be retrieved on demand.
 
         Process:
-        1. Load room memory
+        1. Load room memory (or reuse pre-loaded instance)
         2. Identify turns to compact (older than preserve_recent_turns)
         3. For each turn: upsert full content (idempotent) -> replace with pointer
         4. Update room memory with compact representations
@@ -125,6 +163,7 @@ class CompactionService:
 
         Args:
             room_id: The room ID to compact
+            room_memory: Optional pre-loaded RoomMemory to avoid a redundant DB read
 
         Returns:
             CompactionResult with statistics
@@ -139,7 +178,8 @@ class CompactionService:
                 errors=["Compaction is disabled"],
             )
 
-        room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
+        if not room_memory:
+            room_memory = await self.db_service.get_room_memory_by_room_id(room_id)
         if not room_memory:
             return CompactionResult(
                 room_id=room_id,
@@ -191,8 +231,8 @@ class CompactionService:
             try:
                 did_compact = await self._compact_single_turn(turn, room_id)
                 if did_compact:
-                    tokens_saved += (
-                        turn.estimated_tokens_full - turn.estimated_tokens_compact
+                    tokens_saved += max(
+                        0, turn.estimated_tokens_full - turn.estimated_tokens_compact
                     )
                     compacted_count += 1
             except Exception as e:
@@ -215,14 +255,22 @@ class CompactionService:
             else:
                 room_memory.conversation_history = history
 
-            await self.db_service.update_room_memory_by_room_id(
+            save_success = await self.db_service.update_room_memory_by_room_id(
                 room_id, room_memory
             )
 
-            logger.info(
-                f"CompactionService: Compacted {compacted_count} turns for room {room_id}, "
-                f"saved ~{tokens_saved} tokens"
-            )
+            if save_success:
+                logger.info(
+                    f"CompactionService: Compacted {compacted_count} turns for room {room_id}, "
+                    f"saved ~{tokens_saved} tokens"
+                )
+            else:
+                error_msg = (
+                    f"CompactionService: Compacted {compacted_count} turns in-memory "
+                    f"but failed to persist for room {room_id} — will retry next cycle"
+                )
+                logger.warning(error_msg)
+                errors.append(error_msg)
 
         return CompactionResult(
             room_id=room_id,
@@ -417,7 +465,7 @@ class CompactionService:
 
         full_tokens = sum(t.estimated_tokens_full for t in full_turns)
         compact_tokens_saved = sum(
-            t.estimated_tokens_full - t.estimated_tokens_compact
+            max(0, t.estimated_tokens_full - t.estimated_tokens_compact)
             for t in compact_turns
         )
 

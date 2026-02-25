@@ -1098,6 +1098,71 @@ class RoomMessageCenter:
         if result.status != RunStatus.PAUSED:
             self.sse_manager.remove_token(user_message_id)
 
+        # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
+        terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
+        if result.status in terminal_statuses:
+            # Add synthesis text to room memory history
+            if result.status == RunStatus.COMPLETED and result.synthesis_text:
+                try:
+                    from services.memory_service import room_memory_service
+
+                    synthesis_turn_id = await room_memory_service.add_synthesis_to_history(
+                        room_id=room_id,
+                        synthesis_text=result.synthesis_text,
+                        trajectory=result.trajectory,
+                    )
+                    if synthesis_turn_id:
+                        # Inline await: summary update MUST complete before
+                        # compaction to avoid a last-writer-wins race on
+                        # RoomMemory (both do full $set saves).  The LLM call
+                        # adds ~1-2 s, but this runs after SSE completion is
+                        # already sent, so latency is invisible to the user.
+                        await self._update_room_summary_safe(
+                            room_id, result.synthesis_text, synthesis_turn_id
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Failed to add synthesis to history: %s", e
+                    )
+
+            # Inline await: compaction MUST run while per-room lock is held (§6.9).
+            # A fire-and-forget task would race with the next message's writes.
+            await self._trigger_compaction_safe(room_id)
+
+    # ------------------------------------------------------------------
+    # Post-loop helpers (fire-and-forget tasks)
+    # ------------------------------------------------------------------
+
+    async def _update_room_summary_safe(
+        self, room_id: str, synthesis_text: str, synthesis_turn_id: str | None = None
+    ) -> None:
+        """Wrapper for room summary update (§9). Awaited before compaction."""
+        try:
+            from services.memory_service import room_memory_service
+
+            await room_memory_service.update_room_summary(
+                room_id=room_id,
+                synthesis_text=synthesis_text,
+                synthesis_turn_id=synthesis_turn_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background room summary update failed for %s: %s",
+                room_id, e,
+            )
+
+    async def _trigger_compaction_safe(self, room_id: str) -> None:
+        """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
+        try:
+            from services.compaction_service import compaction_service
+
+            await compaction_service.compact_if_needed(room_id)
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background compaction failed for %s: %s",
+                room_id, e,
+            )
+
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
     # ------------------------------------------------------------------

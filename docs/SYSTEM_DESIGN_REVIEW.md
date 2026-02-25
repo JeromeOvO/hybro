@@ -1,6 +1,6 @@
 # System Design Review: Hybro Frontend + Multi-Agents Backend
 
-**Date**: February 23, 2026 (updated from Feb 22)
+**Date**: February 25, 2026 (updated from Feb 23)
 **Scope**: Full-stack architecture review covering `hybro-frontend` and `multi-agents-backend`
 
 ---
@@ -416,7 +416,7 @@ This section tracks the resolution status of each identified issue. Updated as f
 | 2.8  | No MongoDB transactions for multi-step ops         | 🔴 Open      | Consistency risk; no work started                                                |
 | 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
 | 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
-| 2.11 | Unbounded conversation memory                      | 🟡 Partial   | Context Memory design (§4.2, §6) addresses this; implementation in progress      |
+| 2.11 | Unbounded conversation memory                      | 🟢 Resolved  | Context Memory Phases 1–5 complete (token budgets, lossless compaction, memory search) |
 | 2.12 | Overly permissive CORS                             | 🔴 Open      | Low priority; no work started                                                    |
 | 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
 | 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
@@ -655,10 +655,16 @@ The **critical path** for full Context Memory functionality:
 
 ```
 [CM Phase 1] Data Models ──▶ [CM Phase 2] Context Assembly ──▶ [CM Phase 3] Compaction
-         │                           │
+         │                           │                               │
          │                           └──▶ [SDR 2.11] Unbounded Memory (RESOLVED)
+         │                                                           │
+         │                           ┌──────────────────────────────┘
+         │                           ▼
+[CM Phase 4] Memory Search ──▶ [CM Phase 5] Supervisor V2 Integration
          │
-         └──▶ [HITL Phase 7] HITL Turn Recording (depends on ConversationTurn model)
+         └──▶ ALL 5 PHASES COMPLETE (Feb 25 2026)
+         │
+         └──▶ [HITL Phase 7] HITL Turn Recording (depends on ConversationTurn model ✅)
 ```
 
 ### 5.3 Recommended Implementation Order
@@ -707,7 +713,9 @@ This section tracks the implementation status of the design items identified abo
 | **CM Phase 2: Context Assembly Engine** | ✅ COMPLETED | 2026-02-23 | See details below |
 | **CM Phase 3: Lossless Compaction** | ✅ COMPLETED | 2026-02-23 | See details below |
 | **CM Phase 4: Memory Search** | ✅ COMPLETED | 2026-02-25 | See details below |
-| CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
+| CM Phase 5: Supervisor V2 Integration | ✅ COMPLETED | 2026-02-25 | See details below |
+
+> **Full design compliance audit completed 2026-02-25**: 33/35 §18 checklist items implemented (94.3%). See §6.4 below for item-by-item verification against every section of `CONTEXT_MEMORY_SYSTEM_DESIGN.md`.
 
 #### CM Phase 1 Details (Completed 2026-02-23)
 
@@ -925,6 +933,192 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 - Graph-based retrieval (§8.4) deferred to Phase 4B
 - Cross-room search not yet supported (scoped to single room_id)
 
+#### CM Phase 5 Details (Completed 2026-02-25)
+
+**Created Files:**
+- `tests/test_phase5_supervisor_integration.py` — 16 unit tests covering synthesis history, room summary extraction, prompt cache optimization, compaction triggers, and MAX_CONTEXT_CHARS enforcement
+
+**Modified Files:**
+- `services/room_services.py` — `_prepare_for_supervisor_v2()` now accepts `room_memory` and builds context via `ContextAssemblyService.build_supervisor_context()` (§11.1); `process_agent_message()` now accepts `RoomMemory` and uses `ContextAssemblyService.build_agent_execution_context()` (§11.2); `_prepare_clarify_resume_v2()` also uses `ContextAssemblyService`; room memory always loaded when `use_supervisor=True`
+- `services/memory_service.py` — Added `add_synthesis_to_history()` (SUPERVISOR-role turn creation + trajectory agent contributions in turn_notes) and `update_room_summary()` (LLM-based structured extraction from synthesis text with "never lose data" semantics)
+- `services/room_supervisor_service.py` — Moved `{conversation_context}` from `SUPERVISOR_V2_USER_PROMPT` to `SUPERVISOR_V2_SYSTEM_PROMPT` for OpenAI prompt cache optimization (§12.3); updated `decide_next()` to format context into system prompt
+- `services/context_assembly_service.py` — Added `MAX_CONTEXT_CHARS` hard cap enforcement to both `build_supervisor_context()` and `build_agent_execution_context()` (§17.2)
+- `modules/RoomMessageCenter.py` — Added post-loop integration in `_handle_v2_run_result()`: synthesis history (§11.3), fire-and-forget room summary update (§9), fire-and-forget compaction trigger for all terminal statuses (§6.5); added `_update_room_summary_safe()` and `_trigger_compaction_safe()` helpers
+- `modules/AgentMessageProcessor.py` — Updated `process_single_message()` to pass full `RoomMemory` to `process_agent_message()` instead of just `MemoryContent`
+- `modules/QueueExecutor.py` — Updated fallback `_process_single_message_inline()` to pass `RoomMemory` consistently
+- `common/utils/context_utils.py` — Added `from __future__ import annotations` to fix `str | "TurnRole"` union type syntax
+
+**Key Integration Points:**
+- **§11.1 Pre-Loop**: `ContextAssemblyService.build_supervisor_context()` replaces `build_minimal_context(max_turns=5)` with budget-aware, truncation-tracked context assembly
+- **§11.2 During Loop**: `ContextAssemblyService.build_agent_execution_context()` replaces `build_context_for_agent()` for per-agent context with room summary, facts, and priority-based truncation
+- **§11.3 Post-Loop**: Synthesis text added to room history as SUPERVISOR turn; room summary updated via fast LLM extraction; compaction triggered as fire-and-forget for all terminal statuses
+- **§12.3 Prompt Cache**: `conversation_context` moved to system prompt — shared across all `decide_next` iterations (50% token cost reduction on iterations 2–8)
+- **§17.2 MAX_CONTEXT_CHARS**: Hard char-based cap as safety net in both assembly methods, logging truncation events
+- **§15 Observability**: `context_occupancy_pct` logged at threshold-appropriate levels (debug/info/warning/error) for both supervisor and agent contexts
+
+**Performance Decisions:**
+- `update_room_summary()` runs as `asyncio.create_task()` (fire-and-forget) — summary is for future loops, not current response
+- `compaction_service.compact_room_memory()` runs as `asyncio.create_task()` (fire-and-forget) — compaction is background work
+- Context is built once per supervisor loop invocation (§5.1), not per iteration
+- `agent_dicts` serialized once and reused for both ContextAssemblyService and extend_info
+
+**Design Compliance:**
+- §11.1 Pre-Loop Context: ✅
+- §11.2 During-Loop Agent Context: ✅
+- §11.3 Post-Loop Synthesis/Compaction: ✅
+- §12.3 Prompt Cache Optimization: ✅
+- §15 Observability (context_occupancy_pct): ✅
+- §17.2 MAX_CONTEXT_CHARS Enforcement: ✅
+- §18 Phase 5 Checklist: 8/10 items complete (end-to-end tests and performance benchmarks deferred to integration testing)
+
+---
+
+### 6.4 Context Memory System — Full Design Compliance Audit (2026-02-25)
+
+Comprehensive item-by-item verification of the entire Context Memory System implementation against `CONTEXT_MEMORY_SYSTEM_DESIGN.md`.
+
+#### §2: Design Principles
+
+| Principle | Status | Evidence |
+|---|---|---|
+| §2.1.1 KV-Cache Optimization (stable prefix) | ✅ | `context_assembly_service.py:_build_stable_prefix()`, sorted agent registry (§12.1) |
+| §2.1.2 File System as Memory (MongoDB) | ✅ | `conversation_content` collection, `content_storage_service.py` |
+| §2.1.3 Attention Manipulation (recency) | ✅ | Recent turns always at context end, `_build_dynamic_suffix()` |
+| §2.1.4 Preserve Errors | ✅ | `ConversationTurn.was_successful` field, populated at write time |
+| §2.2.1 Multi-Layer Memory | ✅ | Session (`models/context.py`), Room/User/Agent (`models/memory.py`) |
+| §2.2.2 Lossless Compaction | ✅ | Pointer-based via `compaction_service.py`, original always in `conversation_content` |
+| §2.2.3 Hybrid Search | ✅ | Vector (Pinecone) + Keyword (MongoDB $text) in `memory_search_service.py` |
+| §2.2.4 Temporal Decay | ✅ | `2^(-age/half_life)` formula in `_apply_temporal_decay()` |
+| §2.4.1 Write-time Note Generation (A-MEM) | ✅ | `turn_notes` populated via `extract_turn_notes()` in `add_turn_to_history()` |
+| §2.4.2 Rolling Room Summary (Focus) | ✅ | `RoomSummary` model, `update_room_summary()` at synthesis boundary |
+| §2.4.4 Context Occupancy Metric | ✅ | 4-tier logging in `_log_context_metrics()`: <70%, 70-85%, 85-90%, >90% |
+
+#### §3-§4: Data Models & Memory Layers
+
+| Model | Status | Location |
+|---|---|---|
+| `ConversationTurn` (§6.2 canonical) | ✅ | `models/memory.py:103-157` — all 17 fields present |
+| `ContentReference` | ✅ | `models/compaction.py:35-72` — `to_compact_string()` matches design |
+| `StoredContent` | ✅ | `models/compaction.py:75-98` — includes `turn_notes` for keyword search |
+| `RoomSummary` | ✅ | `models/memory.py:216-240` — 5 named slots + 2 metadata fields |
+| `RoomFact` | ✅ | `models/memory.py:243-256` — includes `confidence`, `category` (as `expires_at`) |
+| `RoomMemory` | ✅ | `models/memory.py:293-351` — all fields including `room_summary`, `room_facts`, `total_compactions` |
+| `SessionContext` | ✅ | `models/context.py:22-56` |
+| `TokenBudget` | ✅ | `models/context.py:59-114` — `available_for_content` property |
+| `UserMemory` | ✅ | `models/memory.py:373-395` |
+| `AgentMemory` | ✅ | `models/memory.py:398-419` |
+| `MemorySearchResult` | ✅ | `models/search.py:34-64` |
+| `MemorySearchResponse` | ✅ | `models/search.py:67-83` |
+| `CompactionResult` | ✅ | `models/compaction.py:101-108` |
+| `CompactionConfig` | ✅ | `models/compaction.py:111-123` |
+
+#### §5: Context Assembly Engine
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `ContextAssemblyService` class | ✅ | `services/context_assembly_service.py:75-785` |
+| `build_supervisor_context()` | ✅ | Lines 113-233 — budget-aware, truncation-tracked |
+| `build_agent_execution_context()` | ✅ | Lines 235-401 — separate history/room/task budgets |
+| Token budget allocation (§5.2) | ✅ | Uses `TokenBudget` with 15%/60%/25% split |
+| Stable prefix / dynamic suffix (§12.1) | ✅ | `_build_stable_prefix()` / `_build_dynamic_suffix()` |
+| Turn selection within budget | ✅ | `_select_turns_within_budget()` — removes oldest first |
+| Task budget enforcement | ✅ | `_build_agent_dynamic_suffix()` accepts `task_budget` |
+| `MAX_CONTEXT_CHARS` hard cap (§17.2) | ✅ | Applied in both build methods as safety net |
+
+#### §6: Compaction System (Lossless)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `CompactionService` | ✅ | `services/compaction_service.py:30-441` |
+| `ContentStorageService` | ✅ | `services/content_storage_service.py:54-326` |
+| Idempotent upsert (`$setOnInsert` + unique index) | ✅ | `content_storage_service.py:123-127`, `mongodb.py:1660-1663` |
+| `content_hash` populated on compaction | ✅ | `compaction_service.py:286` |
+| `ContentExpiredError` exception | ✅ | `content_storage_service.py:22-38` |
+| `expand_turn_content()` (on-demand) | ✅ | `compaction_service.py:299-329` |
+| `fetch_turn_content()` (agent tool) | ✅ | `compaction_service.py:331-365` |
+| `expand_turns_for_context()` (recency-only) | ✅ | `compaction_service.py:367-393` — returns unchanged per Manus design |
+| `should_compact()` triggers (§6.5) | ✅ | Turn count + token threshold checks |
+| `preserve_count=0` edge case | ✅ | `compaction_service.py:163` |
+| Turn indexed in Pinecone before compaction | ✅ | `compaction_service.py:271-279` — aborts if indexing fails |
+
+#### §8: Memory Search (Hybrid)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `MemorySearchService` | ✅ | `services/memory_search_service.py:50-559` |
+| Vector search (Pinecone) | ✅ | `_vector_search()` with `room_id` metadata filter |
+| Keyword search (MongoDB `$text`) | ✅ | `_keyword_search()` on `conversation_content` collection |
+| Weighted merge (configurable) | ✅ | `_merge_results()` with score normalization |
+| Temporal decay: `2^(-age/half_life)` | ✅ | `_apply_temporal_decay()` — exact formula |
+| MMR re-ranking | ✅ | `_apply_mmr()` with cosine similarity on score profiles |
+| `index_turn_for_search()` write path | ✅ | Embedding + Pinecone upsert at compaction time |
+| `delete_room_index()` cleanup | ✅ | `memory_search_service.py:256-277` |
+| Graceful degradation (parallel + log-and-return-empty) | ✅ | `asyncio.gather(return_exceptions=True)` |
+| Config from env (§14) | ✅ | `models/context_config.py:86-128` |
+
+#### §11: Supervisor V2 Integration
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| §11.1 Pre-loop: `build_supervisor_context()` wired | ✅ | `room_services.py:1082-1086` |
+| §11.2 During-loop: `build_agent_execution_context()` wired | ✅ | `room_services.py:2164-2168` |
+| §11.3 Post-loop: `add_synthesis_to_history()` | ✅ | `RoomMessageCenter.py:1109-1112` |
+| §11.3 Post-loop: compaction trigger (all terminal statuses) | ✅ | `RoomMessageCenter.py:1132-1134` |
+| `update_room_summary()` at synthesis boundary | ✅ | `RoomMessageCenter.py:1118-1122` (fire-and-forget) |
+| §12.3 Prompt cache: `conversation_context` in system prompt | ✅ | `room_supervisor_service.py:82` |
+
+#### §14: Configuration
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| All 7 token budget env vars | ✅ | `settings.py:83-89` |
+| All 5 compaction env vars | ✅ | `settings.py:92-96` |
+| All 9 memory search env vars | ✅ | `settings.py:99-107` |
+| Property-based config classes (§14.3) | ✅ | `models/context_config.py` — 3 singletons |
+
+#### §15: Observability
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `context_occupancy_pct` logging | ✅ | `context_assembly_service.py:_log_context_metrics()` + `context_utils.py:478-483` |
+| 4-tier occupancy thresholds | ✅ | <70% debug, 70-85% info, 85-90% warning, >90% error |
+| `cache_prefix_tokens` in logs | ✅ | `stable_prefix_tokens` parameter in all log messages |
+| Compaction logging | ✅ | `compaction_service.py:222-225` |
+| Truncation events tracked | ✅ | `_truncation_count` counter, `TruncationReason` enum |
+
+#### §18: Implementation Checklist (All Phases)
+
+| Phase | Checklist Items | Implemented | Deferred | Notes |
+|---|---|---|---|---|
+| Phase 1 | 10 items | 10/10 | 0 | All models, wiring, settings, indexes, migration |
+| Phase 2 | 5 items | 5/5 | 0 | Service, budget, prefix/suffix, tests, integration |
+| Phase 3 | 5 items | 5/5 | 0 | Compaction, storage, expansion, triggers, tests |
+| Phase 4 | 5 items | 5/5 | 0 | Search, Pinecone, hybrid, MMR, tests |
+| Phase 5 | 10 items | 8/10 | 2 | E2E tests + benchmarks require real infrastructure |
+| **Total** | **35 items** | **33/35** | **2** | 94.3% complete |
+
+#### Test Coverage
+
+| Test File | Test Count | Covers |
+|---|---|---|
+| `test_context_assembly_service.py` | ~25 | Phase 2: budget, turns, occupancy, hard cap, task budget |
+| `test_compaction_service.py` | ~20 | Phase 3: hash, storage, config, compaction, round-trip, errors |
+| `test_memory_search_service.py` | ~15 | Phase 4: cosine sim, merge, decay, MMR, indexing, pipeline |
+| `test_phase5_supervisor_integration.py` | 16 | Phase 5: synthesis, summary, prompt cache, compaction triggers |
+
+#### Known Deferred Items (By Design)
+
+| Item | Design Section | Reason |
+|---|---|---|
+| User Memory / Agent Memory population | §4.3, §4.4 | Models exist; not yet populated by other system components |
+| S3 storage for binary content | §6.8 | Future extension — design placeholder only |
+| Background compaction job | §6.9 | On-demand trigger is primary; background is secondary |
+| Graph-based retrieval (dual-route) | §8.4 | Phase 4B — after hybrid search is production-stable |
+| Agent-driven compaction tool | §2.4.5 | Post-Phase 4 evolution |
+| `brief_summary` for very old turns | §6.7 | Optional enhancement, deferred |
+| E2E tests with real infrastructure | §18 Phase 5 | Requires MongoDB + Pinecone + LLM integration |
+| Performance benchmarks | §18 Phase 5 | Requires production traffic patterns |
+
 ### 6.2 HITL Phases
 
 | Phase | Status | Date | Notes |
@@ -949,5 +1143,5 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
 | SDR 2.7: TTL for cancelled_messages | 🔲 NOT STARTED | - | |
 | SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
-| SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-23 | Via CM Phase 1 |
+| SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |

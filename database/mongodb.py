@@ -1291,7 +1291,7 @@ class MongoDB:
             {"memory_id": memory_id},
             {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
         )
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
         """
@@ -1312,7 +1312,7 @@ class MongoDB:
             {"room_id": room_id},
             {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
         )
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
         """

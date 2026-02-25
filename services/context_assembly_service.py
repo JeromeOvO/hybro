@@ -18,7 +18,7 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §5 for design details.
 from dataclasses import dataclass
 from enum import Enum
 
-from common.utils.context_utils import estimate_tokens
+from common.utils.context_utils import MAX_CONTEXT_CHARS, estimate_tokens
 from common.utils.logger import get_logger
 from config.settings import settings
 from models.context import TokenBudget
@@ -193,6 +193,19 @@ class ContextAssemblyService:
         # Assemble final context
         context = f"{stable_prefix}\n\n{dynamic_suffix}" if stable_prefix else dynamic_suffix
 
+        # Hard cap: enforce MAX_CONTEXT_CHARS as safety net (§17.2)
+        if len(context) > MAX_CONTEXT_CHARS:
+            if not was_truncated:
+                was_truncated = True
+                truncation_reason = TruncationReason.CHAR_LIMIT_EXCEEDED
+                self._truncation_count += 1
+            context = context[:MAX_CONTEXT_CHARS] + "\n... [context truncated]"
+            total_tokens = estimate_tokens(context)
+            logger.warning(
+                f"Context char-limit truncation [supervisor] room={room_memory.room_id}: "
+                f"exceeded MAX_CONTEXT_CHARS={MAX_CONTEXT_CHARS}"
+            )
+
         occupancy_pct = (total_tokens / self._budget.model_context_window) * 100
 
         self._log_context_metrics(
@@ -286,7 +299,7 @@ class ContextAssemblyService:
         # Build dynamic suffix with task budget enforcement
         dynamic_suffix = self._build_agent_dynamic_suffix(
             turns=selected_turns,
-            summary=memory_content.summary if turns_truncated > 0 else None,
+            summary=memory_content.summary,
             current_task=current_task,
             agent_name=agent_name,
             room_awareness=room_awareness,
@@ -339,6 +352,19 @@ class ContextAssemblyService:
         # Assemble final context
         context = f"{stable_prefix}\n\n{dynamic_suffix}" if stable_prefix else dynamic_suffix
 
+        # Hard cap: enforce MAX_CONTEXT_CHARS as safety net (§17.2)
+        if len(context) > MAX_CONTEXT_CHARS:
+            if not was_truncated:
+                was_truncated = True
+                truncation_reason = TruncationReason.CHAR_LIMIT_EXCEEDED
+                self._truncation_count += 1
+            context = context[:MAX_CONTEXT_CHARS] + "\n... [context truncated]"
+            total_tokens = estimate_tokens(context)
+            logger.warning(
+                f"Context char-limit truncation [agent] room={room_memory.room_id}: "
+                f"exceeded MAX_CONTEXT_CHARS={MAX_CONTEXT_CHARS}"
+            )
+
         occupancy_pct = (total_tokens / self._budget.model_context_window) * 100
 
         # Count full vs compact turns
@@ -376,11 +402,16 @@ class ContextAssemblyService:
 
     def _get_memory_content(self, room_memory: RoomMemory) -> MemoryContent:
         """Get MemoryContent from RoomMemory, handling legacy structure."""
-        if room_memory.memory_content:
+        if (
+            room_memory.memory_content
+            and room_memory.memory_content.conversation_history
+        ):
             return room_memory.memory_content
         # Fallback: create from direct conversation_history
         content = MemoryContent()
         content.conversation_history = room_memory.get_conversation_history()
+        if room_memory.memory_content and room_memory.memory_content.summary:
+            content.summary = room_memory.memory_content.summary
         return content
 
     def _build_stable_prefix(
@@ -421,6 +452,9 @@ class ContextAssemblyService:
             if room_summary.open_questions:
                 questions = "; ".join(room_summary.open_questions[:3])
                 parts.append(f"Open Questions: {questions}")
+            if room_summary.recent_agent_contributions:
+                contributions = "; ".join(room_summary.recent_agent_contributions[:3])
+                parts.append(f"Recent Agent Work: {contributions}")
             if room_summary.important_constraints:
                 constraints = "; ".join(room_summary.important_constraints[:3])
                 parts.append(f"Constraints: {constraints}")
@@ -430,9 +464,9 @@ class ContextAssemblyService:
         if agent_registry:
             parts.append("[Available Agents]")
             # Sort by agent_id for deterministic ordering (§12.1)
-            sorted_agents = sorted(agent_registry, key=lambda a: a.get("agent_id", a.get("name", "")))
+            sorted_agents = sorted(agent_registry, key=lambda a: a.get("agent_id", ""))
             for agent in sorted_agents[:10]:  # Limit to 10 agents
-                name = agent.get("name", "Unknown")
+                name = agent.get("agent_name") or agent.get("name", "Unknown")
                 desc = agent.get("description", "")[:100]
                 parts.append(f"- {name}: {desc}")
             parts.append("")
@@ -452,6 +486,7 @@ class ContextAssemblyService:
             room_summary.current_goal
             or room_summary.key_decisions
             or room_summary.open_questions
+            or room_summary.recent_agent_contributions
             or room_summary.important_constraints
         )
 

@@ -78,6 +78,9 @@ Output ONLY valid JSON matching the schema below.
 - Do NOT delegate to agents that are unhealthy (status: unhealthy).
 - You have a maximum of {max_steps} actions. Use SYNTHESIZE or DONE before the limit.
 
+## Room Conversation Background
+{conversation_context}
+
 ## Output Schema
 {{
   "action": "delegate" | "synthesize" | "clarify" | "done",
@@ -89,10 +92,7 @@ Output ONLY valid JSON matching the schema below.
   "clarification_question": "What to ask the user" | null
 }}"""
 
-SUPERVISOR_V2_USER_PROMPT = """## Conversation Context
-{conversation_context}
-
-{debate_mode_note}
+SUPERVISOR_V2_USER_PROMPT = """{debate_mode_note}
 
 ## User Message
 {message_text}
@@ -193,6 +193,7 @@ class RoomSupervisorService:
             system_prompt = SUPERVISOR_V2_SYSTEM_PROMPT.format(
                 agent_registry=agent_registry_str,
                 max_steps=max_steps,
+                conversation_context=conversation_context or "No prior conversation.",
             )
 
             debate_note = ""
@@ -207,7 +208,6 @@ class RoomSupervisorService:
 
             trajectory_summary = self._format_trajectory(trajectory)
             user_prompt = SUPERVISOR_V2_USER_PROMPT.format(
-                conversation_context=conversation_context or "No prior conversation.",
                 debate_mode_note=debate_note,
                 message_text=message_text,
                 trajectory_summary=trajectory_summary,

@@ -4,6 +4,8 @@ Context utilities for room conversation memory management.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
 """
 
+from __future__ import annotations
+
 import re
 from typing import TYPE_CHECKING
 
@@ -25,6 +27,7 @@ logger = get_logger(__name__)
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
 MAX_CONTEXT_CHARS = 12000  # Approximate character limit before summarization kicks in
+MAX_SUMMARY_CHARS = 4000  # Cap for MemoryContent.summary to prevent unbounded growth
 SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
 
 # Token estimation constants
@@ -299,6 +302,14 @@ def add_turn_to_history(
         else:
             memory_content.summary = summary_addition
 
+        # Cap summary to prevent unbounded growth — oldest content (front)
+        # is trimmed first since those turns are already compacted and
+        # searchable via Pinecone.
+        if len(memory_content.summary) > MAX_SUMMARY_CHARS:
+            memory_content.summary = "..." + memory_content.summary[
+                len(memory_content.summary) - MAX_SUMMARY_CHARS + 3 :
+            ]
+
         logger.debug(
             f"Moved {excess_count} turns to summary, history now has "
             f"{len(memory_content.conversation_history)} turns"
@@ -308,29 +319,20 @@ def add_turn_to_history(
 
 
 def _format_turns_for_summary(turns: list["ConversationTurn"]) -> str:
-    """Format conversation turns for summary storage."""
-    from models.memory import TurnRole
+    """Format conversation turns for summary storage.
 
+    Uses to_context_string() so that compact turns render their
+    brief_summary + pointer instead of "[content unavailable]".
+    """
     parts = []
     for turn in turns:
-        # Handle both full and compact turns
-        content = turn.content or turn.brief_summary or "[content unavailable]"
-
-        if turn.role == TurnRole.USER:
-            preview = (
-                content[:SUMMARY_PREVIEW_LENGTH] + "..."
-                if len(content) > SUMMARY_PREVIEW_LENGTH
-                else content
-            )
-            parts.append(f"User: {preview}")
-        else:
-            speaker = turn.agent_name or "Agent"
-            preview = (
-                content[:SUMMARY_PREVIEW_LENGTH] + "..."
-                if len(content) > SUMMARY_PREVIEW_LENGTH
-                else content
-            )
-            parts.append(f"{speaker}: {preview}")
+        rendered = turn.to_context_string()
+        preview = (
+            rendered[:SUMMARY_PREVIEW_LENGTH] + "..."
+            if len(rendered) > SUMMARY_PREVIEW_LENGTH
+            else rendered
+        )
+        parts.append(preview)
     return "\n".join(parts)
 
 
@@ -486,7 +488,17 @@ def build_context_for_agent(
             f"({total_tokens}/{effective_max_tokens} tokens)"
         )
 
-    return "\n".join(parts)
+    result = "\n".join(parts)
+
+    # Hard cap: enforce MAX_CONTEXT_CHARS as safety net (§17.2)
+    if len(result) > MAX_CONTEXT_CHARS:
+        result = result[:MAX_CONTEXT_CHARS] + "\n... [context truncated]"
+        logger.warning(
+            f"Context char-limit truncation [legacy build_context_for_agent]: "
+            f"exceeded MAX_CONTEXT_CHARS={MAX_CONTEXT_CHARS}"
+        )
+
+    return result
 
 
 def build_minimal_context(

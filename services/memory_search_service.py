@@ -232,14 +232,15 @@ class MemorySearchService:
                 else "",
             }
 
-            self._pinecone_index.upsert(
+            await asyncio.to_thread(
+                self._pinecone_index.upsert,
                 vectors=[
                     {
                         "id": turn.turn_id,
                         "values": embedding,
                         "metadata": metadata,
                     }
-                ]
+                ],
             )
 
             logger.debug(
@@ -263,8 +264,9 @@ class MemorySearchService:
             True if deletion succeeded, False otherwise
         """
         try:
-            self._pinecone_index.delete(
-                filter={"room_id": {"$eq": room_id}}
+            await asyncio.to_thread(
+                self._pinecone_index.delete,
+                filter={"room_id": {"$eq": room_id}},
             )
             logger.info(
                 f"MemorySearch: deleted index entries for room {room_id}"
@@ -290,7 +292,8 @@ class MemorySearchService:
         """
         embedding = await self.openai_service.get_embedding(query)
 
-        results = self._pinecone_index.query(
+        results = await asyncio.to_thread(
+            self._pinecone_index.query,
             vector=embedding,
             top_k=50,
             include_metadata=True,

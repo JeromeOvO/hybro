@@ -142,8 +142,8 @@ class TestContextAssemblyService:
     def test_build_supervisor_context_includes_agent_registry(self, service, sample_room_memory):
         """Test that agent registry is included in supervisor context."""
         agent_registry = [
-            {"name": "CodeAgent", "description": "Writes code"},
-            {"name": "TestAgent", "description": "Writes tests"},
+            {"agent_id": "a1", "agent_name": "CodeAgent", "description": "Writes code"},
+            {"agent_id": "a2", "agent_name": "TestAgent", "description": "Writes tests"},
         ]
 
         result = service.build_supervisor_context(
