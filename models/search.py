@@ -2,23 +2,19 @@
 Memory search models for hybrid retrieval.
 
 This module defines:
-- MemorySearchConfig: Configuration for hybrid search
 - MemorySearchResult: Individual search result
 - MemorySearchResponse: Collection of search results
 
+Configuration is handled by models/context_config.py (MemorySearchConfig).
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8 for design details.
 """
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from common.utils.time import utcnow
-
-if TYPE_CHECKING:
-    from models.memory import TurnRole
 
 
 class MemorySourceType(str, Enum):
@@ -33,25 +29,6 @@ class MemorySourceType(str, Enum):
     TURN = "turn"
     FACT = "fact"
     SUMMARY = "summary"
-
-
-class MemorySearchConfig(BaseModel):
-    """
-    Configuration for memory search.
-
-    Values are loaded from environment variables via settings.
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §8.2 and §14.3 for specification.
-    """
-
-    enabled: bool = True
-    vector_weight: float = 0.7  # Weight for semantic similarity
-    keyword_weight: float = 0.3  # Weight for BM25 keyword matching
-    temporal_decay_enabled: bool = True  # Enable recency boost
-    half_life_days: int = 30  # Days for score to decay 50%
-    mmr_lambda: float = 0.7  # Diversity vs relevance tradeoff (0=diverse, 1=relevant)
-    max_results: int = 10  # Maximum results returned
-    max_snippet_chars: int = 500  # Max chars per snippet
-    index_name: str = "room-memory"  # Pinecone index for memory
 
 
 class MemorySearchResult(BaseModel):

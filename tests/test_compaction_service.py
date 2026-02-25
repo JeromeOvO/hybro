@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from models.compaction import (
-    CompactionConfig,
     CompactionResult,
     ContentReference,
     StorageType,
@@ -33,7 +32,6 @@ from models.memory import (
 )
 from services.compaction_service import (
     CompactionService,
-    get_compaction_config,
 )
 from services.content_storage_service import (
     ContentExpiredError,
@@ -50,12 +48,21 @@ from services.content_storage_service import (
 @pytest.fixture
 def mock_settings():
     """Mock settings for compaction configuration."""
-    with patch("services.compaction_service.settings") as mock:
+    with patch("models.context_config.settings") as mock:
         mock.compaction_enabled = True
         mock.compaction_max_full_turns = 20
         mock.compaction_max_total_tokens = 80000
         mock.compaction_preserve_recent = 10
         mock.compaction_content_ttl_days = 0
+        mock.memory_search_enabled = True
+        mock.memory_search_vector_weight = 0.7
+        mock.memory_search_keyword_weight = 0.3
+        mock.memory_search_temporal_decay_enabled = True
+        mock.memory_search_half_life_days = 30
+        mock.memory_search_mmr_lambda = 0.7
+        mock.memory_search_max_results = 10
+        mock.memory_search_max_snippet_chars = 500
+        mock.memory_search_index_name = "room-memory"
         yield mock
 
 
@@ -306,18 +313,17 @@ class TestContentStorageService:
 # =============================================================================
 
 
-class TestGetCompactionConfig:
-    """Tests for get_compaction_config function."""
+class TestCompactionConfig:
+    """Tests for compaction_config singleton from context_config."""
 
-    def test_returns_config_from_settings(self, mock_settings):
-        """Should return CompactionConfig with values from settings."""
-        config = get_compaction_config()
+    def test_reads_from_settings(self, mock_settings):
+        """Should read compaction configuration from settings."""
+        from models.context_config import compaction_config
 
-        assert isinstance(config, CompactionConfig)
-        assert config.enabled is True
-        assert config.max_full_turns == 20
-        assert config.max_total_tokens == 80000
-        assert config.preserve_recent_turns == 10
+        assert compaction_config.enabled is True
+        assert compaction_config.max_full_turns == 20
+        assert compaction_config.max_total_tokens == 80000
+        assert compaction_config.preserve_recent_turns == 10
 
 
 class TestCompactionService:
@@ -327,6 +333,15 @@ class TestCompactionService:
     def service(self):
         """Create a CompactionService instance."""
         return CompactionService()
+
+    @pytest.fixture(autouse=True)
+    def mock_memory_search(self):
+        """Auto-mock memory_search_service.index_turn_for_search for all compaction tests."""
+        with patch(
+            "services.memory_search_service.memory_search_service"
+        ) as mock:
+            mock.index_turn_for_search = AsyncMock(return_value=True)
+            yield mock
 
     @pytest.mark.asyncio
     async def test_should_compact_returns_false_when_disabled(
@@ -628,6 +643,12 @@ class TestCompactionRoundTrip:
         """Create a CompactionService instance."""
         return CompactionService()
 
+    @pytest.fixture(autouse=True)
+    def mock_memory_search(self):
+        with patch("services.memory_search_service.memory_search_service") as mock:
+            mock.index_turn_for_search = AsyncMock(return_value=True)
+            yield mock
+
     @pytest.mark.asyncio
     async def test_compact_and_expand_preserves_content(
         self, service, mock_settings, sample_turn
@@ -753,6 +774,12 @@ class TestTokenSavings:
         """Create a CompactionService instance."""
         return CompactionService()
 
+    @pytest.fixture(autouse=True)
+    def mock_memory_search(self):
+        with patch("services.memory_search_service.memory_search_service") as mock:
+            mock.index_turn_for_search = AsyncMock(return_value=True)
+            yield mock
+
     @pytest.mark.asyncio
     async def test_token_savings_calculated_correctly(
         self, service, mock_settings
@@ -819,6 +846,12 @@ class TestErrorHandling:
         """Create a CompactionService instance."""
         return CompactionService()
 
+    @pytest.fixture(autouse=True)
+    def mock_memory_search(self):
+        with patch("services.memory_search_service.memory_search_service") as mock:
+            mock.index_turn_for_search = AsyncMock(return_value=True)
+            yield mock
+
     @pytest.mark.asyncio
     async def test_compaction_continues_on_single_turn_failure(
         self, service, mock_settings
@@ -876,6 +909,47 @@ class TestErrorHandling:
         assert result.compacted_count == 2
         assert len(result.errors) == 1
         assert "turn-1" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_compaction_skips_turn_when_vector_indexing_fails(
+        self, service, mock_settings, mock_memory_search
+    ):
+        """Compaction should skip a turn if vector indexing fails, leaving it FULL."""
+        turn = ConversationTurn(
+            turn_id="turn-no-index",
+            role=TurnRole.USER,
+            content="Content that fails indexing",
+            representation=TurnRepresentation.FULL,
+            estimated_tokens_full=50,
+            estimated_tokens_compact=20,
+            timestamp=datetime.now(),
+        )
+
+        memory_content = MemoryContent(conversation_history=[turn])
+        room_memory = RoomMemory(
+            room_id="test-room",
+            memory_id=str(uuid4()),
+            memory_content=memory_content,
+        )
+
+        mock_settings.compaction_preserve_recent = 0
+        mock_memory_search.index_turn_for_search = AsyncMock(return_value=False)
+
+        with patch.object(
+            service.db_service,
+            "get_room_memory_by_room_id",
+            return_value=room_memory,
+        ):
+            with patch.object(
+                service.content_storage,
+                "upsert_full_content",
+                AsyncMock(return_value="doc-123"),
+            ):
+                result = await service.compact_room_memory("test-room")
+
+        assert result.compacted_count == 0
+        assert turn.representation == TurnRepresentation.FULL
+        assert turn.content == "Content that fails indexing"
 
     @pytest.mark.asyncio
     async def test_content_expired_error_has_correct_info(self):
@@ -1028,6 +1102,12 @@ class TestWriteBackPath:
     @pytest.fixture
     def service(self):
         return CompactionService()
+
+    @pytest.fixture(autouse=True)
+    def mock_memory_search(self):
+        with patch("services.memory_search_service.memory_search_service") as mock:
+            mock.index_turn_for_search = AsyncMock(return_value=True)
+            yield mock
 
     @pytest.mark.asyncio
     async def test_write_back_targets_conversation_history_field(

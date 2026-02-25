@@ -10,13 +10,12 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from config.settings import settings
 from models.compaction import (
-    CompactionConfig,
     CompactionResult,
     ContentReference,
     StorageType,
 )
+from models.context_config import compaction_config
 from models.memory import ConversationTurn, RoomMemory, TurnRepresentation
 from services.content_storage_service import (
     ContentExpiredError,
@@ -26,22 +25,6 @@ from services.content_storage_service import (
 from services.database_service import db_service
 
 logger = get_logger(__name__)
-
-
-def get_compaction_config() -> CompactionConfig:
-    """
-    Build CompactionConfig from settings.
-
-    Returns:
-        CompactionConfig with values from environment/settings
-    """
-    return CompactionConfig(
-        enabled=settings.compaction_enabled,
-        max_full_turns=settings.compaction_max_full_turns,
-        max_total_tokens=settings.compaction_max_total_tokens,
-        preserve_recent_turns=settings.compaction_preserve_recent,
-        content_ttl_days=settings.compaction_content_ttl_days,
-    )
 
 
 class CompactionService:
@@ -80,7 +63,7 @@ class CompactionService:
         Returns:
             True if compaction should be triggered
         """
-        config = get_compaction_config()
+        config = compaction_config
 
         if not config.enabled:
             return False
@@ -146,7 +129,7 @@ class CompactionService:
         Returns:
             CompactionResult with statistics
         """
-        config = get_compaction_config()
+        config = compaction_config
 
         if not config.enabled:
             return CompactionResult(
@@ -281,7 +264,21 @@ class CompactionService:
             turn_notes=turn.turn_notes,
         )
 
-        # 2. Create reference pointer with content_hash for cache validation (§6.3)
+        # 2. Index the turn in Pinecone for vector search (Phase 4, §8)
+        #    Must happen BEFORE content is cleared below.
+        #    If indexing fails, abort compaction so the turn stays FULL
+        #    and can be retried next cycle (§8: all compact turns must be vector-searchable).
+        from services.memory_search_service import memory_search_service
+
+        indexed = await memory_search_service.index_turn_for_search(turn, room_id)
+        if not indexed:
+            logger.warning(
+                f"CompactionService: Skipping compaction of turn {turn.turn_id} "
+                f"— vector indexing failed; turn stays FULL for retry"
+            )
+            return False
+
+        # 3. Create reference pointer with content_hash for cache validation (§6.3)
         turn.content_ref = ContentReference(
             storage_type=StorageType.MONGODB,
             collection="conversation_content",
@@ -290,10 +287,10 @@ class CompactionService:
             created_at=utcnow(),
         )
 
-        # 3. Optionally populate brief_summary for very old turns (>50 in history)
+        # 4. Optionally populate brief_summary for very old turns (>50 in history)
         # This is deferred - can be added later with a background job
 
-        # 4. Switch to compact representation
+        # 5. Switch to compact representation
         turn.content = None  # Remove full content from context
         turn.representation = TurnRepresentation.COMPACT
 

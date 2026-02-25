@@ -706,7 +706,7 @@ This section tracks the implementation status of the design items identified abo
 | **CM Phase 1: Data Models & Storage** | ✅ COMPLETED | 2026-02-23 | See details below |
 | **CM Phase 2: Context Assembly Engine** | ✅ COMPLETED | 2026-02-23 | See details below |
 | **CM Phase 3: Lossless Compaction** | ✅ COMPLETED | 2026-02-23 | See details below |
-| CM Phase 4: Memory Search | 🔲 NOT STARTED | - | Depends on Phase 3 ✅ |
+| **CM Phase 4: Memory Search** | ✅ COMPLETED | 2026-02-25 | See details below |
 | CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
 
 #### CM Phase 1 Details (Completed 2026-02-23)
@@ -890,6 +890,40 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 - S3 storage for binary content not yet implemented (§6.8 future extension)
 - Background compaction job not yet implemented (§6.9)
   - Current implementation is on-demand only
+
+#### CM Phase 4 Details (Completed 2026-02-25)
+
+**Created Files:**
+- `services/memory_search_service.py` — Hybrid search service (vector + keyword + merge + temporal decay + MMR)
+- `models/context_config.py` — Property-based runtime config classes (TokenBudget, CompactionConfig, MemorySearchConfig) per §14.3
+- `tests/test_memory_search_service.py` — Comprehensive unit tests (cosine similarity, merging, temporal decay, MMR, indexing, pipeline, graceful degradation)
+
+**Modified Files:**
+- `database/pinecone_db.py` — Extended `PineconeDB` with `get_index(name)` for multi-index support and Pinecone client caching
+- `services/compaction_service.py` — Wired `index_turn_for_search()` into `_compact_single_turn()` for write path; migrated to property-based `CompactionConfig` from `models/context_config.py`
+- `tests/test_compaction_service.py` — Updated mock targets for new config import path; added auto-mock for `memory_search_service` in compaction test classes
+
+**Key Features Implemented:**
+- **Vector search**: Pinecone-based semantic similarity search scoped by `room_id` metadata filter
+- **Keyword search**: MongoDB `$text` search on `conversation_content` collection (turn_notes.keywords, entities, one_liner)
+- **Weighted merge**: Configurable vector/keyword weights with score normalization
+- **Temporal decay**: Exponential decay with configurable half-life (2^(-age/half_life))
+- **MMR re-ranking**: Maximal Marginal Relevance for diversity using score-profile proxy vectors
+- **Write path**: `index_turn_for_search()` embeds and upserts turns to Pinecone at compaction time
+- **Graceful degradation**: Parallel search with `asyncio.gather()`, log-and-return-empty on any failure
+- **Property-based config**: All three config classes (TokenBudget, CompactionConfig, MemorySearchConfig) per §14.3
+
+**Design Compliance:**
+- §8.1 Search Architecture: ✅ (vector + keyword + merge + decay + MMR pipeline)
+- §8.2 Search Configuration: ✅ (all parameters loaded from env via `models/context_config.py`)
+- §8.3 turn_notes Integration: ✅ (keyword search uses MongoDB text index on turn_notes)
+- §14.3 Configuration Classes: ✅ (property-based singletons reading from settings)
+- §18 Phase 4 Checklist: ✅ (all 5 items complete)
+
+**Known Limitations:**
+- Pinecone `room-memory` index must be created manually (not auto-provisioned by code)
+- Graph-based retrieval (§8.4) deferred to Phase 4B
+- Cross-room search not yet supported (scoped to single room_id)
 
 ### 6.2 HITL Phases
 

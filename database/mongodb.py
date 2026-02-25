@@ -1669,10 +1669,11 @@ class MongoDB:
                 name="room_stored_at",
             )
 
-            # Text index on turn_notes for hybrid search (§8.3)
-            # Enables keyword search on compact turns without expanding content
+            # Text index on content and turn_notes for hybrid search (§8.3)
+            # Enables keyword search on both full content and compact turn metadata
             await content_coll.create_index(
                 [
+                    ("content", "text"),
                     ("turn_notes.keywords", "text"),
                     ("turn_notes.entities", "text"),
                     ("turn_notes.one_liner", "text"),
