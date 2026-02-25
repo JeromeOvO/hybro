@@ -14,7 +14,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from common.utils.time import utcnow
 
@@ -124,8 +124,9 @@ class ConversationTurn(BaseModel):
     # FULL representation: actual content in context
     content: str | None = None
 
-    # COMPACT representation: pointer to storage (imported at runtime to avoid circular)
-    content_ref: Any | None = None  # Actually ContentReference, but Any to avoid circular import
+    # COMPACT representation: pointer to storage (typed Any to avoid circular import;
+    # coerced to ContentReference at validation time via _coerce_content_ref below)
+    content_ref: Any | None = None
 
     # Content metadata (always present regardless of representation)
     content_type: ContentType = ContentType.TEXT
@@ -154,6 +155,25 @@ class ConversationTurn(BaseModel):
     # None = unknown/not applicable, True = successful, False = failed
     # Used by compaction to prioritize retaining failed turns for model learning
     was_successful: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_content_ref(cls, values: Any) -> Any:
+        """Coerce content_ref from raw dict to ContentReference on deserialization.
+
+        content_ref is typed as Any to avoid a circular import between memory.py
+        and compaction.py.  When Pydantic constructs a ConversationTurn from a
+        MongoDB document (dict), it leaves content_ref as a plain dict.  This
+        validator converts it back to a ContentReference so that downstream code
+        (.storage_type, .to_compact_string(), expand_content_reference()) works.
+        """
+        if isinstance(values, dict):
+            ref = values.get("content_ref")
+            if isinstance(ref, dict):
+                from models.compaction import ContentReference
+
+                values["content_ref"] = ContentReference(**ref)
+        return values
 
     def to_context_string(self) -> str:
         """

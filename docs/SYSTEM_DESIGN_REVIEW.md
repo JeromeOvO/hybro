@@ -705,8 +705,8 @@ This section tracks the implementation status of the design items identified abo
 |-------|--------|------|-------|
 | **CM Phase 1: Data Models & Storage** | ✅ COMPLETED | 2026-02-23 | See details below |
 | **CM Phase 2: Context Assembly Engine** | ✅ COMPLETED | 2026-02-23 | See details below |
-| CM Phase 3: Lossless Compaction | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
-| CM Phase 4: Memory Search | 🔲 NOT STARTED | - | Depends on Phase 3 |
+| **CM Phase 3: Lossless Compaction** | ✅ COMPLETED | 2026-02-23 | See details below |
+| CM Phase 4: Memory Search | 🔲 NOT STARTED | - | Depends on Phase 3 ✅ |
 | CM Phase 5: Supervisor V2 Integration | 🔲 NOT STARTED | - | Depends on Phase 2 ✅ |
 
 #### CM Phase 1 Details (Completed 2026-02-23)
@@ -815,6 +815,81 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 - User Memory and Agent Memory loading not yet implemented (§5.1 Stage 1 partial)
   - These memory layers are not yet populated by other parts of the system
   - Will be added when Phase 4 (Memory Search) is implemented
+
+#### CM Phase 3 Details (Completed 2026-02-23)
+
+**Files Created:**
+- `services/content_storage_service.py` — `ContentStorageService` class with:
+  - `upsert_full_content()` — Idempotent storage of full content (§6.3)
+  - `get_content_by_document_id()` — Retrieve content by MongoDB document ID
+  - `get_content_by_turn_id()` — Retrieve content by room_id + turn_id
+  - `expand_content_reference()` — Expand ContentReference to full content (§6.4)
+  - `delete_content_by_turn_id()` / `delete_content_by_room_id()` — Content cleanup
+  - `get_content_stats_for_room()` — Storage statistics
+  - `ContentExpiredError` exception class (§6.4)
+  - `hash_content()` utility for SHA-256 content hashing
+
+- `services/compaction_service.py` — `CompactionService` class with:
+  - `should_compact()` — Check if room needs compaction (§6.5)
+  - `compact_room_memory()` — Lossless compaction of older turns (§6.3)
+  - `expand_turn_content()` — On-demand content retrieval (§6.4)
+  - `fetch_turn_content()` — Agent-callable tool for content retrieval (§6.4)
+  - `expand_turns_for_context()` — Prepare turns for context window (§6.4)
+  - `get_compaction_stats()` — Room compaction statistics
+  - `get_compaction_config()` — Build config from settings
+
+- `tests/test_compaction_service.py` — Comprehensive unit tests:
+  - `TestHashContent` — Content hashing tests
+  - `TestContentStorageService` — Storage upsert, retrieval, expansion tests
+  - `TestGetCompactionConfig` — Configuration loading tests
+  - `TestCompactionService` — Compaction trigger, execution, expansion tests
+  - `TestCompactionRoundTrip` — Full compact → expand → verify cycle tests
+  - `TestTokenSavings` — Token savings calculation tests
+  - `TestErrorHandling` — Error handling and recovery tests
+
+**Key Features Implemented:**
+- **Lossless Compaction** (§6): Pointer-based compaction, NOT summarization
+  - Full content stored in MongoDB `conversation_content` collection
+  - Turns replaced with `ContentReference` pointers
+  - Original content always retrievable on demand
+- **Idempotent Upsert** (§6.3): Uses unique `(room_id, turn_id)` index
+  - Crashed-and-retried compaction never creates duplicate documents
+  - Safe to call within per-room processing lock
+- **Compaction Triggers** (§6.5):
+  - Turn count threshold: `compaction_max_full_turns` (default: 20)
+  - Token threshold: `compaction_max_total_tokens` (default: 80000)
+  - Preserve recent: `compaction_preserve_recent` (default: 10)
+- **On-Demand Expansion** (§6.4):
+  - Compact turns render as pointer strings via `to_context_string()`
+  - Agents request full content via `fetch_turn_content` tool
+  - `ContentExpiredError` raised if content missing (TTL, deletion)
+- **Token Savings Tracking**: `CompactionResult` includes `tokens_saved`
+- **Error Resilience**: Compaction continues even if individual turns fail
+
+**Design Compliance:**
+- §6.2 `ContentReference.to_compact_string()`: Renders pointer for context
+- §6.3 Idempotent upsert: Uses `$setOnInsert` with unique index
+- §6.3 `content_hash` in ContentReference: Populated for cache validation
+- §6.4 `ContentExpiredError`: Proper exception with turn_id and document_id
+- §6.5 Trigger thresholds: Configurable via settings
+- §6.6 Storage schema: `StoredContent` model with TTL support
+- §6.7 Compaction vs Summarization: Clear separation (compaction only)
+
+**Bug Fixes Applied (2026-02-23 Review):**
+1. **content_hash not populated** (§6.3): `ContentReference.content_hash` was set to `None` instead of the actual hash. Fixed by importing `hash_content` and calculating hash before creating ContentReference.
+
+**Integration Points:**
+- `CompactionService` uses `ContentStorageService` for storage operations
+- `CompactionService` uses `db_service` for room memory operations
+- Settings from `config/settings.py` control all thresholds
+- MongoDB indexes created by `create_context_memory_indexes()` (Phase 1)
+
+**Known Limitations:**
+- `brief_summary` generation for very old turns (>50) not yet implemented
+  - Design allows for this but deferred to future enhancement
+- S3 storage for binary content not yet implemented (§6.8 future extension)
+- Background compaction job not yet implemented (§6.9)
+  - Current implementation is on-demand only
 
 ### 6.2 HITL Phases
 
