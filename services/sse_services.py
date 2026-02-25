@@ -58,13 +58,12 @@ class SSEConnection:
             message = await asyncio.wait_for(self.queue.get(), timeout=timeout)
             return message
         except TimeoutError:
-            # send heartbeat
+            # send heartbeat (return directly, don't also queue it)
             heartbeat = {
                 "type": "heartbeat",
                 "timestamp": utcnow().isoformat(),
                 "room_id": self.room_id,
             }
-            await self.queue.put(json.dumps(heartbeat))
             return json.dumps(heartbeat)
 
     def close(self):
