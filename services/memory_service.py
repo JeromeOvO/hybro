@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 from common.utils.context_utils import (
@@ -581,6 +582,30 @@ class RoomMemoryService:
         except Exception as e:
             logger.debug("AgentMemory tracking skipped: %s", e)
 
+    async def _enrich_turn_notes_background(
+        self,
+        room_id: str,
+        turn_id: str,
+        heuristic_notes: dict | None,
+        content: str,
+    ) -> None:
+        """Background task: call LLM to extract richer turn_notes, then
+        atomically update just that turn in MongoDB via positional $ operator.
+        Failures are logged and swallowed — heuristic notes from Save #1 remain."""
+        try:
+            from common.utils.context_utils import extract_turn_notes_llm
+
+            enriched_notes = await extract_turn_notes_llm(content)
+            if enriched_notes and enriched_notes != heuristic_notes:
+                await self.database_service.update_turn_notes(
+                    room_id, turn_id, enriched_notes,
+                )
+        except Exception as e:
+            logger.debug(
+                "RoomMemoryService: background turn_notes enrichment failed "
+                "for room %s turn %s: %s", room_id, turn_id, e,
+            )
+
     async def add_agent_response_to_memory(
         self,
         room_id: str,
@@ -654,24 +679,31 @@ class RoomMemoryService:
                 status_code=500,
             )
 
-        # Post-save: enrich turn_notes via LLM for long turns (§6.2)
+        # Post-save: enrich turn_notes via LLM for long turns (§6.2).
+        # Fire-and-forget: the LLM call + targeted DB write run in a background
+        # task so the caller isn't blocked by the extra 1-2s round-trip.
         try:
             from common.utils.context_utils import (
                 LLM_TURN_NOTES_THRESHOLD,
                 estimate_tokens,
-                extract_turn_notes_llm,
             )
 
             if response_text and estimate_tokens(response_text) > LLM_TURN_NOTES_THRESHOLD:
-                history = room_memory.get_conversation_history()
-                if history:
-                    last_turn = history[-1]
-                    enriched_notes = await extract_turn_notes_llm(response_text)
-                    if enriched_notes and last_turn.turn_notes != enriched_notes:
-                        last_turn.turn_notes = enriched_notes
-                        await self.database_service.update_room_memory_by_room_id(
-                            room_id, room_memory
+                # add_turn_to_history appends to memory_content.conversation_history,
+                # so read from that list directly (not get_conversation_history(),
+                # which may return the top-level list after compaction).
+                mc_history = (
+                    room_memory.memory_content.conversation_history
+                    if room_memory.memory_content
+                    else []
+                )
+                if mc_history:
+                    last_turn = mc_history[-1]
+                    asyncio.create_task(
+                        self._enrich_turn_notes_background(
+                            room_id, last_turn.turn_id, last_turn.turn_notes, response_text,
                         )
+                    )
         except Exception as e:
             logger.debug(
                 "RoomMemoryService: LLM turn_notes enrichment skipped: %s", e

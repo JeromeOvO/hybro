@@ -1408,6 +1408,22 @@ class DatabaseService:
             )
             return False
 
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        """
+        Atomically update turn_notes for a single conversation turn.
+        Uses MongoDB positional $ operator — no full-document rewrite.
+        """
+        try:
+            return await self.mongo.update_turn_notes(room_id, turn_id, turn_notes)
+        except Exception as e:
+            logger.error(
+                "Failed to update turn_notes for room %s turn %s: %s",
+                room_id, turn_id, e,
+            )
+            return False
+
     # Agent Group management
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
         """

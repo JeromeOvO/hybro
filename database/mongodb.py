@@ -1314,6 +1314,27 @@ class MongoDB:
         )
         return result.matched_count > 0
 
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        """
+        Atomically update turn_notes for a single conversation turn using the
+        MongoDB positional $ operator. Avoids the full-document read-modify-write
+        cycle used by update_room_memory_by_room_id.
+        """
+        result = await self.room_memories_collection.update_one(
+            {
+                "room_id": room_id,
+                "memory_content.conversation_history.turn_id": turn_id,
+            },
+            {
+                "$set": {
+                    "memory_content.conversation_history.$.turn_notes": turn_notes
+                }
+            },
+        )
+        return result.modified_count > 0
+
     async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room memory by room_id
