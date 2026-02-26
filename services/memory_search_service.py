@@ -174,6 +174,12 @@ class MemorySearchService:
 
         final = merged[: self.config.max_results]
 
+        # Hydrate results that have empty content (vector-only matches)
+        # by fetching one_liner from conversation_content collection
+        empty_content_ids = [r.turn_id for r in final if not r.content and r.turn_id]
+        if empty_content_ids:
+            await self._hydrate_results_from_storage(final, room_id)
+
         elapsed_ms = (time.monotonic() - start_time) * 1000
 
         return MemorySearchResponse(
@@ -277,6 +283,45 @@ class MemorySearchService:
                 f"MemorySearch: failed to delete index for room {room_id}: {e}"
             )
             return False
+
+    # =========================================================================
+    # Private: Result hydration
+    # =========================================================================
+
+    async def _hydrate_results_from_storage(
+        self,
+        results: list[MemorySearchResult],
+        room_id: str,
+    ) -> None:
+        """Populate empty content/content_preview from conversation_content docs.
+
+        Vector-only results arrive with content="" because Pinecone only stores
+        metadata. This fetches the one_liner from turn_notes stored at compaction
+        time so the result is useful to the supervisor.
+        """
+        needs_hydration = {r.turn_id for r in results if not r.content and r.turn_id}
+        if not needs_hydration:
+            return
+
+        try:
+            cursor = self._content_collection.find(
+                {"room_id": room_id, "turn_id": {"$in": list(needs_hydration)}},
+                {"turn_id": 1, "turn_notes": 1},
+            )
+            docs_by_turn: dict[str, dict] = {}
+            async for doc in cursor:
+                docs_by_turn[doc.get("turn_id", "")] = doc
+
+            for r in results:
+                if r.turn_id in docs_by_turn and not r.content:
+                    notes = docs_by_turn[r.turn_id].get("turn_notes")
+                    if isinstance(notes, dict):
+                        one_liner = notes.get("one_liner", "")
+                        if one_liner:
+                            r.content = one_liner[:self.config.max_snippet_chars]
+                            r.content_preview = one_liner[:self.config.max_snippet_chars]
+        except Exception as e:
+            logger.debug("MemorySearch: hydration failed, results may lack content: %s", e)
 
     # =========================================================================
     # Private: Vector search (Pinecone)

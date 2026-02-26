@@ -31,45 +31,54 @@ from models.memory import (
     ContentType,
     TurnType,
 )
-from models.context import TokenBudget
+from models.context_config import TokenBudget
 
 
 class TestTokenBudget:
-    """Tests for TokenBudget model."""
+    """Tests for TokenBudget configuration."""
 
     def test_available_for_content_calculation(self):
         """Test that available_for_content correctly subtracts fixed allocations."""
-        budget = TokenBudget(
-            model_context_window=128000,
-            system_prompt=2000,
-            tool_schemas=3000,
-            response_reserve=4000,
-        )
-        expected = 128000 - 2000 - 3000 - 4000  # 119000
-        assert budget.available_for_content == expected
+        with patch("models.context_config.settings") as mock_settings:
+            mock_settings.context_model_window = 128000
+            mock_settings.context_system_prompt_tokens = 2000
+            mock_settings.context_tool_schema_tokens = 3000
+            mock_settings.context_response_reserve_tokens = 4000
+            mock_settings.context_room_pct = 0.15
+            mock_settings.context_history_pct = 0.60
+            mock_settings.context_task_pct = 0.25
+            budget = TokenBudget()
+            expected = 128000 - 2000 - 3000 - 4000  # 119000
+            assert budget.available_for_content == expected
 
     def test_dynamic_allocation_percentages(self):
         """Test that dynamic allocations sum to 100%."""
-        budget = TokenBudget()
-        total_pct = (
-            budget.room_context_pct
-            + budget.conversation_history_pct
-            + budget.current_task_pct
-        )
-        assert total_pct == 1.0, f"Dynamic allocations should sum to 100%, got {total_pct * 100}%"
+        with patch("models.context_config.settings") as mock_settings:
+            mock_settings.context_room_pct = 0.15
+            mock_settings.context_history_pct = 0.60
+            mock_settings.context_task_pct = 0.25
+            budget = TokenBudget()
+            total_pct = (
+                budget.room_context_pct
+                + budget.conversation_history_pct
+                + budget.current_task_pct
+            )
+            assert total_pct == 1.0, f"Dynamic allocations should sum to 100%, got {total_pct * 100}%"
 
     def test_conversation_history_tokens(self):
         """Test conversation history token allocation."""
-        budget = TokenBudget(
-            model_context_window=100000,
-            system_prompt=2000,
-            tool_schemas=3000,
-            response_reserve=5000,
-            conversation_history_pct=0.60,
-        )
-        available = 100000 - 2000 - 3000 - 5000  # 90000
-        expected = int(available * 0.60)  # 54000
-        assert budget.conversation_history_tokens == expected
+        with patch("models.context_config.settings") as mock_settings:
+            mock_settings.context_model_window = 100000
+            mock_settings.context_system_prompt_tokens = 2000
+            mock_settings.context_tool_schema_tokens = 3000
+            mock_settings.context_response_reserve_tokens = 5000
+            mock_settings.context_room_pct = 0.15
+            mock_settings.context_history_pct = 0.60
+            mock_settings.context_task_pct = 0.25
+            budget = TokenBudget()
+            available = 100000 - 2000 - 3000 - 5000  # 90000
+            expected = int(available * 0.60)  # 54000
+            assert budget.conversation_history_tokens == expected
 
 
 class TestContextAssemblyService:
@@ -78,7 +87,7 @@ class TestContextAssemblyService:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService instance with mocked settings."""
-        with patch("services.context_assembly_service.settings") as mock_settings:
+        with patch("models.context_config.settings") as mock_settings:
             mock_settings.context_model_window = 32000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 3000

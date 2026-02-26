@@ -20,8 +20,7 @@ from enum import Enum
 
 from common.utils.context_utils import MAX_CONTEXT_CHARS, estimate_tokens
 from common.utils.logger import get_logger
-from config.settings import settings
-from models.context import TokenBudget
+from models.context_config import TokenBudget, token_budget
 from models.memory import (
     ConversationTurn,
     MemoryContent,
@@ -86,16 +85,7 @@ class ContextAssemblyService:
     """
 
     def __init__(self):
-        # Load budget from settings
-        self._budget = TokenBudget(
-            model_context_window=settings.context_model_window,
-            system_prompt=settings.context_system_prompt_tokens,
-            tool_schemas=settings.context_tool_schema_tokens,
-            response_reserve=settings.context_response_reserve_tokens,
-            room_context_pct=settings.context_room_pct,
-            conversation_history_pct=settings.context_history_pct,
-            current_task_pct=settings.context_task_pct,
-        )
+        self._budget: TokenBudget = token_budget
 
         # Truncation tracking for metrics
         self._truncation_count = 0
@@ -116,6 +106,7 @@ class ContextAssemblyService:
         current_task: str,
         agent_registry: list[dict] | None = None,
         max_turns: int = 5,
+        memory_search_results: list | None = None,
     ) -> ContextAssemblyResult:
         """
         Build context for the Supervisor LLM (decide_next calls).
@@ -131,17 +122,31 @@ class ContextAssemblyService:
             current_task: The current user request
             agent_registry: List of available agents with their capabilities
             max_turns: Maximum recent turns to include (default 5)
+            memory_search_results: Optional pre-fetched MemorySearchResult list
 
         Returns:
             ContextAssemblyResult with assembled context and metrics
         """
         memory_content = self._get_memory_content(room_memory)
 
-        # Build stable prefix (room summary + agent roster)
+        # Format memory search results into snippets
+        search_snippets = None
+        if memory_search_results:
+            search_snippets = []
+            for r in memory_search_results[:5]:
+                preview = getattr(r, "content_preview", None) or getattr(r, "content", "")
+                role = getattr(r, "role", None) or "unknown"
+                agent = getattr(r, "agent_name", None)
+                label = f"[{agent}]" if agent else f"[{role}]"
+                if preview:
+                    search_snippets.append(f"{label} {preview}")
+
+        # Build stable prefix (room summary + agent roster + memory search)
         stable_prefix = self._build_stable_prefix(
             room_summary=room_memory.room_summary,
             agent_registry=agent_registry,
             include_room_facts=False,  # Supervisor doesn't need detailed facts
+            memory_search_snippets=search_snippets,
         )
 
         # Build dynamic suffix (recent turns + current task)
@@ -420,6 +425,7 @@ class ContextAssemblyService:
         agent_registry: list[dict] | None = None,
         room_facts: list[str] | None = None,
         include_room_facts: bool = True,
+        memory_search_snippets: list[str] | None = None,
     ) -> str:
         """
         Build the stable prefix portion of context.
@@ -429,12 +435,14 @@ class ContextAssemblyService:
         - Room summary (current goal, key decisions, open questions)
         - Agent roster (if multi-agent)
         - Room facts (if enabled)
+        - Memory search snippets (if provided)
 
         Args:
             room_summary: The room's rolling summary
             agent_registry: List of available agents
             room_facts: List of room fact strings
             include_room_facts: Whether to include room facts
+            memory_search_snippets: Pre-formatted search result snippets
 
         Returns:
             Stable prefix string
@@ -476,6 +484,13 @@ class ContextAssemblyService:
             parts.append("[Room Facts]")
             for fact in room_facts[:5]:  # Limit to 5 facts
                 parts.append(f"- {fact}")
+            parts.append("")
+
+        # Memory search results (§8 hybrid retrieval)
+        if memory_search_snippets:
+            parts.append("[Relevant Memory]")
+            for snippet in memory_search_snippets[:5]:
+                parts.append(f"- {snippet}")
             parts.append("")
 
         return "\n".join(parts)
@@ -660,10 +675,13 @@ class ContextAssemblyService:
         """
         Select turns that fit within the token budget.
 
+        Uses a suffix-sum approach with binary search to find the optimal
+        cutoff in O(n) instead of the O(n^2) peel-from-front loop.
+
         Strategy:
-        1. Always include the most recent turns (preserve recency)
-        2. Remove oldest turns first when over budget
-        3. Track how many turns were truncated
+        1. Build per-turn token costs from newest to oldest
+        2. Compute cumulative sum from the tail
+        3. Binary search for the first index whose cumulative total fits budget
 
         Args:
             turns: All conversation turns
@@ -676,36 +694,45 @@ class ContextAssemblyService:
         if not turns:
             return [], 0
 
-        # Start with all turns
-        selected = list(turns)
-        turns_truncated = 0
-
-        # Calculate current token usage
-        def calculate_tokens(turn_list: list[ConversationTurn]) -> int:
-            total = 0
-            for turn in turn_list:
-                if turn.representation == TurnRepresentation.FULL:
-                    total += turn.estimated_tokens_full
-                else:
-                    total += turn.estimated_tokens_compact
-            return total
-
-        current_tokens = calculate_tokens(selected)
-
-        # Cache summary tokens (avoid recalculating in loop)
         summary_tokens = estimate_tokens(summary) if summary else 0
-        current_tokens += summary_tokens
+        remaining_budget = budget_tokens - summary_tokens
+        if remaining_budget <= 0:
+            return turns[-1:], len(turns) - 1
 
-        # Remove oldest turns until within budget
-        while current_tokens > budget_tokens and len(selected) > 1:
-            selected = selected[1:]  # Remove oldest
-            turns_truncated += 1
-            current_tokens = calculate_tokens(selected) + summary_tokens
+        n = len(turns)
+        costs = []
+        for turn in turns:
+            if turn.representation == TurnRepresentation.FULL:
+                tok = turn.estimated_tokens_full
+                if tok == 0 and turn.content:
+                    tok = estimate_tokens(turn.content)
+                costs.append(tok)
+            else:
+                costs.append(turn.estimated_tokens_compact)
+
+        # Suffix sums: suffix_sum[i] = sum of costs[i..n-1]
+        suffix_sum = [0] * (n + 1)
+        for i in range(n - 1, -1, -1):
+            suffix_sum[i] = suffix_sum[i + 1] + costs[i]
+
+        # Binary search for the earliest index where suffix_sum[idx] <= remaining_budget
+        lo, hi = 0, n - 1
+        best_start = n - 1  # At minimum, include the last turn
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if suffix_sum[mid] <= remaining_budget:
+                best_start = mid
+                hi = mid - 1
+            else:
+                lo = mid + 1
+
+        selected = turns[best_start:]
+        turns_truncated = best_start
 
         if turns_truncated > 0:
             logger.debug(
                 f"Truncated {turns_truncated} turns to fit budget: "
-                f"{current_tokens} tokens (budget: {budget_tokens})"
+                f"{suffix_sum[best_start]} tokens (budget: {budget_tokens})"
             )
 
         return selected, turns_truncated

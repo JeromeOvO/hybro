@@ -1,6 +1,6 @@
 # System Design Review: Hybro Frontend + Multi-Agents Backend
 
-**Date**: February 25, 2026 (updated from Feb 23)
+**Date**: February 25, 2026 (updated from Feb 23; audit pass Feb 25 PM)
 **Scope**: Full-stack architecture review covering `hybro-frontend` and `multi-agents-backend`
 
 ---
@@ -30,13 +30,14 @@ The frontend serves two portals via subdomain routing:
 | ---------------- | ---------------------------------------- |
 | Framework        | FastAPI (async Python, Uvicorn)           |
 | Database         | MongoDB (Motor async driver)              |
-| Vector DB        | Pinecone (semantic agent matching)        |
+| Vector DB        | Pinecone (agent matching + memory search) |
 | Auth             | Clerk JWT + API Key (SHA-256)             |
 | Agent Protocol   | A2A (Agent-to-Agent) via `a2a-sdk`        |
 | Real-time        | SSE via `sse-starlette`                   |
-| LLMs             | OpenAI (GPT-5-mini), Google Gemini        |
+| LLMs             | OpenAI (GPT-5-mini), Google Gemini 2.0    |
 | Config           | pydantic-settings                         |
 | Observability    | OpenTelemetry + Loguru                    |
+| Caching/TTL      | `cachetools.TTLCache`                     |
 
 ### Core Data Flow
 
@@ -45,12 +46,17 @@ User types message
     └─→ RoomChatInput.onSubmit()
         └─→ useRoomWebhook.sendUserMessage()
             ├─→ Zustand: addLiveMessage (optimistic user msg + processing placeholder)
-            ├─→ POST /api/v1/roomCenter/sendMessage (creates message in DB)
-            ├─→ POST /api/v1/orchestrationCenter/processRoomUserMessage (fire & forget)
+            ├─→ POST /api/v1/roomCenter/sendMessage
+            │       ├─→ Creates user message + agent messages in DB
+            │       └─→ background_tasks.add_task(process_room_user_message)
+            │               ├─→ V2 Supervisor path (if room.extend_info.use_supervisor)
+            │               │       └─→ SupervisorExecutor.run() → decide → dispatch → synthesis
+            │               └─→ V1 Legacy path (QueueExecutor)
+            │                       └─→ Sequential agent processing + coordinator summary
             └─→ SSE stream delivers events:
                 ├─→ task_submitted  → addLiveMessage (task bubble)
                 ├─→ task_update     → replaceLiveMessage (update task status)
-                ├─→ agent_response  → addLiveMessage (final agent message)
+                ├─→ agent_token     → streaming token display
                 └─→ processing_status=completed → setProcessing(false)
 
 Final UI = React Query cached messages ∪ Zustand live messages (deduped by ID, sorted)
@@ -164,29 +170,28 @@ while len(message_queue) > 0:
 
 ### 2.5 HIGH: Potential Double-Processing Race Condition
 
-**Location**: `hybro-frontend/src/hooks/useRoomWebhook.ts` (`sendUserMessage`)
+**Location**: `api/room_center.py` (`sendMessage`), `api/orchestration_center.py` (`processRoomUserMessage`)
 
-The frontend sends two requests:
+The `sendMessage` endpoint now auto-triggers processing via `background_tasks.add_task()`:
 
-```typescript
-// Step 1: Create message (backend may auto-trigger processing)
-const createResponse = await SendMessage(roomId, userInput, ...)
-
-// Step 3: Fire-and-forget processing call (kept for "redundancy")
-processRoomUserMessage({...}).catch(error => {
-    console.log('backend auto-processes anyway:', error)
-})
+```python
+# room_center.py — sendMessage endpoint
+# Processing happens atomically to prevent orphaned messages on page refresh.
+if room_center_response.success and room_center_response.message_id:
+    background_tasks.add_task(
+        room_message_center.process_room_user_message, orchestration_request
+    )
 ```
 
-The comment indicates the backend auto-triggers processing, but the explicit call is retained "for redundancy."
+However, the legacy `POST /api/v1/orchestrationCenter/processRoomUserMessage` endpoint **still exists** and performs the same processing. If the frontend still calls both, or if an external client calls the legacy endpoint, the same message is processed twice.
 
 **Impact**:
-- If both the auto-trigger and the explicit call succeed, the same user message is processed twice, leading to duplicate agent calls, duplicate SSE events, and confused UI state.
-- The backend's `process_room_user_message` does not appear to have an idempotency guard against concurrent invocations for the same user message.
+- If both paths trigger for the same user message, duplicate agent calls, duplicate SSE events, and confused UI state result.
+- The backend's `process_room_user_message` does not have an idempotency guard against concurrent invocations for the same user message.
 
 **Recommendation**:
-- **Option A**: Remove the redundant `processRoomUserMessage` call entirely — trust the backend auto-trigger.
-- **Option B**: Add an idempotency guard on the backend (e.g., an atomic `processing_started` flag on the user message document, checked before starting work).
+- **Option A (quick)**: Remove or deprecate the legacy `processRoomUserMessage` endpoint. Add a `processing_started_at` timestamp on the user message document and check it atomically before starting work.
+- **Option B (robust)**: Add an idempotency guard via an atomic `findOneAndUpdate` that sets a `processing_started` flag, returning the previous value. Only proceed if the flag was not already set.
 
 ---
 
@@ -212,19 +217,23 @@ GET /api/v1/sse/room/{roomId}/stream?token=<clerk-jwt>
 
 ---
 
-### 2.7 MEDIUM: Unbounded Memory Growth — Cancelled Messages Set
+### 2.7 ~~MEDIUM~~ RESOLVED: Unbounded Memory Growth — Cancelled Messages Set
 
 **Location**: `services/sse_services.py` (`SSEManager.cancelled_messages`)
 
+**Previous state**: `self.cancelled_messages: set[str] = set()` — unbounded set.
+
+**Current state (Feb 25)**: Migrated to `cachetools.TTLCache`:
+
 ```python
-self.cancelled_messages: set[str] = set()
+self.cancelled_messages: TTLCache[str, bool] = TTLCache(maxsize=10_000, ttl=3600)
+self._terminal_status_sent: TTLCache[str, str] = TTLCache(maxsize=10_000, ttl=300)
+self._cancellation_tokens: TTLCache[str, CancellationToken] = TTLCache(maxsize=10_000, ttl=3600)
 ```
 
-Cancelled message IDs are added to this set but only removed when the specific workflow calls `clear_cancellation()`. If a cancellation happens after the workflow is already complete, or if `clear_cancellation()` is never called (e.g., due to an exception), the ID remains in memory forever.
+All three in-memory stores now have TTL-based auto-eviction (1 hour for cancellation data, 5 minutes for terminal status dedup) and capped sizes. `CancellationToken` objects are also TTL-managed.
 
-**Impact**: Under heavy usage with frequent cancellations, this set grows without bound, consuming increasing memory.
-
-**Recommendation**: Store a `(message_id, timestamp)` tuple and add periodic cleanup that prunes entries older than a threshold (e.g., 30 minutes). Alternatively, use a TTL-based cache like `cachetools.TTLCache`.
+**Status**: ✅ **RESOLVED**
 
 ---
 
@@ -362,14 +371,14 @@ When an external A2A agent is down or slow, every user message targeting that ag
 | 2.1  | Critical   | In-memory SSE state prevents horizontal scaling   | Cannot scale backend       |
 | 2.2  | Critical   | No durable task queue, all in-process             | Lost work on crash         |
 | 2.3  | High       | httpx client leak (connections never closed)       | Resource exhaustion        |
-| 2.4  | High       | Sequential agent processing                       | Poor latency               |
+| 2.4  | High       | Sequential agent processing                       | Poor latency (V1 only)    |
 | 2.5  | High       | Potential double-processing race condition         | Duplicate agent calls      |
 | 2.6  | High       | JWT token in SSE query parameter                   | Token exposure             |
-| 2.7  | Medium     | Unbounded `cancelled_messages` set                 | Memory leak                |
+| 2.7  | ~~Medium~~ | ~~Unbounded `cancelled_messages` set~~             | ✅ Resolved (TTLCache)     |
 | 2.8  | Medium     | No MongoDB transactions for multi-step ops         | Inconsistent state         |
 | 2.9  | Medium     | Optimistic update ID mismatch window               | Duplicate UI messages      |
 | 2.10 | Medium     | No message size validation                         | DoS / OOM risk             |
-| 2.11 | Medium     | Unbounded conversation memory                      | Cost / quality degradation |
+| 2.11 | ~~Medium~~ | ~~Unbounded conversation memory~~                  | ✅ Resolved (CM Phases 1–5)|
 | 2.12 | Low-Medium | Overly permissive CORS                             | Attack surface             |
 | 2.13 | Low        | Unbounded orphan recovery tasks                    | Event loop saturation      |
 | 2.14 | Low        | No circuit breaker for external agents             | Cascading failures         |
@@ -392,8 +401,8 @@ When an external A2A agent is down or slow, every user message targeting that ag
 - Implement conversation memory windowing/summarization.
 - Add circuit breakers for external agent calls.
 
-**Phase 4 — Hardening** (Issues 2.7, 2.9, 2.12, 2.13):
-- TTL-based cleanup for cancellation set.
+**Phase 4 — Hardening** (Issues 2.9, 2.12, 2.13):
+- ~~TTL-based cleanup for cancellation set.~~ ✅ Resolved
 - Improve optimistic update deduplication.
 - Tighten CORS configuration.
 - Cap concurrent orphan recovery tasks.
@@ -408,11 +417,11 @@ This section tracks the resolution status of each identified issue. Updated as f
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
 | 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — HITL design (§3) depends on this fix; requires Redis Pub/Sub |
 | 2.2  | No durable task queue, all in-process             | 🔴 Open      | Production blocker; no work started                                              |
-| 2.3  | httpx client leak (connections never closed)       | 🔴 Open      | **Blocker for HITL** — `reply_to_task()` inherits this leak (HITL Risk 17)       |
-| 2.4  | Sequential agent processing                       | 🟡 Partial   | Supervisor V2 supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
-| 2.5  | Potential double-processing race condition         | 🔴 Open      | No idempotency guard implemented                                                 |
+| 2.3  | httpx client leak (connections never closed)       | 🔴 Open      | **Blocker for HITL** — 3 methods still create `httpx.AsyncClient(timeout=600.0)` without closing |
+| 2.4  | Sequential agent processing                       | 🟡 Partial   | V2 Supervisor supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
+| 2.5  | Potential double-processing race condition         | 🟡 Partial   | `sendMessage` now auto-triggers processing; legacy `processRoomUserMessage` endpoint still exists |
 | 2.6  | JWT token in SSE query parameter                   | 🔴 Open      | Security risk; no work started                                                   |
-| 2.7  | Unbounded `cancelled_messages` set                 | 🔴 Open      | Memory leak; no TTL cleanup implemented                                          |
+| 2.7  | Unbounded `cancelled_messages` set                 | 🟢 Resolved  | Migrated to `cachetools.TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | 2.8  | No MongoDB transactions for multi-step ops         | 🔴 Open      | Consistency risk; no work started                                                |
 | 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
 | 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
@@ -957,10 +966,32 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 - **§15 Observability**: `context_occupancy_pct` logged at threshold-appropriate levels (debug/info/warning/error) for both supervisor and agent contexts
 
 **Performance Decisions:**
-- `update_room_summary()` runs as `asyncio.create_task()` (fire-and-forget) — summary is for future loops, not current response
-- `compaction_service.compact_room_memory()` runs as `asyncio.create_task()` (fire-and-forget) — compaction is background work
+- `update_room_summary()` runs as inline `await` (NOT fire-and-forget) — summary must complete before compaction to prevent last-writer-wins race on the RoomMemory document (both do full `$set` saves)
+- `compaction_service.compact_if_needed()` runs as inline `await` within the per-room lock — fire-and-forget would race with the next message's writes
 - Context is built once per supervisor loop invocation (§5.1), not per iteration
 - `agent_dicts` serialized once and reused for both ContextAssemblyService and extend_info
+
+**Bug Fixes Applied (2026-02-25 Post-Phase-5 Reviews — 4 rounds, 12 bugs):**
+
+*Round 1 — Race Conditions & Data Loss:*
+1. **CRITICAL: Data race between summary update and compaction** — `_update_room_summary_safe` changed from fire-and-forget `asyncio.create_task` to `await` (RoomMessageCenter.py:1114-1122)
+2. **HIGH: Silent data loss in compact turn eviction** — `_format_turns_for_summary` rewritten to use `turn.to_context_string()` so compact turns render `brief_summary + pointer` instead of `"[content unavailable]"` (context_utils.py:324-330)
+3. **MEDIUM: Redundant DB load in compaction trigger** — `_trigger_compaction_safe` now calls `compact_if_needed()` instead of separate `should_compact()` + `compact_room_memory()` (RoomMessageCenter.py:1154-1159)
+
+*Round 2 — Budget & Correctness:*
+4. **MEDIUM: Negative token savings in compaction stats** — Added `max(0, ...)` guard to `compact_tokens_saved` calculation (compaction_service.py:468)
+5. **MEDIUM: Legacy context builder missing hard cap** — Added `MAX_CONTEXT_CHARS` truncation to `build_context_for_agent()` (context_utils.py:493-498)
+6. **MEDIUM: LLM extraction merging bug** — `update_room_summary` changed to `is not None` checks for list fields so empty lists from LLM correctly clear fields (memory_service.py:813-822)
+7. **LOW: Unbounded summary growth** — Introduced `MAX_SUMMARY_CHARS = 4000` and front-trim in `add_turn_to_history` (context_utils.py:305-311)
+
+*Round 3 — Missing Rendering & False Errors:*
+8. **MEDIUM: recent_agent_contributions never rendered** — `_build_stable_prefix` now includes `recent_agent_contributions` in output (context_assembly_service.py:455-457)
+9. **LOW: False-positive error logs on idempotent saves** — Changed `update_room_memory_by_room_id` and `update_room_memory_by_memory_id` to return `matched_count > 0` instead of `modified_count > 0` (mongodb.py:1294, 1315)
+
+*Round 4 — Context Completeness & Persistence:*
+10. **MEDIUM: Agent context suppressed plaintext summary** — Removed conditional `if turns_truncated > 0` when passing `memory_content.summary`, ensuring it's always included (context_assembly_service.py:300-302)
+11. **MEDIUM: Compaction persistence failure silently ignored** — Added explicit `save_success` check in `compact_room_memory`, logs WARNING and adds error to `CompactionResult.errors` on failure (compaction_service.py:258-273)
+12. **LOW: `_has_room_summary_content` didn't check contributions** — Added `recent_agent_contributions` to the check (context_assembly_service.py:489)
 
 **Design Compliance:**
 - §11.1 Pre-Loop Context: ✅
@@ -1119,6 +1150,51 @@ Comprehensive item-by-item verification of the entire Context Memory System impl
 | E2E tests with real infrastructure | §18 Phase 5 | Requires MongoDB + Pinecone + LLM integration |
 | Performance benchmarks | §18 Phase 5 | Requires production traffic patterns |
 
+### 6.5 Architecture Improvements (Implemented, Not in Original Review)
+
+These improvements were implemented after the original review and are documented here for completeness.
+
+#### A-3: Cooperative Cancellation — CancellationToken
+
+**Files**: `common/utils/cancellation.py`, `models/processing.py`, `services/sse_services.py`
+
+Replaces the old polling-based `SSEManager.is_cancelled(message_id)` checkpoint pattern with an event-driven `CancellationToken` threaded through the processing pipeline:
+
+- `CancellationToken` wraps an `asyncio.Event`; cancellation is instant (no poll interval)
+- `token.race(awaitable)` lets any I/O call be transparently interruptible
+- `token.check()` provides a lightweight synchronous checkpoint
+- `CancellationError` exception propagates cleanly up the call stack
+- SSE manager creates tokens on processing start and pre-signals if cancel arrived first
+- All three TTL caches (`cancelled_messages`, `_terminal_status_sent`, `_cancellation_tokens`) use `cachetools.TTLCache`
+
+#### A-4: Module Decomposition — RoomMessageCenter Refactoring
+
+**Files**: `modules/SupervisorExecutor.py`, `modules/QueueExecutor.py`, `modules/AgentMessageProcessor.py`, `modules/AgentDispatcher.py`, `modules/ResponseProcessor.py`, `modules/TaskStateManager.py`
+
+The monolithic `RoomMessageCenter` was decomposed into focused modules:
+
+| Module | Responsibility |
+|--------|----------------|
+| `RoomMessageCenter` | Entry point, orchestrates V1/V2 routing, post-loop lifecycle |
+| `SupervisorExecutor` | V2 decide → dispatch → record cycle, push-pause/resume, step budget |
+| `QueueExecutor` | V1 sequential queue processing (non-supervisor rooms, fast paths) |
+| `AgentMessageProcessor` | Single-agent message processing (streaming, sync, task tracking) |
+| `AgentDispatcher` | Agent assignment resolution (group expansion, @mention routing) |
+| `ResponseProcessor` | Streaming/sync response handling, SSE event emission |
+| `TaskStateManager` | Task state machine (submitted → working → completed/failed) |
+
+#### Discovery CORS Middleware
+
+**File**: `common/middleware/discovery_cors_middleware.py`
+
+Separate permissive CORS middleware applied only to `/api/v1/discovery/*` paths, allowing external API access from any origin while keeping the main CORS policy restricted to frontend origins.
+
+#### Rate Limiting
+
+**Files**: `services/rate_limit_service.py`, `services/discovery_rate_limit_service.py`
+
+Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has separate limits from authenticated endpoints.
+
 ### 6.2 HITL Phases
 
 | Phase | Status | Date | Notes |
@@ -1138,10 +1214,10 @@ Comprehensive item-by-item verification of the entire Context Memory System impl
 |-------|--------|------|-------|
 | SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker |
 | SDR 2.2: Durable Task Queue | 🔲 NOT STARTED | - | |
-| SDR 2.3: httpx client fix | 🔲 NOT STARTED | - | P0 blocker |
-| SDR 2.5: Double-Processing Guard | 🔲 NOT STARTED | - | |
+| SDR 2.3: httpx client fix | 🔲 NOT STARTED | - | P0 blocker — 3 methods still leak |
+| SDR 2.5: Double-Processing Guard | 🟡 PARTIAL | 2026-02-25 | `sendMessage` auto-triggers; legacy endpoint still exists |
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
-| SDR 2.7: TTL for cancelled_messages | 🔲 NOT STARTED | - | |
+| SDR 2.7: TTL for cancelled_messages | ✅ RESOLVED | 2026-02-25 | `TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
 | SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |

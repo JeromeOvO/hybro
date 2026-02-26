@@ -544,6 +544,9 @@ class RoomMemoryService:
                     status_code=500,
                 )
 
+        # Track user interaction (§4.3 UserMemory)
+        await self._track_user_interaction(user_id)
+
         return RoomCenterMemoryResponse(
             room_id=room_id,
             memory_id=room_memory.memory_id,
@@ -553,12 +556,38 @@ class RoomMemoryService:
             status_code=200,
         )
 
+    async def _track_user_interaction(self, user_id: str | None) -> None:
+        """Fire-and-forget: increment user interaction counter in UserMemory (§4.3)."""
+        if not user_id:
+            return
+        try:
+            await self.database_service.increment_user_interactions(user_id)
+        except Exception as e:
+            logger.debug("UserMemory tracking skipped: %s", e)
+
+    async def _track_agent_call(
+        self,
+        agent_id: str,
+        success: bool,
+        response_time_ms: float = 0.0,
+    ) -> None:
+        """Fire-and-forget: record agent call outcome in AgentMemory (§4.4)."""
+        try:
+            await self.database_service.record_agent_call(
+                agent_id=agent_id,
+                success=success,
+                response_time_ms=response_time_ms,
+            )
+        except Exception as e:
+            logger.debug("AgentMemory tracking skipped: %s", e)
+
     async def add_agent_response_to_memory(
         self,
         room_id: str,
         agent_id: str,
         agent_name: str,
         response_text: str,
+        was_successful: bool = True,
     ) -> RoomCenterMemoryResponse:
         """
         Add an agent's response to the room conversation history.
@@ -569,6 +598,7 @@ class RoomMemoryService:
             agent_id: The agent's ID
             agent_name: The agent's display name
             response_text: The agent's response text
+            was_successful: Whether the agent completed successfully
 
         Returns:
             RoomCenterMemoryResponse with success status
@@ -599,6 +629,7 @@ class RoomMemoryService:
             content=response_text,
             agent_id=agent_id,
             agent_name=agent_name,
+            was_successful=was_successful,
         )
 
         # Log context stats
@@ -622,6 +653,35 @@ class RoomMemoryService:
                 error="Failed to update room memory",
                 status_code=500,
             )
+
+        # Post-save: enrich turn_notes via LLM for long turns (§6.2)
+        try:
+            from common.utils.context_utils import (
+                LLM_TURN_NOTES_THRESHOLD,
+                estimate_tokens,
+                extract_turn_notes_llm,
+            )
+
+            if response_text and estimate_tokens(response_text) > LLM_TURN_NOTES_THRESHOLD:
+                history = room_memory.get_conversation_history()
+                if history:
+                    last_turn = history[-1]
+                    enriched_notes = await extract_turn_notes_llm(response_text)
+                    if enriched_notes and last_turn.turn_notes != enriched_notes:
+                        last_turn.turn_notes = enriched_notes
+                        await self.database_service.update_room_memory_by_room_id(
+                            room_id, room_memory
+                        )
+        except Exception as e:
+            logger.debug(
+                "RoomMemoryService: LLM turn_notes enrichment skipped: %s", e
+            )
+
+        # Track agent call outcome (§4.4 AgentMemory)
+        await self._track_agent_call(
+            agent_id=agent_id,
+            success=was_successful,
+        )
 
         return RoomCenterMemoryResponse(
             room_id=room_id,
@@ -783,7 +843,11 @@ class RoomMemoryService:
             '- "key_decisions": list of strings — decisions that should persist\n'
             '- "open_questions": list of strings — unresolved questions or blockers\n'
             '- "recent_agent_contributions": list of strings — last 3-5 agent result summaries\n'
-            '- "important_constraints": list of strings — hard constraints stated\n\n'
+            '- "important_constraints": list of strings — hard constraints stated\n'
+            '- "room_facts": list of strings — durable facts worth remembering across sessions '
+            '(e.g. user preferences, project names, deadlines, technical constraints). '
+            "Only include facts NOT already obvious from the goal or decisions. "
+            "Return an empty list if there are no new facts.\n\n"
             f"Synthesis:\n{synthesis_text}"
         )
 
@@ -824,6 +888,29 @@ class RoomMemoryService:
             last_updated_at=utcnow(),
             updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
         )
+
+        # Extract and merge room facts (§4.2)
+        extracted_facts_raw = extracted.get("room_facts", [])
+        if isinstance(extracted_facts_raw, list) and extracted_facts_raw:
+            from models.memory import RoomFact
+
+            existing_fact_contents = {f.content.lower().strip() for f in room_memory.room_facts}
+            for fact_text in extracted_facts_raw:
+                if (
+                    isinstance(fact_text, str)
+                    and fact_text.strip()
+                    and fact_text.lower().strip() not in existing_fact_contents
+                ):
+                    room_memory.room_facts.append(
+                        RoomFact(
+                            content=fact_text.strip(),
+                            source_turn_id=synthesis_turn_id,
+                        )
+                    )
+                    existing_fact_contents.add(fact_text.lower().strip())
+            MAX_ROOM_FACTS = 50
+            if len(room_memory.room_facts) > MAX_ROOM_FACTS:
+                room_memory.room_facts = room_memory.room_facts[-MAX_ROOM_FACTS:]
 
         success = await self.database_service.update_room_memory_by_room_id(
             room_id, room_memory

@@ -8,6 +8,7 @@ Original content is always retrievable on demand.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 """
 
+from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.compaction import (
@@ -25,6 +26,15 @@ from services.content_storage_service import (
 from services.database_service import db_service
 
 logger = get_logger(__name__)
+
+
+def _safe_tokens_full(turn: ConversationTurn) -> int:
+    """Return estimated_tokens_full, falling back to estimate_tokens() for legacy turns."""
+    if turn.estimated_tokens_full > 0:
+        return turn.estimated_tokens_full
+    if turn.content:
+        return estimate_tokens(turn.content)
+    return 0
 
 
 class CompactionService:
@@ -93,7 +103,7 @@ class CompactionService:
             return True
 
         # Check token threshold
-        token_estimate = sum(t.estimated_tokens_full for t in full_turns)
+        token_estimate = sum(_safe_tokens_full(t) for t in full_turns)
         if token_estimate > config.max_total_tokens:
             logger.debug(
                 f"CompactionService: Room {room_id} has {token_estimate} tokens "
@@ -129,7 +139,7 @@ class CompactionService:
 
         needs = len(full_turns) > config.max_full_turns
         if not needs:
-            token_estimate = sum(t.estimated_tokens_full for t in full_turns)
+            token_estimate = sum(_safe_tokens_full(t) for t in full_turns)
             needs = token_estimate > config.max_total_tokens
 
         if not needs:
@@ -247,13 +257,11 @@ class CompactionService:
             room_memory.total_compactions += 1
             room_memory.last_activity_at = utcnow()
 
-            # Write back to the same field that get_conversation_history() sourced from
-            if room_memory.conversation_history:
-                room_memory.conversation_history = history
-            elif room_memory.memory_content and room_memory.memory_content.conversation_history:
+            # Write back to both fields to ensure consistency regardless of
+            # which field get_conversation_history() sourced from.
+            room_memory.conversation_history = history
+            if room_memory.memory_content:
                 room_memory.memory_content.conversation_history = history
-            else:
-                room_memory.conversation_history = history
 
             save_success = await self.db_service.update_room_memory_by_room_id(
                 room_id, room_memory
@@ -463,7 +471,7 @@ class CompactionService:
             t for t in history if t.representation == TurnRepresentation.COMPACT
         ]
 
-        full_tokens = sum(t.estimated_tokens_full for t in full_turns)
+        full_tokens = sum(_safe_tokens_full(t) for t in full_turns)
         compact_tokens_saved = sum(
             max(0, t.estimated_tokens_full - t.estimated_tokens_compact)
             for t in compact_turns

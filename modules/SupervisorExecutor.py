@@ -355,6 +355,7 @@ class SupervisorExecutor:
                                 agent_id=result.agent_id,
                                 agent_name=result.agent_name,
                                 response_text=result.response_text,
+                                was_successful=True,
                             )
 
                     # Check for PAUSED (push notification agent)

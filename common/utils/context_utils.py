@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 
 # Configuration
 MAX_HISTORY_TURNS = 20  # Keep last N turns in full detail
-MAX_CONTEXT_CHARS = 12000  # Approximate character limit before summarization kicks in
+MAX_CONTEXT_CHARS = 500_000  # Safety net for char-level truncation; token budget is the real limiter
 MAX_SUMMARY_CHARS = 4000  # Cap for MemoryContent.summary to prevent unbounded growth
 SUMMARY_PREVIEW_LENGTH = 150  # Characters to show per turn when summarizing
 
@@ -168,6 +168,50 @@ def extract_turn_notes(content: str | None) -> dict | None:
         "tags": [],  # Placeholder for future LLM-based tag extraction
         "one_liner": one_liner,
     }
+
+
+LLM_TURN_NOTES_THRESHOLD = 100
+
+
+async def extract_turn_notes_llm(content: str) -> dict | None:
+    """Extract structured turn notes using a fast LLM for long content.
+
+    Callers should check content length before calling. This function always
+    attempts the LLM path and falls back to the heuristic on failure.
+
+    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.2 and §8.3.
+    """
+    if not content or len(content.strip()) < 10:
+        return None
+
+    try:
+        from services.openai_service import openai_service
+
+        prompt = (
+            "Extract structured notes from the following conversation turn. "
+            "Return ONLY valid JSON with these keys:\n"
+            '- "keywords": list of 5-10 important keywords\n'
+            '- "entities": list of named entities (people, projects, tools)\n'
+            '- "tags": list of topic tags (e.g. "debugging", "deployment")\n'
+            '- "one_liner": a single sentence summary (max 100 chars)\n\n'
+            f"Turn content:\n{content[:3000]}"
+        )
+        result = await openai_service.call_supervisor_llm_json(
+            system_prompt="Extract structured notes. Respond with valid JSON only.",
+            user_prompt=prompt,
+            model="gpt-4o-mini",
+        )
+        if isinstance(result, dict):
+            return {
+                "keywords": result.get("keywords", [])[:10],
+                "entities": result.get("entities", [])[:5],
+                "tags": result.get("tags", [])[:5],
+                "one_liner": (result.get("one_liner", "") or "")[:150],
+            }
+    except Exception as e:
+        logger.debug("extract_turn_notes_llm failed, using heuristic: %s", e)
+
+    return extract_turn_notes(content)
 
 
 def clean_mention_format(
@@ -346,6 +390,9 @@ def build_context_for_agent(
     max_tokens: int | None = None,
 ) -> str:
     """
+    DEPRECATED: Use ContextAssemblyService.build_agent_execution_context() instead.
+    This function is kept only as a fallback and will be removed in a future release.
+
     Build context string for an agent request (ChatGPT/Claude style).
 
     This creates a clean conversation context that:

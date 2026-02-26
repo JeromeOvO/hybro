@@ -604,9 +604,11 @@ class RoomMessageCenter:
         3. Refresh the agent registry from the database (agents may have
            changed while the execution was paused).
         4. Add the completed agent's response to room memory.
-        5. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
+        5. Refresh conversation_context from room memory (§7.6 — context may
+           be stale after a push-notification pause).
+        6. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
            continue the adaptive loop.
-        6. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
+        7. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
         """
         from models.supervisor_v2 import (
             SupervisorTrajectory,
@@ -678,6 +680,7 @@ class RoomMessageCenter:
                 agent_id=paused_agent_id,
                 agent_name=paused_agent_name or "Agent",
                 response_text=task_result_text,
+                was_successful=True,
             )
 
         # 5. Refresh agent registry from database (not serialized)
@@ -693,6 +696,54 @@ class RoomMessageCenter:
                 details="V2 resume: room not found",
             )
             return False
+
+        # 5b. Refresh conversation_context from room memory (§7.6).
+        # The serialized context may be stale after a push-notification pause
+        # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
+        # with the same logic used in _prepare_for_supervisor_v2 / _prepare_clarify_resume_v2.
+        try:
+            from services.context_assembly_service import context_assembly_service
+
+            room_memory = await room_memory_service.get_room_memory(room_id)
+            if room_memory:
+                agent_dicts = [
+                    {"agent_id": aid, "agent_name": aname}
+                    for aid, aname in (room.room_agent_set or {}).items()
+                ]
+                memory_search_results = None
+                try:
+                    from services.memory_search_service import memory_search_service
+
+                    search_response = await memory_search_service.search(
+                        query=message_text,
+                        room_id=room_id,
+                    )
+                    if search_response.results:
+                        memory_search_results = search_response.results
+                except Exception as search_err:
+                    logger.debug(
+                        "supervisor_v2_resume: memory search skipped: %s",
+                        search_err,
+                    )
+                result_ctx = context_assembly_service.build_supervisor_context(
+                    room_memory=room_memory,
+                    current_task=message_text,
+                    agent_registry=agent_dicts,
+                    max_turns=5,
+                    memory_search_results=memory_search_results,
+                )
+                conversation_context = result_ctx.context
+                logger.debug(
+                    "supervisor_v2_resume: refreshed conversation_context for %s "
+                    "(occupancy=%.1f%%)",
+                    room_id, result_ctx.occupancy_pct,
+                )
+        except Exception as e:
+            logger.warning(
+                "supervisor_v2_resume: failed to refresh conversation_context "
+                "for %s, using serialized fallback: %s",
+                room_id, e,
+            )
 
         agent_registry: list[AgentProfile] = []
         room_agent_items = list((room.room_agent_set or {}).items())

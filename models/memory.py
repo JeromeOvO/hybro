@@ -271,8 +271,19 @@ class AgentSuccessRecord(BaseModel):
     total_calls: int = 0
     successful_calls: int = 0
     last_called_at: datetime | None = None
+    total_response_time_ms: float = 0.0
     average_response_time_ms: float = 0.0
     failure_reasons: list[str] = Field(default_factory=list)  # Recent failure reasons
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compute_average_response_time(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            total = values.get("total_response_time_ms", 0.0)
+            calls = values.get("total_calls", 0)
+            if calls > 0 and total > 0:
+                values["average_response_time_ms"] = round(total / calls, 2)
+        return values
 
 
 class MemoryContent(BaseModel):
@@ -411,6 +422,7 @@ class AgentMemory(BaseModel):
     # Performance metrics
     total_calls: int = 0
     successful_calls: int = 0
+    total_response_time_ms: float = 0.0
     average_response_time_ms: float = 0.0
 
     # Task type performance
@@ -421,3 +433,13 @@ class AgentMemory(BaseModel):
 
     # Metadata
     last_called_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compute_avg_response_time(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            total = values.get("total_response_time_ms", 0.0)
+            calls = values.get("total_calls", 0)
+            if calls > 0 and total > 0:
+                values["average_response_time_ms"] = round(total / calls, 2)
+        return values

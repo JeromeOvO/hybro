@@ -1321,6 +1321,81 @@ class MongoDB:
         result = await self.room_memories_collection.delete_one({"room_id": room_id})
         return result.deleted_count > 0
 
+    # ======================== User Memory management ========================
+
+    async def get_user_memory(self, user_id: str):
+        """Get or create a UserMemory document by user_id."""
+        doc = await self.user_memories_collection.find_one({"user_id": user_id})
+        if doc:
+            from models.memory import UserMemory
+            return UserMemory(**doc)
+        return None
+
+    async def upsert_user_memory(self, user_id: str, update_fields: dict) -> bool:
+        """Upsert a UserMemory document. Creates if not found."""
+        result = await self.user_memories_collection.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+            upsert=True,
+        )
+        return result.matched_count > 0 or result.upserted_id is not None
+
+    async def increment_user_interactions(self, user_id: str) -> bool:
+        """Atomically increment total_interactions and update last_active_at."""
+        from common.utils.time import utcnow
+
+        result = await self.user_memories_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {"total_interactions": 1},
+                "$set": {"last_active_at": utcnow()},
+                "$setOnInsert": {"user_id": user_id, "created_at": utcnow()},
+            },
+            upsert=True,
+        )
+        return result.matched_count > 0 or result.upserted_id is not None
+
+    # ======================== Agent Memory management ========================
+
+    async def get_agent_memory(self, agent_id: str):
+        """Get an AgentMemory document by agent_id."""
+        doc = await self.agent_memories_collection.find_one({"agent_id": agent_id})
+        if doc:
+            from models.memory import AgentMemory
+            return AgentMemory(**doc)
+        return None
+
+    async def record_agent_call(
+        self,
+        agent_id: str,
+        success: bool,
+        response_time_ms: float,
+    ) -> bool:
+        """Atomically record an agent call outcome.
+
+        Stores total_response_time_ms alongside total_calls so that
+        average_response_time_ms can be computed without a second round-trip.
+        """
+        from common.utils.time import utcnow
+
+        inc_fields: dict = {"total_calls": 1, "total_response_time_ms": response_time_ms}
+        if success:
+            inc_fields["successful_calls"] = 1
+
+        result = await self.agent_memories_collection.update_one(
+            {"agent_id": agent_id},
+            {
+                "$inc": inc_fields,
+                "$set": {"last_called_at": utcnow()},
+                "$setOnInsert": {
+                    "agent_id": agent_id,
+                },
+            },
+            upsert=True,
+        )
+
+        return result.matched_count > 0 or result.upserted_id is not None
+
     # Agent Group management
     async def add_agent_group(self, agent_group: AgentGroup) -> str:
         """

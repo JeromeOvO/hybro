@@ -1078,13 +1078,28 @@ class RoomServices:
         # Build budget-aware context via ContextAssemblyService (§11.1)
         agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
         conversation_context: str | None = None
+        memory_search_results = None
         if room_memory:
+            try:
+                from services.memory_search_service import memory_search_service
+
+                search_response = await memory_search_service.search(
+                    query=message_text,
+                    room_id=room.room_id,
+                )
+                if search_response.results:
+                    memory_search_results = search_response.results
+            except Exception as e:
+                logger.debug(
+                    "RoomServices: MemorySearch skipped: %s", e
+                )
             try:
                 result = context_assembly_service.build_supervisor_context(
                     room_memory=room_memory,
                     current_task=message_text,
                     agent_registry=agent_dicts,
                     max_turns=5,
+                    memory_search_results=memory_search_results,
                 )
                 conversation_context = result.context
             except Exception as e:
@@ -1221,6 +1236,20 @@ class RoomServices:
         if room_memory:
             from services.context_assembly_service import context_assembly_service
 
+            memory_search_results = None
+            try:
+                from services.memory_search_service import memory_search_service
+
+                search_response = await memory_search_service.search(
+                    query=message_text,
+                    room_id=room.room_id,
+                )
+                if search_response.results:
+                    memory_search_results = search_response.results
+            except Exception as e:
+                logger.debug(
+                    "RoomServices: MemorySearch skipped in clarify-resume: %s", e
+                )
             try:
                 agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
                 ctx_result = context_assembly_service.build_supervisor_context(
@@ -1228,6 +1257,7 @@ class RoomServices:
                     current_task=message_text,
                     agent_registry=agent_dicts,
                     max_turns=5,
+                    memory_search_results=memory_search_results,
                 )
                 conversation_context = ctx_result.context
             except Exception as e:
@@ -2175,7 +2205,8 @@ class RoomServices:
                         context = result.context
                     except Exception as e:
                         logger.warning(
-                            "ContextAssemblyService failed for agent, falling back: %s", e
+                            "ContextAssemblyService failed for agent, falling back to "
+                            "DEPRECATED build_context_for_agent (to be removed): %s", e
                         )
                         context = build_context_for_agent(
                             memory_content=room_memory_content,

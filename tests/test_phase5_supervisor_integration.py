@@ -451,7 +451,7 @@ class TestMaxContextCharsEnforcement:
     @pytest.fixture
     def service(self):
         """Create a ContextAssemblyService with mock settings."""
-        with patch("services.context_assembly_service.settings") as mock_settings:
+        with patch("models.context_config.settings") as mock_settings:
             mock_settings.context_model_window = 128000
             mock_settings.context_system_prompt_tokens = 2000
             mock_settings.context_tool_schema_tokens = 1000

@@ -47,6 +47,34 @@ class TokenBudget:
             self.system_prompt + self.tool_schemas + self.response_reserve
         )
 
+    @property
+    def room_context_tokens(self) -> int:
+        """Tokens allocated for room context (facts, agent roster)."""
+        return int(self.available_for_content * self.room_context_pct)
+
+    @property
+    def conversation_history_tokens(self) -> int:
+        """Tokens allocated for conversation history."""
+        return int(self.available_for_content * self.conversation_history_pct)
+
+    @property
+    def current_task_tokens(self) -> int:
+        """Tokens allocated for current task/request."""
+        return int(self.available_for_content * self.current_task_pct)
+
+    def get_budget_summary(self) -> dict[str, int]:
+        """Get a summary of token allocations."""
+        return {
+            "model_context_window": self.model_context_window,
+            "system_prompt": self.system_prompt,
+            "tool_schemas": self.tool_schemas,
+            "response_reserve": self.response_reserve,
+            "available_for_content": self.available_for_content,
+            "room_context": self.room_context_tokens,
+            "conversation_history": self.conversation_history_tokens,
+            "current_task": self.current_task_tokens,
+        }
+
 
 class CompactionConfig:
     """
