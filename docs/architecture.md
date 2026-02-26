@@ -18,6 +18,7 @@
 - [12. Authentication](#12-authentication)
 - [13. Key Interaction Diagrams](#13-key-interaction-diagrams)
 - [14. Conventions & Patterns for Contributors](#14-conventions--patterns-for-contributors)
+- [15. Known Issues, Risks & Future Improvements](#15-known-issues-risks--future-improvements)
 
 ---
 
@@ -78,7 +79,10 @@ The `getApiUrl(key)` helper in `lib/utils.ts` builds backend URLs as: `${NEXT_PU
 src/
 ├── app/                          # Next.js App Router
 │   ├── layout.tsx                # Root layout (Clerk, Theme, QueryProvider)
-│   ├── (auth)/                   # Auth pages (sign-in, sign-up)
+│   ├── (auth)/                   # Auth pages (centered layout)
+│   │   ├── layout.tsx            #   Auth layout (centered, background image)
+│   │   ├── sign-in/[[...sign-in]]/page.tsx  # Clerk SignIn (+ waitlist check)
+│   │   └── sign-up/[[...sign-up]]/page.tsx  # Clerk SignUp (+ waitlist check)
 │   ├── c/                        # Consumer portal routes
 │   │   ├── layout.tsx            #   Consumer layout (sidebar + header)
 │   │   ├── page.tsx              #   Landing page (redirects to /chat if signed in)
@@ -106,29 +110,59 @@ src/
 │   └── privacy/page.tsx          # Privacy policy
 │
 ├── components/
-│   ├── consumer/                 # Consumer-specific (sidebar, header)
-│   ├── developer/                # Developer-specific (sidebar, header, settings)
-│   ├── providers/                # Context providers (Clerk, React Query)
-│   ├── settings/                 # User settings dialog components
-│   ├── ui/                       # shadcn/ui primitives
+│   ├── consumer/                 # Consumer-specific
+│   │   ├── consumer-sidebar.tsx  #   Sidebar with room list, nav
+│   │   └── consumer-header.tsx   #   Top header bar
+│   ├── developer/                # Developer-specific
+│   │   ├── developer-sidebar.tsx #   Sidebar with nav, agents
+│   │   ├── developer-header.tsx  #   Top header bar
+│   │   └── agent-settings-card.tsx # Agent config form card
+│   ├── providers/                # Context providers
+│   │   ├── ClerkAuthProvider.tsx  #   Sets defaultGetToken for apiClient
+│   │   └── query-provider.tsx    #   TanStack React Query setup
+│   ├── settings/                 # User settings dialog
+│   │   ├── settings-dialog.tsx   #   Main settings dialog shell
+│   │   ├── settings-dialog-provider.tsx # Dialog open/close context
+│   │   ├── profile-section.tsx   #   Profile edit (name, avatar)
+│   │   ├── password-section.tsx  #   Change password
+│   │   ├── sessions-section.tsx  #   Active sessions management
+│   │   ├── danger-zone-section.tsx #  Delete account
+│   │   ├── settings-card.tsx     #   Reusable card wrapper
+│   │   ├── form-group.tsx        #   Form field wrapper
+│   │   ├── loading-button.tsx    #   Button with spinner
+│   │   └── password-input.tsx    #   Password visibility toggle
+│   ├── ui/                       # shadcn/ui primitives (25 components)
 │   ├── room-messages.tsx         # Message list renderer
 │   ├── room-chat-input.tsx       # Chat input with @mentions, groups
 │   ├── message-bubble.tsx        # Individual message display
 │   ├── task-status-message.tsx   # A2A task status card
-│   ├── workflow-message.tsx      # Workflow visualization
-│   ├── workflow-container.tsx    # Workflow step container
+│   ├── workflow-message.tsx      # Workflow visualization (DEAD CODE)
+│   ├── workflow-container.tsx    # Workflow step container (DEAD CODE)
 │   ├── agent-card.tsx            # Agent display card
 │   ├── agent-selector.tsx        # Multi-agent selector
 │   ├── group-selector.tsx        # Agent group selector
 │   ├── group-management-modal.tsx # CRUD modal for groups
 │   ├── room-setting-form.tsx     # Room configuration form
-│   └── markdown-content.tsx      # Markdown renderer
+│   ├── markdown-content.tsx      # Markdown renderer
+│   ├── developer-docs-content.tsx # Developer docs page content
+│   ├── cookie-banner.tsx         # GDPR cookie consent banner
+│   ├── theme-provider.tsx        # next-themes wrapper
+│   ├── theme-toggle.tsx          # Dark/light mode toggle button
+│   ├── icons.tsx                 # Custom SVG icons (GitHub, Discord, etc.)
+│   ├── logo.tsx                  # Hybro logo component
+│   ├── framework-badges.tsx      # Framework/tool icon badges
+│   ├── video-embed.tsx           # YouTube video embed (lazy-load)
+│   ├── nav-main.tsx              # Sidebar main navigation
+│   ├── nav-agent.tsx             # Sidebar agent nav item
+│   ├── nav-user.tsx              # User avatar/dropdown in sidebar
+│   ├── nav-discord-button.tsx    # Discord link in sidebar
+│   └── upgrade-button.tsx        # Pricing/upgrade sidebar button
 │
 ├── hooks/
 │   ├── useRoomWebhook.ts         # Core room orchestration hook
 │   ├── useRoomSSE.ts             # SSE connection management
 │   ├── useRoomMessages.ts        # Message store selectors
-│   ├── useWorkflow.ts            # Workflow lifecycle management
+│   ├── useWorkflow.ts            # Workflow lifecycle management (DEAD CODE)
 │   ├── useChatRoomCreation.ts    # Room creation + navigation
 │   ├── useMyAgents.ts            # Developer's registered agents
 │   ├── useGroupManagement.ts     # Agent group CRUD + selection
@@ -467,7 +501,7 @@ useRoomWebhook (orchestration)
     ├── useRoomSSE (connection management)
     │       │
     │       └── SSEConnection class (EventSource wrapper)
-    │           • Auto-reconnect (5 attempts, exponential backoff)
+    │           • Auto-reconnect (5 attempts, linear backoff: 1s, 2s, 3s...)
     │           • Manual disconnect on room change
     │
     ├── handleSSEMessage callback
@@ -757,3 +791,201 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 - The `useRoomWebhook` hook is the single orchestration point for the room page — it coordinates React Query, Zustand message store, Zustand UI store, and SSE. Any new room-level feature should integrate through this hook.
 - `pendingRoomData` in `useRoomUiStore` is used to pass the initial message from the chat creation page (`/c/chat`) to the room page (`/c/room/[id]`). It is consumed once on room load.
 - Agent group override state persists in `localStorage` per room via key `room-{roomId}-override-group`.
+
+---
+
+## 15. Known Issues, Risks & Future Improvements
+
+### 15.1 Architecture Issues
+
+#### `useRoomWebhook` is a God Hook (~944 lines)
+
+**File:** `src/hooks/useRoomWebhook.ts`
+
+The central room orchestration hook manages SSE handling, message sending, room settings, cancellation, DB hydration, reconciliation, agent name resolution, placeholder lifecycle, and timeout safety nets — all in one function. It holds **8 refs** for tracking internal state and has a dependency array on `sendUserMessage` that spans nearly a full screen.
+
+**Risk:** High cognitive load for contributors; hard to test in isolation; any change can introduce subtle regressions across unrelated features.
+
+**Recommendation:** Split into focused composable hooks: `useRoomHydration`, `useSSEMessageHandler`, `useSendMessage`, `useCancelProcessing`, `useAgentNameResolver`. The current `useRoomWebhook` would become a thin orchestrator that wires them together.
+
+---
+
+#### Dead Code: Workflow Subsystem
+
+**Files:** `src/hooks/useWorkflow.ts`, `src/components/workflow-message.tsx`, `src/components/workflow-container.tsx`
+
+The entire workflow orchestration subsystem (decompose → assign → run → summarize) is **never imported** by any page or parent component. `WorkflowContainer` is only referenced within its own file. These files are dead code from a legacy multi-step orchestration approach that has been superseded by the SSE-based task flow.
+
+**Recommendation:** Remove or archive these files to reduce confusion. If the workflow UI is needed again, it should be rebuilt against the current SSE/message-store architecture.
+
+---
+
+#### Dead Code: Legacy API Route Proxies
+
+**Files:** All routes under `src/app/api/` (agent, roomCenter, orchestrationCenter, task, memory, inspectionCenter, health)
+
+These Next.js API route proxy handlers forward requests to the backend, but the current `lib/api/*.ts` client layer bypasses them entirely via direct `getApiUrl()` calls. They add ~500 lines of maintenance burden with no active consumers.
+
+**Recommendation:** Remove unless there's a specific plan to use them (e.g., server-side token injection, rate limiting at edge).
+
+---
+
+#### Dead Code: `createAndParseUserMessage` and `processRoomUserMessage`
+
+**Files:** `src/lib/api/room.ts` (line 133), `src/lib/api/orchestration.ts` (line 130)
+
+These functions are defined but never called — superseded by the unified `SendMessage` API which handles message creation and processing orchestration in a single backend call.
+
+**Recommendation:** Remove to reduce API surface confusion.
+
+---
+
+### 15.2 Security Risks
+
+#### SSE Auth Token in URL Query Parameter
+
+**File:** `src/lib/api/sse.ts` (line 53)
+
+The Clerk JWT is passed as `?token=...` in the SSE URL because `EventSource` does not support custom headers. While the code redacts the token in console logs, the token is visible in:
+- Browser network inspector (URL column)
+- Server access logs
+- Any proxy/CDN that logs full URLs
+- Browser history
+
+**Risk:** Token leakage through URL logging. Clerk JWTs are short-lived (60s default), which limits the window, but it's still a security surface.
+
+**Recommendation:** Consider migrating from `EventSource` to `fetch()`-based SSE streaming, which supports custom `Authorization` headers. Alternatively, use a one-time-use connection token exchanged server-side.
+
+---
+
+#### No CSRF Protection on API Calls
+
+The `apiClient` sends authenticated requests directly to the Python backend with `Bearer` tokens. Since tokens are obtained from Clerk's `getToken()` and not from cookies, traditional CSRF attacks are mitigated. However, the backend must ensure it validates the Bearer token on every request and does not also accept cookie-based auth, which would re-introduce CSRF risk.
+
+---
+
+### 15.3 Reliability Risks
+
+#### SSE as Single Real-Time Channel (No Fallback)
+
+The room page relies entirely on `EventSource` for live updates. If SSE fails or is blocked (corporate firewalls, aggressive proxies), users see no task updates after sending a message. The only recovery is a manual page refresh or the `reconcileWithDb()` call that fires after processing completes — but if SSE never delivers the "completed" signal, the UI stays in "Processing..." indefinitely.
+
+**Mitigation in place:**
+- Auto-reconnect with 5 attempts + linear backoff
+- Stale task detection on DB hydration (10-minute threshold)
+- Processing placeholder restore on page reload
+- SSE disconnection tracking + post-processing reconciliation
+
+**Recommendation:** Add a polling fallback: if SSE is disconnected for >30s during active processing, start a slow poll (e.g., every 10s) against `inquiryRoomMessagesByRoomId` until SSE reconnects.
+
+---
+
+#### No Pagination for Room Messages
+
+**File:** `src/lib/api/room.ts` — `inquiryRoomMessagesByRoomId`
+
+The message hydration loads **all messages for a room** in a single request. For rooms with hundreds or thousands of messages, this will cause:
+- Slow initial load times
+- High memory usage in the browser (all entities held in Zustand)
+- Large JSON parse blocking the main thread
+
+**Recommendation:** Implement cursor-based pagination: load the most recent N messages, then fetch older messages on scroll-up. The normalized store already supports incremental `upsertMany` which makes this straightforward.
+
+---
+
+#### `useRoomUiStore` is a Global Singleton
+
+**File:** `src/stores/room-ui-store.ts`
+
+`sending`, `processing`, `cancelling` are global — not scoped per room. If a user has multiple tabs open to different rooms (same origin), state from one room bleeds into another because Zustand stores share the same memory within a tab, and the hook resets state on room change via effects.
+
+This is mostly safe today (single-room-per-tab), but becomes a bug if the app ever supports multi-room views or room switching without full unmount.
+
+**Recommendation:** Key these flags by `roomId` inside the store, or scope them as local state within `useRoomWebhook`.
+
+---
+
+### 15.4 Code Quality
+
+#### Verbose `console.log` Throughout Production Code
+
+There are **~76 `console.log` calls** across hooks and API files (emoji-prefixed debug statements like `🚀`, `✅`, `❌`, `📨`). While `next.config.ts` has `removeConsole` configured, it only strips `console.log` in **production builds** — dev builds and staging environments still log extensively.
+
+The API layer (`room.ts`, `orchestration.ts`) also logs full request/response payloads via `JSON.stringify(requestData, null, 2)`, which may expose sensitive data in dev consoles.
+
+**Recommendation:** Replace ad-hoc `console.log` calls with a structured logger (e.g., a thin wrapper that respects log levels). Remove payload logging from API functions or gate it behind a debug flag.
+
+---
+
+#### Test Coverage Limited to Message Store
+
+Tests exist only for `stores/message-store/` (6 test files). There are **no tests** for:
+- Hooks (`useRoomWebhook`, `useRoomSSE`, `useChatRoomCreation`, `useGroupManagement`)
+- API client functions (`lib/api/*.ts`, `lib/api-client.ts`)
+- Components (room page, chat page, message rendering)
+- Middleware (subdomain routing logic)
+
+**Recommendation:** Priority test additions:
+1. `middleware.ts` — subdomain routing logic (pure function, easy to unit test)
+2. `lib/api-client.ts` — error handling, timeout, abort behavior
+3. `useRoomWebhook` — SSE message handling, optimistic update lifecycle, cancellation flow (use `@testing-library/react` + MSW for mocking)
+
+---
+
+#### Inconsistent API Function Naming
+
+API functions mix naming conventions:
+- `PascalCase`: `SendMessage()` in `room.ts`
+- `camelCase`: `createNewRoom()`, `inquiryRoomSetting()`, `suggestAgents()`
+- Backend-style: `inquiryRoomsByRoomOwnerId()`, `getAgentCardFromUrl()`
+
+**Recommendation:** Standardize to `camelCase` verb-noun pattern (e.g., `sendMessage`, `getRoomSettings`, `listRoomsByOwner`).
+
+---
+
+### 15.5 Performance Considerations
+
+#### Full Agent Catalog Loaded on Every Room Entry
+
+**File:** `src/hooks/useRoomWebhook.ts` (line 92)
+
+`allAgentsQuery` fetches the entire active agents list on room entry (staleTime 24h, so cached across rooms within a session). This is used for agent name resolution in SSE messages. For a platform with hundreds of registered agents, this payload will grow linearly.
+
+**Recommendation:** Switch to on-demand agent name resolution: maintain a lightweight cache and fetch individual agent names only when encountering an unknown `agent_id` in an SSE event. Or have the backend include `agent_name` in every SSE event payload (partially done already).
+
+---
+
+#### No Virtualized Message List
+
+**File:** `src/components/room-messages.tsx`
+
+All messages render as DOM elements (with per-message isolation via `useMessage(id)` selectors). For rooms with 100+ messages, this creates a large DOM tree. The normalized store and shallow selectors minimize re-renders, but the DOM size itself remains a concern.
+
+**Recommendation:** Adopt a virtualized list (e.g., `@tanstack/react-virtual`) that only renders messages visible in the viewport, plus a small overscan buffer.
+
+---
+
+#### Room Settings Updated via 3 Sequential API Calls
+
+**File:** `src/hooks/useRoomWebhook.ts` — `updateRoomSettings()`
+
+Updating room settings fires up to 3 separate API calls sequentially: `updateRoomName` → `updateRoomAgentSet` → `updateRoomExtendInfo`. If any call fails midway, the room is left in a partially-updated state.
+
+**Recommendation:** Create a single backend endpoint (e.g., `PATCH /roomCenter/updateRoom`) that accepts all fields atomically.
+
+---
+
+### 15.6 Future Improvement Ideas
+
+| Area | Improvement | Impact |
+|---|---|---|
+| **Real-time** | Migrate SSE to WebSocket or `fetch()`-based streaming for header-based auth | Security, reliability |
+| **Offline** | Add optimistic message queue with retry for network failures | UX |
+| **Performance** | Message pagination + virtual scrolling | Scalability |
+| **Testing** | E2E tests with Playwright for critical flows (room creation → message → response) | Reliability |
+| **Observability** | Structured error reporting (Sentry/LogRocket) replacing console.log | Debugging |
+| **DX** | Storybook for component library (shadcn/ui + business components) | Development speed |
+| **API** | Typed API client generated from OpenAPI spec (backend → frontend types) | Type safety, DRY |
+| **State** | Persist partial message store in IndexedDB for instant room re-entry | UX |
+| **A11y** | Keyboard navigation audit for chat input, message list, and modals | Accessibility |
+| **i18n** | Extract hardcoded English strings into a localization framework | Internationalization |
