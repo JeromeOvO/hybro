@@ -1424,6 +1424,74 @@ class DatabaseService:
             )
             return False
 
+    # ------------------------------------------------------------------
+    # Atomic room-memory mutations (Layer A)
+    # ------------------------------------------------------------------
+
+    async def push_conversation_turn(self, room_id: str, turn: dict) -> tuple[bool, bool]:
+        """Atomically append a turn to conversation_history via $push.
+
+        Returns:
+            (modified, matched) — matched is False when the document doesn't exist.
+        """
+        try:
+            return await self.mongo.push_conversation_turn(room_id, turn)
+        except Exception as e:
+            logger.error("Failed to push conversation turn for room %s: %s", room_id, e)
+            return (False, False)
+
+    async def trim_conversation_history(
+        self, room_id: str, max_turns: int, summary_addition: str,
+        max_summary_chars: int = 4000,
+    ) -> bool:
+        """Atomically cap conversation_history at max_turns and append to summary."""
+        try:
+            return await self.mongo.trim_conversation_history(
+                room_id, max_turns, summary_addition, max_summary_chars,
+            )
+        except Exception as e:
+            logger.error("Failed to trim conversation history for room %s: %s", room_id, e)
+            return False
+
+    async def update_room_summary_atomic(
+        self, room_id: str, room_summary: dict,
+        new_facts: list[dict] | None = None, max_facts: int = 50,
+    ) -> bool:
+        """Atomically update room_summary and optionally push new facts."""
+        try:
+            return await self.mongo.update_room_summary_atomic(
+                room_id, room_summary, new_facts, max_facts,
+            )
+        except Exception as e:
+            logger.error("Failed to atomically update room summary for room %s: %s", room_id, e)
+            return False
+
+    async def compact_turns_atomic(
+        self, room_id: str, compacted_turns: list[dict],
+    ) -> bool:
+        """Atomically mark turns as compact using arrayFilters + bulk_write."""
+        try:
+            return await self.mongo.compact_turns_atomic(room_id, compacted_turns)
+        except Exception as e:
+            logger.error("Failed to atomically compact turns for room %s: %s", room_id, e)
+            return False
+
+    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+        """Lightweight projection: fetch only room_summary and room_facts."""
+        try:
+            return await self.mongo.get_room_summary_projection(room_id)
+        except Exception as e:
+            logger.error("Failed to get room summary projection for room %s: %s", room_id, e)
+            return None
+
+    async def get_conversation_history_length(self, room_id: str) -> int:
+        """Return the number of turns in conversation_history."""
+        try:
+            return await self.mongo.get_conversation_history_length(room_id)
+        except Exception as e:
+            logger.error("Failed to get conversation history length for room %s: %s", room_id, e)
+            return 0
+
     # Agent Group management
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
         """

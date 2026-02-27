@@ -161,22 +161,15 @@ class CompactionService:
         Process:
         1. Load room memory (or reuse pre-loaded instance)
         2. Identify turns to compact (older than preserve_recent_turns)
-        3. For each turn: upsert full content (idempotent) -> replace with pointer
-        4. Update room memory with compact representations
+        3. For each turn: upsert full content (idempotent) -> collect pointer data
+        4. Atomic bulk_write to mark turns compact in MongoDB (no full-doc rewrite)
 
         Design constraints (§6.3):
         1. Idempotent: If the server crashes between store_full_content and
-           save_room_memory, re-running compaction must not create duplicate documents.
+           the bulk_write, re-running compaction must not create duplicate documents.
            Achieved by using upsert on a unique (room_id, turn_id) index.
         2. Trigger location matters: This function is safe to call within the
            per-room processing lock (on-demand after synthesis).
-
-        Args:
-            room_id: The room ID to compact
-            room_memory: Optional pre-loaded RoomMemory to avoid a redundant DB read
-
-        Returns:
-            CompactionResult with statistics
         """
         config = compaction_config
 
@@ -234,82 +227,65 @@ class CompactionService:
             )
 
         tokens_saved = 0
-        compacted_count = 0
+        compacted_entries: list[dict] = []
         errors: list[str] = []
 
         for turn in turns_to_compact:
             try:
-                did_compact = await self._compact_single_turn(turn, room_id)
-                if did_compact:
+                ref_data = await self._prepare_compaction(turn, room_id)
+                if ref_data:
                     tokens_saved += max(
                         0, turn.estimated_tokens_full - turn.estimated_tokens_compact
                     )
-                    compacted_count += 1
+                    compacted_entries.append(ref_data)
             except Exception as e:
                 error_msg = f"Failed to compact turn {turn.turn_id}: {e}"
                 logger.error(f"CompactionService: {error_msg}")
                 errors.append(error_msg)
 
-        # Update room memory with compacted turns
-        if compacted_count > 0:
-            # Update the conversation history in room_memory
-            # The turns were modified in place, so we just need to save
-            room_memory.total_compactions += 1
-            room_memory.last_activity_at = utcnow()
-
-            # Write back to both fields to ensure consistency regardless of
-            # which field get_conversation_history() sourced from.
-            room_memory.conversation_history = history
-            if room_memory.memory_content:
-                room_memory.memory_content.conversation_history = history
-
-            save_success = await self.db_service.update_room_memory_by_room_id(
-                room_id, room_memory
+        if compacted_entries:
+            save_success = await self.db_service.compact_turns_atomic(
+                room_id, compacted_entries
             )
 
             if save_success:
                 logger.info(
-                    f"CompactionService: Compacted {compacted_count} turns for room {room_id}, "
+                    f"CompactionService: Compacted {len(compacted_entries)} turns for room {room_id}, "
                     f"saved ~{tokens_saved} tokens"
                 )
             else:
                 error_msg = (
-                    f"CompactionService: Compacted {compacted_count} turns in-memory "
-                    f"but failed to persist for room {room_id} — will retry next cycle"
+                    f"CompactionService: Prepared {len(compacted_entries)} turns in-memory "
+                    f"but atomic write failed for room {room_id} — will retry next cycle"
                 )
                 logger.warning(error_msg)
                 errors.append(error_msg)
 
         return CompactionResult(
             room_id=room_id,
-            compacted_count=compacted_count,
+            compacted_count=len(compacted_entries),
             tokens_saved=tokens_saved,
             errors=errors,
         )
 
-    async def _compact_single_turn(
+    async def _prepare_compaction(
         self, turn: ConversationTurn, room_id: str
-    ) -> bool:
+    ) -> dict | None:
         """
-        Compact a single turn by storing content and creating reference.
+        Prepare a single turn for compaction: store content + index in Pinecone.
 
-        Modifies the turn in place.
-
-        Args:
-            turn: The turn to compact (modified in place)
-            room_id: The room ID
-
-        Returns:
-            True if the turn was compacted, False if skipped
+        Returns a dict with {turn_id, content_ref, estimated_tokens_compact}
+        ready for compact_turns_atomic, or None if the turn should be skipped.
+        Does NOT mutate the turn object.
         """
         if turn.representation == TurnRepresentation.COMPACT:
-            return False
+            return None
 
         if not turn.content:
             logger.warning(
                 f"CompactionService: Turn {turn.turn_id} has no content to compact"
             )
-            return False
+            return None
 
         # 1. Upsert full content to MongoDB (IDEMPOTENT via unique index)
         content_doc_id = await self.content_storage.upsert_full_content(
@@ -321,9 +297,6 @@ class CompactionService:
         )
 
         # 2. Index the turn in Pinecone for vector search (Phase 4, §8)
-        #    Must happen BEFORE content is cleared below.
-        #    If indexing fails, abort compaction so the turn stays FULL
-        #    and can be retried next cycle (§8: all compact turns must be vector-searchable).
         from services.memory_search_service import memory_search_service
 
         indexed = await memory_search_service.index_turn_for_search(turn, room_id)
@@ -332,10 +305,10 @@ class CompactionService:
                 f"CompactionService: Skipping compaction of turn {turn.turn_id} "
                 f"— vector indexing failed; turn stays FULL for retry"
             )
-            return False
+            return None
 
-        # 3. Create reference pointer with content_hash for cache validation (§6.3)
-        turn.content_ref = ContentReference(
+        # 3. Build reference pointer
+        content_ref = ContentReference(
             storage_type=StorageType.MONGODB,
             collection="conversation_content",
             document_id=content_doc_id,
@@ -343,14 +316,11 @@ class CompactionService:
             created_at=utcnow(),
         )
 
-        # 4. Optionally populate brief_summary for very old turns (>50 in history)
-        # This is deferred - can be added later with a background job
-
-        # 5. Switch to compact representation
-        turn.content = None  # Remove full content from context
-        turn.representation = TurnRepresentation.COMPACT
-
-        return True
+        return {
+            "turn_id": turn.turn_id,
+            "content_ref": content_ref.model_dump(mode="json"),
+            "estimated_tokens_compact": turn.estimated_tokens_compact,
+        }
 
     async def expand_turn_content(self, turn: ConversationTurn) -> str:
         """

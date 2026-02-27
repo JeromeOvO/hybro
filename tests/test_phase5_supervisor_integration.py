@@ -82,9 +82,9 @@ class TestAddSynthesisToHistory:
     async def test_adds_supervisor_turn_and_persists(
         self, room_memory, mock_db_service, mock_openai_service
     ):
-        """Synthesis text should be added as a SUPERVISOR turn and saved to DB."""
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
-        mock_db_service.update_room_memory_by_room_id.return_value = True
+        """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
+        mock_db_service.push_conversation_turn.return_value = (True, True)
+        mock_db_service.get_conversation_history_length.return_value = 3
 
         from services.memory_service import RoomMemoryService
 
@@ -98,19 +98,18 @@ class TestAddSynthesisToHistory:
         )
 
         assert result is not None  # Returns turn_id on success
-        mock_db_service.update_room_memory_by_room_id.assert_awaited_once()
+        mock_db_service.push_conversation_turn.assert_awaited_once()
 
-        saved_memory = mock_db_service.update_room_memory_by_room_id.call_args[0][1]
-        last_turn = saved_memory.memory_content.conversation_history[-1]
-        assert last_turn.role == TurnRole.SUPERVISOR
-        assert "Combined results" in last_turn.content
+        pushed_turn = mock_db_service.push_conversation_turn.call_args[0][1]
+        assert pushed_turn["role"] == "supervisor"
+        assert "Combined results" in pushed_turn["content"]
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_room_not_found(
+    async def test_returns_none_when_push_fails(
         self, mock_db_service, mock_openai_service
     ):
-        """Should return None when room memory doesn't exist."""
-        mock_db_service.get_room_memory_by_room_id.return_value = None
+        """Should return None when room document doesn't exist."""
+        mock_db_service.push_conversation_turn.return_value = (False, False)
 
         from services.memory_service import RoomMemoryService
 
@@ -124,15 +123,13 @@ class TestAddSynthesisToHistory:
         )
 
         assert result is None
-        mock_db_service.update_room_memory_by_room_id.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_none_when_db_update_fails(
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """Should return None when DB persistence fails."""
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
-        mock_db_service.update_room_memory_by_room_id.return_value = False
+        mock_db_service.push_conversation_turn.return_value = (False, True)
 
         from services.memory_service import RoomMemoryService
 
@@ -160,9 +157,12 @@ class TestUpdateRoomSummary:
     async def test_extracts_and_persists_summary(
         self, room_memory, mock_db_service, mock_openai_service
     ):
-        """Happy path: LLM extracts structured fields, summary is saved."""
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
-        mock_db_service.update_room_memory_by_room_id.return_value = True
+        """Happy path: LLM extracts structured fields, summary is saved atomically."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {"current_goal": "Write tests"},
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
         mock_openai_service.call_supervisor_llm_json.return_value = {
             "current_goal": "Complete test coverage",
             "key_decisions": ["Use pytest", "Mock external services"],
@@ -183,17 +183,16 @@ class TestUpdateRoomSummary:
         )
 
         assert success is True
-        saved_memory = mock_db_service.update_room_memory_by_room_id.call_args[0][1]
-        assert saved_memory.room_summary.current_goal == "Complete test coverage"
-        assert len(saved_memory.room_summary.key_decisions) == 2
-        assert saved_memory.room_summary.last_updated_at is not None
+        mock_db_service.update_room_summary_atomic.assert_awaited_once()
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["current_goal"] == "Complete test coverage"
+        assert len(saved_summary["key_decisions"]) == 2
 
     @pytest.mark.asyncio
     async def test_preserves_existing_on_llm_failure(
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """On LLM failure, existing summary should be preserved (graceful degradation)."""
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
         mock_openai_service.call_supervisor_llm_json.side_effect = Exception(
             "LLM timeout"
         )
@@ -210,14 +209,21 @@ class TestUpdateRoomSummary:
         )
 
         assert success is False
-        mock_db_service.update_room_memory_by_room_id.assert_not_awaited()
+        mock_db_service.update_room_summary_atomic.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_false_when_room_not_found(
         self, mock_db_service, mock_openai_service
     ):
         """Should return False when room memory doesn't exist."""
-        mock_db_service.get_room_memory_by_room_id.return_value = None
+        mock_db_service.get_room_summary_projection.return_value = None
+        mock_openai_service.call_supervisor_llm_json.return_value = {
+            "current_goal": "Test",
+            "key_decisions": [],
+            "open_questions": [],
+            "recent_agent_contributions": [],
+            "important_constraints": [],
+        }
 
         from services.memory_service import RoomMemoryService
 
@@ -237,12 +243,14 @@ class TestUpdateRoomSummary:
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """If LLM returns empty/null fields, existing values should be kept."""
-        room_memory.room_summary = RoomSummary(
-            current_goal="Original goal",
-            key_decisions=["Original decision"],
-        )
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
-        mock_db_service.update_room_memory_by_room_id.return_value = True
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {
+                "current_goal": "Original goal",
+                "key_decisions": ["Original decision"],
+            },
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
         mock_openai_service.call_supervisor_llm_json.return_value = {
             "current_goal": None,
             "key_decisions": [],
@@ -263,18 +271,21 @@ class TestUpdateRoomSummary:
         )
 
         assert success is True
-        saved = mock_db_service.update_room_memory_by_room_id.call_args[0][1]
-        assert saved.room_summary.current_goal == "Original goal"
-        assert saved.room_summary.key_decisions == ["Original decision"]
-        assert saved.room_summary.open_questions == ["New question"]
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["current_goal"] == "Original goal"
+        assert saved_summary["key_decisions"] == []  # LLM explicitly returned empty list
+        assert saved_summary["open_questions"] == ["New question"]
 
     @pytest.mark.asyncio
     async def test_populates_updated_after_turn_id(
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """synthesis_turn_id should be stored in RoomSummary.updated_after_turn_id (§4.2)."""
-        mock_db_service.get_room_memory_by_room_id.return_value = room_memory
-        mock_db_service.update_room_memory_by_room_id.return_value = True
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {},
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
         mock_openai_service.call_supervisor_llm_json.return_value = {
             "current_goal": "Test goal",
             "key_decisions": [],
@@ -296,9 +307,9 @@ class TestUpdateRoomSummary:
         )
 
         assert success is True
-        saved = mock_db_service.update_room_memory_by_room_id.call_args[0][1]
-        assert saved.room_summary.updated_after_turn_id == "turn_abc_123"
-        assert saved.room_summary.last_updated_at is not None
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["updated_after_turn_id"] == "turn_abc_123"
+        assert saved_summary["last_updated_at"] is not None
 
 
 # =========================================================================
@@ -424,12 +435,19 @@ class TestCompactionTrigger:
 
         from modules.RoomMessageCenter import RunStatus
 
-        await rmc._handle_v2_run_result(
-            result=result,
-            room_id="test_room",
-            user_message_id="msg-1",
-            user_message=user_message,
-        )
+        mock_memory_service = AsyncMock()
+        mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
+
+        with patch(
+            "services.memory_service.room_memory_service",
+            mock_memory_service,
+        ):
+            await rmc._handle_v2_run_result(
+                result=result,
+                room_id="test_room",
+                user_message_id="msg-1",
+                user_message=user_message,
+            )
 
         # Compaction is now awaited inline (not fire-and-forget) per §6.9
         rmc._trigger_compaction_safe.assert_awaited_once_with("test_room")

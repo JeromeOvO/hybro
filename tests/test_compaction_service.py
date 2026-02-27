@@ -428,7 +428,7 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
+                "compact_turns_atomic",
                 return_value=True,
             ):
                 with patch.object(
@@ -447,10 +447,9 @@ class TestCompactionService:
     async def test_compact_room_memory_populates_content_hash(
         self, service, mock_settings
     ):
-        """Should populate content_hash in ContentReference (§6.3 requirement)."""
+        """Should populate content_hash in data sent to compact_turns_atomic (§6.3)."""
         from services.content_storage_service import hash_content
 
-        # Create a single turn for simpler verification
         turn = ConversationTurn(
             turn_id="turn-hash-test",
             role=TurnRole.USER,
@@ -468,10 +467,12 @@ class TestCompactionService:
             memory_content=memory_content,
         )
 
-        mock_settings.compaction_preserve_recent = 0  # Compact all
+        mock_settings.compaction_preserve_recent = 0
 
         async def mock_upsert(*args, **kwargs):
             return "doc-id-123"
+
+        mock_compact = AsyncMock(return_value=True)
 
         with patch.object(
             service.db_service,
@@ -480,8 +481,8 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
-                return_value=True,
+                "compact_turns_atomic",
+                mock_compact,
             ):
                 with patch.object(
                     service.content_storage,
@@ -490,14 +491,13 @@ class TestCompactionService:
                 ):
                     await service.compact_room_memory("test-room")
 
-        # Verify content_hash is populated
-        compacted_turn = room_memory.memory_content.conversation_history[0]
-        assert compacted_turn.representation == TurnRepresentation.COMPACT
-        assert compacted_turn.content_ref is not None
-        assert compacted_turn.content_ref.content_hash is not None
-        # Verify the hash matches what we expect
+        mock_compact.assert_awaited_once()
+        compacted_turns = mock_compact.call_args[0][1]
+        assert len(compacted_turns) == 1
+        content_ref = compacted_turns[0]["content_ref"]
+        assert content_ref["content_hash"] is not None
         expected_hash = hash_content("Test content for hash verification")
-        assert compacted_turn.content_ref.content_hash == expected_hash
+        assert content_ref["content_hash"] == expected_hash
 
     @pytest.mark.asyncio
     async def test_compact_room_memory_handles_preserve_zero(
@@ -515,7 +515,7 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
+                "compact_turns_atomic",
                 return_value=True,
             ):
                 with patch.object(
@@ -683,10 +683,11 @@ class TestCompactionRoundTrip:
             "get_room_memory_by_room_id",
             return_value=room_memory,
         ):
+            mock_compact = AsyncMock(return_value=True)
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
-                return_value=True,
+                "compact_turns_atomic",
+                mock_compact,
             ):
                 with patch.object(
                     service.content_storage,
@@ -698,25 +699,36 @@ class TestCompactionRoundTrip:
 
         assert result.compacted_count == 1
 
-        # Verify turn is now compact
-        compacted_turn = room_memory.memory_content.conversation_history[0]
-        assert compacted_turn.representation == TurnRepresentation.COMPACT
-        assert compacted_turn.content is None
-        assert compacted_turn.content_ref is not None
+        # Verify compact_turns_atomic was called with correct data
+        mock_compact.assert_awaited_once()
+        compacted_data = mock_compact.call_args[0][1]
+        assert len(compacted_data) == 1
+        assert compacted_data[0]["content_ref"] is not None
 
-        # Expand and verify content matches
+        # Simulate expand by retrieving from our storage mock
+        from models.compaction import ContentReference
+        content_ref = ContentReference(**compacted_data[0]["content_ref"])
+
         with patch.object(
             service.content_storage,
             "expand_content_reference",
             mock_expand,
         ):
-            expanded_content = await service.expand_turn_content(compacted_turn)
+            expanded_content = await service.expand_turn_content(
+                ConversationTurn(
+                    turn_id=sample_turn.turn_id,
+                    role=sample_turn.role,
+                    content=None,
+                    representation=TurnRepresentation.COMPACT,
+                    content_ref=content_ref,
+                )
+            )
 
         assert expanded_content == original_content
 
     @pytest.mark.asyncio
     async def test_idempotent_compaction(self, service, mock_settings, sample_turn):
-        """Running compaction twice should not create duplicate storage."""
+        """Running compaction twice should not compact already-compact turns."""
         room_id = "test-room"
         memory_content = MemoryContent(conversation_history=[sample_turn])
         room_memory = RoomMemory(
@@ -733,14 +745,35 @@ class TestCompactionRoundTrip:
 
         mock_settings.compaction_preserve_recent = 0
 
+        # First call: room has a FULL turn
+        # Second call: room has the turn marked COMPACT (as MongoDB would after first call)
+        compact_turn = ConversationTurn(
+            turn_id=sample_turn.turn_id,
+            role=sample_turn.role,
+            content=None,
+            representation=TurnRepresentation.COMPACT,
+        )
+        room_memory_after = RoomMemory(
+            room_id=room_id,
+            memory_id=str(uuid4()),
+            memory_content=MemoryContent(conversation_history=[compact_turn]),
+        )
+
+        call_count = 0
+
+        async def get_room_memory_side_effect(rid):
+            nonlocal call_count
+            call_count += 1
+            return room_memory if call_count == 1 else room_memory_after
+
         with patch.object(
             service.db_service,
             "get_room_memory_by_room_id",
-            return_value=room_memory,
+            side_effect=get_room_memory_side_effect,
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
+                "compact_turns_atomic",
                 return_value=True,
             ):
                 with patch.object(
@@ -748,16 +781,11 @@ class TestCompactionRoundTrip:
                     "upsert_full_content",
                     mock_upsert,
                 ):
-                    # First compaction
                     result1 = await service.compact_room_memory(room_id)
-                    # Second compaction (turn is already compact)
                     result2 = await service.compact_room_memory(room_id)
 
-        # First compaction should compact 1 turn
         assert result1.compacted_count == 1
-        # Second compaction should find nothing to compact
         assert result2.compacted_count == 0
-        # Upsert should only be called once
         assert len(upsert_calls) == 1
 
 
@@ -818,7 +846,7 @@ class TestTokenSavings:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
+                "compact_turns_atomic",
                 return_value=True,
             ):
                 with patch.object(
@@ -895,7 +923,7 @@ class TestErrorHandling:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
+                "compact_turns_atomic",
                 return_value=True,
             ):
                 with patch.object(
@@ -1113,7 +1141,7 @@ class TestWriteBackPath:
     async def test_write_back_targets_conversation_history_field(
         self, service, mock_settings
     ):
-        """When data comes from conversation_history, write-back should target it."""
+        """Compaction should call compact_turns_atomic with correct turn data."""
         turns = [
             ConversationTurn(
                 turn_id=f"turn-{i}",
@@ -1139,6 +1167,8 @@ class TestWriteBackPath:
         async def mock_upsert(*args, **kwargs):
             return "doc-id"
 
+        mock_compact = AsyncMock(return_value=True)
+
         with patch.object(
             service.db_service,
             "get_room_memory_by_room_id",
@@ -1146,25 +1176,24 @@ class TestWriteBackPath:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
-                return_value=True,
+                "compact_turns_atomic",
+                mock_compact,
             ):
                 with patch.object(
                     service.content_storage, "upsert_full_content", mock_upsert
                 ):
                     await service.compact_room_memory("room-wb")
 
-        assert len(room_memory.conversation_history) == 3
-        assert all(
-            t.representation == TurnRepresentation.COMPACT
-            for t in room_memory.conversation_history
-        )
+        mock_compact.assert_awaited_once()
+        compacted_turns = mock_compact.call_args[0][1]
+        assert len(compacted_turns) == 3
+        assert all(t["turn_id"].startswith("turn-") for t in compacted_turns)
 
     @pytest.mark.asyncio
     async def test_write_back_targets_memory_content_field(
         self, service, mock_settings
     ):
-        """When data comes from memory_content, write-back should target it."""
+        """Compaction should call compact_turns_atomic for memory_content-sourced turns."""
         turns = [
             ConversationTurn(
                 turn_id=f"turn-{i}",
@@ -1190,6 +1219,8 @@ class TestWriteBackPath:
         async def mock_upsert(*args, **kwargs):
             return "doc-id"
 
+        mock_compact = AsyncMock(return_value=True)
+
         with patch.object(
             service.db_service,
             "get_room_memory_by_room_id",
@@ -1197,19 +1228,17 @@ class TestWriteBackPath:
         ):
             with patch.object(
                 service.db_service,
-                "update_room_memory_by_room_id",
-                return_value=True,
+                "compact_turns_atomic",
+                mock_compact,
             ):
                 with patch.object(
                     service.content_storage, "upsert_full_content", mock_upsert
                 ):
                     await service.compact_room_memory("room-mc")
 
-        assert len(room_memory.memory_content.conversation_history) == 3
-        assert all(
-            t.representation == TurnRepresentation.COMPACT
-            for t in room_memory.memory_content.conversation_history
-        )
+        mock_compact.assert_awaited_once()
+        compacted_turns = mock_compact.call_args[0][1]
+        assert len(compacted_turns) == 3
 
 
 # =============================================================================

@@ -1335,6 +1335,241 @@ class MongoDB:
         )
         return result.modified_count > 0
 
+    # ------------------------------------------------------------------
+    # Atomic room-memory mutations (Layer A)
+    #
+    # These methods mutate disjoint subsets of the room_memories document
+    # using targeted MongoDB operators ($push, $set, $inc, arrayFilters)
+    # so that concurrent calls do NOT conflict.
+    #
+    # LAYER B (future): Add optimistic concurrency control via a `version`
+    #   field and conditional `{"version": expected_version}` filter on
+    #   every update. On conflict, retry with exponential backoff.
+    #   See docs/CONCURRENCY_ROADMAP.md for design sketch.
+    #
+    # LAYER C (future): For multi-instance deployments, add distributed
+    #   locking (e.g. MongoDB advisory locks or Redis SETNX) so that only
+    #   one backend instance processes a given room at a time.
+    #   See docs/CONCURRENCY_ROADMAP.md for design sketch.
+    # ------------------------------------------------------------------
+
+    async def push_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+    ) -> tuple[bool, bool]:
+        """Atomically append a turn to memory_content.conversation_history.
+
+        Uses $push to avoid full-document read-modify-write.
+
+        Returns:
+            (modified, matched) — matched is False when the room_id document
+            doesn't exist, letting callers distinguish 404 from write-failure.
+        """
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            {
+                "$push": {
+                    "memory_content.conversation_history": turn,
+                },
+                "$inc": {"total_messages": 1},
+                "$set": {"last_activity_at": utcnow()},
+            },
+        )
+        return (result.modified_count > 0, result.matched_count > 0)
+
+    async def trim_conversation_history(
+        self,
+        room_id: str,
+        max_turns: int,
+        summary_addition: str,
+        max_summary_chars: int = 4000,
+    ) -> bool:
+        """Atomically trim conversation_history and append to summary.
+
+        Uses a pipeline update (MongoDB 4.2+) so both the summary
+        concatenation and the array slice happen in a single atomic
+        operation — no TOCTOU race on the summary field.
+        """
+        if max_turns <= 0:
+            return False
+        if max_summary_chars < 10:
+            max_summary_chars = 10
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            [
+                {
+                    "$set": {
+                        "memory_content.summary": {
+                            "$let": {
+                                "vars": {
+                                    "existing": {
+                                        "$ifNull": ["$memory_content.summary", ""]
+                                    },
+                                },
+                                "in": {
+                                    "$let": {
+                                        "vars": {
+                                            "concatenated": {
+                                                "$cond": {
+                                                    "if": {"$eq": ["$$existing", ""]},
+                                                    "then": summary_addition,
+                                                    "else": {
+                                                        "$concat": [
+                                                            "$$existing",
+                                                            "\n",
+                                                            summary_addition,
+                                                        ]
+                                                    },
+                                                }
+                                            }
+                                        },
+                                        "in": {
+                                            "$cond": {
+                                                "if": {
+                                                    "$gt": [
+                                                        {"$strLenCP": "$$concatenated"},
+                                                        max_summary_chars,
+                                                    ]
+                                                },
+                                                "then": {
+                                                    "$concat": [
+                                                        "...",
+                                                        {
+                                                            "$substrCP": [
+                                                                "$$concatenated",
+                                                                {
+                                                                    "$subtract": [
+                                                                        {"$strLenCP": "$$concatenated"},
+                                                                        max_summary_chars - 3,
+                                                                    ]
+                                                                },
+                                                                max_summary_chars - 3,
+                                                            ]
+                                                        },
+                                                    ]
+                                                },
+                                                "else": "$$concatenated",
+                                            }
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                        "memory_content.conversation_history": {
+                            "$slice": [
+                                {"$ifNull": ["$memory_content.conversation_history", []]},
+                                {"$multiply": [-1, max_turns]},
+                            ]
+                        },
+                    }
+                }
+            ],
+        )
+        return result.modified_count > 0
+
+    async def update_room_summary_atomic(
+        self,
+        room_id: str,
+        room_summary: dict,
+        new_facts: list[dict] | None = None,
+        max_facts: int = 50,
+    ) -> bool:
+        """Atomically update room_summary and optionally push new facts.
+
+        Does NOT touch conversation_history — safe to run concurrently
+        with push_conversation_turn and compact_turns_atomic.
+        """
+        update: dict = {
+            "$set": {"room_summary": room_summary},
+        }
+
+        if new_facts:
+            update["$push"] = {
+                "room_facts": {
+                    "$each": new_facts,
+                    "$slice": -max_facts,
+                }
+            }
+
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            update,
+        )
+        return result.modified_count > 0
+
+    async def compact_turns_atomic(
+        self,
+        room_id: str,
+        compacted_turns: list[dict],
+    ) -> bool:
+        """Atomically mark turns as compact using arrayFilters + bulk_write.
+
+        Each entry in compacted_turns must have:
+          - turn_id: str
+          - content_ref: dict (ContentReference.model_dump())
+          - estimated_tokens_compact: int
+
+        Does NOT rewrite the entire document — only touches the specific
+        array elements being compacted plus the total_compactions counter.
+        """
+        from pymongo import UpdateOne
+
+        operations = []
+        for t in compacted_turns:
+            operations.append(
+                UpdateOne(
+                    {"room_id": room_id},
+                    {
+                        "$set": {
+                            "memory_content.conversation_history.$[elem].representation": "compact",
+                            "memory_content.conversation_history.$[elem].content": None,
+                            "memory_content.conversation_history.$[elem].content_ref": t["content_ref"],
+                            "memory_content.conversation_history.$[elem].estimated_tokens_compact": t.get(
+                                "estimated_tokens_compact", 0
+                            ),
+                        },
+                    },
+                    array_filters=[{"elem.turn_id": t["turn_id"]}],
+                )
+            )
+
+        operations.append(
+            UpdateOne(
+                {"room_id": room_id},
+                {
+                    "$inc": {"total_compactions": 1},
+                    "$set": {"last_activity_at": utcnow()},
+                },
+            )
+        )
+
+        result = await self.room_memories_collection.bulk_write(
+            operations, ordered=True
+        )
+        return result.modified_count > 0
+
+    async def get_room_summary_projection(
+        self, room_id: str
+    ) -> dict | None:
+        """Lightweight projection: fetch only room_summary and room_facts."""
+        return await self.room_memories_collection.find_one(
+            {"room_id": room_id},
+            {"room_summary": 1, "room_facts": 1},
+        )
+
+    async def get_conversation_history_length(
+        self, room_id: str
+    ) -> int:
+        """Return the number of turns in memory_content.conversation_history."""
+        pipeline = [
+            {"$match": {"room_id": room_id}},
+            {"$project": {"count": {"$size": {"$ifNull": ["$memory_content.conversation_history", []]}}}},
+        ]
+        async for doc in self.room_memories_collection.aggregate(pipeline):
+            return doc.get("count", 0)
+        return 0
+
     async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room memory by room_id

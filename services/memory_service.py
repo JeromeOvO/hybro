@@ -505,45 +505,48 @@ class RoomMemoryService:
                 f"RoomMemoryService: Initialized new room memory for room {room_id}"
             )
         else:
-            # Migrate legacy memory if needed
-            if room_memory.memory_content:
-                room_memory.memory_content = migrate_legacy_memory(
-                    room_memory.memory_content
-                )
-
             if new_message:
-                # Clean @mentions before storing
                 clean_message = clean_mention_format(new_message, room_agent_set)
 
-                # Add as user turn to conversation history
-                room_memory.memory_content = add_turn_to_history(
-                    memory_content=room_memory.memory_content,
-                    role="user",
+                from common.utils.context_utils import (
+                    MAX_HISTORY_TURNS,
+                    MAX_SUMMARY_CHARS,
+                    estimate_tokens,
+                    extract_turn_notes,
+                )
+                from models.memory import ConversationTurn, TurnRole
+
+                turn = ConversationTurn(
+                    role=TurnRole.USER,
                     content=clean_message,
                     user_id=user_id,
+                    estimated_tokens_full=estimate_tokens(clean_message),
+                    turn_notes=extract_turn_notes(clean_message),
                 )
 
-                # Log context stats for debugging
-                stats = get_context_stats(room_memory.memory_content)
-                logger.debug(
-                    f"RoomMemoryService: Room {room_id} context stats: {stats}"
+                modified, matched = await self.database_service.push_conversation_turn(
+                    room_id, turn.model_dump(mode="json")
                 )
+                if not modified:
+                    logger.error("RoomMemoryService: Failed to push user turn to room %s", room_id)
+                    return RoomCenterMemoryResponse(
+                        room_id=room_id,
+                        success=False,
+                        error="Room memory not found" if not matched else "Failed to update room memory",
+                        status_code=404 if not matched else 500,
+                    )
 
-            room_memory_response = (
-                await self.database_service.update_room_memory_by_room_id(
-                    room_id, room_memory
+                history_len = await self.database_service.get_conversation_history_length(
+                    room_id
                 )
-            )
-
-            if not room_memory_response:
-                logger.error("RoomMemoryService: Failed to update room memory")
-                return RoomCenterMemoryResponse(
-                    room_id=room_id,
-                    memory_id=room_memory.memory_id,
-                    success=False,
-                    error="Failed to update room memory",
-                    status_code=500,
-                )
+                if history_len > MAX_HISTORY_TURNS:
+                    summary_stub = f"[User] {clean_message[:200]}..."
+                    await self.database_service.trim_conversation_history(
+                        room_id,
+                        max_turns=MAX_HISTORY_TURNS,
+                        summary_addition=summary_stub,
+                        max_summary_chars=MAX_SUMMARY_CHARS,
+                    )
 
         # Track user interaction (§4.3 UserMemory)
         await self._track_user_interaction(user_id)
@@ -618,92 +621,72 @@ class RoomMemoryService:
         Add an agent's response to the room conversation history.
         Called after an agent completes its response.
 
-        Args:
-            room_id: The room ID
-            agent_id: The agent's ID
-            agent_name: The agent's display name
-            response_text: The agent's response text
-            was_successful: Whether the agent completed successfully
-
-        Returns:
-            RoomCenterMemoryResponse with success status
+        Uses atomic $push instead of loading the full document.
         """
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+        from common.utils.context_utils import (
+            MAX_HISTORY_TURNS,
+            MAX_SUMMARY_CHARS,
+            estimate_tokens,
+            extract_turn_notes,
+        )
+        from models.memory import ConversationTurn, TurnRole
 
-        if not room_memory:
-            logger.error(
-                f"RoomMemoryService: Room memory not found for room {room_id}"
-            )
-            return RoomCenterMemoryResponse(
-                room_id=room_id,
-                success=False,
-                error="Room memory not found",
-                status_code=404,
-            )
+        tokens_full = estimate_tokens(response_text)
+        notes = extract_turn_notes(response_text)
 
-        # Migrate legacy memory if needed
-        if room_memory.memory_content:
-            room_memory.memory_content = migrate_legacy_memory(
-                room_memory.memory_content
-            )
-
-        # Add agent response to conversation history
-        room_memory.memory_content = add_turn_to_history(
-            memory_content=room_memory.memory_content,
-            role="agent",
+        turn = ConversationTurn(
+            role=TurnRole.AGENT,
             content=response_text,
             agent_id=agent_id,
             agent_name=agent_name,
+            estimated_tokens_full=tokens_full,
+            turn_notes=notes,
             was_successful=was_successful,
         )
 
-        # Log context stats
-        stats = get_context_stats(room_memory.memory_content)
-        logger.debug(
-            f"RoomMemoryService: Added agent response to room {room_id}, stats: {stats}"
+        modified, matched = await self.database_service.push_conversation_turn(
+            room_id, turn.model_dump(mode="json")
         )
 
-        update_success = await self.database_service.update_room_memory_by_room_id(
-            room_id, room_memory
-        )
-
-        if not update_success:
+        if not modified:
             logger.error(
-                f"RoomMemoryService: Failed to update room memory with agent response"
+                "RoomMemoryService: Failed to push agent response to room %s",
+                room_id,
             )
             return RoomCenterMemoryResponse(
                 room_id=room_id,
-                memory_id=room_memory.memory_id,
                 success=False,
-                error="Failed to update room memory",
-                status_code=500,
+                error="Room memory not found" if not matched else "Failed to update room memory",
+                status_code=404 if not matched else 500,
+            )
+
+        # Trim if conversation_history exceeds MAX_HISTORY_TURNS
+        history_len = await self.database_service.get_conversation_history_length(
+            room_id
+        )
+        if history_len > MAX_HISTORY_TURNS:
+            summary_stub = (
+                f"[{agent_name}] {response_text[:200]}..."
+            )
+            await self.database_service.trim_conversation_history(
+                room_id,
+                max_turns=MAX_HISTORY_TURNS,
+                summary_addition=summary_stub,
+                max_summary_chars=MAX_SUMMARY_CHARS,
             )
 
         # Post-save: enrich turn_notes via LLM for long turns (§6.2).
         # Fire-and-forget: the LLM call + targeted DB write run in a background
         # task so the caller isn't blocked by the extra 1-2s round-trip.
         try:
-            from common.utils.context_utils import (
-                LLM_TURN_NOTES_THRESHOLD,
-                estimate_tokens,
-            )
+            from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
 
-            if response_text and estimate_tokens(response_text) > LLM_TURN_NOTES_THRESHOLD:
-                # add_turn_to_history appends to memory_content.conversation_history,
-                # so read from that list directly (not get_conversation_history(),
-                # which may return the top-level list after compaction).
-                mc_history = (
-                    room_memory.memory_content.conversation_history
-                    if room_memory.memory_content
-                    else []
-                )
-                if mc_history:
-                    last_turn = mc_history[-1]
-                    asyncio.create_task(
-                        self._enrich_turn_notes_background(
-                            room_id, last_turn.turn_id, last_turn.turn_notes, response_text,
-                        )
+            if response_text and tokens_full > LLM_TURN_NOTES_THRESHOLD:
+                asyncio.create_task(
+                    self._enrich_turn_notes_background(
+                        room_id, turn.turn_id, notes, response_text,
                     )
+                )
         except Exception as e:
             logger.debug(
                 "RoomMemoryService: LLM turn_notes enrichment skipped: %s", e
@@ -717,8 +700,6 @@ class RoomMemoryService:
 
         return RoomCenterMemoryResponse(
             room_id=room_id,
-            memory_id=room_memory.memory_id,
-            memory=room_memory,
             success=True,
             error=None,
             status_code=200,
@@ -770,33 +751,22 @@ class RoomMemoryService:
         """
         Add supervisor synthesis text to room conversation history (§11.3).
 
-        Creates a SUPERVISOR-role turn with the synthesis content, persists it,
-        and returns the new turn_id on success (needed by update_room_summary
+        Creates a SUPERVISOR-role turn with the synthesis content and atomically
+        pushes it to MongoDB using $push (no full-document read-modify-write).
+
+        Returns the new turn_id on success (needed by update_room_summary
         to populate RoomSummary.updated_after_turn_id per §4.2).
 
         When trajectory is provided, agent contributions are extracted into the
         turn for richer turn_notes (forward-compatibility with Phase 4B search).
-
-        Args:
-            room_id: The room ID
-            synthesis_text: The synthesis text from the supervisor
-            trajectory: Optional trajectory for agent contribution extraction
-
-        Returns:
-            The new turn_id if successfully persisted, None otherwise
         """
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            logger.error(
-                "RoomMemoryService.add_synthesis_to_history: "
-                "Room memory not found for room %s", room_id,
-            )
-            return None
-
-        if room_memory.memory_content:
-            room_memory.memory_content = migrate_legacy_memory(
-                room_memory.memory_content
-            )
+        from common.utils.context_utils import (
+            MAX_HISTORY_TURNS,
+            MAX_SUMMARY_CHARS,
+            estimate_tokens,
+            extract_turn_notes,
+        )
+        from models.memory import ConversationTurn, TurnRole, TurnType
 
         # Enrich synthesis content with trajectory agent contributions
         enriched_content = synthesis_text
@@ -816,28 +786,49 @@ class RoomMemoryService:
                     f"[Agent contributions: {contributions_text}]"
                 )
 
-        room_memory.memory_content = add_turn_to_history(
-            memory_content=room_memory.memory_content,
-            role="supervisor",
+        turn = ConversationTurn(
+            role=TurnRole.SUPERVISOR,
             content=enriched_content,
-            turn_type="message",
+            turn_type=TurnType.MESSAGE,
+            estimated_tokens_full=estimate_tokens(enriched_content),
+            turn_notes=extract_turn_notes(enriched_content),
         )
 
-        # Grab the turn_id of the just-appended synthesis turn
-        synthesis_turn_id: str | None = None
-        if room_memory.memory_content and room_memory.memory_content.conversation_history:
-            synthesis_turn_id = room_memory.memory_content.conversation_history[-1].turn_id
-
-        success = await self.database_service.update_room_memory_by_room_id(
-            room_id, room_memory
+        modified, matched = await self.database_service.push_conversation_turn(
+            room_id, turn.model_dump(mode="json")
         )
-        if not success:
-            logger.error(
-                "RoomMemoryService.add_synthesis_to_history: "
-                "Failed to persist synthesis turn for room %s", room_id,
-            )
+        if not modified:
+            if not matched:
+                logger.error(
+                    "RoomMemoryService.add_synthesis_to_history: "
+                    "Room memory not found for room %s", room_id,
+                )
+            else:
+                logger.error(
+                    "RoomMemoryService.add_synthesis_to_history: "
+                    "Failed to persist synthesis turn for room %s", room_id,
+                )
             return None
-        return synthesis_turn_id
+
+        # Trim if conversation_history exceeds MAX_HISTORY_TURNS.
+        # This is a separate atomic op — safe even if another writer pushed
+        # concurrently, because $push/$slice is idempotent on the tail.
+        history_len = await self.database_service.get_conversation_history_length(
+            room_id
+        )
+        if history_len > MAX_HISTORY_TURNS:
+            summary_stub = (
+                f"[Supervisor synthesis ({turn.turn_id[:8]})] "
+                f"{enriched_content[:200]}..."
+            )
+            await self.database_service.trim_conversation_history(
+                room_id,
+                max_turns=MAX_HISTORY_TURNS,
+                summary_addition=summary_stub,
+                max_summary_chars=MAX_SUMMARY_CHARS,
+            )
+
+        return turn.turn_id
 
     async def update_room_summary(
         self,
@@ -848,26 +839,14 @@ class RoomMemoryService:
         """
         Update RoomMemory.room_summary using LLM extraction from synthesis text (§9, §11.3).
 
-        Sends the synthesis text to a fast LLM with JSON mode to extract structured
-        room summary fields. On any failure, the existing summary is preserved.
-
-        Args:
-            room_id: The room ID
-            synthesis_text: The synthesis text to extract summary from
-            synthesis_turn_id: The turn_id of the synthesis that triggered this update
-                (populates RoomSummary.updated_after_turn_id per §4.2)
+        Uses a lightweight projection to load only room_summary + room_facts,
+        then writes back with an atomic $set (no full-document rewrite).
+        This is safe to run concurrently with add_synthesis_to_history and
+        compact_room_memory — they touch disjoint fields.
 
         Returns:
             True if successfully updated, False if extraction or persistence failed
         """
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        if not room_memory:
-            logger.warning(
-                "RoomMemoryService.update_room_summary: "
-                "Room memory not found for room %s", room_id,
-            )
-            return False
-
         extraction_prompt = (
             "Extract structured room summary fields from the following synthesis. "
             "Return ONLY valid JSON with these keys:\n"
@@ -896,16 +875,25 @@ class RoomMemoryService:
             )
             return False
 
-        from models.memory import RoomSummary
+        from models.memory import RoomFact, RoomSummary
 
-        existing = room_memory.room_summary or RoomSummary()
+        # Lightweight projection — only loads room_summary and room_facts
+        doc = await self.database_service.get_room_summary_projection(room_id)
+        if not doc:
+            logger.warning(
+                "RoomMemoryService.update_room_summary: "
+                "Room memory not found for room %s", room_id,
+            )
+            return False
+
+        existing = RoomSummary(**(doc.get("room_summary") or {}))
         extracted_goal = extracted.get("current_goal")
         extracted_decisions = extracted.get("key_decisions")
         extracted_questions = extracted.get("open_questions")
         extracted_contributions = extracted.get("recent_agent_contributions")
         extracted_constraints = extracted.get("important_constraints")
 
-        room_memory.room_summary = RoomSummary(
+        new_summary = RoomSummary(
             current_goal=extracted_goal if extracted_goal is not None else existing.current_goal,
             key_decisions=extracted_decisions if extracted_decisions is not None else existing.key_decisions,
             open_questions=extracted_questions if extracted_questions is not None else existing.open_questions,
@@ -921,32 +909,36 @@ class RoomMemoryService:
             updated_after_turn_id=synthesis_turn_id or existing.updated_after_turn_id,
         )
 
-        # Extract and merge room facts (§4.2)
+        # Deduplicate new facts against existing ones
+        new_facts: list[dict] = []
         extracted_facts_raw = extracted.get("room_facts", [])
         if isinstance(extracted_facts_raw, list) and extracted_facts_raw:
-            from models.memory import RoomFact
-
-            existing_fact_contents = {f.content.lower().strip() for f in room_memory.room_facts}
+            existing_fact_contents = {
+                (f.get("content") or "").lower().strip()
+                for f in (doc.get("room_facts") or [])
+            }
             for fact_text in extracted_facts_raw:
                 if (
                     isinstance(fact_text, str)
                     and fact_text.strip()
                     and fact_text.lower().strip() not in existing_fact_contents
                 ):
-                    room_memory.room_facts.append(
+                    new_facts.append(
                         RoomFact(
                             content=fact_text.strip(),
                             source_turn_id=synthesis_turn_id,
-                        )
+                        ).model_dump(mode="json")
                     )
                     existing_fact_contents.add(fact_text.lower().strip())
-            MAX_ROOM_FACTS = 50
-            if len(room_memory.room_facts) > MAX_ROOM_FACTS:
-                room_memory.room_facts = room_memory.room_facts[-MAX_ROOM_FACTS:]
 
-        success = await self.database_service.update_room_memory_by_room_id(
-            room_id, room_memory
+        MAX_ROOM_FACTS = 50
+        success = await self.database_service.update_room_summary_atomic(
+            room_id,
+            new_summary.model_dump(mode="json"),
+            new_facts=new_facts if new_facts else None,
+            max_facts=MAX_ROOM_FACTS,
         )
+
         if success:
             logger.info(
                 "RoomMemoryService.update_room_summary: "

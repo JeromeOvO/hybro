@@ -1163,11 +1163,9 @@ class RoomMessageCenter:
                         trajectory=result.trajectory,
                     )
                     if synthesis_turn_id:
-                        # Inline await: summary update MUST complete before
-                        # compaction to avoid a last-writer-wins race on
-                        # RoomMemory (both do full $set saves).  The LLM call
-                        # adds ~1-2 s, but this runs after SSE completion is
-                        # already sent, so latency is invisible to the user.
+                        # Summary update and compaction are now safe to run
+                        # in any order — they write to disjoint MongoDB fields
+                        # after the Layer A atomic-operator migration.
                         await self._update_room_summary_safe(
                             room_id, result.synthesis_text, synthesis_turn_id
                         )
