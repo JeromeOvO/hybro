@@ -8,6 +8,9 @@ Original content is always retrievable on demand.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for design details.
 """
 
+import asyncio
+import os
+
 from common.utils.context_utils import estimate_tokens
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -26,6 +29,15 @@ from services.content_storage_service import (
 from services.database_service import db_service
 
 logger = get_logger(__name__)
+
+# Concurrency limit for parallel compaction I/O (content storage + Pinecone).
+# Tune based on downstream service capacity. Default 5 balances throughput vs.
+# rate-limit risk.  Must be >= 1; invalid values fall back to default.
+_DEFAULT_COMPACTION_CONCURRENCY = 5
+try:
+    COMPACTION_CONCURRENCY = max(1, int(os.getenv("COMPACTION_CONCURRENCY", str(_DEFAULT_COMPACTION_CONCURRENCY))))
+except (ValueError, TypeError):
+    COMPACTION_CONCURRENCY = _DEFAULT_COMPACTION_CONCURRENCY
 
 
 def _safe_tokens_full(turn: ConversationTurn) -> int:
@@ -161,7 +173,8 @@ class CompactionService:
         Process:
         1. Load room memory (or reuse pre-loaded instance)
         2. Identify turns to compact (older than preserve_recent_turns)
-        3. For each turn: upsert full content (idempotent) -> collect pointer data
+        3. Concurrently prepare each turn (bounded by semaphore):
+           upsert full content (idempotent) + index for search -> collect pointer data
         4. Atomic bulk_write to mark turns compact in MongoDB (no full-doc rewrite)
 
         Design constraints (§6.3):
@@ -230,17 +243,33 @@ class CompactionService:
         compacted_entries: list[dict] = []
         errors: list[str] = []
 
-        for turn in turns_to_compact:
-            try:
-                ref_data = await self._prepare_compaction(turn, room_id)
-                if ref_data:
-                    tokens_saved += max(
-                        0, turn.estimated_tokens_full - turn.estimated_tokens_compact
-                    )
-                    compacted_entries.append(ref_data)
-            except Exception as e:
-                error_msg = f"Failed to compact turn {turn.turn_id}: {e}"
-                logger.error(f"CompactionService: {error_msg}")
+        sem = asyncio.Semaphore(COMPACTION_CONCURRENCY)
+
+        async def _compact_one(turn: ConversationTurn) -> tuple[dict | None, int, str | None]:
+            """Prepare one turn for compaction under a semaphore."""
+            async with sem:
+                try:
+                    ref_data = await self._prepare_compaction(turn, room_id)
+                    if ref_data:
+                        saved = max(
+                            0, turn.estimated_tokens_full - turn.estimated_tokens_compact
+                        )
+                        return ref_data, saved, None
+                    return None, 0, None
+                except Exception as e:
+                    msg = f"Failed to compact turn {turn.turn_id}: {e}"
+                    logger.error("CompactionService: %s", msg)
+                    return None, 0, msg
+
+        results = await asyncio.gather(
+            *(_compact_one(turn) for turn in turns_to_compact)
+        )
+
+        for ref_data, saved, error_msg in results:
+            if ref_data:
+                compacted_entries.append(ref_data)
+                tokens_saved += saved
+            if error_msg:
                 errors.append(error_msg)
 
         if compacted_entries:
@@ -298,21 +327,33 @@ class CompactionService:
 
         # 2. Index the turn in Pinecone for vector search (Phase 4, §8).
         # Indexing failure is non-blocking: compaction proceeds regardless so that
-        # a Pinecone outage doesn't stall all compaction. The un-indexed turn can
-        # be retried later by a background reconciliation job.
+        # a Pinecone outage doesn't stall all compaction.
+        #
+        # TODO(reconciliation): Implement a background reconciliation worker that:
+        #   1. Queries conversation_content for documents without a corresponding
+        #      Pinecone vector (track via `indexed_at` field or separate collection).
+        #   2. Re-indexes missing turns with exponential backoff.
+        #   3. Runs on a cron schedule (e.g., every 5 minutes).
+        # Until implemented, un-indexed turns will be missing from vector search
+        # but still retrievable via keyword search and direct expansion.
         try:
             from services.memory_search_service import memory_search_service
 
             indexed = await memory_search_service.index_turn_for_search(turn, room_id)
             if not indexed:
                 logger.warning(
-                    f"CompactionService: Pinecone indexing failed for turn {turn.turn_id} "
-                    f"in room {room_id} — compaction will proceed; index retry needed"
+                    "CompactionService: Pinecone indexing failed for turn %s "
+                    "in room %s — compaction will proceed; index retry needed",
+                    turn.turn_id,
+                    room_id,
                 )
         except Exception as e:
             logger.warning(
-                f"CompactionService: Pinecone indexing error for turn {turn.turn_id} "
-                f"in room {room_id}: {e} — compaction will proceed; index retry needed"
+                "CompactionService: Pinecone indexing error for turn %s "
+                "in room %s: %s — compaction will proceed; index retry needed",
+                turn.turn_id,
+                room_id,
+                e,
             )
 
         # 3. Build reference pointer
@@ -395,6 +436,8 @@ class CompactionService:
             return await self.expand_turn_content(turn)
         except ContentExpiredError:
             return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
+        except NotImplementedError as e:
+            return f"[Error: Content for turn {turn_id} uses unsupported storage: {e}]"
         except ValueError as e:
             return f"[Error: {e}]"
 

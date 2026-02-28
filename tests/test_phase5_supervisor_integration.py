@@ -83,8 +83,7 @@ class TestAddSynthesisToHistory:
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
-        mock_db_service.push_conversation_turn.return_value = (True, True)
-        mock_db_service.get_conversation_history_length.return_value = 3
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
 
         from services.memory_service import RoomMemoryService
 
@@ -98,9 +97,9 @@ class TestAddSynthesisToHistory:
         )
 
         assert result is not None  # Returns turn_id on success
-        mock_db_service.push_conversation_turn.assert_awaited_once()
+        mock_db_service.push_and_trim_conversation_turn.assert_awaited_once()
 
-        pushed_turn = mock_db_service.push_conversation_turn.call_args[0][1]
+        pushed_turn = mock_db_service.push_and_trim_conversation_turn.call_args[0][1]
         assert pushed_turn["role"] == "supervisor"
         assert "Combined results" in pushed_turn["content"]
 
@@ -109,7 +108,7 @@ class TestAddSynthesisToHistory:
         self, mock_db_service, mock_openai_service
     ):
         """Should return None when room document doesn't exist."""
-        mock_db_service.push_conversation_turn.return_value = (False, False)
+        mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
 
         from services.memory_service import RoomMemoryService
 
@@ -129,7 +128,7 @@ class TestAddSynthesisToHistory:
         self, room_memory, mock_db_service, mock_openai_service
     ):
         """Should return None when DB persistence fails."""
-        mock_db_service.push_conversation_turn.return_value = (False, True)
+        mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
 
         from services.memory_service import RoomMemoryService
 
@@ -143,6 +142,65 @@ class TestAddSynthesisToHistory:
         )
 
         assert result is None
+
+
+class TestSynthesisLLMEnrichment:
+    """Tests for background LLM enrichment of synthesis turn_notes (§6.2)."""
+
+    @pytest.mark.asyncio
+    async def test_enrichment_scheduled_for_long_synthesis(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Long synthesis text should trigger background _enrich_turn_notes_background."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        long_text = "This is a very detailed synthesis. " * 50
+
+        with patch.object(
+            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+        ) as mock_enrich:
+            result = await service.add_synthesis_to_history(
+                room_id="test_room",
+                synthesis_text=long_text,
+            )
+            await asyncio.sleep(0)
+
+            assert result is not None
+            mock_enrich.assert_called_once()
+            call_args = mock_enrich.call_args
+            assert call_args[0][0] == "test_room"
+            assert call_args[0][3] == long_text
+
+    @pytest.mark.asyncio
+    async def test_enrichment_skipped_for_short_synthesis(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Short synthesis text should NOT trigger background enrichment."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        with patch.object(
+            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+        ) as mock_enrich:
+            result = await service.add_synthesis_to_history(
+                room_id="test_room",
+                synthesis_text="Short synthesis.",
+            )
+            await asyncio.sleep(0)
+
+            assert result is not None
+            mock_enrich.assert_not_called()
 
 
 # =========================================================================

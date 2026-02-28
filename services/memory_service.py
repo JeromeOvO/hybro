@@ -3,10 +3,7 @@ from uuid import uuid4
 
 from common.utils.context_utils import (
     add_turn_to_history,
-    build_context_for_agent,
     clean_mention_format,
-    get_context_stats,
-    migrate_legacy_memory,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -686,43 +683,6 @@ class RoomMemoryService:
             status_code=200,
         )
 
-    async def get_context_for_agent(
-        self,
-        room_id: str,
-        current_task: str,
-        agent_name: str | None = None,
-    ) -> str:
-        """
-        Build context string for an agent request (ChatGPT/Claude style).
-
-        Args:
-            room_id: The room ID
-            current_task: The current user request/task
-            agent_name: Name of the agent (for personalization)
-
-        Returns:
-            Formatted context string ready to send to agent
-        """
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-
-        if not room_memory or not room_memory.memory_content:
-            # No history, just return the current task
-            if agent_name:
-                return (
-                    f"[Current request]\nUser: {current_task}\n\n"
-                    f"You are {agent_name}. Please respond to the request above."
-                )
-            return f"[Current request]\nUser: {current_task}"
-
-        # Migrate legacy memory if needed
-        room_memory.memory_content = migrate_legacy_memory(room_memory.memory_content)
-
-        return build_context_for_agent(
-            memory_content=room_memory.memory_content,
-            current_task=current_task,
-            agent_name=agent_name,
-        )
-
     async def add_synthesis_to_history(
         self,
         room_id: str,
@@ -767,12 +727,15 @@ class RoomMemoryService:
                     f"[Agent contributions: {contributions_text}]"
                 )
 
+        tokens_full = estimate_tokens(enriched_content)
+        notes = extract_turn_notes(enriched_content)
+
         turn = ConversationTurn(
             role=TurnRole.SUPERVISOR,
             content=enriched_content,
             turn_type=TurnType.MESSAGE,
-            estimated_tokens_full=estimate_tokens(enriched_content),
-            turn_notes=extract_turn_notes(enriched_content),
+            estimated_tokens_full=tokens_full,
+            turn_notes=notes,
         )
 
         summary_stub = (
@@ -798,6 +761,23 @@ class RoomMemoryService:
                     "Failed to persist synthesis turn for room %s", room_id,
                 )
             return None
+
+        # Post-save: enrich turn_notes via LLM for long synthesis turns (§6.2).
+        # Synthesis turns are high-value, context-dense text — worth the LLM call.
+        try:
+            from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
+
+            if enriched_content and tokens_full > LLM_TURN_NOTES_THRESHOLD:
+                asyncio.create_task(
+                    self._enrich_turn_notes_background(
+                        room_id, turn.turn_id, notes, enriched_content,
+                    )
+                )
+        except Exception as e:
+            logger.debug(
+                "RoomMemoryService.add_synthesis_to_history: "
+                "background enrichment schedule failed: %s", e,
+            )
 
         return turn.turn_id
 

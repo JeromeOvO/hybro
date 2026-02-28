@@ -225,48 +225,101 @@ def migrate_room_memory(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 async def create_context_memory_indexes(db: Any) -> None:
-    """Create indexes required by the context memory system (mirrors mongodb.py)."""
-    try:
-        content_coll = db["conversation_content"]
+    """
+    Create indexes required by the context memory system (mirrors mongodb.py).
 
-        await content_coll.create_index(
-            [("room_id", 1), ("turn_id", 1)],
-            unique=True,
-            name="room_turn_unique",
-        )
-        await content_coll.create_index(
-            [("room_id", 1), ("stored_at", -1)],
-            name="room_stored_at",
-        )
-        await content_coll.create_index(
-            [
-                ("content", "text"),
-                ("turn_notes.keywords", "text"),
-                ("turn_notes.entities", "text"),
-                ("turn_notes.one_liner", "text"),
-            ],
-            name="turn_notes_text",
-        )
-        await content_coll.create_index(
-            "expires_at",
-            expireAfterSeconds=0,
-            sparse=True,
-            name="content_ttl",
-        )
-        print("  indexes created on conversation_content")
+    Raises:
+        RuntimeError: If a critical unique index fails (indicates duplicate data).
+    """
+    critical_failures: list[tuple[str, str]] = []
 
-        await db["user_memories"].create_index(
-            "user_id", unique=True, name="user_id_unique"
-        )
-        print("  indexes created on user_memories")
+    async def _create_index(
+        coll_name: str,
+        keys,
+        *,
+        name: str,
+        unique: bool = False,
+        critical: bool = False,
+        **kwargs,
+    ) -> None:
+        coll = db[coll_name]
+        try:
+            await coll.create_index(keys, unique=unique, name=name, **kwargs)
+            print(f"  index '{name}' created on {coll_name}")
+        except Exception as e:
+            if unique and critical:
+                print(
+                    f"  [ERROR] CRITICAL: Failed to create unique index '{name}' "
+                    f"on {coll_name}: {e}. Duplicate documents likely exist."
+                )
+                critical_failures.append((coll_name, name))
+            else:
+                print(f"  [WARN] Failed to create index '{name}' on {coll_name}: {e}")
 
-        await db["agent_memories"].create_index(
-            "agent_id", unique=True, name="agent_id_unique"
-        )
-        print("  indexes created on agent_memories")
+    # conversation_content indexes
+    await _create_index(
+        "conversation_content",
+        [("room_id", 1), ("turn_id", 1)],
+        name="room_turn_unique",
+        unique=True,
+        critical=True,
+    )
+    await _create_index(
+        "conversation_content",
+        [("room_id", 1), ("stored_at", -1)],
+        name="room_stored_at",
+    )
+    await _create_index(
+        "conversation_content",
+        [
+            ("content", "text"),
+            ("turn_notes.keywords", "text"),
+            ("turn_notes.entities", "text"),
+            ("turn_notes.one_liner", "text"),
+        ],
+        name="turn_notes_text",
+    )
+    await _create_index(
+        "conversation_content",
+        "expires_at",
+        name="content_ttl",
+        expireAfterSeconds=0,
+        sparse=True,
+    )
 
-    except Exception as e:
-        print(f"  [WARN] Error creating indexes (may already exist): {e}")
+    # user_memories unique index
+    await _create_index(
+        "user_memories",
+        "user_id",
+        name="user_id_unique",
+        unique=True,
+        critical=True,
+    )
+
+    # agent_memories unique index
+    await _create_index(
+        "agent_memories",
+        "agent_id",
+        name="agent_id_unique",
+        unique=True,
+        critical=True,
+    )
+
+    # room_memories unique index
+    await _create_index(
+        "room_memories",
+        "room_id",
+        name="room_id_unique",
+        unique=True,
+        critical=True,
+    )
+
+    if critical_failures:
+        failed = ", ".join(f"{coll}.{idx}" for coll, idx in critical_failures)
+        raise RuntimeError(
+            f"Critical unique index creation failed: {failed}. "
+            "Duplicate documents likely exist. Resolve before proceeding."
+        )
 
 
 async def migrate_room_memories(room_id: str | None, dry_run: bool) -> None:

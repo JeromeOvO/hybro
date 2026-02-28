@@ -11,15 +11,13 @@ See CONTEXT_MEMORY_SYSTEM_DESIGN.md for design details.
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
 from common.utils.time import utcnow
-
-if TYPE_CHECKING:
-    from models.compaction import ContentReference
+from models.compaction import ContentReference
 
 
 class TurnRole(str, Enum):
@@ -124,9 +122,9 @@ class ConversationTurn(BaseModel):
     # FULL representation: actual content in context
     content: str | None = None
 
-    # COMPACT representation: pointer to storage (typed Any to avoid circular import;
-    # coerced to ContentReference at validation time via _coerce_content_ref below)
-    content_ref: Any | None = None
+    # COMPACT representation: pointer to external storage.
+    # Pydantic v2 handles dict → ContentReference coercion natively.
+    content_ref: ContentReference | None = None
 
     # Content metadata (always present regardless of representation)
     content_type: ContentType = ContentType.TEXT
@@ -156,25 +154,6 @@ class ConversationTurn(BaseModel):
     # Used by compaction to prioritize retaining failed turns for model learning
     was_successful: bool | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_content_ref(cls, values: Any) -> Any:
-        """Coerce content_ref from raw dict to ContentReference on deserialization.
-
-        content_ref is typed as Any to avoid a circular import between memory.py
-        and compaction.py.  When Pydantic constructs a ConversationTurn from a
-        MongoDB document (dict), it leaves content_ref as a plain dict.  This
-        validator converts it back to a ContentReference so that downstream code
-        (.storage_type, .to_compact_string(), expand_content_reference()) works.
-        """
-        if isinstance(values, dict):
-            ref = values.get("content_ref")
-            if isinstance(ref, dict):
-                from models.compaction import ContentReference
-
-                values["content_ref"] = ContentReference(**ref)
-        return values
-
     @model_validator(mode="after")
     def _validate_content_for_representation(self) -> "ConversationTurn":
         """Enforce that FULL-representation turns always have content set."""
@@ -202,8 +181,6 @@ class ConversationTurn(BaseModel):
 
         # Compact representation
         if self.content_ref:
-            from models.compaction import ContentReference
-
             if isinstance(self.content_ref, ContentReference):
                 pointer = self.content_ref.to_compact_string()
             else:

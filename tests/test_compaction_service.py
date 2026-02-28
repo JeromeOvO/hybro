@@ -307,6 +307,18 @@ class TestContentStorageService:
         with pytest.raises(NotImplementedError):
             await service.expand_content_reference(content_ref, "turn-123")
 
+    @pytest.mark.asyncio
+    async def test_expand_content_reference_url_not_implemented(self, service):
+        """Should raise NotImplementedError for URL storage (SSRF-blocked)."""
+        content_ref = ContentReference(
+            storage_type=StorageType.URL,
+            url="https://example.com/content.txt",
+            created_at=datetime.now(),
+        )
+
+        with pytest.raises(NotImplementedError):
+            await service.expand_content_reference(content_ref, "turn-456")
+
 
 # =============================================================================
 # Compaction Service Tests
@@ -628,6 +640,32 @@ class TestCompactionService:
 
         assert "[Error:" in content
         assert "not found" in content.lower()
+
+    @pytest.mark.asyncio
+    async def test_fetch_turn_content_returns_error_for_not_implemented_storage(
+        self, service, sample_room_memory
+    ):
+        """Should return graceful error (not raise) when storage type is not implemented."""
+        from models.memory import TurnRepresentation
+
+        turn = sample_room_memory.memory_content.conversation_history[0]
+        turn.representation = TurnRepresentation.COMPACT
+        turn.content = None
+        turn.content_ref = ContentReference(
+            storage_type=StorageType.URL,
+            url="https://example.com/content.txt",
+            created_at=datetime.now(),
+        )
+
+        with patch.object(
+            service.db_service,
+            "get_room_memory_by_room_id",
+            return_value=sample_room_memory,
+        ):
+            content = await service.fetch_turn_content(turn.turn_id, "test-room-123")
+
+        assert "[Error:" in content
+        assert "unsupported storage" in content.lower()
 
 
 # =============================================================================

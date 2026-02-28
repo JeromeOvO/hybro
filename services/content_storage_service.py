@@ -209,7 +209,8 @@ class ContentStorageService:
 
         Raises:
             ContentExpiredError: If the content is not found
-            ValueError: If the storage type is not supported
+            NotImplementedError: If the storage type is not yet implemented (S3, URL)
+            ValueError: If the content reference is malformed
         """
         if content_ref.storage_type == StorageType.MONGODB:
             if not content_ref.document_id:
@@ -227,17 +228,11 @@ class ContentStorageService:
             raise NotImplementedError("S3 expansion not yet implemented")
 
         elif content_ref.storage_type == StorageType.URL:
-            # URL retrieval (for web content)
-            if not content_ref.url:
-                raise ValueError(
-                    f"ContentReference for turn {turn_id} has no URL"
-                )
-            import httpx
-
-            async with httpx.AsyncClient() as client:
-                response = await client.get(content_ref.url)
-                response.raise_for_status()
-                return response.text
+            # FUTURE: URL-based content retrieval (external web content).
+            # Blocked due to SSRF risk — requires allow-listing, timeout,
+            # size limits, and redirect controls before enabling.
+            # See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.8 for design notes.
+            raise NotImplementedError("URL expansion not yet implemented")
 
         else:
             raise ValueError(

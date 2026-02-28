@@ -1259,21 +1259,31 @@ may become stale: compaction cycles, new room memory entries, or agent registry 
 are not reflected.
 
 **Requirement**: On HITL resume, `_resume_supervisor_v2()` must **re-fetch**
-`conversation_context` from `room_memory_service` and refresh `agent_registry` from
-the database, using the serialized values only as fallbacks if the services are
-unavailable.
+`conversation_context` and refresh `agent_registry` from the database, using the
+serialized values only as fallbacks if the services are unavailable.
+
+> **Implementation note:** The actual implementation unconditionally refreshes context
+> for *all* resume types (not just HITL), using
+> `context_assembly_service.build_supervisor_context()` — the same budget-aware assembly
+> used in `_prepare_for_supervisor_v2()`. The `interrupt_kind` branching shown below is
+> a future enhancement; the current uniform-refresh is more conservative and correct.
 
 ```python
-# In RoomMessageCenter._resume_supervisor_v2(), for HITL kinds:
-if interrupt_kind in ("hitl_agent", "hitl_supervisor"):
-    # Re-fetch to avoid staleness after long HITL pause
-    refreshed_context = await room_memory_service.build_conversation_context(room_id)
-    if refreshed_context:
-        conversation_context = refreshed_context
-    # Also refresh agent_registry (agents may have been added/removed/health-changed)
-    refreshed_registry = await agent_service.get_room_agents(room_id)
-    if refreshed_registry:
-        agent_registry = refreshed_registry
+# In RoomMessageCenter._resume_supervisor_v2(), step 5b:
+# Re-fetch to avoid staleness after long pause
+room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+result_ctx = context_assembly_service.build_supervisor_context(
+    room_memory=room_memory,
+    current_task=message_text,
+    agent_registry=agent_dicts,
+    max_turns=5,
+    memory_search_results=memory_search_results,
+)
+conversation_context = result_ctx.context
+# Also refresh agent_registry (agents may have been added/removed/health-changed)
+agents = await asyncio.gather(*(
+    self.database_service.get_agent_by_agent_id(aid) for aid, _ in room_agent_items
+))
 ```
 
 ---
@@ -1337,6 +1347,11 @@ class MemorySearchService:
 
         return diverse[:self.config.max_results]
 ```
+
+> **Implementation note:** The actual return type is `MemorySearchResponse`
+> (see `models/search.py`), which wraps `list[MemorySearchResult]` with
+> search diagnostics (timing, which sub-searches ran, decay/MMR flags).
+> Results are available at `.results`.
 
 ### 8.2 Search Configuration
 
@@ -1427,6 +1442,8 @@ evolution. Temporal edges alone already recover much multi-hop recall at near-ze
 | `user_memories`        | User preferences + patterns                      | `user_id` (unique)                  |
 | `agent_memories`       | Agent performance history                        | `agent_id` (unique)                 |
 | `room_facts`           | Extracted durable facts                          | `room_id`, `created_at`             |
+
+> **Implementation note:** `room_facts` is embedded as `list[RoomFact]` inside `room_memories` rather than a standalone collection. This simplifies atomic updates (facts are pushed/sliced alongside room_summary in a single `update_one`) and avoids cross-collection consistency concerns. The trade-off is that fact-level queries by `created_at` require scanning the parent document's embedded array rather than using a dedicated index. At current scale this is acceptable.
 
 ### 9.2 Model Files to Create/Update
 
@@ -2273,7 +2290,7 @@ def apply_temporal_decay(
 ## 20. Implementation Reality vs. Design
 
 > **Update (Feb 25 2026)**: All 5 phases of the Context Memory System are now implemented.
-> The gaps documented in §20.2 and §20.4 below have been **fully closed**. This section
+> The gaps documented in §20.2 and §20.5 below have been **fully closed**. This section
 > is retained for historical reference. See `SYSTEM_DESIGN_REVIEW.md §6.4` for the
 > comprehensive item-by-item compliance audit.
 
@@ -2291,7 +2308,7 @@ engineering prioritization.
 | `build_minimal_context` for supervisor | ✅ Implemented | `common/utils/context_utils.py` |
 | `add_agent_response_to_memory` (V2 loop writes) | ✅ Implemented | `services/memory_service.py` |
 | Legacy memory migration (`memory_text` → `summary`) | ✅ Implemented | `context_utils.migrate_legacy_memory` |
-| Per-agent context via `get_context_for_agent` | ✅ Implemented | `services/memory_service.py` |
+| Per-agent context via `ContextAssemblyService.build_agent_execution_context` | ✅ Implemented | `services/context_assembly_service.py` |
 | Supervisor V2 adaptive loop | ✅ Implemented | `modules/SupervisorExecutor.py` |
 | **Context Assembly Engine** (`ContextAssemblyService`) | ✅ Implemented (Phase 2) | `services/context_assembly_service.py` |
 | **Lossless compaction** (pointer-based, §6) | ✅ Implemented (Phase 3) | `services/compaction_service.py`, `services/content_storage_service.py` |
@@ -2314,11 +2331,32 @@ engineering prioritization.
 | **Token budget enforcement** | ✅ Implemented — `ContextAssemblyService` + `MAX_CONTEXT_CHARS` hard cap | RESOLVED |
 | **Context Assembly Engine** (`ContextAssemblyService`) | ✅ Implemented — budget-aware, KV-cache optimized | RESOLVED |
 | **Memory Search** (`MemorySearchService`, Pinecone) | ✅ Implemented — hybrid vector + keyword + temporal decay + MMR | RESOLVED |
-| **User Memory / Agent Memory** | ⚠️ Partial — models defined, collections indexed; not yet populated by runtime | DEFERRED |
-| **Room Facts extraction** | ⚠️ Partial — `RoomFact` model defined; auto-extraction not yet implemented | DEFERRED |
+| **User Memory / Agent Memory** | ⚠️ Partial — models defined, collections indexed; runtime writes interaction counters and agent success/failure stats (`_track_user_interaction`, `_track_agent_call`); not yet consumed by context assembly | PARTIAL |
+| **Room Facts extraction** | ⚠️ Partial — `RoomFact` model defined; LLM-based extraction from synthesis text implemented in `update_room_summary()`; no per-turn extraction pipeline | PARTIAL |
 | **Prompt caching optimization** (§12.3) | ✅ Implemented — `conversation_context` in system prompt | RESOLVED |
 
-### 20.3 Known Behavioral Gaps in the V2 Loop
+### 20.3 Intentional Implementation Divergences
+
+These are cases where the implementation intentionally deviates from the spec.
+Documented here so future readers don't treat them as bugs.
+
+| Spec | Implementation | Rationale |
+|---|---|---|
+| §9.1: `room_facts` is a standalone collection with `room_id` and `created_at` indexes | `room_facts` is embedded as `list[RoomFact]` inside `room_memories` | Simplifies atomic updates (facts pushed/sliced with `room_summary` in a single `update_one`); avoids cross-collection consistency. Acceptable at current scale. |
+| §8.1: `search() -> list[MemorySearchResult]` | `search() -> MemorySearchResponse` (wraps list + diagnostics) | Richer return value includes timing, sub-search flags, decay/MMR metadata. Results at `.results`. |
+| §8.1: MMR uses full embedding vectors | MMR uses 3-element score profile `[vector_score, keyword_score, temporal_decay_factor]` as a diversity proxy | Avoids storing/passing full embeddings on `MemorySearchResult`; sufficient for deduplication. |
+| §7.6: HITL resume branches on `interrupt_kind` and calls `room_memory_service.build_conversation_context()` | Single resume path calls `context_assembly_service.build_supervisor_context()` for all pause types | `build_conversation_context` was never implemented; `build_supervisor_context` is the real equivalent. `interrupt_kind` branching is a future enhancement. |
+| §11.3: Two-step `should_compact()` + `compact_room_memory()` | Single `compact_if_needed()` combines check + compact to avoid redundant DB load | Functionally equivalent; avoids double-fetching room memory. |
+
+### 20.3.1 Known Implementation Gaps (Not Yet Built)
+
+| Gap | Impact | Mitigation | Priority |
+|---|---|---|---|
+| **Pinecone reconciliation worker** — compaction proceeds even when Pinecone indexing fails, but there's no background job to retry failed indexes | Un-indexed turns are missing from vector search (keyword search and direct expansion still work) | Manual re-index via `memory_search_service.index_turn_for_search()` if needed; add `indexed_at` field to `conversation_content` to track | P2 |
+| **User Memory / Agent Memory** — partially implemented: `_track_user_interaction()` and `_track_agent_call()` write interaction counters and success/failure stats, but the data is not yet consumed by context assembly or exposed to agents | Tracking data accumulates but has no downstream consumer; no impact on agent behavior yet | Wire into `ContextAssemblyService` when personalization features are prioritized | P3 |
+| **Room Facts auto-extraction** — partially implemented: `update_room_summary()` extracts `room_facts` from synthesis text via LLM at synthesis boundaries; no standalone extraction pipeline for individual turns | Facts are captured at synthesis granularity (every N turns), not per-turn; short conversations that never trigger synthesis won't accumulate facts | Acceptable coverage for current use cases; per-turn extraction is a future enhancement | P3 |
+
+### 20.4 Known Behavioral Gaps in the V2 Loop
 
 These are not design omissions — they are observable behaviors of the current
 implementation that engineers should be aware of:
@@ -2329,7 +2367,7 @@ implementation that engineers should be aware of:
 | Concurrent agents don't see each other's results in per-agent context | `asyncio.gather` dispatches all agents before any write to room memory | For multi-target DELEGATE, agents have no awareness of sibling results. Supervisor must compensate via `DelegateTarget.task`. |
 | Current user message appears **twice** in supervisor prompt | `initialize_or_update_room_memory` runs before `_prepare_for_supervisor_v2`, so current message is in room history AND in `## User Message` section | Minor redundancy; does not affect correctness. |
 
-### 20.4 Priority Order for Closing Gaps
+### 20.5 Priority Order for Closing Gaps
 
 > **All items below have been completed as of Feb 25, 2026.**
 

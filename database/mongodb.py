@@ -2104,71 +2104,135 @@ class MongoDB:
         - conversation_content: For lossless compaction storage
         - user_memories: For user preferences
         - agent_memories: For agent performance history
+        - room_memories: Unique constraint on room_id (§9.1)
 
         See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 and §9.1 for schema details.
         Should be called on application startup.
+
+        Raises:
+            Exception: Re-raised if a critical unique index fails (indicates
+                duplicate data that must be resolved before the system can
+                guarantee data integrity).
         """
-        try:
-            # === conversation_content collection ===
-            content_coll = self.conversation_content_collection
+        critical_unique_indexes: list[tuple[str, str]] = []
 
-            # UNIQUE index for idempotent upsert in compact_room_memory (§6.3)
-            # Ensures crashed-and-retried compaction never creates duplicate documents
-            await content_coll.create_index(
-                [("room_id", 1), ("turn_id", 1)],
-                unique=True,
-                name="room_turn_unique",
+        async def _create_index(
+            coll,
+            keys,
+            *,
+            name: str,
+            unique: bool = False,
+            critical: bool = False,
+            **kwargs,
+        ) -> None:
+            """Helper to create an index with proper error handling."""
+            try:
+                await coll.create_index(keys, unique=unique, name=name, **kwargs)
+                logger.info("Index '%s' created on %s", name, coll.name)
+            except Exception as e:
+                if unique and critical:
+                    logger.error(
+                        "CRITICAL: Failed to create unique index '%s' on %s: %s. "
+                        "This likely means duplicate documents exist. "
+                        "Run a deduplication script before retrying.",
+                        name,
+                        coll.name,
+                        e,
+                    )
+                    critical_unique_indexes.append((coll.name, name))
+                elif unique:
+                    logger.warning(
+                        "Failed to create unique index '%s' on %s: %s. "
+                        "Duplicate documents may exist.",
+                        name,
+                        coll.name,
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to create index '%s' on %s (may already exist): %s",
+                        name,
+                        coll.name,
+                        e,
+                    )
+
+        # === conversation_content collection ===
+        content_coll = self.conversation_content_collection
+
+        # UNIQUE index for idempotent upsert in compact_room_memory (§6.3)
+        # Ensures crashed-and-retried compaction never creates duplicate documents
+        await _create_index(
+            content_coll,
+            [("room_id", 1), ("turn_id", 1)],
+            name="room_turn_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # Fast room-level queries for content retrieval
+        await _create_index(
+            content_coll,
+            [("room_id", 1), ("stored_at", -1)],
+            name="room_stored_at",
+        )
+
+        # Text index on content and turn_notes for hybrid search (§8.3)
+        # Enables keyword search on both full content and compact turn metadata
+        await _create_index(
+            content_coll,
+            [
+                ("content", "text"),
+                ("turn_notes.keywords", "text"),
+                ("turn_notes.entities", "text"),
+                ("turn_notes.one_liner", "text"),
+            ],
+            name="turn_notes_text",
+        )
+
+        # TTL index for content expiry (if configured)
+        # Only applies to documents with expires_at set
+        await _create_index(
+            content_coll,
+            "expires_at",
+            name="content_ttl",
+            expireAfterSeconds=0,
+            sparse=True,
+        )
+
+        # === user_memories collection ===
+        await _create_index(
+            self.user_memories_collection,
+            "user_id",
+            name="user_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # === agent_memories collection ===
+        await _create_index(
+            self.agent_memories_collection,
+            "agent_id",
+            name="agent_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # === room_memories collection ===
+        await _create_index(
+            self.room_memories_collection,
+            "room_id",
+            name="room_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # If any critical unique index failed, raise to alert operators
+        if critical_unique_indexes:
+            failed = ", ".join(f"{coll}.{idx}" for coll, idx in critical_unique_indexes)
+            raise RuntimeError(
+                f"Critical unique index creation failed: {failed}. "
+                "Duplicate documents likely exist. Resolve before proceeding."
             )
-
-            # Fast room-level queries for content retrieval
-            await content_coll.create_index(
-                [("room_id", 1), ("stored_at", -1)],
-                name="room_stored_at",
-            )
-
-            # Text index on content and turn_notes for hybrid search (§8.3)
-            # Enables keyword search on both full content and compact turn metadata
-            await content_coll.create_index(
-                [
-                    ("content", "text"),
-                    ("turn_notes.keywords", "text"),
-                    ("turn_notes.entities", "text"),
-                    ("turn_notes.one_liner", "text"),
-                ],
-                name="turn_notes_text",
-            )
-
-            # TTL index for content expiry (if configured)
-            # Only applies to documents with expires_at set
-            await content_coll.create_index(
-                "expires_at",
-                expireAfterSeconds=0,
-                sparse=True,
-                name="content_ttl",
-            )
-
-            print("Context memory indexes created successfully on conversation_content")
-
-            # === user_memories collection ===
-            user_mem_coll = self.user_memories_collection
-            await user_mem_coll.create_index(
-                "user_id",
-                unique=True,
-                name="user_id_unique",
-            )
-            print("Context memory indexes created successfully on user_memories")
-
-            # === agent_memories collection ===
-            agent_mem_coll = self.agent_memories_collection
-            await agent_mem_coll.create_index(
-                "agent_id",
-                unique=True,
-                name="agent_id_unique",
-            )
-            print("Context memory indexes created successfully on agent_memories")
-
-        except Exception as e:
-            print(f"Error creating context memory indexes: {e}")
 
 
 mongodb = MongoDB()
