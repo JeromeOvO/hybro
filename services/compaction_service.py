@@ -289,6 +289,8 @@ class CompactionService:
                 )
                 logger.warning(error_msg)
                 errors.append(error_msg)
+                compacted_entries = []
+                tokens_saved = 0
 
         return CompactionResult(
             room_id=room_id,
