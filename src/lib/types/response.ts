@@ -75,7 +75,6 @@ export type {
 import type {
   AgentCard,
   Task,
-  Message,
   SendMessageResponse,
   SendStreamingMessageResponse,
 } from '@a2a-js/sdk'

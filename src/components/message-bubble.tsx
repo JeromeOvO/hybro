@@ -101,6 +101,14 @@ function AgentMessageBubbleInner({
   const quoteBtnRef = useRef<HTMLButtonElement | null>(null)
   const selectedTextRef = useRef<string>('')
 
+  const hideQuoteButton = useCallback(() => {
+    if (quoteBtnRef.current) {
+      quoteBtnRef.current.remove()
+      quoteBtnRef.current = null
+    }
+    selectedTextRef.current = ''
+  }, [])
+
   // Create or update quote button using native DOM to avoid React re-render
   const showQuoteButton = useCallback((top: number, left: number, text: string) => {
     selectedTextRef.current = text
@@ -136,15 +144,7 @@ function AgentMessageBubbleInner({
 
     document.body.appendChild(btn)
     quoteBtnRef.current = btn
-  }, [message.id, message.sender_name, onQuote])
-
-  const hideQuoteButton = useCallback(() => {
-    if (quoteBtnRef.current) {
-      quoteBtnRef.current.remove()
-      quoteBtnRef.current = null
-    }
-    selectedTextRef.current = ''
-  }, [])
+  }, [message.id, message.sender_name, onQuote, hideQuoteButton])
 
   // Cleanup on unmount
   useEffect(() => {
