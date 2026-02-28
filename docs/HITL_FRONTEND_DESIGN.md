@@ -454,6 +454,274 @@ optimistically sets `hitlResolved: true` on the message entity.
 - Ensure keyboard navigation: `Enter` submits the text form, `Escape` does nothing
   (do not close -- the user may not realize the form is dismissable).
 
+### 5.7a HITL UI Specification — Visual Layouts
+
+This section defines the exact visual structure of the HITL inline reply form as
+rendered inside the `task-status-message.tsx` `input-required` card.
+
+**Prerequisites**: Install `RadioGroup` from shadcn/ui (`npx shadcn@latest add radio-group`).
+All other primitives (`Input`, `Textarea`, `Button`, `Label`, `Form`) already exist.
+
+#### Container: `input-required` Task Card (Existing)
+
+The HITL form renders **inside** the existing amber-themed `input-required` card.
+The card already has this visual structure:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  border-amber-200  bg-amber-50  (dark: border-amber-500/20 │
+│                                  bg-amber-500/12)           │
+│                                                             │
+│  ┌──┐  Agent Name          ⚠ Input required · Step 2/5     │
+│  │⚠ │  ────────────                                        │
+│  └──┘                                                       │
+│                                                             │
+│  "Which date range should I search?"  ← hitlPrompt         │
+│                                                             │
+│  ┌─────────────────────────────── NEW: HITL FORM ──┐       │
+│  │  (varies by promptType — see below)              │       │
+│  └──────────────────────────────────────────────────┘       │
+│                                                             │
+│  ⏱ 12s elapsed                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+The form is inserted between the prompt text and the elapsed timer, separated by an
+amber-themed `border-t` on the form container (not a `<Separator>` component, because
+the border needs to match the amber card color scheme).
+
+#### Variant A: `text` Prompt Type
+
+Most common variant. Free-form text reply.
+
+```
+┌─ HITL Form (text) ──────────────────────────────────────────┐
+│                                                              │
+│  ┌──────────────────────────────────────────┐  ┌─────────┐  │
+│  │  Type your reply...                      │  │  Send ➤ │  │
+│  └──────────────────────────────────────────┘  └─────────┘  │
+│                                                              │
+│  (error state:)                                              │
+│  ✕ Failed to send reply. Try again.                         │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Implementation**:
+
+```tsx
+<form onSubmit={handleSubmit} className="mt-3 pt-3 border-t border-amber-200/60
+  dark:border-amber-500/20">
+  <div className="flex gap-2 items-start">
+    <Input
+      ref={inputRef}
+      value={input}
+      onChange={(e) => setInput(e.target.value)}
+      placeholder="Type your reply..."
+      disabled={isSubmitting}
+      aria-label={`Reply to ${agentName}`}
+      className="flex-1 bg-white/80 dark:bg-white/5 border-amber-300
+        dark:border-amber-500/30 focus-visible:ring-amber-400"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault()
+          handleSubmit(e)
+        }
+      }}
+    />
+    <Button
+      type="submit"
+      disabled={isSubmitting || !input.trim()}
+      size="sm"
+      className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+    >
+      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
+    </Button>
+  </div>
+  {error && (
+    <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+      <XCircle className="h-3 w-3" />
+      {error}
+    </p>
+  )}
+</form>
+```
+
+**Styling rationale**: The form uses amber-tinted borders and the amber-600 primary
+button to stay within the `input-required` color scheme. The input background uses
+`bg-white/80` (light) / `bg-white/5` (dark) for subtle contrast against the amber card.
+
+#### Variant B: `choice` Prompt Type
+
+Renders radio buttons for predefined choices.
+
+```
+┌─ HITL Form (choice) ────────────────────────────────────────┐
+│                                                              │
+│  ○  2023-2024                                               │
+│  ◉  2024-2025                      (selected)               │
+│  ○  2025-2026                                               │
+│  ○  All available years                                     │
+│                                                              │
+│  ┌──────────┐                                               │
+│  │  Submit   │                                               │
+│  └──────────┘                                               │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Implementation**:
+
+```tsx
+<form onSubmit={handleSubmit} className="mt-3 pt-3 border-t border-amber-200/60
+  dark:border-amber-500/20">
+  <RadioGroup
+    value={selectedChoice}
+    onValueChange={setSelectedChoice}
+    aria-label={`Choose a response for ${agentName}`}
+    className="space-y-2"
+  >
+    {choices.map((choice, i) => (
+      <div key={i} className="flex items-center gap-2.5">
+        <RadioGroupItem
+          value={choice}
+          id={`hitl-choice-${requestId}-${i}`}
+          disabled={isSubmitting}
+          className="border-amber-400 text-amber-600
+            data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
+        />
+        <Label
+          htmlFor={`hitl-choice-${requestId}-${i}`}
+          className="text-sm font-normal cursor-pointer text-amber-900
+            dark:text-amber-100"
+        >
+          {choice}
+        </Label>
+      </div>
+    ))}
+  </RadioGroup>
+  <Button
+    type="submit"
+    disabled={isSubmitting || !selectedChoice}
+    size="sm"
+    className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
+  >
+    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Submit'}
+  </Button>
+  {error && (
+    <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
+      <XCircle className="h-3 w-3" />
+      {error}
+    </p>
+  )}
+</form>
+```
+
+**Prerequisite**: Run `npx shadcn@latest add radio-group` to install `RadioGroup` and
+`RadioGroupItem` into `src/components/ui/`. This adds `@radix-ui/react-radio-group`.
+
+#### Variant C: `confirmation` Prompt Type
+
+Binary decision. Two buttons, no text input.
+
+```
+┌─ HITL Form (confirmation) ──────────────────────────────────┐
+│                                                              │
+│  ┌─────────────┐    ┌──────────────┐                        │
+│  │  ✓ Approve   │    │  ✕ Reject    │                        │
+│  └─────────────┘    └──────────────┘                        │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Implementation**:
+
+```tsx
+<div className="mt-3 pt-3 border-t border-amber-200/60
+  dark:border-amber-500/20 flex gap-2">
+  <Button
+    onClick={() => handleConfirmation('approved')}
+    disabled={isSubmitting}
+    size="sm"
+    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  >
+    {isSubmitting && lastAction === 'approved'
+      ? <Loader2 className="h-4 w-4 animate-spin" />
+      : <><CheckCircle className="h-4 w-4 mr-1" /> Approve</>
+    }
+  </Button>
+  <Button
+    onClick={() => handleConfirmation('rejected')}
+    disabled={isSubmitting}
+    variant="outline"
+    size="sm"
+    className="border-red-300 text-red-600 hover:bg-red-50
+      dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10"
+  >
+    {isSubmitting && lastAction === 'rejected'
+      ? <Loader2 className="h-4 w-4 animate-spin" />
+      : <><XCircle className="h-4 w-4 mr-1" /> Reject</>
+    }
+  </Button>
+  {error && (
+    <p className="ml-2 self-center text-xs text-red-600 dark:text-red-400">
+      {error}
+    </p>
+  )}
+</div>
+```
+
+**Color choice**: Approve uses emerald (matching the "completed" task state), Reject
+uses red outline (matching the "failed" state). This gives users clear visual
+association: green = positive, red = negative.
+
+#### All Variants: State Transitions
+
+```
+idle ──(user submits)──→ submitting ──(API success)──→ submitted
+                              │
+                              └──(API error)──→ error ──(user retries)──→ submitting
+```
+
+| State | Visual |
+|-------|--------|
+| `idle` | Form visible, inputs enabled, no spinner |
+| `submitting` | Inputs disabled, submit button shows `<Loader2 animate-spin />`, amber pulse overlay on card |
+| `submitted` | Form replaced with: `<p className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Reply sent</p>` |
+| `error` | Form re-enabled, red error text below form, retry via re-submit |
+
+**Optimistic UX**: The `submitted` state appears immediately on API call (before
+response). If the backend returns an error, the state reverts to `error` and the form
+reappears.
+
+#### Form Entry Animation
+
+When the HITL form section appears (on `hitl_input_requested` SSE), use the same entry
+animation as the task card itself:
+
+```
+animate-in fade-in slide-in-from-bottom-1 duration-200
+```
+
+This is slightly faster than the card's `duration-300` to feel like an additive reveal
+rather than a competing animation.
+
+#### Resolved State: Form Removal
+
+When `hitlResolved` becomes `true` (either from optimistic update or SSE
+`hitl_status_update`), the form is replaced with a contextual message based on the
+resolution type:
+
+| Resolution | Display |
+|-----------|---------|
+| `responded` (user replied) | `✓ Reply sent` in emerald |
+| `expired` | Card transitions to **failed** state (red theme, XCircle icon, "Request expired" error text). The form is removed entirely. |
+| `canceled` | Card transitions to **canceled** state (red theme, XCircle icon, "Request canceled" text). The form is removed entirely. |
+
+The theme transition (amber → red for expired/canceled) happens naturally because
+`hitl_status_update` handler sets `taskStatus` to `'failed'` or `'canceled'`, which
+changes the task-status-message rendering branch.
+
 ### 5.8 `src/components/room-messages.tsx` — Pass HITL props to TaskStatusMessage
 
 **Critical wiring step**: The current `task-status` case in `room-messages.tsx` (around
@@ -552,6 +820,9 @@ replies.
 - HITL for `auth-required` state (requires OAuth redirect flow, separate design).
 - Notification badge for pending HITL requests outside the room view.
 - HITL request history / audit log UI.
+- Image/file attachments in HITL replies — HITL forms are text-only in this design.
+  See `MULTIMODAL_SUPPORT_DESIGN.md` Phase 3 for adding file attachments to HITL
+  replies once both HITL and user file input are independently stable.
 
 ---
 

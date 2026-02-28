@@ -2,7 +2,7 @@
 
 **Status**: Not started
 **Depends on**: None (backend APIs exist for re-sending messages)
-**Decoupled from**: All other frontend design docs
+**Decoupled from**: All other frontend design docs **except** `MULTIMODAL_SUPPORT_DESIGN.md` Phase 3 — the `retryMessage` snippet forwards `attachments` to `sendUserMessage`, which requires the 4-arg signature introduced by Phase 3. **If implemented before Phase 3**, remove the `attachments` parameter from the `sendUserMessage` calls in `retryMessage` (§4.6); the retry will be text-only but fully functional. Re-add the parameter when Phase 3 lands.
 
 ---
 
@@ -342,7 +342,17 @@ const retryMessage = async (failedEntityId: string) => {
     // Happy path: message is in the store.
     // targetGroup may be undefined if the entity was DB-hydrated (RoomMessage
     // does not carry target_group). sendUserMessage defaults to "all_agents".
-    await sendUserMessage(userEntity.content, userEntity.targetGroup)
+    // attachments may also be undefined for DB-hydrated entities.
+    //
+    // NOTE: The `attachments` parameter requires the 4-arg sendUserMessage
+    // signature from MULTIMODAL_SUPPORT_DESIGN.md Phase 3. If implementing
+    // this doc before Phase 3, omit the 4th argument (text-only retry).
+    await sendUserMessage(
+      userEntity.content,
+      userEntity.targetGroup,
+      undefined, // no quote on retry
+      userEntity.attachments, // Phase 3 only — remove if Phase 3 not yet landed
+    )
     return
   }
 
@@ -360,11 +370,14 @@ const retryMessage = async (failedEntityId: string) => {
       return
     }
     // target_group is not persisted on RoomMessage; default to "all_agents".
+    // attachments are also not persisted on RoomMessage; retry is text-only.
     // This is a KNOWN LIMITATION: retry via fallback may change routing for
-    // messages originally sent to a specific agent group. Acceptable because:
+    // messages originally sent to a specific agent group, and will drop any
+    // file attachments from the original message. Acceptable because:
     // 1. The fallback is rare (pagination evicted the original message).
     // 2. "all_agents" is the most common target group.
-    // 3. If the backend adds target_group to RoomMessage, this can be fixed.
+    // 3. If the backend adds target_group + attachments to RoomMessage, this
+    //    can be fixed.
     await sendUserMessage(originalContent)
   } catch {
     banner.error('Cannot retry — failed to fetch original message')
@@ -382,7 +395,6 @@ acceptable because:
 2. The room already loaded these messages recently (high probability of HTTP cache hit).
 3. If `MESSAGE_PAGINATION_DESIGN.md` is implemented first, the paginated API can be
    used instead (fetch the page containing the target message by timestamp cursor).
-```
 
 Expose `retryMessage` from the hook. The room page passes it as `onRetry` prop to
 message components.
@@ -436,7 +448,7 @@ No changes. The retry countdown is local to the `RetryButton` component via
 | Retry button only on failed/rejected (not canceled) | Canceled tasks were intentionally stopped by the user. Auto-showing retry would be confusing. |
 | `relatedUserMessageId` links to original | Enables finding the original message text without requiring the retry button to carry the text as a prop. |
 | `targetGroup` stored on user messages | Enables retry to re-send to the same target group. Without this, retry would default to `"all_agents"`, silently changing routing for messages sent to specific agent groups. |
-| **Known limitation**: retry may default to `"all_agents"` | `RoomMessage` (the backend DB response) does not carry `target_group`. This affects **both** retry paths: (1) happy path — if the original optimistic user message has been replaced by a DB-hydrated entity (page refresh, SSE reconnect with full re-hydration), `targetGroup` is `undefined` and `sendUserMessage` defaults to `"all_agents"`; (2) fallback path — the fetched `RoomMessage` also lacks `target_group`. Mitigations: (a) `mergeIncoming` coalesce preserves the optimistic `targetGroup` on incremental reconciliation (the common case), (b) `"all_agents"` is the most common group, (c) fully fixable when backend adds `target_group` to `RoomMessage`. |
+| **Known limitation**: retry may default to `"all_agents"` and drop attachments | `RoomMessage` (the backend DB response) does not carry `target_group` or `attachments`. This affects **both** retry paths: (1) happy path — if the original optimistic user message has been replaced by a DB-hydrated entity (page refresh, SSE reconnect with full re-hydration), `targetGroup` and `attachments` are `undefined` and `sendUserMessage` defaults to `"all_agents"` with text-only content; (2) fallback path — the fetched `RoomMessage` also lacks both fields. Mitigations: (a) `mergeIncoming` coalesce preserves the optimistic `targetGroup` and `attachments` on incremental reconciliation (the common case), (b) `"all_agents"` is the most common group, (c) text-only retry is still useful even without attachments, (d) fully fixable when backend adds `target_group` and `attachments` to `RoomMessage`. |
 | Rate-limit info fields (used/limit) shown in card | Gives users context about why they were rate-limited and how close they are to the limit. |
 
 ---
@@ -474,10 +486,10 @@ No changes. The retry countdown is local to the `RetryButton` component via
   reaches 0.
 - Unit test `TaskStatusMessage` with `onRetry` prop: retry button renders in failed
   state, does not render in working state.
-- Unit test `retryMessage`: finds original user message, calls `sendMessage` with
+- Unit test `retryMessage`: finds original user message, calls `sendUserMessage` with
   correct text.
 - Unit test `retryMessage` fallback: original message not in store (pagination),
-  mock `inquiryRoomMessagesByRoomId` returns the message, calls `sendMessage`.
+  mock `inquiryRoomMessagesByRoomId` returns the message, calls `sendUserMessage`.
 - Edge case: `retryMessage` called when original message not in store AND backend
   fetch also fails — shows error banner.
 - Edge case: `retryMessage` called when `relatedUserMessageId` is missing.
