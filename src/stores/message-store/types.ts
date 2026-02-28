@@ -65,7 +65,7 @@ export interface IncomingMessage {
   // All optional — omitted fields preserve existing values on update
   agentId?: string
   userId?: string
-  taskStatus?: TaskState
+  taskStatus?: TaskState | null
   taskError?: string | null
   taskStatusMessage?: string | null
   taskRequiresInput?: boolean

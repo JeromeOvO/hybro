@@ -1,6 +1,6 @@
 # Token Streaming Design — Real-time Agent Token Streaming
 
-**Status**: Not started
+**Status**: Implemented
 **Depends on**: None (backend already emits `agent_token` SSE events)
 **Decoupled from**: All other frontend design docs
 
@@ -108,13 +108,19 @@ should not touch the normalized message store.
 
 1. First `agent_token` arrives for `message_id=X`. If no entity exists yet, create a
    placeholder entity in the message store (with empty content, `isEphemeral: true`).
+   If the entity was created by `task_submitted` (displayType: task-status), re-upsert
+   it as ephemeral so it renders as an agent-bubble for streaming.
    Initialize the streaming buffer entry for `X`.
 2. Subsequent `agent_token` events append to the buffer string.
 3. A `requestAnimationFrame`-based flush notifies subscribers (React components) at
    most once per frame (~60fps).
-4. `agent_response` arrives with the final complete text. Upsert the entity with full
-   content. Delete the streaming buffer entry for `X`. The component switches from
+4. `task_update` (with terminal status) OR `agent_response` arrives with the final
+   complete text. Finalize (delete) the streaming buffer entry for `X`. Upsert the
+   entity with full content and `isEphemeral: false`. The component switches from
    streaming buffer to entity content seamlessly.
+   **Note:** The backend sends `task_update` (not `agent_response`) when streaming
+   completes for regular agent messages. `agent_response` is only used for
+   coordinator-generated summaries (debate mode).
 5. If the SSE disconnects mid-stream, the partial content in the buffer is promoted
    to the entity content as a fallback.
 
@@ -280,6 +286,23 @@ case 'agent_response': {
 }
 ```
 
+Modify the `task_update` case to finalize the buffer on terminal states (the backend
+sends `task_update`, not `agent_response`, when streaming completes):
+
+```typescript
+case 'task_update': {
+  // Finalize streaming buffer on terminal task_update
+  if (isTerminalState(status)) {
+    streamingBuffer.finalize(messageId)
+  }
+  store.upsertMessage({
+    // ... existing fields ...
+    isEphemeral: isTerminalState(status) ? false : undefined,
+  }, 'sse')
+  break
+}
+```
+
 On SSE disconnect, promote any partial streaming content to entity content:
 
 ```typescript
@@ -413,10 +436,12 @@ No changes.
 | Separate ephemeral buffer (not Zustand) | Avoids triggering normalized store reconciliation, conflict resolution, and sort recomputation 100+ times per second. |
 | `requestAnimationFrame` batching | Caps React re-renders at 60fps regardless of token arrival rate. |
 | `useSyncExternalStore` for React binding | Standard React API for external stores. No dependencies, no middleware. |
-| Placeholder entity on first token | Ensures the message bubble renders immediately, before `agent_response` arrives. |
-| Finalize + discard buffer on `agent_response` | The `agent_response` content is authoritative. Partial streaming content may have encoding differences. |
+| Placeholder entity on first token | Ensures the message bubble renders immediately, before the final response arrives. |
+| Finalize buffer on terminal `task_update` or `agent_response` | The backend sends `task_update` (not `agent_response`) when streaming completes. Both paths finalize the buffer. |
+| Convert task-status to agent-bubble on first token | When `task_submitted` arrives before `agent_token`, the entity is a task-status card. Setting `isEphemeral: true` triggers `resolveDisplayType` to return `agent-bubble`. |
 | Promote partial content on disconnect | Prevents data loss if SSE disconnects mid-stream. The partial text is better than nothing. |
 | Debounced markdown rendering | Full markdown parsing on every frame is too expensive. Debouncing at 200ms gives a smooth experience. |
+| Client-side typewriter for non-streamed content | When content arrives all at once (agent doesn't stream), the `TypewriterManager` feeds text progressively into the streaming buffer so the existing cursor + throttled-render UI works transparently. Duration scales with content length (~800ms). |
 
 ---
 
@@ -425,9 +450,12 @@ No changes.
 | Scenario | Behavior |
 |---|---|
 | `agent_token` with unknown `message_id` (no entity) | Create placeholder entity. Buffer accumulates tokens. |
-| `agent_response` arrives without prior `agent_token` events | Normal flow — no streaming buffer entry exists, `finalize()` returns empty string, entity is upserted with full content. |
+| `agent_token` for entity created by `task_submitted` | Re-upsert entity with `isEphemeral: true` to convert from task-status to agent-bubble. Buffer accumulates tokens. |
+| `task_update` (completed) arrives after streaming | Finalize buffer, upsert final content with `isEphemeral: false`. Entity transitions to permanent agent-bubble. |
+| `agent_response` arrives without prior `agent_token` events | Typewriter effect: create ephemeral entity, feed content progressively through `TypewriterManager`, then upsert final content on completion. |
+| `task_update` (completed) arrives without prior streaming | Typewriter effect: same as above. Content is revealed progressively instead of appearing all at once. |
 | SSE disconnect during streaming | Promote partial buffer content to entity content. Clear buffer. On reconnect, `reconcileWithDb` may update with the final content from the DB. |
-| `agent_token` for a message that already has final content | Ignore — the entity already has authoritative content from `agent_response`. |
+| `agent_token` for a message that already has final content | Ignore — the entity already has authoritative content from `task_update`/`agent_response`. |
 | Extremely rapid tokens (> 200/sec) | `requestAnimationFrame` batching ensures at most 60 React updates/sec regardless. String concatenation remains O(n) but is fast in V8. |
 
 ---
@@ -435,7 +463,6 @@ No changes.
 ## 9. Out of Scope
 
 - Streaming for `task_update` content (task status messages are discrete, not streamed).
-- Token-level animation (character-by-character reveal) — we display accumulated text.
 - Streaming artifact content (covered in `ARTIFACT_RENDERING_DESIGN.md`).
 - Backend changes — `agent_token` emission is already implemented.
 - Streaming cancellation feedback (handled by existing `processing_status` logic).
@@ -444,14 +471,29 @@ No changes.
 
 ## 10. Testing Strategy
 
-- Unit test `StreamingBuffer`: `append`, `get`, `isStreaming`, `finalize`, `clear`.
-- Unit test `useStreamingContent` hook: verify re-renders on buffer flush, returns
-  correct text.
-- Unit test `handleSSEMessage` for `agent_token`: placeholder creation, buffer
-  append, finalize on `agent_response`.
-- Unit test `StreamingCursor` renders correctly.
-- Performance test: simulate 1000 `agent_token` events at 100/sec, verify React
-  re-renders stay at ~60fps (no jank).
+### Implemented
+
+- Unit test `StreamingBuffer`: `append`, `get`, `isStreaming`, `finalize`, `clear`,
+  `subscribe`/`getSnapshot` batching, per-message snapshots.
+- Unit test `TypewriterManager` + `startTypewriter`: progressive delivery, `finish()`
+  jump-to-end, `abort()` without onComplete, `finishAll()`, concurrent typewriters.
+- Integration test `handleSSEMessage` for `agent_token`: placeholder creation, buffer
+  append, task-status → agent-bubble conversion.
+- Integration test: full lifecycle (`task_submitted` → `agent_token` → `task_update`).
+- Integration test: typewriter lifecycle for `task_update(completed)` without prior
+  streaming, room-switch cleanup, `agent_response` typewriter, `agent_token` abort.
 - Edge case: `agent_response` before any `agent_token` (direct response, no streaming).
-- Edge case: SSE disconnect mid-stream, verify partial content promoted.
+- Edge case: SSE disconnect mid-stream with non-terminal task status, verify partial
+  content promoted with `optimistic` source, DB reconciliation accepted.
 - Edge case: multiple agents streaming simultaneously (different `message_id`s).
+- Edge case: late `agent_token` after `agent_response` is ignored.
+- Unit test `resolveDisplayType`: ephemeral without task → agent-bubble, ephemeral
+  with non-terminal task → task-status (processing placeholder regression check).
+
+### Deferred
+
+- Unit test `useStreamingContent` hook (requires React test renderer; hook is < 20
+  lines and covered implicitly by integration tests).
+- Unit test `StreamingCursor` component (trivial CSS-only component, 15 lines).
+- Performance test: simulate 1000 `agent_token` events at 100/sec, verify React
+  re-renders stay at ~60fps. Mitigated by per-message snapshots and RAF batching.

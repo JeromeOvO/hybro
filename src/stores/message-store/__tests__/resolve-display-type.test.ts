@@ -104,4 +104,36 @@ describe('resolveDisplayType', () => {
       taskStatus: TASK_STATE.REJECTED,
     })).toBe('task-status')
   })
+
+  // ── Ephemeral streaming entities ─────────────────────────
+  it('returns agent-bubble for ephemeral agent without taskStatus (streaming placeholder)', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      isEphemeral: true,
+      content: '',
+    })).toBe('agent-bubble')
+  })
+
+  it('returns task-status for ephemeral agent with non-terminal taskStatus (processing placeholder)', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.WORKING,
+      isEphemeral: true,
+    })).toBe('task-status')
+  })
+
+  it('returns task-status for ephemeral agent with input-required taskStatus', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.INPUT_REQUIRED,
+      isEphemeral: true,
+    })).toBe('task-status')
+  })
+
+  it('returns user-bubble for user messages even with isEphemeral', () => {
+    expect(resolveDisplayType({
+      messageType: 'user',
+      isEphemeral: true,
+    })).toBe('user-bubble')
+  })
 })
