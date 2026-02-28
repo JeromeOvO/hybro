@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update'
+  type: 'connected' | 'user_message' | 'agent_response' | 'agent_token' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update'
   room_id: string
   timestamp: string
   data?: {
@@ -39,6 +39,8 @@ export interface SSEMessage {
     total_steps?: number // Total number of steps in the workflow
     // Task content (the description of what the agent is working on)
     task_content?: string
+    // Token streaming field (for agent_token events)
+    token?: string
   }
 }
 

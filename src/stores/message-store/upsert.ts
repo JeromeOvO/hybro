@@ -55,11 +55,13 @@ export function applyUpsert(
   }
 
   // ── Build the new entity ──
+  const resolvedEphemeral = incoming.isEphemeral ?? existing?.isEphemeral ?? false
+
   const displayType = resolveDisplayType({
     messageType: incoming.messageType,
-    taskStatus: incoming.taskStatus,
+    taskStatus: incoming.taskStatus ?? undefined,
     content: incoming.content,
-    isEphemeral: incoming.isEphemeral,
+    isEphemeral: resolvedEphemeral,
   })
 
   // Merge: preserve fields not present in incoming, overlay incoming fields,
@@ -75,7 +77,7 @@ export function applyUpsert(
     sourceVersion: (existing?.sourceVersion ?? 0) + 1,
     updatedAt: Date.now(),
     createdAt: existing?.createdAt ?? Date.now(),
-    isEphemeral: incoming.isEphemeral ?? existing?.isEphemeral ?? false,
+    isEphemeral: resolvedEphemeral,
   }
 
   const newEntities = { ...entities, [entity.id]: entity }
@@ -104,7 +106,7 @@ function mergeIncoming(
       timestamp: incoming.timestamp,
       agentId: incoming.agentId,
       userId: incoming.userId,
-      taskStatus: incoming.taskStatus,
+      taskStatus: incoming.taskStatus ?? undefined,
       taskError: incoming.taskError,
       taskStatusMessage: incoming.taskStatusMessage,
       taskRequiresInput: incoming.taskRequiresInput,
@@ -126,7 +128,9 @@ function mergeIncoming(
     timestamp: incoming.timestamp,
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
     userId: incoming.userId !== undefined ? incoming.userId : existing.userId,
-    taskStatus: incoming.taskStatus !== undefined ? incoming.taskStatus : existing.taskStatus,
+    taskStatus: incoming.taskStatus !== undefined
+      ? (incoming.taskStatus ?? undefined)  // null → undefined (clear the field)
+      : existing.taskStatus,
     taskError: incoming.taskError !== undefined ? incoming.taskError : existing.taskError,
     taskStatusMessage: incoming.taskStatusMessage !== undefined ? incoming.taskStatusMessage : existing.taskStatusMessage,
     taskRequiresInput: incoming.taskRequiresInput !== undefined ? incoming.taskRequiresInput : existing.taskRequiresInput,
@@ -162,8 +166,9 @@ export function isNoOpUpdate(
 ): boolean {
   const incomingDisplayType = resolveDisplayType({
     messageType: incoming.messageType ?? existing.messageType,
-    taskStatus: coalesce(incoming.taskStatus, existing.taskStatus) as TaskState | undefined,
+    taskStatus: (coalesce(incoming.taskStatus, existing.taskStatus) ?? undefined) as TaskState | undefined,
     content: incoming.content ?? existing.content,
+    isEphemeral: incoming.isEphemeral ?? existing.isEphemeral,
   })
 
   return (
@@ -177,6 +182,7 @@ export function isNoOpUpdate(
     existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
     existing.displayType       === incomingDisplayType
   )
 }
