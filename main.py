@@ -15,6 +15,7 @@ from api import (
     agent,
     agent_group,
     discovery,
+    hitl,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -89,6 +90,9 @@ async def lifespan(app: FastAPI):
     # Initialize task tracking indexes for room_agent_messages
     if settings.webhook_signing_key:
         await mongodb.create_task_tracking_indexes()
+        # Create HITL indexes
+        from services.database_service import db_service
+        await db_service.ensure_hitl_indexes()
         # Start stale task checker background job
         await stale_task_checker.start()
         # Run cleanup immediately on startup to recover tasks orphaned by a
@@ -193,6 +197,12 @@ app.include_router(
     room_center.router,
     prefix=api_prefix,
     tags=["room"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    hitl.router,
+    prefix=api_prefix,
+    tags=["hitl"],
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(

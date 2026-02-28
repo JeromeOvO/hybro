@@ -886,5 +886,99 @@ class A2AService:
             )
             return False
 
+    # ------------------------------------------------------------------
+    # HITL: Reply to an existing task (input_required continuation)
+    # ------------------------------------------------------------------
+
+    async def reply_to_task(
+        self,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+    ) -> dict:
+        """Send a follow-up message to an existing A2A task (for HITL replies).
+
+        Uses the same task_id and context_id to continue the conversation
+        rather than starting a new task.
+        """
+        from services.database_service import db_service
+
+        msg = await db_service.get_room_agent_message_by_message_id(message_id)
+        if not msg:
+            raise ValueError(f"Agent message {message_id} not found")
+
+        agent_url = msg.agent_url
+        if not agent_url:
+            raise ValueError(
+                f"Agent message {message_id} has no agent_url"
+            )
+
+        # Generate a NEW webhook token (original plaintext was never stored)
+        webhook_token = db_service.generate_webhook_token()
+        webhook_token_hash = db_service.hash_webhook_token(webhook_token)
+        await db_service.update_webhook_token_hash_on_message(
+            message_id, webhook_token_hash
+        )
+
+        webhook_url = settings.webhook_base_url or "http://localhost:8000"
+        push_config = PushNotificationConfig(
+            id=message_id,
+            url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
+            token=webhook_token,
+        )
+
+        # Build message continuing the existing task
+        reply_message = Message(
+            role=Role.user,
+            parts=[TextPart(text=user_input)],
+            task_id=task_id,
+            context_id=context_id,
+            reference_task_ids=[task_id],
+        )
+
+        params = MessageSendParams(
+            message=reply_message,
+            configuration=MessageSendConfiguration(
+                push_notification_config=push_config,
+            ),
+        )
+
+        # Use a scoped httpx client with `async with` to ensure cleanup.
+        # Unlike get_a2a_client() which leaks connections, this properly
+        # closes the transport. Agent card resolution is skipped since we
+        # already have the agent_url from the stored RoomAgentMessage.
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            a2a_client = A2AClient(
+                httpx_client=client,
+                url=agent_url,
+            )
+            request = SendMessageRequest(
+                id=str(uuid4()),
+                method="message/send",
+                jsonrpc="2.0",
+                params=params,
+            )
+            response = await a2a_client.send_message(request)
+
+        # Update task status locally if a Task was returned
+        result = getattr(response, "root", None)
+        if result and hasattr(result, "result"):
+            task_result = result.result
+            if hasattr(task_result, "kind") and task_result.kind == "task":
+                await db_service.update_task_on_message(
+                    message_id, task_result.model_dump(mode="json")
+                )
+
+        logger.info(
+            "hitl_reply_to_task_sent",
+            extra={
+                "message_id": message_id,
+                "task_id": task_id,
+                "context_id": context_id,
+            },
+        )
+        return {"status": "sent"}
+
 
 a2a_service = A2AService()

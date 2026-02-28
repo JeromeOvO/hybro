@@ -1567,5 +1567,189 @@ class DatabaseService:
             logger.error(f"Failed to delete agent group {group_id}: {str(e)}")
             return False
 
+    # ------------------------------------------------------------------
+    # HITL request management
+    # ------------------------------------------------------------------
+
+    async def create_hitl_request(self, request_data: dict) -> bool:
+        """Insert an HITL request document into the hitl_requests collection."""
+        try:
+            result = await self.mongo.db.hitl_requests.insert_one(request_data)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Failed to create HITL request: {e}")
+            return False
+
+    async def get_hitl_request(self, request_id: str) -> dict | None:
+        """Get a single HITL request by request_id."""
+        try:
+            return await self.mongo.db.hitl_requests.find_one(
+                {"request_id": request_id}
+            )
+        except Exception as e:
+            logger.error(f"Failed to get HITL request {request_id}: {e}")
+            return None
+
+    async def update_hitl_request(
+        self, request_id: str, **updates
+    ) -> bool:
+        """Update fields on an HITL request document."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Failed to update HITL request {request_id}: {e}")
+            return False
+
+    async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
+        """Get all pending HITL requests for a room (for SSE reconnect catch-up)."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"room_id": room_id, "status": "pending"}
+            )
+            return await cursor.to_list(length=50)
+        except Exception as e:
+            logger.error(
+                f"Failed to get pending HITL requests for room {room_id}: {e}"
+            )
+            return []
+
+    async def get_pending_hitl_requests_for_message(
+        self, user_message_id: str
+    ) -> list[dict]:
+        """Get all pending HITL requests associated with a user message."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"user_message_id": user_message_id, "status": "pending"}
+            )
+            return await cursor.to_list(length=50)
+        except Exception as e:
+            logger.error(
+                f"Failed to get pending HITL requests for message {user_message_id}: {e}"
+            )
+            return []
+
+    async def count_hitl_requests_for_message(
+        self, continuation_message_id: str
+    ) -> int:
+        """Count active (non-canceled) HITL requests for a continuation message."""
+        try:
+            return await self.mongo.db.hitl_requests.count_documents(
+                {
+                    "continuation_message_id": continuation_message_id,
+                    "status": {"$ne": "canceled"},
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to count HITL requests for message {continuation_message_id}: {e}"
+            )
+            return 0
+
+    async def get_pending_continuation_on_message(
+        self, message_id: str
+    ) -> dict | None:
+        """Non-destructive peek at the pending continuation for a message.
+
+        Checks both room_agent_messages and room_user_messages collections
+        (supervisor HITL stores continuations on user messages).
+        """
+        try:
+            doc = await self.mongo.db.room_agent_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"pending_continuation": 1},
+            )
+            if doc and doc.get("pending_continuation"):
+                return doc["pending_continuation"]
+            doc = await self.mongo.db.room_user_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"pending_continuation": 1},
+            )
+            if doc and doc.get("pending_continuation"):
+                return doc["pending_continuation"]
+            return None
+        except Exception as e:
+            logger.error(
+                f"Failed to peek continuation for message {message_id}: {e}"
+            )
+            return None
+
+    async def save_continuation_on_user_message(
+        self, message_id: str, continuation_data: dict
+    ) -> bool:
+        """Save continuation state on a user message (for HITL_SUPERVISOR)."""
+        try:
+            result = await self.mongo.db.room_user_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"pending_continuation": continuation_data}},
+            )
+            return result.modified_count > 0 or result.matched_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to save continuation on user message {message_id}: {e}"
+            )
+            return False
+
+    async def get_and_clear_continuation_on_user_message(
+        self, message_id: str
+    ) -> dict | None:
+        """Get and clear continuation state on a user message atomically."""
+        try:
+            doc = await self.mongo.db.room_user_messages.find_one_and_update(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"$unset": {"pending_continuation": ""}},
+            )
+            return doc.get("pending_continuation") if doc else None
+        except Exception as e:
+            logger.error(
+                f"Failed to get/clear continuation on user message {message_id}: {e}"
+            )
+            return None
+
+    async def reset_last_notified_state(self, message_id: str) -> bool:
+        """Reset last_notified_state to None so re-notification is possible."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$unset": {"last_notified_state": ""}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to reset last_notified_state for {message_id}: {e}"
+            )
+            return False
+
+    async def update_webhook_token_hash_on_message(
+        self, message_id: str, webhook_token_hash: str
+    ) -> bool:
+        """Update the stored webhook token hash on an agent message."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"webhook_token_hash": webhook_token_hash}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to update webhook token hash for {message_id}: {e}"
+            )
+            return False
+
+    async def ensure_hitl_indexes(self) -> None:
+        """Create indexes for the hitl_requests collection."""
+        try:
+            coll = self.mongo.db.hitl_requests
+            await coll.create_index("request_id", unique=True)
+            await coll.create_index([("room_id", 1), ("status", 1)])
+            await coll.create_index([("expires_at", 1), ("status", 1)])
+            await coll.create_index([("user_message_id", 1), ("status", 1)])
+            await coll.create_index("continuation_message_id")
+        except Exception as e:
+            logger.error(f"Failed to create HITL indexes: {e}")
+
 
 db_service = DatabaseService()

@@ -273,6 +273,8 @@ class StaleTaskChecker:
             logger.error(f"Failed to get task from agent: {e}")
             return None
 
+    HITL_EXPIRY_HOURS = 24
+
     async def _auto_fail_expired_task(
         self,
         msg: RoomAgentMessage,
@@ -282,21 +284,39 @@ class StaleTaskChecker:
         if not msg.has_task_tracking:
             return
 
+        task_state = (
+            msg.message_content.message_task.status.state
+            if msg.message_content
+            and msg.message_content.message_task
+            and msg.message_content.message_task.status
+            else None
+        )
+
+        is_interactive = task_state and task_state in INTERACTIVE_STATES
         created_at = (
             ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
         )
-
         age_hours = (utcnow() - created_at).total_seconds() / 3600
 
+        if is_interactive:
+            if age_hours < self.HITL_EXPIRY_HOURS:
+                return
+            logger.warning(
+                "Auto-failing HITL task for message %s after %.1f hours "
+                "(HITL threshold: %dh)",
+                message_id, age_hours, self.HITL_EXPIRY_HOURS,
+            )
+
+        threshold = self.HITL_EXPIRY_HOURS if is_interactive else self.task_expiry_hours
         logger.error(
             f"Auto-failing task for message {message_id} after {age_hours:.1f} hours "
-            f"(threshold: {self.task_expiry_hours}h)"
+            f"(threshold: {threshold}h)"
         )
 
         await self._mark_task_failed(
             message_id=message_id,
             msg=msg,
-            error=f"Task expired after {self.task_expiry_hours} hours without completion. "
+            error=f"Task expired after {threshold} hours without completion. "
             "The agent may be unresponsive.",
         )
 
@@ -365,6 +385,24 @@ class StaleTaskChecker:
         await db_service.update_task_on_message(
             message_id, failed_task.model_dump(mode="json")
         )
+
+        # Clear any orphaned continuation (on both agent and user messages)
+        await db_service.get_and_clear_continuation_on_message(message_id)
+        if msg.related_message_id:
+            await db_service.get_and_clear_continuation_on_user_message(msg.related_message_id)
+
+        # Cancel any pending HITL request for this message
+        try:
+            from services.hitl_service import hitl_service
+            # HITL requests are keyed by user_message_id, not agent message_id.
+            # related_message_id on the agent message points to the user message.
+            user_msg_id = msg.related_message_id or message_id
+            await hitl_service.cancel_requests_for_message(user_msg_id)
+        except Exception as e:
+            logger.warning(
+                "stale_task_checker: Failed to cancel HITL requests for %s: %s",
+                message_id, e,
+            )
 
         await notify_task_update(
             message_id=message_id,

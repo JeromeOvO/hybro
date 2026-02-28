@@ -97,8 +97,10 @@ class SupervisorAction(BaseModel):
     # SYNTHESIZE fields
     synthesis_instruction: str | None = None
 
-    # CLARIFY fields
+    # CLARIFY fields (used for all supervisor questions, pre-plan or mid-loop)
     clarification_question: str | None = None
+    prompt_type: str | None = None
+    choices: list[str] | None = None
 
 
 # =========================================================================
@@ -110,6 +112,7 @@ class StepStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     PAUSED = "paused"
+    AWAITING_INPUT = "awaiting_input"
 
 
 class V2StepResult(BaseModel):
@@ -127,6 +130,11 @@ class V2StepResult(BaseModel):
     status: StepStatus = StepStatus.SUCCESS
     paused_message_id: str | None = None
     agent_message_id: str | None = None
+
+    # HITL fields (populated when status == AWAITING_INPUT)
+    a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
+    status_message: str | None = None
 
 
 # =========================================================================
@@ -154,10 +162,11 @@ class TrajectoryStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
-    CLARIFYING = "clarifying"
+    CLARIFYING = "clarifying"  # deprecated: kept for legacy trajectory deserialization
     # Transient state used by the DB layer when claiming a stuck trajectory
     # for recovery; never set by the executor itself.
     RECOVERING = "recovering"
+    AWAITING_INPUT = "awaiting_input"
 
 
 class SupervisorTrajectory(BaseModel):
@@ -186,6 +195,16 @@ class SupervisorTrajectory(BaseModel):
     status even when the clarify-resume itself gets paused by a push
     notification and later resumes via the webhook path."""
 
+    hitl_user_reply: str | None = None
+    """The user's reply to a CLARIFY question (pre-plan or mid-loop).
+    Set by _handle_supervisor_response() before calling
+    resume_queue_from_continuation(). Replaces clarify_user_reply for
+    new HITL flows. Resume code reads both for backward compat."""
+
+    hitl_original_message_id: str | None = None
+    """The user_message_id of the message whose loop was paused by CLARIFY.
+    Replaces clarify_original_message_id for new HITL flows."""
+
 
 # =========================================================================
 # Run result
@@ -197,7 +216,8 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELED = "canceled"
     PAUSED = "paused"
-    CLARIFYING = "clarifying"
+    CLARIFYING = "clarifying"  # deprecated: kept for legacy backward compat
+    AWAITING_INPUT = "awaiting_input"
 
 
 class SupervisorRunResult(BaseModel):
