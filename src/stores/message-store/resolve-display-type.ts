@@ -21,6 +21,12 @@ export function resolveDisplayType(msg: {
   // User messages are always user bubbles
   if (msg.messageType === 'user') return 'user-bubble'
 
+  // Ephemeral agent messages WITHOUT a task status are streaming/typewriter
+  // placeholders — always render as agent-bubble so useStreamingContent works.
+  // Ephemeral messages WITH a non-terminal task status (e.g. processing
+  // placeholders at WORKING) must still render as task-status cards.
+  if (msg.isEphemeral && !msg.taskStatus) return 'agent-bubble'
+
   // Agent message with no task → regular agent bubble
   if (!msg.taskStatus) return 'agent-bubble'
 

@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
+import { StreamingCursor } from './streaming-cursor'
+import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
 
 /** Lightweight UI type for passing quote data between components. */
@@ -48,6 +50,7 @@ interface EntityBubbleProps {
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
+  isStreaming?: boolean
 }
 
 /**
@@ -77,6 +80,7 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
 
 /**
  * Agent message bubble - internal implementation using BubbleMessage shape.
+ * Supports streaming content with debounced markdown rendering.
  */
 function AgentMessageBubbleInner({
   message,
@@ -88,6 +92,7 @@ function AgentMessageBubbleInner({
   isUserExpanded = false,
   onUserToggle,
   onQuote,
+  isStreaming = false,
 }: EntityBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(
     defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
@@ -95,6 +100,40 @@ function AgentMessageBubbleInner({
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+  
+  // Throttled markdown rendering during streaming (Option B from design doc).
+  // We keep a ref to the latest content and run a 200ms interval that picks
+  // up whatever is current. This avoids the "cancel-on-every-frame" problem
+  // that a useEffect + setTimeout approach has when content changes at 60fps.
+  const [debouncedContent, setDebouncedContent] = useState(message.content)
+  const latestContentRef = useRef(message.content)
+  latestContentRef.current = message.content
+  
+  useEffect(() => {
+    if (!isStreaming) {
+      setDebouncedContent(message.content)
+      return
+    }
+    
+    // Immediately render the first frame
+    setDebouncedContent(message.content)
+    
+    // Then update at most every 50ms via interval
+    const interval = setInterval(() => {
+      setDebouncedContent(latestContentRef.current)
+    }, 50)
+    
+    return () => clearInterval(interval)
+  // Only re-run when streaming state changes, not on every content change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming])
+  
+  // When streaming ends, ensure we render the final content
+  useEffect(() => {
+    if (!isStreaming) {
+      setDebouncedContent(message.content)
+    }
+  }, [isStreaming, message.content])
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
@@ -235,7 +274,14 @@ function AgentMessageBubbleInner({
     }
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
-  const displayContent = message.content || "No message content"
+  
+  // Determine display content:
+  // - During streaming: use debounced content for markdown rendering (throttled to 200ms)
+  // - After streaming: use the final message content
+  // - Fallback to "No message content" only when not streaming and content is empty
+  const displayContent = isStreaming 
+    ? (debouncedContent || '') 
+    : (message.content || "No message content")
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
   const textColorClass = colors.text
@@ -289,7 +335,16 @@ function AgentMessageBubbleInner({
           )}
           onMouseUp={handleMouseUp}
         >
-          <MarkdownContent content={displayContent} />
+          {isStreaming ? (
+            // Streaming mode: show content with cursor
+            <>
+              {displayContent && <MarkdownContent content={displayContent} />}
+              <StreamingCursor />
+            </>
+          ) : (
+            // Final mode: show content or placeholder
+            <MarkdownContent content={displayContent} />
+          )}
         </div>
 
         {/* Expand/Collapse button */}
@@ -357,6 +412,7 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
+ * Supports real-time token streaming with debounced markdown rendering.
  */
 export function EntityAgentBubble({
   entity,
@@ -379,7 +435,97 @@ export function EntityAgentBubble({
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }) {
-  const bubble = entityToBubble(entity)
+  // Get streaming content for this message (real agent_token streaming)
+  const { streamingText, isStreaming } = useStreamingContent(entity.id)
+
+  // ── Component-level progressive reveal ──
+  // Progressively reveals entity.content for live SSE messages.
+  // DB-hydrated messages (source === 'db') display instantly.
+  // Real streaming (isStreaming via agent_token) takes precedence.
+  const [revealedLen, setRevealedLen] = useState(
+    entity.source === 'db' ? entity.content.length : 0,
+  )
+  const revealTargetRef = useRef(entity.source === 'db' ? entity.content : '')
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    // Real streaming is active — let it handle display
+    if (isStreaming) {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      revealTargetRef.current = ''
+      setRevealedLen(0)
+      return
+    }
+
+    // New content to reveal
+    if (entity.content && entity.content !== revealTargetRef.current) {
+      console.warn('[REVEAL] starting', { id: entity.id, len: entity.content.length, source: entity.source })
+      revealTargetRef.current = entity.content
+      const len = entity.content.length
+      // ~3 seconds total: 30ms interval × 100 ticks.
+      // With the 50ms markdown debounce, this yields ~60 visible updates.
+      const TICK_MS = 30
+      const TARGET_TICKS = 100
+      const MIN_CHARS = 2
+      const charsPerTick = Math.max(MIN_CHARS, Math.ceil(len / TARGET_TICKS))
+      let offset = 0
+
+      if (timerRef.current) clearInterval(timerRef.current)
+
+      setRevealedLen(charsPerTick)
+      offset = charsPerTick
+
+      timerRef.current = setInterval(() => {
+        offset = Math.min(offset + charsPerTick, len)
+        setRevealedLen(offset)
+        if (offset >= len) {
+          clearInterval(timerRef.current!)
+          timerRef.current = null
+          console.warn('[REVEAL] complete', { id: entity.id })
+        }
+      }, TICK_MS)
+    }
+
+    // Content was cleared — reset
+    if (!entity.content) {
+      revealTargetRef.current = ''
+      setRevealedLen(0)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+    }
+  }, [entity.content, isStreaming, entity.id, entity.source])
+
+  useEffect(() => {
+    return () => { if (timerRef.current) clearInterval(timerRef.current) }
+  }, [])
+
+  // Reveal is active when we have a target but haven't reached full length yet.
+  // Also "pending" on the first render frame before the effect fires.
+  const hasRevealTarget = !isStreaming && entity.source !== 'db' && entity.content.length > 0
+  const isRevealing = hasRevealTarget && revealedLen < entity.content.length
+
+  // Priority: real streaming > progressive reveal > final content
+  let displayContent: string
+  let showAsStreaming: boolean
+
+  if (isStreaming) {
+    displayContent = streamingText
+    showAsStreaming = true
+  } else if (isRevealing) {
+    displayContent = entity.content.slice(0, revealedLen)
+    showAsStreaming = true
+  } else {
+    displayContent = entity.content
+    showAsStreaming = false
+  }
+
+  const bubble: BubbleMessage = {
+    id: entity.id,
+    content: displayContent,
+    sender_name: entity.senderName,
+    timestamp: entity.timestamp,
+    agent_id: entity.agentId,
+  }
+
   return (
     <AgentMessageBubbleInner
       message={bubble}
@@ -391,6 +537,7 @@ export function EntityAgentBubble({
       isUserExpanded={isUserExpanded}
       onUserToggle={onUserToggle}
       onQuote={onQuote}
+      isStreaming={showAsStreaming}
     />
   )
 }

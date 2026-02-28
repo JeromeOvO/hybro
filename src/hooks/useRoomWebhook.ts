@@ -17,6 +17,7 @@ import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import { streamingBuffer } from '@/stores/streaming-buffer'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { normalizeTimestampOrNow, isStale } from '@/lib/time'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
@@ -296,6 +297,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       cancelTimeoutRef.current = null
     }
 
+    // Clear streaming buffer on room switch
+    streamingBuffer.clear()
+
     // Reset UI flags so the new room starts with clean state.
     // The previous room's processing continues server-side; when the user
     // returns, the restore effect re-enables processing from room data.
@@ -411,19 +415,62 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
       case 'agent_response':
         console.log('🤖 Agent response received via SSE')
-        if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
-          const agentName = await getAgentName(sseMessage.data.agent_id)
-          store.upsertMessage({
-            id: sseMessage.data.message_id || `sse-agent-${Date.now()}`,
-            roomId,
-            messageType: 'agent',
-            content: sseMessage.data.content,
-            senderName: agentName,
-            agentId: sseMessage.data.agent_id,
-            timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
-          }, 'sse')
+        if (sseMessage.data?.message_id) {
+          const messageId = sseMessage.data.message_id
+          streamingBuffer.finalize(messageId)
+
+          if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
+            const agentName = await getAgentName(sseMessage.data.agent_id)
+            const content = sseMessage.data.content
+            const msgTimestamp = normalizeTimestampOrNow(sseMessage.timestamp)
+
+            store.upsertMessage({
+              id: messageId,
+              roomId,
+              messageType: 'agent',
+              content,
+              senderName: agentName,
+              agentId: sseMessage.data.agent_id,
+              timestamp: msgTimestamp,
+              isEphemeral: false,
+            }, 'sse')
+          }
         }
         break
+
+      case 'agent_token': {
+        // Token streaming: append to ephemeral buffer, not the message store
+        const { message_id, agent_id, token } = sseMessage.data || {}
+        if (!message_id || !token) break
+
+        // Ignore tokens for messages that already have authoritative content
+        // (task_update/agent_response already arrived with final content)
+        const existingEntity = store.entities[message_id]
+        if (existingEntity && existingEntity.content && !existingEntity.isEphemeral) {
+          break
+        }
+
+        // Ensure a placeholder entity exists so the message bubble renders.
+        // If the entity was created by task_submitted (displayType: task-status),
+        // re-upsert it as an ephemeral agent-bubble so streaming content is visible.
+        // resolveDisplayType returns 'agent-bubble' for ephemeral entities.
+        if (!existingEntity || existingEntity.displayType === 'task-status') {
+          const agentName = agent_id ? await getAgentName(agent_id) : (existingEntity?.senderName || 'Agent')
+          store.upsertMessage({
+            id: message_id,
+            roomId,
+            messageType: 'agent',
+            content: '',
+            senderName: agentName,
+            timestamp: existingEntity?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
+            agentId: agent_id,
+            isEphemeral: true,
+          }, 'sse')
+        }
+
+        streamingBuffer.append(message_id, token)
+        break
+      }
 
       case 'processing_status':
         console.log('⚙️ Processing status update:', sseMessage.data?.status)
@@ -550,26 +597,13 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             resolvedAgentName = await getAgentName(sseMessage.data.agent_id)
           }
           const taskTimestamp = sseMessage.data.created_at || sseMessage.timestamp
+          const content = sseMessage.data.content || ''
 
-          // The normalized store's upsert preserves existing fields when incoming
-          // fields are undefined, so we don't need manual field-preservation logic.
-          store.upsertMessage({
-            id: messageId,
-            roomId,
-            messageType: 'agent',
-            content: sseMessage.data.content || '',
-            senderName: resolvedAgentName || 'Agent',
-            agentId: sseMessage.data.agent_id,
+          const taskFields = {
             taskStatus: status,
-            // Gap 16: Use undefined-preserving coalescing — pass undefined when
-            // the SSE payload doesn't include the field so mergeIncoming preserves
-            // the existing value. Pass the value (or null) when the field is present.
             taskError: sseMessage.data.error !== undefined ? (sseMessage.data.error || null) : undefined,
             taskStatusMessage: sseMessage.data.status_message !== undefined
-              ? (sseMessage.data.status_message || null)
-              : undefined,
-            // Gap 17: Pass through as-is — undefined preserves existing values
-            // instead of coercing to false which could clear an input-required state.
+              ? (sseMessage.data.status_message || null) : undefined,
             taskRequiresInput: sseMessage.data.requires_input,
             taskRequiresAuth: sseMessage.data.requires_auth,
             taskContent: sseMessage.data.task_content,
@@ -577,10 +611,26 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             totalSteps: sseMessage.data.total_steps,
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
-          }, 'sse')
+          }
 
-          // If task is terminal, coordinate UI state (Gap 12)
+          const baseMsg = {
+            id: messageId,
+            roomId,
+            messageType: 'agent' as const,
+            senderName: resolvedAgentName || 'Agent',
+            agentId: sseMessage.data.agent_id,
+          }
+
           if (isTerminalState(status)) {
+            streamingBuffer.finalize(messageId)
+
+            store.upsertMessage({
+              ...baseMsg,
+              content,
+              isEphemeral: false,
+              ...taskFields,
+            }, 'sse')
+
             setProcessing(false)
             setCancelling(false)
             if (cancelTimeoutRef.current) {
@@ -595,6 +645,19 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               }
             }
             cancelTimedOutRef.current = false
+          } else {
+            // Non-terminal status update (working, input-required, etc.)
+            // Skip if the entity is currently streaming — the streaming buffer
+            // has the real-time content and a non-terminal status update would
+            // flip displayType back to task-status, causing UI thrash.
+            const isCurrentlyStreaming = streamingBuffer.isStreaming(messageId)
+            if (!isCurrentlyStreaming) {
+              store.upsertMessage({
+                ...baseMsg,
+                content,
+                ...taskFields,
+              }, 'sse')
+            }
           }
         }
         break
@@ -624,12 +687,37 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Track SSE disconnections during active processing.
   // If SSE drops while agents are working, we may have missed events and need
   // to reconcile with DB after processing completes.
+  // Also promote any partial streaming content to entity content.
   useEffect(() => {
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       sseHadDisconnectionRef.current = true
+
+      // Promote partial streaming content to entity content on disconnect.
+      // Use 'optimistic' source so Rule 2 (SSE wins over DB for non-terminal)
+      // doesn't block DB reconciliation later. Clear task fields so
+      // cancelAllNonTerminal doesn't sweep these fallback messages.
+      const store = useMessageStore.getState()
+      for (const [messageId, partial] of streamingBuffer.entries()) {
+        if (partial) {
+          console.log(`📝 Promoting partial streaming content for message ${messageId}`)
+          const existing = store.entities[messageId]
+          store.upsertMessage({
+            id: messageId,
+            roomId,
+            messageType: 'agent',
+            content: partial,
+            senderName: existing?.senderName || 'Agent',
+            agentId: existing?.agentId,
+            timestamp: existing?.timestamp || new Date().toISOString(),
+            isEphemeral: false,
+            taskStatus: null,
+          }, 'optimistic')
+        }
+      }
+      streamingBuffer.clear()
     }
-  }, [sseConnected, processing])
+  }, [sseConnected, processing, roomId])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
