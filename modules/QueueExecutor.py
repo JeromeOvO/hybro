@@ -300,6 +300,7 @@ class QueueExecutor:
                         agent_id=current_message.agent_id,
                         agent_name=agent.agent_card.name if agent else "Agent",
                         response_text=result.response_text,
+                        was_successful=result.status == ProcessingStatus.SUCCESS,
                     )
 
                 # Queue up next messages in the chain (skip for direct chat)
@@ -514,17 +515,13 @@ class QueueExecutor:
         quoted_text: str | None = None,
     ) -> ProcessingResult:
         """Original inline implementation — kept as fallback during migration."""
-        from models.memory import MemoryContent
         from models.request import RoomCenterAgentMessageRequest
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        room_memory_content = (
-            room_memory.memory_content if room_memory else MemoryContent()
-        )
 
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,
+            room_memory=room_memory,
             quoted_text=quoted_text,
         )
 
@@ -723,6 +720,7 @@ class QueueExecutor:
                 agent_id=current_agent_id,
                 agent_name=current_agent_name,
                 response_text=task_result_text,
+                was_successful=True,
             )
 
         if len(remaining_queue) > 0:

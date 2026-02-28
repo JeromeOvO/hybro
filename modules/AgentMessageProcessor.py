@@ -19,7 +19,6 @@ from a2a.types import TaskState
 
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
-from models.memory import MemoryContent
 from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
@@ -81,13 +80,10 @@ class AgentMessageProcessor:
         # Consider splitting streaming and sync paths into separate private methods.
         """
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        room_memory_content = (
-            room_memory.memory_content if room_memory else MemoryContent()
-        )
 
         process_response = await self.room_services.process_agent_message(
             RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,
+            room_memory=room_memory,
             quoted_text=quoted_text,
         )
 

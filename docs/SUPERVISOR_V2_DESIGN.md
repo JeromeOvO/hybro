@@ -934,11 +934,14 @@ async def _prepare_for_supervisor_v2(
     )
 
     # 3. Build conversation_context for the supervisor LLM prompt
-    room_memory = await self.room_memory_service.get_context_for_agent(
-        room_id=room.room_id,
-        agent_id=None,  # supervisor context, not agent-specific
-    )
-    conversation_context = room_memory if room_memory else None
+    conversation_context = None
+    if room_memory:
+        result = context_assembly_service.build_supervisor_context(
+            room_memory=room_memory,
+            current_task=message_text,
+            agent_registry=[p.model_dump(mode="json") for p in agent_registry],
+        )
+        conversation_context = result.text if result else None
 
     # 4. Store in extend_info — this is what RoomMessageCenter reads
     user_message.extend_info = {
@@ -1074,7 +1077,7 @@ async def process_room_user_message(self, user_message: RoomUserMessage) -> None
 **Key differences from V1 path**:
 1. **No `inquiry_agent_messages_by_related_message_id`** — V2 has no pre-generated agent messages to query.
 2. **`agent_registry` and `room_config` come from `extend_info`** — not from a `SupervisorPlan`.
-3. **`conversation_context` comes from `extend_info`** — built by `send_message_to_room._prepare_for_supervisor_v2`, using `RoomMemoryService.get_context_for_agent`. This is the context for the **supervisor LLM prompt**, not the per-agent context (which is handled separately inside `_process_single_message`).
+3. **`conversation_context` comes from `extend_info`** — built by `send_message_to_room._prepare_for_supervisor_v2`, using `ContextAssemblyService.build_supervisor_context()`. This is the context for the **supervisor LLM prompt**, not the per-agent context (which is handled separately by `ContextAssemblyService.build_agent_execution_context()` inside `_process_single_message`).
 4. **All 5 `RunStatus` variants are handled** — V1 only had COMPLETED.
 
 ### 7.3 Push Notification Pause/Resume

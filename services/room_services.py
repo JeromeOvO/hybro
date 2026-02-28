@@ -1043,7 +1043,7 @@ class RoomServices:
         agents: list | None,
         selected_agent_set: dict,
         is_debate_mode: bool,
-        conversation_context: str | None,
+        room_memory: "RoomMemory | None",
         token: CancellationToken | None = None,
     ) -> ParseResult:
         """Prepare extend_info for supervisor execution.
@@ -1052,11 +1052,13 @@ class RoomServices:
         - Does NOT call the supervisor LLM
         - Does NOT create any ``RoomAgentMessage`` records
         - ONLY stores the data needed for ``SupervisorExecutor.run()``
+        - Builds budget-aware supervisor context via ContextAssemblyService (§11.1)
 
         Agent messages are created one at a time inside
         ``SupervisorExecutor._dispatch_targets``.
         """
         from models.supervisor_v2 import RoomConfig
+        from services.context_assembly_service import context_assembly_service
 
         if token and token.is_cancelled:
             logger.info(
@@ -1073,11 +1075,43 @@ class RoomServices:
             room_agent_set=selected_agent_set,
         )
 
+        # Build budget-aware context via ContextAssemblyService (§11.1)
+        agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
+        conversation_context: str | None = None
+        memory_search_results = None
+        if room_memory:
+            try:
+                from services.memory_search_service import memory_search_service
+
+                search_response = await memory_search_service.search(
+                    query=message_text,
+                    room_id=room.room_id,
+                )
+                if search_response.results:
+                    memory_search_results = search_response.results
+            except Exception as e:
+                logger.debug(
+                    "RoomServices: MemorySearch skipped: %s", e
+                )
+            try:
+                result = context_assembly_service.build_supervisor_context(
+                    room_memory=room_memory,
+                    current_task=message_text,
+                    agent_registry=agent_dicts,
+                    max_turns=5,
+                    memory_search_results=memory_search_results,
+                )
+                conversation_context = result.context
+            except Exception as e:
+                logger.warning(
+                    "RoomServices: ContextAssemblyService failed, falling back: %s", e
+                )
+
         if user_message.extend_info is None:
             user_message.extend_info = {}
         user_message.extend_info.update({
             "supervisor_v2": True,
-            "agent_registry": [p.model_dump(mode="json") for p in agent_registry],
+            "agent_registry": agent_dicts,
             "room_config": room_config.model_dump(mode="json"),
             "conversation_context": conversation_context,
         })
@@ -1108,7 +1142,7 @@ class RoomServices:
         agents: list | None,
         selected_agent_set: dict,
         is_debate_mode: bool,
-        conversation_context: str | None,
+        room_memory: "RoomMemory | None",
     ) -> bool:
         """Check whether a pending CLARIFY can be resumed and prepare extend_info.
 
@@ -1196,6 +1230,40 @@ class RoomServices:
             is_debate_mode=is_debate_mode,
             room_agent_set=selected_agent_set,
         )
+
+        # Build budget-aware context via ContextAssemblyService (§11.1)
+        conversation_context: str | None = None
+        if room_memory:
+            from services.context_assembly_service import context_assembly_service
+
+            memory_search_results = None
+            try:
+                from services.memory_search_service import memory_search_service
+
+                search_response = await memory_search_service.search(
+                    query=message_text,
+                    room_id=room.room_id,
+                )
+                if search_response.results:
+                    memory_search_results = search_response.results
+            except Exception as e:
+                logger.debug(
+                    "RoomServices: MemorySearch skipped in clarify-resume: %s", e
+                )
+            try:
+                agent_dicts = [p.model_dump(mode="json") for p in agent_registry]
+                ctx_result = context_assembly_service.build_supervisor_context(
+                    room_memory=room_memory,
+                    current_task=message_text,
+                    agent_registry=agent_dicts,
+                    max_turns=5,
+                    memory_search_results=memory_search_results,
+                )
+                conversation_context = ctx_result.context
+            except Exception as e:
+                logger.warning(
+                    "RoomServices: ContextAssemblyService failed in clarify-resume: %s", e
+                )
 
         if user_message.extend_info is None:
             user_message.extend_info = {}
@@ -1403,10 +1471,11 @@ class RoomServices:
                 request, user_message, target_group
             )
 
-        # Fetch conversation context for the decomposer LLM so it can
-        # distinguish simple follow-ups from genuinely complex tasks.
-        conversation_context = None
-        if len(selected_agent_set) > 1:
+        # Fetch room memory for context assembly.
+        # V2 supervisor always needs room_memory for ContextAssemblyService (§11.1).
+        # Non-V2 multi-agent paths need it for build_minimal_context.
+        room_memory = None
+        if use_supervisor or len(selected_agent_set) > 1:
             room_memory = await self.database_service.get_room_memory_by_room_id(
                 request.room_id
             )
@@ -1414,11 +1483,15 @@ class RoomServices:
                 room_memory.memory_content = migrate_legacy_memory(
                     room_memory.memory_content
                 )
-                conversation_context = build_minimal_context(
-                    room_memory.memory_content,
-                    current_task=message_text,
-                    max_turns=5,
-                )
+
+        # Build conversation_context for non-V2 paths (V1 decomposer, mentions, etc.)
+        conversation_context = None
+        if room_memory and room_memory.memory_content:
+            conversation_context = build_minimal_context(
+                room_memory.memory_content,
+                current_task=message_text,
+                max_turns=5,
+            )
 
         # V2 Supervisor: lightweight preparation (no LLM call, no pre-generated messages)
         if use_supervisor:
@@ -1438,7 +1511,7 @@ class RoomServices:
                     agents=agents,
                     selected_agent_set=selected_agent_set,
                     is_debate_mode=is_debate_mode,
-                    conversation_context=conversation_context,
+                    room_memory=room_memory,
                 )
 
             if clarify_resume_prepared:
@@ -1451,7 +1524,7 @@ class RoomServices:
                     agents=agents,
                     selected_agent_set=selected_agent_set,
                     is_debate_mode=is_debate_mode,
-                    conversation_context=conversation_context,
+                    room_memory=room_memory,
                     token=token,
                 )
         else:
@@ -2033,15 +2106,18 @@ class RoomServices:
     async def process_agent_message(
         self,
         request: RoomCenterAgentMessageRequest,
-        room_memory_content: MemoryContent | str | None,
+        room_memory: "RoomMemory | None" = None,
         quoted_text: str | None = None,
     ) -> RoomCenterAgentMessageResponse:
         """
-        Process an agent message by building ChatGPT/Claude-style context.
+        Process an agent message by building budget-aware context.
+
+        Uses ContextAssemblyService for structured MemoryContent (§11.2),
+        falls back to legacy string formatting for old-style memory.
 
         Args:
             request: The agent message request
-            room_memory_content: Either MemoryContent (new style) or str (legacy)
+            room_memory: Full RoomMemory object (preferred) or None
             quoted_text: Text the user highlighted and quoted from a previous message
 
         Returns:
@@ -2104,22 +2180,42 @@ class RoomServices:
             agent_profiles=agent_profiles,
         )
 
-        # Build context using ChatGPT/Claude-style conversation history
+        # Build context using ContextAssemblyService (§11.2) or legacy fallback
         try:
             if agent_message and agent_message.parts and len(agent_message.parts) > 0:
                 original_text = agent_message.parts[0].root.text or ""
 
-                # Handle both new MemoryContent and legacy string formats
+                room_memory_content = (
+                    room_memory.memory_content if room_memory else None
+                )
+
                 if isinstance(room_memory_content, MemoryContent):
-                    # New style: Use structured conversation history
-                    context = build_context_for_agent(
-                        memory_content=room_memory_content,
-                        current_task=original_text,
-                        agent_name=agent_name,
-                        include_system_instruction=True,
-                        quoted_text=quoted_text,
-                        room_awareness=room_awareness,
-                    )
+                    # Budget-aware context via ContextAssemblyService (§11.2)
+                    from services.context_assembly_service import context_assembly_service
+
+                    try:
+                        result = context_assembly_service.build_agent_execution_context(
+                            room_memory=room_memory,
+                            current_task=original_text,
+                            agent_name=agent_name,
+                            room_awareness=room_awareness,
+                            quoted_text=quoted_text,
+                            include_system_instruction=True,
+                        )
+                        context = result.context
+                    except Exception as e:
+                        logger.warning(
+                            "ContextAssemblyService failed for agent, falling back to "
+                            "DEPRECATED build_context_for_agent (to be removed): %s", e
+                        )
+                        context = build_context_for_agent(
+                            memory_content=room_memory_content,
+                            current_task=original_text,
+                            agent_name=agent_name,
+                            include_system_instruction=True,
+                            quoted_text=quoted_text,
+                            room_awareness=room_awareness,
+                        )
                 elif (
                     isinstance(room_memory_content, str) and room_memory_content.strip()
                 ):

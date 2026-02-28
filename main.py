@@ -28,6 +28,7 @@ from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from jobs.compaction_sweep import compaction_sweep
 from jobs.stale_task_checker import stale_task_checker
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
@@ -80,6 +81,8 @@ async def lifespan(app: FastAPI):
     await mongodb.connect()
     pinecone_db.connect()
 
+    await mongodb.create_context_memory_indexes()
+
     # Start the agent health check service
     await agent_health_service.start()
 
@@ -108,11 +111,17 @@ async def lifespan(app: FastAPI):
             f"Could not start change stream watcher (may not have replica set): {e}"
         )
 
+    # Start background compaction sweep (§6 lossless compaction)
+    await compaction_sweep.start()
+
     try:
         yield
     finally:
         # Stop the stale task checker
         await stale_task_checker.stop()
+
+        # Stop background compaction sweep
+        await compaction_sweep.stop()
 
         # Stop the agent health check service
         await agent_health_service.stop()

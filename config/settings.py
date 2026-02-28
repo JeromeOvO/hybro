@@ -74,6 +74,38 @@ class Settings(BaseSettings):
     cs_backoff_factor: float = 2.0  # multiplier per retry
     cs_jitter_fraction: float = 0.25  # ±25% random jitter
 
+    # ===========================================
+    # Context & Memory System Settings
+    # See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14 for specification
+    # ===========================================
+
+    # Token Budget Settings
+    context_model_window: int = 128000  # Model's max context window
+    context_system_prompt_tokens: int = 2000  # Reserved for system prompt
+    context_tool_schema_tokens: int = 3000  # Reserved for tool schemas
+    context_response_reserve_tokens: int = 4000  # Reserved for response
+    context_room_pct: float = 0.15  # % of remaining for room context
+    context_history_pct: float = 0.60  # % of remaining for conversation history
+    context_task_pct: float = 0.25  # % of remaining for current task
+
+    # Compaction Settings (LOSSLESS - pointer-based, not summarization)
+    compaction_enabled: bool = True  # Enable/disable auto-compaction
+    compaction_max_full_turns: int = 20  # Max turns to keep in FULL representation
+    compaction_max_total_tokens: int = 80000  # Trigger compaction when full turns exceed this
+    compaction_preserve_recent: int = 10  # Always keep this many recent turns FULL
+    compaction_content_ttl_days: int = 0  # TTL for stored content (0 = forever)
+
+    # Memory Search Settings
+    memory_search_enabled: bool = True  # Enable/disable memory search
+    memory_search_vector_weight: float = 0.7  # Weight for vector similarity
+    memory_search_keyword_weight: float = 0.3  # Weight for BM25 keyword matching
+    memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
+    memory_search_half_life_days: int = 30  # Half-life for temporal decay
+    memory_search_mmr_lambda: float = 0.7  # MMR diversity parameter (0=diverse, 1=relevant)
+    memory_search_max_results: int = 10  # Max results to return
+    memory_search_max_snippet_chars: int = 500  # Max chars per snippet
+    memory_search_index_name: str = "room-memory"  # Pinecone index for memory
+
     class Config:
         env_file = ".env"
         extra = "ignore"

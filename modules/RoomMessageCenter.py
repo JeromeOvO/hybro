@@ -604,9 +604,11 @@ class RoomMessageCenter:
         3. Refresh the agent registry from the database (agents may have
            changed while the execution was paused).
         4. Add the completed agent's response to room memory.
-        5. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
+        5. Refresh conversation_context from room memory (§7.6 — context may
+           be stale after a push-notification pause).
+        6. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
            continue the adaptive loop.
-        6. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
+        7. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
         """
         from models.supervisor_v2 import (
             SupervisorTrajectory,
@@ -678,6 +680,7 @@ class RoomMessageCenter:
                 agent_id=paused_agent_id,
                 agent_name=paused_agent_name or "Agent",
                 response_text=task_result_text,
+                was_successful=True,
             )
 
         # 5. Refresh agent registry from database (not serialized)
@@ -693,6 +696,54 @@ class RoomMessageCenter:
                 details="V2 resume: room not found",
             )
             return False
+
+        # 5b. Refresh conversation_context from room memory (§7.6).
+        # The serialized context may be stale after a push-notification pause
+        # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
+        # with the same logic used in _prepare_for_supervisor_v2 / _prepare_clarify_resume_v2.
+        try:
+            from services.context_assembly_service import context_assembly_service
+
+            room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+            if room_memory:
+                agent_dicts = [
+                    {"agent_id": aid, "agent_name": aname}
+                    for aid, aname in (room.room_agent_set or {}).items()
+                ]
+                memory_search_results = None
+                try:
+                    from services.memory_search_service import memory_search_service
+
+                    search_response = await memory_search_service.search(
+                        query=message_text,
+                        room_id=room_id,
+                    )
+                    if search_response.results:
+                        memory_search_results = search_response.results
+                except Exception as search_err:
+                    logger.debug(
+                        "supervisor_v2_resume: memory search skipped: %s",
+                        search_err,
+                    )
+                result_ctx = context_assembly_service.build_supervisor_context(
+                    room_memory=room_memory,
+                    current_task=message_text,
+                    agent_registry=agent_dicts,
+                    max_turns=5,
+                    memory_search_results=memory_search_results,
+                )
+                conversation_context = result_ctx.context
+                logger.debug(
+                    "supervisor_v2_resume: refreshed conversation_context for %s "
+                    "(occupancy=%.1f%%)",
+                    room_id, result_ctx.occupancy_pct,
+                )
+        except Exception as e:
+            logger.warning(
+                "supervisor_v2_resume: failed to refresh conversation_context "
+                "for %s, using serialized fallback: %s",
+                room_id, e,
+            )
 
         agent_registry: list[AgentProfile] = []
         room_agent_items = list((room.room_agent_set or {}).items())
@@ -1097,6 +1148,69 @@ class RoomMessageCenter:
         # will create/reuse it.
         if result.status != RunStatus.PAUSED:
             self.sse_manager.remove_token(user_message_id)
+
+        # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
+        terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
+        if result.status in terminal_statuses:
+            # Add synthesis text to room memory history
+            if result.status == RunStatus.COMPLETED and result.synthesis_text:
+                try:
+                    from services.memory_service import room_memory_service
+
+                    synthesis_turn_id = await room_memory_service.add_synthesis_to_history(
+                        room_id=room_id,
+                        synthesis_text=result.synthesis_text,
+                        trajectory=result.trajectory,
+                    )
+                    if synthesis_turn_id:
+                        # Summary update and compaction are now safe to run
+                        # in any order — they write to disjoint MongoDB fields
+                        # after the Layer A atomic-operator migration.
+                        await self._update_room_summary_safe(
+                            room_id, result.synthesis_text, synthesis_turn_id
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Failed to add synthesis to history: %s", e
+                    )
+
+            # Inline await: compaction MUST run while per-room lock is held (§6.9).
+            # A fire-and-forget task would race with the next message's writes.
+            await self._trigger_compaction_safe(room_id)
+
+    # ------------------------------------------------------------------
+    # Post-loop helpers (fire-and-forget tasks)
+    # ------------------------------------------------------------------
+
+    async def _update_room_summary_safe(
+        self, room_id: str, synthesis_text: str, synthesis_turn_id: str | None = None
+    ) -> None:
+        """Wrapper for room summary update (§9). Awaited before compaction."""
+        try:
+            from services.memory_service import room_memory_service
+
+            await room_memory_service.update_room_summary(
+                room_id=room_id,
+                synthesis_text=synthesis_text,
+                synthesis_turn_id=synthesis_turn_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background room summary update failed for %s: %s",
+                room_id, e,
+            )
+
+    async def _trigger_compaction_safe(self, room_id: str) -> None:
+        """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
+        try:
+            from services.compaction_service import compaction_service
+
+            await compaction_service.compact_if_needed(room_id)
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background compaction failed for %s: %s",
+                room_id, e,
+            )
 
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
