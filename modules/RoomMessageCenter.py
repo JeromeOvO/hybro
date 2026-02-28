@@ -704,7 +704,7 @@ class RoomMessageCenter:
         try:
             from services.context_assembly_service import context_assembly_service
 
-            room_memory = await room_memory_service.get_room_memory(room_id)
+            room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
             if room_memory:
                 agent_dicts = [
                     {"agent_id": aid, "agent_name": aname}

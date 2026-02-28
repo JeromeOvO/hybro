@@ -244,7 +244,7 @@ class CompactionService:
                 errors.append(error_msg)
 
         if compacted_entries:
-            save_success = await self.db_service.compact_turns_atomic(
+            save_success = await self.db_service.compact_turns_bulk(
                 room_id, compacted_entries
             )
 
@@ -275,7 +275,7 @@ class CompactionService:
         Prepare a single turn for compaction: store content + index in Pinecone.
 
         Returns a dict with {turn_id, content_ref, estimated_tokens_compact}
-        ready for compact_turns_atomic, or None if the turn should be skipped.
+        ready for compact_turns_bulk, or None if the turn should be skipped.
         Does NOT mutate the turn object.
         """
         if turn.representation == TurnRepresentation.COMPACT:
@@ -296,16 +296,24 @@ class CompactionService:
             turn_notes=turn.turn_notes,
         )
 
-        # 2. Index the turn in Pinecone for vector search (Phase 4, §8)
-        from services.memory_search_service import memory_search_service
+        # 2. Index the turn in Pinecone for vector search (Phase 4, §8).
+        # Indexing failure is non-blocking: compaction proceeds regardless so that
+        # a Pinecone outage doesn't stall all compaction. The un-indexed turn can
+        # be retried later by a background reconciliation job.
+        try:
+            from services.memory_search_service import memory_search_service
 
-        indexed = await memory_search_service.index_turn_for_search(turn, room_id)
-        if not indexed:
+            indexed = await memory_search_service.index_turn_for_search(turn, room_id)
+            if not indexed:
+                logger.warning(
+                    f"CompactionService: Pinecone indexing failed for turn {turn.turn_id} "
+                    f"in room {room_id} — compaction will proceed; index retry needed"
+                )
+        except Exception as e:
             logger.warning(
-                f"CompactionService: Skipping compaction of turn {turn.turn_id} "
-                f"— vector indexing failed; turn stays FULL for retry"
+                f"CompactionService: Pinecone indexing error for turn {turn.turn_id} "
+                f"in room {room_id}: {e} — compaction will proceed; index retry needed"
             )
-            return None
 
         # 3. Build reference pointer
         content_ref = ContentReference(

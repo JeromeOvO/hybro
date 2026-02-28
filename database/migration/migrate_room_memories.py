@@ -285,12 +285,10 @@ async def migrate_room_memories(room_id: str | None, dry_run: bool) -> None:
         skipped_count = 0
         error_count = 0
 
-        cursor = room_memories.find(query)
-        docs = await cursor.to_list(length=None)
+        total_count = await room_memories.count_documents(query)
+        print(f"Found {total_count} room_memories to process")
 
-        print(f"Found {len(docs)} room_memories to process")
-
-        for doc in docs:
+        async for doc in room_memories.find(query).batch_size(100):
             try:
                 updates = migrate_room_memory(doc)
 

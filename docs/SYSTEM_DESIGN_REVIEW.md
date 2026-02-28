@@ -729,7 +729,7 @@ This section tracks the implementation status of the design items identified abo
 #### CM Phase 1 Details (Completed 2026-02-23)
 
 **Files Created:**
-- `models/compaction.py` — `StorageType` enum, `ContentReference`, `StoredContent`, `CompactionResult`, `CompactionConfig`
+- `models/compaction.py` — `StorageType` enum, `ContentReference`, `StoredContent`, `CompactionResult`
 - `models/context.py` — `SessionContext`, `TokenBudget`
 - `models/search.py` — `MemorySourceType` enum, `MemorySearchConfig`, `MemorySearchResult`, `MemorySearchResponse`
 - `scripts/migrate_room_memories.py` — Migration script for existing data
@@ -1041,7 +1041,7 @@ Comprehensive item-by-item verification of the entire Context Memory System impl
 | `MemorySearchResult` | ✅ | `models/search.py:34-64` |
 | `MemorySearchResponse` | ✅ | `models/search.py:67-83` |
 | `CompactionResult` | ✅ | `models/compaction.py:101-108` |
-| `CompactionConfig` | ✅ | `models/compaction.py:111-123` |
+| `CompactionConfig` | ✅ | `models/context_config.py:79-111` (property-based, §14.3) |
 
 #### §5: Context Assembly Engine
 

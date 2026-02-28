@@ -524,8 +524,12 @@ class RoomMemoryService:
                     turn_notes=extract_turn_notes(clean_message),
                 )
 
-                modified, matched = await self.database_service.push_conversation_turn(
-                    room_id, turn.model_dump(mode="json")
+                modified, matched = await self.database_service.push_and_trim_conversation_turn(
+                    room_id,
+                    turn.model_dump(mode="json"),
+                    max_turns=MAX_HISTORY_TURNS,
+                    summary_stub=f"[User] {clean_message[:200]}...",
+                    max_summary_chars=MAX_SUMMARY_CHARS,
                 )
                 if not modified:
                     logger.error("RoomMemoryService: Failed to push user turn to room %s", room_id)
@@ -534,18 +538,6 @@ class RoomMemoryService:
                         success=False,
                         error="Room memory not found" if not matched else "Failed to update room memory",
                         status_code=404 if not matched else 500,
-                    )
-
-                history_len = await self.database_service.get_conversation_history_length(
-                    room_id
-                )
-                if history_len > MAX_HISTORY_TURNS:
-                    summary_stub = f"[User] {clean_message[:200]}..."
-                    await self.database_service.trim_conversation_history(
-                        room_id,
-                        max_turns=MAX_HISTORY_TURNS,
-                        summary_addition=summary_stub,
-                        max_summary_chars=MAX_SUMMARY_CHARS,
                     )
 
         # Track user interaction (§4.3 UserMemory)
@@ -644,8 +636,12 @@ class RoomMemoryService:
             was_successful=was_successful,
         )
 
-        modified, matched = await self.database_service.push_conversation_turn(
-            room_id, turn.model_dump(mode="json")
+        modified, matched = await self.database_service.push_and_trim_conversation_turn(
+            room_id,
+            turn.model_dump(mode="json"),
+            max_turns=MAX_HISTORY_TURNS,
+            summary_stub=f"[{agent_name}] {response_text[:200]}...",
+            max_summary_chars=MAX_SUMMARY_CHARS,
         )
 
         if not modified:
@@ -658,21 +654,6 @@ class RoomMemoryService:
                 success=False,
                 error="Room memory not found" if not matched else "Failed to update room memory",
                 status_code=404 if not matched else 500,
-            )
-
-        # Trim if conversation_history exceeds MAX_HISTORY_TURNS
-        history_len = await self.database_service.get_conversation_history_length(
-            room_id
-        )
-        if history_len > MAX_HISTORY_TURNS:
-            summary_stub = (
-                f"[{agent_name}] {response_text[:200]}..."
-            )
-            await self.database_service.trim_conversation_history(
-                room_id,
-                max_turns=MAX_HISTORY_TURNS,
-                summary_addition=summary_stub,
-                max_summary_chars=MAX_SUMMARY_CHARS,
             )
 
         # Post-save: enrich turn_notes via LLM for long turns (§6.2).
@@ -794,8 +775,16 @@ class RoomMemoryService:
             turn_notes=extract_turn_notes(enriched_content),
         )
 
-        modified, matched = await self.database_service.push_conversation_turn(
-            room_id, turn.model_dump(mode="json")
+        summary_stub = (
+            f"[Supervisor synthesis ({turn.turn_id[:8]})] "
+            f"{enriched_content[:200]}..."
+        )
+        modified, matched = await self.database_service.push_and_trim_conversation_turn(
+            room_id,
+            turn.model_dump(mode="json"),
+            max_turns=MAX_HISTORY_TURNS,
+            summary_stub=summary_stub,
+            max_summary_chars=MAX_SUMMARY_CHARS,
         )
         if not modified:
             if not matched:
@@ -809,24 +798,6 @@ class RoomMemoryService:
                     "Failed to persist synthesis turn for room %s", room_id,
                 )
             return None
-
-        # Trim if conversation_history exceeds MAX_HISTORY_TURNS.
-        # This is a separate atomic op — safe even if another writer pushed
-        # concurrently, because $push/$slice is idempotent on the tail.
-        history_len = await self.database_service.get_conversation_history_length(
-            room_id
-        )
-        if history_len > MAX_HISTORY_TURNS:
-            summary_stub = (
-                f"[Supervisor synthesis ({turn.turn_id[:8]})] "
-                f"{enriched_content[:200]}..."
-            )
-            await self.database_service.trim_conversation_history(
-                room_id,
-                max_turns=MAX_HISTORY_TURNS,
-                summary_addition=summary_stub,
-                max_summary_chars=MAX_SUMMARY_CHARS,
-            )
 
         return turn.turn_id
 

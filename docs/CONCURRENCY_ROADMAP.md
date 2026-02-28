@@ -35,7 +35,7 @@ Each mutation now uses the narrowest MongoDB operator for its target field(s):
 | `push_conversation_turn` | `$push` on the array | Appends are commutative |
 | `trim_conversation_history` | `$push` with `$each: []` + `$slice: -N` | Atomic cap from tail |
 | `update_room_summary_atomic` | `$set` on `room_summary` + `$push` on `room_facts` | Disjoint from history |
-| `compact_turns_atomic` | `bulk_write` with `arrayFilters` | Per-element updates |
+| `compact_turns_bulk` | `bulk_write` with `arrayFilters` | Per-element updates |
 
 Because the writers now target **disjoint fields**, they can run concurrently
 without conflict even on a single MongoDB instance.
@@ -45,7 +45,7 @@ without conflict even on a single MongoDB instance.
 - `push_conversation_turn(room_id, turn_dict)` — `$push` + `$inc` + `$set`
 - `trim_conversation_history(room_id, max_turns, summary_addition)` — `$push/$slice` + `$set`
 - `update_room_summary_atomic(room_id, summary_dict, new_facts)` — `$set` + `$push/$slice`
-- `compact_turns_atomic(room_id, compacted_turns)` — `bulk_write` with `arrayFilters`
+- `compact_turns_bulk(room_id, compacted_turns)` — `bulk_write` with `arrayFilters`
 - `get_room_summary_projection(room_id)` — lightweight `find_one` for summary + facts only
 - `get_conversation_history_length(room_id)` — aggregation `$size` without loading the array
 

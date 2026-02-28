@@ -1378,6 +1378,126 @@ class MongoDB:
         )
         return (result.modified_count > 0, result.matched_count > 0)
 
+    async def push_and_trim_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+        max_turns: int,
+        summary_stub: str,
+        max_summary_chars: int = 4000,
+    ) -> tuple[bool, bool]:
+        """Atomically push a turn and trim history if it exceeds max_turns.
+
+        Combines push_conversation_turn + get_conversation_history_length +
+        trim_conversation_history into a single pipeline update, eliminating the
+        race condition where concurrent writers could interleave between push
+        and trim.
+
+        Returns:
+            (modified, matched) — matched is False when the room_id document
+            doesn't exist.
+        """
+        if max_turns <= 0:
+            return (False, False)
+        if max_summary_chars < 10:
+            max_summary_chars = 10
+
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            [
+                {
+                    "$set": {
+                        "memory_content.conversation_history": {
+                            "$concatArrays": [
+                                {"$ifNull": ["$memory_content.conversation_history", []]},
+                                [turn],
+                            ]
+                        },
+                        "total_messages": {"$add": [{"$ifNull": ["$total_messages", 0]}, 1]},
+                        "last_activity_at": utcnow(),
+                    }
+                },
+                {
+                    "$set": {
+                        "memory_content.summary": {
+                            "$cond": {
+                                "if": {
+                                    "$gt": [
+                                        {"$size": "$memory_content.conversation_history"},
+                                        max_turns,
+                                    ]
+                                },
+                                "then": {
+                                    "$let": {
+                                        "vars": {
+                                            "existing": {
+                                                "$ifNull": ["$memory_content.summary", ""]
+                                            },
+                                        },
+                                        "in": {
+                                            "$let": {
+                                                "vars": {
+                                                    "concatenated": {
+                                                        "$cond": {
+                                                            "if": {"$eq": ["$$existing", ""]},
+                                                            "then": summary_stub,
+                                                            "else": {
+                                                                "$concat": [
+                                                                    "$$existing",
+                                                                    "\n",
+                                                                    summary_stub,
+                                                                ]
+                                                            },
+                                                        }
+                                                    }
+                                                },
+                                                "in": {
+                                                    "$cond": {
+                                                        "if": {
+                                                            "$gt": [
+                                                                {"$strLenCP": "$$concatenated"},
+                                                                max_summary_chars,
+                                                            ]
+                                                        },
+                                                        "then": {
+                                                            "$concat": [
+                                                                "...",
+                                                                {
+                                                                    "$substrCP": [
+                                                                        "$$concatenated",
+                                                                        {
+                                                                            "$subtract": [
+                                                                                {"$strLenCP": "$$concatenated"},
+                                                                                max_summary_chars - 3,
+                                                                            ]
+                                                                        },
+                                                                        max_summary_chars - 3,
+                                                                    ]
+                                                                },
+                                                            ]
+                                                        },
+                                                        "else": "$$concatenated",
+                                                    }
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+                                "else": {"$ifNull": ["$memory_content.summary", ""]},
+                            }
+                        },
+                        "memory_content.conversation_history": {
+                            "$slice": [
+                                "$memory_content.conversation_history",
+                                {"$multiply": [-1, max_turns]},
+                            ]
+                        },
+                    }
+                },
+            ],
+        )
+        return (result.modified_count > 0, result.matched_count > 0)
+
     async def trim_conversation_history(
         self,
         room_id: str,
@@ -1478,7 +1598,7 @@ class MongoDB:
         """Atomically update room_summary and optionally push new facts.
 
         Does NOT touch conversation_history — safe to run concurrently
-        with push_conversation_turn and compact_turns_atomic.
+        with push_conversation_turn and compact_turns_bulk.
         """
         update: dict = {
             "$set": {"room_summary": room_summary},
@@ -1498,12 +1618,18 @@ class MongoDB:
         )
         return result.modified_count > 0
 
-    async def compact_turns_atomic(
+    async def compact_turns_bulk(
         self,
         room_id: str,
         compacted_turns: list[dict],
     ) -> bool:
-        """Atomically mark turns as compact using arrayFilters + bulk_write.
+        """Mark turns as compact using arrayFilters + bulk_write.
+
+        NOTE: bulk_write(ordered=True) guarantees ordering but NOT full atomicity.
+        A crash mid-batch may leave some turns compacted and others still FULL.
+        This is safe because: (1) content is already persisted in
+        conversation_content before this call, and (2) re-running compaction on
+        an already-compacted turn is a no-op (the arrayFilter won't match).
 
         Each entry in compacted_turns must have:
           - turn_id: str

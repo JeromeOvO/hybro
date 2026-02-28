@@ -106,18 +106,3 @@ class CompactionResult(BaseModel):
     tokens_saved: int  # Estimated tokens saved
     errors: list[str] = Field(default_factory=list)  # Any errors encountered
     compacted_at: datetime = Field(default_factory=utcnow)
-
-
-class CompactionConfig(BaseModel):
-    """
-    Runtime compaction configuration.
-
-    Values are loaded from environment variables via settings.
-    See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14.3 for specification.
-    """
-
-    enabled: bool = True
-    max_full_turns: int = 20  # Max turns to keep in FULL representation
-    max_total_tokens: int = 80000  # Trigger compaction when exceeded
-    preserve_recent_turns: int = 10  # Always keep this many recent turns FULL
-    content_ttl_days: int = 0  # TTL for stored content (0 = forever)

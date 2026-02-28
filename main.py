@@ -81,6 +81,8 @@ async def lifespan(app: FastAPI):
     await mongodb.connect()
     pinecone_db.connect()
 
+    await mongodb.create_context_memory_indexes()
+
     # Start the agent health check service
     await agent_health_service.start()
 

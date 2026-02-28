@@ -1440,6 +1440,27 @@ class DatabaseService:
             logger.error("Failed to push conversation turn for room %s: %s", room_id, e)
             return (False, False)
 
+    async def push_and_trim_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+        max_turns: int,
+        summary_stub: str,
+        max_summary_chars: int = 4000,
+    ) -> tuple[bool, bool]:
+        """Atomically push a turn and trim history if it exceeds max_turns.
+
+        Returns:
+            (modified, matched) — matched is False when the document doesn't exist.
+        """
+        try:
+            return await self.mongo.push_and_trim_conversation_turn(
+                room_id, turn, max_turns, summary_stub, max_summary_chars,
+            )
+        except Exception as e:
+            logger.error("Failed to push+trim conversation turn for room %s: %s", room_id, e)
+            return (False, False)
+
     async def trim_conversation_history(
         self, room_id: str, max_turns: int, summary_addition: str,
         max_summary_chars: int = 4000,
@@ -1466,14 +1487,14 @@ class DatabaseService:
             logger.error("Failed to atomically update room summary for room %s: %s", room_id, e)
             return False
 
-    async def compact_turns_atomic(
+    async def compact_turns_bulk(
         self, room_id: str, compacted_turns: list[dict],
     ) -> bool:
-        """Atomically mark turns as compact using arrayFilters + bulk_write."""
+        """Mark turns as compact using arrayFilters + bulk_write (not fully atomic; see mongodb.py)."""
         try:
-            return await self.mongo.compact_turns_atomic(room_id, compacted_turns)
+            return await self.mongo.compact_turns_bulk(room_id, compacted_turns)
         except Exception as e:
-            logger.error("Failed to atomically compact turns for room %s: %s", room_id, e)
+            logger.error("Failed to compact turns (bulk) for room %s: %s", room_id, e)
             return False
 
     async def get_room_summary_projection(self, room_id: str) -> dict | None:

@@ -428,7 +428,7 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 return_value=True,
             ):
                 with patch.object(
@@ -447,7 +447,7 @@ class TestCompactionService:
     async def test_compact_room_memory_populates_content_hash(
         self, service, mock_settings
     ):
-        """Should populate content_hash in data sent to compact_turns_atomic (§6.3)."""
+        """Should populate content_hash in data sent to compact_turns_bulk (§6.3)."""
         from services.content_storage_service import hash_content
 
         turn = ConversationTurn(
@@ -481,7 +481,7 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 mock_compact,
             ):
                 with patch.object(
@@ -515,7 +515,7 @@ class TestCompactionService:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 return_value=True,
             ):
                 with patch.object(
@@ -686,7 +686,7 @@ class TestCompactionRoundTrip:
             mock_compact = AsyncMock(return_value=True)
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 mock_compact,
             ):
                 with patch.object(
@@ -699,7 +699,7 @@ class TestCompactionRoundTrip:
 
         assert result.compacted_count == 1
 
-        # Verify compact_turns_atomic was called with correct data
+        # Verify compact_turns_bulk was called with correct data
         mock_compact.assert_awaited_once()
         compacted_data = mock_compact.call_args[0][1]
         assert len(compacted_data) == 1
@@ -773,7 +773,7 @@ class TestCompactionRoundTrip:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 return_value=True,
             ):
                 with patch.object(
@@ -846,7 +846,7 @@ class TestTokenSavings:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 return_value=True,
             ):
                 with patch.object(
@@ -923,7 +923,7 @@ class TestErrorHandling:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 return_value=True,
             ):
                 with patch.object(
@@ -939,10 +939,10 @@ class TestErrorHandling:
         assert "turn-1" in result.errors[0]
 
     @pytest.mark.asyncio
-    async def test_compaction_skips_turn_when_vector_indexing_fails(
+    async def test_compaction_proceeds_when_vector_indexing_fails(
         self, service, mock_settings, mock_memory_search
     ):
-        """Compaction should skip a turn if vector indexing fails, leaving it FULL."""
+        """Compaction should proceed even if vector indexing fails (decoupled)."""
         turn = ConversationTurn(
             turn_id="turn-no-index",
             role=TurnRole.USER,
@@ -973,10 +973,14 @@ class TestErrorHandling:
                 "upsert_full_content",
                 AsyncMock(return_value="doc-123"),
             ):
-                result = await service.compact_room_memory("test-room")
+                with patch.object(
+                    service.db_service,
+                    "compact_turns_bulk",
+                    return_value=True,
+                ):
+                    result = await service.compact_room_memory("test-room")
 
-        assert result.compacted_count == 0
-        assert turn.representation == TurnRepresentation.FULL
+        assert result.compacted_count == 1
         assert turn.content == "Content that fails indexing"
 
     @pytest.mark.asyncio
@@ -1141,7 +1145,7 @@ class TestWriteBackPath:
     async def test_write_back_targets_conversation_history_field(
         self, service, mock_settings
     ):
-        """Compaction should call compact_turns_atomic with correct turn data."""
+        """Compaction should call compact_turns_bulk with correct turn data."""
         turns = [
             ConversationTurn(
                 turn_id=f"turn-{i}",
@@ -1176,7 +1180,7 @@ class TestWriteBackPath:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 mock_compact,
             ):
                 with patch.object(
@@ -1193,7 +1197,7 @@ class TestWriteBackPath:
     async def test_write_back_targets_memory_content_field(
         self, service, mock_settings
     ):
-        """Compaction should call compact_turns_atomic for memory_content-sourced turns."""
+        """Compaction should call compact_turns_bulk for memory_content-sourced turns."""
         turns = [
             ConversationTurn(
                 turn_id=f"turn-{i}",
@@ -1228,7 +1232,7 @@ class TestWriteBackPath:
         ):
             with patch.object(
                 service.db_service,
-                "compact_turns_atomic",
+                "compact_turns_bulk",
                 mock_compact,
             ):
                 with patch.object(

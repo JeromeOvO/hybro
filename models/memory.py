@@ -175,6 +175,19 @@ class ConversationTurn(BaseModel):
                 values["content_ref"] = ContentReference(**ref)
         return values
 
+    @model_validator(mode="after")
+    def _validate_content_for_representation(self) -> "ConversationTurn":
+        """Enforce that FULL-representation turns always have content set."""
+        if (
+            self.representation == TurnRepresentation.FULL
+            and self.content is None
+        ):
+            raise ValueError(
+                f"ConversationTurn {self.turn_id}: content must not be None "
+                f"when representation is FULL"
+            )
+        return self
+
     def to_context_string(self) -> str:
         """
         Render this turn for inclusion in a context window.
