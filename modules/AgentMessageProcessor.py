@@ -163,6 +163,34 @@ class AgentMessageProcessor:
                 return ProcessingResult(ProcessingStatus.FAILED)
 
         if full_response_text is None and paused_message_id:
+            # Detect input_required vs. regular push-notification pause
+            # by checking the task state on the message
+            task = get_task(current_message)
+            if task and task.status and task.status.state == TaskState.input_required:
+                logger.info(
+                    "AgentMessageProcessor: Agent returned input_required for message %s",
+                    paused_message_id,
+                )
+                task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
+                status_msg = None
+                if task.status and task.status.message:
+                    parts = task.status.message.parts or []
+                    for p in parts:
+                        if hasattr(p, "root") and hasattr(p.root, "text"):
+                            status_msg = p.root.text
+                            break
+                        if hasattr(p, "text"):
+                            status_msg = p.text
+                            break
+                return ProcessingResult(
+                    ProcessingStatus.AWAITING_INPUT,
+                    response_text="",
+                    message_id=paused_message_id,
+                    a2a_task_id=task_data.get("id") or (task.id if hasattr(task, "id") else None),
+                    a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
+                    status_message=status_msg,
+                )
+
             logger.info(
                 "AgentMessageProcessor: Push notification task submitted for message %s; "
                 "queue will be paused until task completes",

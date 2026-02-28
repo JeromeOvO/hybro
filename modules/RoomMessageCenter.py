@@ -595,21 +595,21 @@ class RoomMessageCenter:
         paused_message_id: str,
         task_result_text: str | None,
     ) -> bool:
-        """Resume a V2 supervisor loop after a push notification webhook.
+        """Resume a V2 supervisor loop after an interrupt.
+
+        Handles all three interrupt kinds:
+        - PUSH_NOTIFICATION: webhook result appended to trajectory
+        - HITL_AGENT: webhook result appended (same as push notification)
+        - HITL_SUPERVISOR: user reply injected into conversation context
 
         Steps:
         1. Deserialize the trajectory from continuation data.
-        2. Find the ``TrajectoryEntry`` containing the paused step and append
-           the push notification result to it.
-        3. Refresh the agent registry from the database (agents may have
-           changed while the execution was paused).
-        4. Add the completed agent's response to room memory.
-        5. Refresh conversation_context from room memory (§7.6 — context may
-           be stale after a push-notification pause).
-        6. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
-           continue the adaptive loop.
-        7. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
+        2. Branch on interrupt_kind.
+        3. Refresh agent registry and conversation context.
+        4. Call SupervisorExecutor.run(resumed_trajectory=...).
+        5. Handle the RunStatus result.
         """
+        from models.hitl import InterruptKind
         from models.supervisor_v2 import (
             SupervisorTrajectory,
         )
@@ -647,6 +647,19 @@ class RoomMessageCenter:
             )
             return False
 
+        # 2. Read and validate interrupt_kind
+        raw_kind = continuation.get("interrupt_kind", "push_notification")
+        try:
+            interrupt_kind = InterruptKind(raw_kind)
+        except ValueError:
+            logger.error(
+                "Unknown interrupt_kind=%r in continuation for message %s — "
+                "defaulting to PUSH_NOTIFICATION",
+                raw_kind,
+                paused_message_id,
+            )
+            interrupt_kind = InterruptKind.PUSH_NOTIFICATION
+
         logger.info(
             "supervisor_v2_resume_started",
             extra={
@@ -654,34 +667,93 @@ class RoomMessageCenter:
                 "trajectory_id": trajectory.trajectory_id,
                 "paused_message_id": paused_message_id,
                 "user_message_id": user_message_id,
+                "interrupt_kind": interrupt_kind.value,
             },
         )
 
-        # 2. Identify the paused agent (before appending result, since the
-        #    append fills in the missing entry)
-        paused_agent_id: str | None = None
-        paused_agent_name: str | None = None
-        if task_result_text:
-            paused_agent_id, paused_agent_name = self._find_paused_agent(
-                trajectory, paused_message_id
+        # 3. Branch on interrupt_kind
+        if interrupt_kind in (
+            InterruptKind.PUSH_NOTIFICATION,
+            InterruptKind.HITL_AGENT,
+        ):
+            # Identify the paused agent before appending result
+            paused_agent_id: str | None = None
+            paused_agent_name: str | None = None
+            if task_result_text:
+                paused_agent_id, paused_agent_name = self._find_paused_agent(
+                    trajectory, paused_message_id
+                )
+
+            # Append the webhook result to the matching trajectory entry
+            self._append_paused_result_to_trajectory(
+                trajectory,
+                paused_message_id=paused_message_id,
+                task_result_text=task_result_text,
             )
 
-        # 3. Append the push notification result to the matching entry
-        self._append_paused_result_to_trajectory(
-            trajectory,
-            paused_message_id=paused_message_id,
-            task_result_text=task_result_text,
-        )
+            # Add completed agent response to room memory
+            if task_result_text and paused_agent_id:
+                await room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=paused_agent_id,
+                    agent_name=paused_agent_name or "Agent",
+                    response_text=task_result_text,
+                    was_successful=True,
+                )
 
-        # 4. Add completed agent response to room memory
-        if task_result_text and paused_agent_id:
-            await room_memory_service.add_agent_response_to_memory(
-                room_id=room_id,
-                agent_id=paused_agent_id,
-                agent_name=paused_agent_name or "Agent",
-                response_text=task_result_text,
-                was_successful=True,
+        elif interrupt_kind == InterruptKind.HITL_SUPERVISOR:
+            # User reply is already patched onto trajectory by
+            # HITLService._handle_supervisor_response(). Re-fetch
+            # conversation_context to avoid staleness.
+            try:
+                from services.context_assembly_service import context_assembly_service
+
+                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                if room_memory:
+                    room_tmp = await self.database_service.get_room_by_room_id(room_id)
+                    agent_dicts = [
+                        {"agent_id": aid, "agent_name": aname}
+                        for aid, aname in ((room_tmp.room_agent_set or {}).items() if room_tmp else [])
+                    ]
+                    memory_search_results = None
+                    try:
+                        from services.memory_search_service import memory_search_service
+                        search_response = await memory_search_service.search(
+                            query=message_text, room_id=room_id,
+                        )
+                        if search_response.results:
+                            memory_search_results = search_response.results
+                    except Exception:
+                        pass
+                    result_ctx = context_assembly_service.build_supervisor_context(
+                        room_memory=room_memory,
+                        current_task=message_text,
+                        agent_registry=agent_dicts,
+                        max_turns=5,
+                        memory_search_results=memory_search_results,
+                    )
+                    conversation_context = result_ctx.context
+            except Exception as e:
+                logger.warning(
+                    "supervisor_v2_resume: failed to refresh conversation_context "
+                    "for %s (HITL_SUPERVISOR), using serialized fallback: %s",
+                    room_id, e,
+                )
+
+            # Inject the HITL user reply into conversation context
+            effective_reply = (
+                trajectory.hitl_user_reply
+                or trajectory.clarify_user_reply
             )
+            if effective_reply:
+                original_question = self._extract_clarify_question(trajectory)
+                hitl_block = ""
+                if original_question:
+                    hitl_block += f"[Supervisor asked the user]: {original_question}\n"
+                hitl_block += f"[User replied]: {effective_reply}"
+                conversation_context = (
+                    f"{conversation_context or ''}\n\n{hitl_block}"
+                ).strip()
 
         # 5. Refresh agent registry from database (not serialized)
         room = await self.database_service.get_room_by_room_id(room_id)
@@ -701,49 +773,52 @@ class RoomMessageCenter:
         # The serialized context may be stale after a push-notification pause
         # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
         # with the same logic used in _prepare_for_supervisor_v2 / _prepare_clarify_resume_v2.
-        try:
-            from services.context_assembly_service import context_assembly_service
+        # SKIP for HITL_SUPERVISOR: that branch already refreshes context and
+        # appends the hitl_block — a second refresh would overwrite the user's reply.
+        if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
+            try:
+                from services.context_assembly_service import context_assembly_service
 
-            room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-            if room_memory:
-                agent_dicts = [
-                    {"agent_id": aid, "agent_name": aname}
-                    for aid, aname in (room.room_agent_set or {}).items()
-                ]
-                memory_search_results = None
-                try:
-                    from services.memory_search_service import memory_search_service
+                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                if room_memory:
+                    agent_dicts = [
+                        {"agent_id": aid, "agent_name": aname}
+                        for aid, aname in (room.room_agent_set or {}).items()
+                    ]
+                    memory_search_results = None
+                    try:
+                        from services.memory_search_service import memory_search_service
 
-                    search_response = await memory_search_service.search(
-                        query=message_text,
-                        room_id=room_id,
+                        search_response = await memory_search_service.search(
+                            query=message_text,
+                            room_id=room_id,
+                        )
+                        if search_response.results:
+                            memory_search_results = search_response.results
+                    except Exception as search_err:
+                        logger.debug(
+                            "supervisor_v2_resume: memory search skipped: %s",
+                            search_err,
+                        )
+                    result_ctx = context_assembly_service.build_supervisor_context(
+                        room_memory=room_memory,
+                        current_task=message_text,
+                        agent_registry=agent_dicts,
+                        max_turns=5,
+                        memory_search_results=memory_search_results,
                     )
-                    if search_response.results:
-                        memory_search_results = search_response.results
-                except Exception as search_err:
+                    conversation_context = result_ctx.context
                     logger.debug(
-                        "supervisor_v2_resume: memory search skipped: %s",
-                        search_err,
+                        "supervisor_v2_resume: refreshed conversation_context for %s "
+                        "(occupancy=%.1f%%)",
+                        room_id, result_ctx.occupancy_pct,
                     )
-                result_ctx = context_assembly_service.build_supervisor_context(
-                    room_memory=room_memory,
-                    current_task=message_text,
-                    agent_registry=agent_dicts,
-                    max_turns=5,
-                    memory_search_results=memory_search_results,
+            except Exception as e:
+                logger.warning(
+                    "supervisor_v2_resume: failed to refresh conversation_context "
+                    "for %s, using serialized fallback: %s",
+                    room_id, e,
                 )
-                conversation_context = result_ctx.context
-                logger.debug(
-                    "supervisor_v2_resume: refreshed conversation_context for %s "
-                    "(occupancy=%.1f%%)",
-                    room_id, result_ctx.occupancy_pct,
-                )
-        except Exception as e:
-            logger.warning(
-                "supervisor_v2_resume: failed to refresh conversation_context "
-                "for %s, using serialized fallback: %s",
-                room_id, e,
-            )
 
         agent_registry: list[AgentProfile] = []
         room_agent_items = list((room.room_agent_set or {}).items())
@@ -883,7 +958,7 @@ class RoomMessageCenter:
         for entry in trajectory.entries:
             for idx, result in enumerate(entry.results):
                 if (
-                    result.status == StepStatus.PAUSED
+                    result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
                     and result.agent_message_id == paused_message_id
                 ):
                     entry.results[idx] = V2StepResult(
@@ -906,9 +981,10 @@ class RoomMessageCenter:
                         agent_message_id=paused_message_id,
                         completed_at=utcnow(),
                     )
-                    # Mark entry completed if no more PAUSED results remain
+                    # Mark entry completed if no more PAUSED/AWAITING results remain
                     still_paused = any(
-                        r.status == StepStatus.PAUSED for r in entry.results
+                        r.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+                        for r in entry.results
                     )
                     if not still_paused and entry.completed_at is None:
                         entry.completed_at = utcnow()
@@ -947,11 +1023,23 @@ class RoomMessageCenter:
         for entry in trajectory.entries:
             for result in entry.results:
                 if (
-                    result.status == StepStatus.PAUSED
+                    result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
                     and result.agent_message_id == paused_message_id
                 ):
                     return result.agent_id, result.agent_name
         return None, None
+
+    @staticmethod
+    def _extract_clarify_question(
+        trajectory: SupervisorTrajectory,
+    ) -> str | None:
+        """Extract the CLARIFY question from the last CLARIFY trajectory entry."""
+        from models.supervisor_v2 import ActionType
+
+        for entry in reversed(trajectory.entries):
+            if entry.action.action == ActionType.CLARIFY:
+                return entry.action.clarification_question
+        return None
 
     async def _persist_failed_trajectory(
         self,
@@ -1012,6 +1100,7 @@ class RoomMessageCenter:
         if user_message and result.status in (
             RunStatus.COMPLETED,
             RunStatus.CLARIFYING,
+            RunStatus.AWAITING_INPUT,
             RunStatus.FAILED,
             RunStatus.CANCELED,
             RunStatus.PAUSED,
@@ -1074,6 +1163,10 @@ class RoomMessageCenter:
 
             case RunStatus.PAUSED:
                 pass
+
+            case RunStatus.AWAITING_INPUT:
+                pass  # Continuation already saved; HITLService emits the SSE event.
+                      # Token stays alive — resume path creates/reuses it.
 
             case RunStatus.CLARIFYING:
                 if room is None:
@@ -1144,9 +1237,9 @@ class RoomMessageCenter:
                 )
 
         # Clean up cancellation token for all terminal statuses.
-        # PAUSED runs keep their token alive — the webhook resume path
-        # will create/reuse it.
-        if result.status != RunStatus.PAUSED:
+        # PAUSED and AWAITING_INPUT runs keep their token alive — the
+        # webhook/HITL resume path will create/reuse it.
+        if result.status not in (RunStatus.PAUSED, RunStatus.AWAITING_INPUT):
             self.sse_manager.remove_token(user_message_id)
 
         # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
@@ -1242,6 +1335,13 @@ class RoomMessageCenter:
                 message_id
             )
         )
+        # Also check user messages (HITL_SUPERVISOR stores continuations there)
+        if not continuation:
+            continuation = (
+                await self.database_service.get_and_clear_continuation_on_user_message(
+                    message_id
+                )
+            )
         if not continuation:
             logger.debug(
                 "RoomMessageCenter: No continuation found for message %s",
@@ -1252,17 +1352,29 @@ class RoomMessageCenter:
         if continuation.get("supervisor_v2"):
             # Re-save continuation before attempting resume so a process
             # crash mid-resume doesn't permanently lose the execution state.
-            await self.database_service.save_continuation_on_message(
-                message_id, continuation
-            )
+            # Use the correct collection based on interrupt_kind.
+            interrupt_kind = continuation.get("interrupt_kind", "push_notification")
+            if interrupt_kind == "hitl_supervisor":
+                await self.database_service.save_continuation_on_user_message(
+                    message_id, continuation
+                )
+            else:
+                await self.database_service.save_continuation_on_message(
+                    message_id, continuation
+                )
             try:
                 result = await self._resume_supervisor_v2(
                     continuation, message_id, task_result_text
                 )
                 # On success, clear the continuation (it was re-saved above).
-                await self.database_service.get_and_clear_continuation_on_message(
-                    message_id
-                )
+                if interrupt_kind == "hitl_supervisor":
+                    await self.database_service.get_and_clear_continuation_on_user_message(
+                        message_id
+                    )
+                else:
+                    await self.database_service.get_and_clear_continuation_on_message(
+                        message_id
+                    )
                 return result
             except Exception:
                 logger.exception(
