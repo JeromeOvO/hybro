@@ -158,6 +158,7 @@ function coalesce<T>(incomingVal: T | undefined, existingVal: T): T {
 export function isNoOpUpdate(
   existing: MessageEntity,
   incoming: IncomingMessage,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _source: MessageSource,
 ): boolean {
   const incomingDisplayType = resolveDisplayType({
