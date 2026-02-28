@@ -125,6 +125,28 @@ export interface AgentCenterResponse {
   error?: string | null;
   status_code?: number;
 }
+export interface APIKeyItemResponse {
+  key_id: string;
+  name: string;
+  created_at: string;
+  last_used_at?: string | null;
+  is_active: boolean;
+  usage_count: number;
+}
+export interface APIKeyListResponse {
+  keys: APIKeyItemResponse[];
+  count: number;
+}
+export interface APIKeyCreateResponse {
+  key_id: string;
+  name: string;
+  created_at: string;
+  api_key: string;
+}
+export interface APIKeyOperationResponse {
+  success: boolean;
+  message: string;
+}
 /**
  * A BaseTask represents a complete user request and serves as the top-level container.
  * It wraps a Task object and includes session/user metadata for tracking purposes.
