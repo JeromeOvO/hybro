@@ -2,13 +2,18 @@ import { SignIn } from '@clerk/nextjs'
 import Link from 'next/link'
 import { isWaitlistEnabled } from '@/lib/utils'
 
-export default function Page () {
+export default function Page ({
+  searchParams,
+}: {
+  searchParams: { redirect_url?: string }
+}) {
   const waitlistEnabled = isWaitlistEnabled()
+  const redirectUrl = searchParams.redirect_url || '/'
 
   return (
     <div className="flex flex-col items-center justify-center gap-4">
       <SignIn
-        redirectUrl="/"
+        redirectUrl={redirectUrl}
         appearance={{
           elements: {
             rootBox: "mx-auto",

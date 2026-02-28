@@ -346,9 +346,24 @@ export default function DeveloperAgentManagePage() {
         {!isOwner && (
           <Card className="border-dashed">
             <CardContent className="text-center py-8">
-              <p className="text-muted-foreground">
-                You do not own this agent. Only the agent owner can manage settings.
-              </p>
+              {!userId ? (
+                <>
+                  <p className="text-muted-foreground">
+                    Please sign in to manage this agent&apos;s settings.
+                  </p>
+                  <Button
+                    variant="default"
+                    className="mt-4"
+                    onClick={() => router.push(`/sign-in?redirect_url=/d/agents/${agentId}`)}
+                  >
+                    Sign In
+                  </Button>
+                </>
+              ) : (
+                <p className="text-muted-foreground">
+                  You do not own this agent. Only the agent owner can manage settings.
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
