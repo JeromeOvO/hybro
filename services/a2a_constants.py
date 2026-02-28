@@ -73,6 +73,7 @@ class SSEProcessingStatus(str, Enum):
     REJECTED = "rejected"
     RATE_LIMITED = "rate_limited"
     ERROR = "error"
+    AWAITING_INPUT = "awaiting_input"
 
 
 # Statuses that indicate processing is done (clear the spinner)

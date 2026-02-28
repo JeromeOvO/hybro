@@ -901,6 +901,10 @@ class ResponseProcessor:
                 )
 
             if self.a2a_service.has_push_notification_capability(agent_card):
+                if response.get("requires_input"):
+                    task_obj = get_task(current_message)
+                    if task_obj and task_obj.status:
+                        task_obj.status.state = TaskState.input_required
                 return True, None, message_id
 
             # Non-push agent: poll for completion
