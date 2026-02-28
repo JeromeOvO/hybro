@@ -173,6 +173,14 @@ class StaleTaskChecker:
         #    SupervisorExecutor.run() was in-flight.
         await self._recover_stuck_supervisor_trajectories()
 
+        # 7. Recover HITL requests stuck in "processing" (worker crashed
+        #    between CAS claim and finalization).
+        try:
+            from services.hitl_service import hitl_service
+            await hitl_service.recover_stale_processing()
+        except Exception as e:
+            logger.error("Failed to recover stale HITL processing requests: %s", e)
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,

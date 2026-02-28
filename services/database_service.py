@@ -1604,6 +1604,58 @@ class DatabaseService:
             logger.error(f"Failed to update HITL request {request_id}: {e}")
             return False
 
+    async def cas_update_hitl_request(
+        self, request_id: str, expected_status: str, **updates
+    ) -> bool:
+        """CAS update: only applies if current status matches expected_status."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id, "status": expected_status},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed CAS update HITL request {request_id} "
+                f"(expected {expected_status}): {e}"
+            )
+            return False
+
+    async def fenced_update_hitl_request(
+        self, request_id: str, claim_id: str, **updates
+    ) -> bool:
+        """Fenced update: only applies if claim_id matches (ownership check)."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id, "claim_id": claim_id},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed fenced update HITL request {request_id} "
+                f"(claim_id {claim_id}): {e}"
+            )
+            return False
+
+    async def claim_hitl_request(
+        self, request_id: str, **updates
+    ) -> dict | None:
+        """Atomically claim a PENDING HITL request (CAS: status must be 'pending').
+
+        Returns the pre-update document if claimed, or None if already claimed
+        by another caller (race lost).
+        """
+        try:
+            doc = await self.mongo.db.hitl_requests.find_one_and_update(
+                {"request_id": request_id, "status": "pending"},
+                {"$set": updates},
+            )
+            return doc
+        except Exception as e:
+            logger.error(f"Failed to claim HITL request {request_id}: {e}")
+            return None
+
     async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
         """Get all pending HITL requests for a room (for SSE reconnect catch-up)."""
         try:

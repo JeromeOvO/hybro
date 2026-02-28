@@ -1402,6 +1402,27 @@ class RoomServices:
         if validation_response:
             return validation_response
 
+        # Block new messages while an HITL request is pending (Risk 2 mitigation).
+        # Check BEFORE persisting the message or creating a token so we don't
+        # leave orphaned DB records on rejection.
+        try:
+            from services.hitl_service import hitl_service
+            pending_hitl = await hitl_service.get_pending_requests(request.room_id)
+            if pending_hitl:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error="An agent is waiting for your input. "
+                          "Please reply to the pending request before sending a new message.",
+                    status_code=409,
+                )
+        except Exception as e:
+            logger.warning(
+                "HITL pending check failed for room %s: %s — proceeding with message",
+                request.room_id, e,
+            )
+
         user_message = request.message
         if not await self._persist_user_message(user_message):
             return RoomCenterUserMessageResponse(
@@ -1439,32 +1460,6 @@ class RoomServices:
                 success=True,
                 error="Room not found, but message saved",
                 status_code=200,
-            )
-
-        # Block new messages while an HITL request is pending (Risk 2 mitigation)
-        try:
-            from services.hitl_service import hitl_service
-            pending_hitl = await hitl_service.get_pending_requests(request.room_id)
-            if pending_hitl:
-                await self.sse_manager.send_processing_status(
-                    request.room_id,
-                    SSEProcessingStatus.FAILED,
-                    user_message.message_id,
-                    details="An agent is waiting for your input. "
-                            "Please reply to the pending request before sending a new message.",
-                )
-                return RoomCenterUserMessageResponse(
-                    message_id=user_message.message_id,
-                    message=user_message,
-                    success=False,
-                    error="An agent is waiting for your input. "
-                          "Please reply to the pending request before sending a new message.",
-                    status_code=409,
-                )
-        except Exception as e:
-            logger.warning(
-                "HITL pending check failed for room %s: %s — proceeding with message",
-                request.room_id, e,
             )
 
         is_debate_mode = (

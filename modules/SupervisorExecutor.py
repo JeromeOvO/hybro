@@ -121,17 +121,20 @@ class SupervisorExecutor:
         # Debate mode resume: if all paused results have been filled in,
         # the debate is complete — skip straight to DONE without calling
         # decide_next (which wouldn't know about debate mode at step > 0).
+        # Also block if any result is non-success (e.g. deferred agents
+        # marked FAILED during multi-agent HITL) — those need re-evaluation.
         if (
             resumed_trajectory is not None
             and room_config.is_debate_mode
             and step_number > 0
         ):
-            still_paused = any(
-                r.status == StepStatus.PAUSED
+            still_unresolved = any(
+                r.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+                or not r.success
                 for entry in trajectory.entries
                 for r in entry.results
             )
-            if not still_paused:
+            if not still_unresolved:
                 done_entry = TrajectoryEntry(
                     step_number=len(trajectory.entries) + 1,
                     action=SupervisorAction(
@@ -399,6 +402,19 @@ class SupervisorExecutor:
                         if r.status == StepStatus.AWAITING_INPUT
                     ]
                     if awaiting:
+                        # Mark non-first awaiting agents as FAILED so the
+                        # supervisor gets clean state on resume and can
+                        # re-dispatch them (they may or may not request
+                        # input again). Only the first agent gets an HITL
+                        # request to avoid trajectory race conditions.
+                        for extra in awaiting[1:]:
+                            extra.status = StepStatus.FAILED
+                            extra.success = False
+                            extra.error_message = (
+                                "Deferred: another agent is awaiting human input first. "
+                                "Will be re-evaluated on resume."
+                            )
+
                         entry.results = results
                         trajectory.status = "awaiting_input"
 

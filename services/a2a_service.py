@@ -917,9 +917,14 @@ class A2AService:
         # Generate a NEW webhook token (original plaintext was never stored)
         webhook_token = db_service.generate_webhook_token()
         webhook_token_hash = db_service.hash_webhook_token(webhook_token)
-        await db_service.update_webhook_token_hash_on_message(
+        token_updated = await db_service.update_webhook_token_hash_on_message(
             message_id, webhook_token_hash
         )
+        if not token_updated:
+            raise RuntimeError(
+                f"Failed to rotate webhook token for message {message_id} — "
+                "agent callback would fail verification; aborting reply"
+            )
 
         webhook_url = settings.webhook_base_url or "http://localhost:8000"
         push_config = PushNotificationConfig(

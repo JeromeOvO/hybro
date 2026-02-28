@@ -63,6 +63,7 @@ class HITLStatus(str, Enum):
     """Lifecycle status of a single HITL request."""
 
     PENDING = "pending"
+    PROCESSING = "processing"
     RESPONDED = "responded"
     EXPIRED = "expired"
     CANCELED = "canceled"
