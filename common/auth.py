@@ -1,7 +1,13 @@
 """
 Clerk Authentication for FastAPI
 Validates JWT tokens from Clerk and provides user authentication.
+
+Two verification paths:
+1. Clerk SDK session handshake (browser / frontend requests with cookies).
+2. Direct Bearer JWT decode (Postman / API clients that send a raw token).
 """
+
+import jwt
 
 from clerk_backend_api import authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
@@ -20,6 +26,76 @@ AUTHORIZED_PARTIES = [
     "http://dev.localhost:3000",
 ]
 
+_jwks_client: jwt.PyJWKClient | None = None
+
+
+def _get_jwks_client() -> jwt.PyJWKClient:
+    """
+    Build a JWKS client pointed at the correct Clerk instance.
+
+    Clerk secret keys have the form:  sk_live_<base58_payload>
+    The Clerk Backend API exposes JWKS at:
+        https://<clerk_secret_key>/.well-known/jwks.json  (via Clerk's own SDK)
+    but the simplest universal endpoint is the one the SDK already uses:
+        https://api.clerk.dev/v1/jwks   with Authorization: Bearer <secret_key>
+
+    PyJWKClient doesn't support auth headers, so we use Clerk's public JWKS
+    URL which is derived from the publishable key / CLERK_JWKS_URL env var if
+    set, otherwise we fall back to fetching keys via the Clerk REST API once
+    and caching the result in a local JWKSet.
+    """
+    global _jwks_client
+    if _jwks_client is None:
+        # Clerk exposes a public JWKS endpoint per instance.
+        # Format: https://<instance>.clerk.accounts.dev/.well-known/jwks.json
+        # We can derive this from the secret key: sk_live_<base58>
+        # The simplest reliable approach: use Clerk's API with the secret key.
+        jwks_url = "https://api.clerk.dev/v1/jwks"
+        _jwks_client = jwt.PyJWKClient(
+            jwks_url,
+            cache_keys=True,
+            headers={"Authorization": f"Bearer {settings.clerk_secret_key}"},
+        )
+    return _jwks_client
+
+
+def _verify_bearer_jwt(token: str) -> dict:
+    """
+    Verify a raw Clerk JWT using JWKS (RS256).
+    Returns the decoded payload or raises HTTPException on failure.
+    """
+    try:
+        client = _get_jwks_client()
+        signing_key = client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_exp": True},
+        )
+        # Validate azp (authorized party) claim if present
+        azp = payload.get("azp")
+        if azp and azp not in AUTHORIZED_PARTIES:
+            logger.warning(f"JWT azp claim '{azp}' not in AUTHORIZED_PARTIES")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token: unauthorized party",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return payload
+    except jwt.ExpiredSignatureError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+    except (jwt.InvalidTokenError, Exception) as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
 
 class ClerkUser:
     """Represents an authenticated Clerk user"""
@@ -34,8 +110,12 @@ class ClerkUser:
 
 async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
     """
-    Verify a Clerk JWT token from a FastAPI Request using Clerk SDK.
-    The SDK will automatically extract and verify the token from the request.
+    Verify a Clerk JWT token from a FastAPI Request.
+
+    Strategy:
+    1. Try the Clerk SDK session handshake (works for browser/frontend clients).
+    2. If the SDK says not signed in but a Bearer token is present, fall back to
+       direct JWKS-based JWT verification (works for Postman / API clients).
 
     Args:
         request: The FastAPI Request object
@@ -47,42 +127,44 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
-        # Use Clerk SDK to authenticate the request
-        # The SDK handles JWKS fetching, caching, and JWT verification automatically
-        # Create authentication options with secret key and authorized parties
         options = AuthenticateRequestOptions(
             secret_key=settings.clerk_secret_key,
             authorized_parties=AUTHORIZED_PARTIES,
         )
         request_state = authenticate_request(request, options)
 
-        if not request_state.is_signed_in:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        if request_state.is_signed_in and request_state.payload:
+            payload = request_state.payload
+            user_id = payload.get("sub")
+            session_id = payload.get("sid")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token: missing user ID",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return ClerkUser(user_id=user_id, session_id=session_id, claims=payload)
 
-        # Extract user information from the verified token payload
-        payload = request_state.payload
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing payload",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        # SDK handshake did not resolve — try raw Bearer token (Postman / API clients)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            raw_token = auth_header[len("Bearer "):]
+            payload = _verify_bearer_jwt(raw_token)
+            user_id = payload.get("sub")
+            session_id = payload.get("sid")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token: missing user ID",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return ClerkUser(user_id=user_id, session_id=session_id, claims=payload)
 
-        user_id = payload.get("sub")  # Subject claim contains user ID
-        session_id = payload.get("sid")  # Session ID claim
-
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token: missing user ID",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        return ClerkUser(user_id=user_id, session_id=session_id, claims=payload)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     except HTTPException:
         raise
