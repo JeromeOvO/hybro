@@ -174,82 +174,82 @@ class TestContentStorageService:
         """Create a ContentStorageService instance."""
         return ContentStorageService()
 
+    @pytest.fixture
+    def mock_mongodb(self):
+        """Mock the mongodb singleton to prevent real DB connections."""
+        mock_coll = AsyncMock()
+        with patch("services.content_storage_service.mongodb") as mock_db:
+            mock_db.conversation_content_collection = mock_coll
+            yield mock_coll
+
     @pytest.mark.asyncio
     async def test_upsert_full_content_new_document(
-        self, service, mock_content_settings
+        self, service, mock_content_settings, mock_mongodb
     ):
         """Upsert should create new document and return ID."""
-        mock_collection = AsyncMock()
-        mock_collection.update_one = AsyncMock(
+        mock_mongodb.update_one = AsyncMock(
             return_value=MagicMock(upserted_id="new-doc-id-123")
         )
 
-        with patch.object(service, "collection", mock_collection):
-            doc_id = await service.upsert_full_content(
-                room_id="room-123",
-                turn_id="turn-456",
-                content="Test content",
-                content_type="text",
-            )
+        doc_id = await service.upsert_full_content(
+            room_id="room-123",
+            turn_id="turn-456",
+            content="Test content",
+            content_type="text",
+        )
 
         assert doc_id == "new-doc-id-123"
-        mock_collection.update_one.assert_called_once()
+        mock_mongodb.update_one.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_upsert_full_content_existing_document(
-        self, service, mock_content_settings
+        self, service, mock_content_settings, mock_mongodb
     ):
         """Upsert should return existing document ID if already exists."""
         from bson import ObjectId
 
         existing_id = ObjectId()
-        mock_collection = AsyncMock()
-        mock_collection.update_one = AsyncMock(
+        mock_mongodb.update_one = AsyncMock(
             return_value=MagicMock(upserted_id=None)
         )
-        mock_collection.find_one = AsyncMock(return_value={"_id": existing_id})
+        mock_mongodb.find_one = AsyncMock(return_value={"_id": existing_id})
 
-        with patch.object(service, "collection", mock_collection):
-            doc_id = await service.upsert_full_content(
-                room_id="room-123",
-                turn_id="turn-456",
-                content="Test content",
-                content_type="text",
-            )
+        doc_id = await service.upsert_full_content(
+            room_id="room-123",
+            turn_id="turn-456",
+            content="Test content",
+            content_type="text",
+        )
 
         assert doc_id == str(existing_id)
 
     @pytest.mark.asyncio
-    async def test_get_content_by_document_id(self, service):
+    async def test_get_content_by_document_id(self, service, mock_mongodb):
         """Should retrieve content by document ID."""
         from bson import ObjectId
 
         doc_id = str(ObjectId())
-        mock_collection = AsyncMock()
-        mock_collection.find_one = AsyncMock(
+        mock_mongodb.find_one = AsyncMock(
             return_value={"_id": ObjectId(doc_id), "content": "Retrieved content"}
         )
 
-        with patch.object(service, "collection", mock_collection):
-            content = await service.get_content_by_document_id(doc_id)
+        content = await service.get_content_by_document_id(doc_id)
 
         assert content == "Retrieved content"
 
     @pytest.mark.asyncio
-    async def test_get_content_by_document_id_not_found(self, service):
+    async def test_get_content_by_document_id_not_found(self, service, mock_mongodb):
         """Should return None if document not found."""
         from bson import ObjectId
 
-        mock_collection = AsyncMock()
-        mock_collection.find_one = AsyncMock(return_value=None)
+        mock_mongodb.find_one = AsyncMock(return_value=None)
 
-        with patch.object(service, "collection", mock_collection):
-            content = await service.get_content_by_document_id(str(ObjectId()))
+        content = await service.get_content_by_document_id(str(ObjectId()))
 
         assert content is None
 
     @pytest.mark.asyncio
-    async def test_expand_content_reference_mongodb(self, service):
+    async def test_expand_content_reference_mongodb(self, service, mock_mongodb):
         """Should expand MongoDB content reference."""
         from bson import ObjectId
 
@@ -261,18 +261,16 @@ class TestContentStorageService:
             created_at=datetime.now(),
         )
 
-        mock_collection = AsyncMock()
-        mock_collection.find_one = AsyncMock(
+        mock_mongodb.find_one = AsyncMock(
             return_value={"_id": ObjectId(doc_id), "content": "Expanded content"}
         )
 
-        with patch.object(service, "collection", mock_collection):
-            content = await service.expand_content_reference(content_ref, "turn-123")
+        content = await service.expand_content_reference(content_ref, "turn-123")
 
         assert content == "Expanded content"
 
     @pytest.mark.asyncio
-    async def test_expand_content_reference_not_found_raises_error(self, service):
+    async def test_expand_content_reference_not_found_raises_error(self, service, mock_mongodb):
         """Should raise ContentExpiredError if content not found."""
         from bson import ObjectId
 
@@ -284,12 +282,10 @@ class TestContentStorageService:
             created_at=datetime.now(),
         )
 
-        mock_collection = AsyncMock()
-        mock_collection.find_one = AsyncMock(return_value=None)
+        mock_mongodb.find_one = AsyncMock(return_value=None)
 
-        with patch.object(service, "collection", mock_collection):
-            with pytest.raises(ContentExpiredError) as exc_info:
-                await service.expand_content_reference(content_ref, "turn-123")
+        with pytest.raises(ContentExpiredError) as exc_info:
+            await service.expand_content_reference(content_ref, "turn-123")
 
         assert exc_info.value.turn_id == "turn-123"
         assert exc_info.value.document_id == doc_id
