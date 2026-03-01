@@ -247,6 +247,69 @@ describe('useChatRoomCreation', () => {
       expect(roomId!).toBeNull()
       expect(banner.error).toHaveBeenCalledWith('Server down')
     })
+
+    it('should return null when API returns success=false (line 142)', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: false,
+        error: 'Rate limited',
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      let roomId: string | null
+      await act(async () => {
+        roomId = await result.current.createRoomWithMessage('Hello')
+      })
+
+      expect(roomId!).toBeNull()
+      expect(banner.error).toHaveBeenCalledWith('Rate limited')
+    })
+
+    it('should return null when room_id is missing (line 130)', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: '' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      let roomId: string | null
+      await act(async () => {
+        roomId = await result.current.createRoomWithMessage('Hello')
+      })
+
+      expect(roomId!).toBeNull()
+      expect(banner.error).toHaveBeenCalledWith('Room created but no room_id returned')
+    })
+
+    it('should return null when room object is null (line 142)', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: null,
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      let roomId: string | null
+      await act(async () => {
+        roomId = await result.current.createRoomWithMessage('Hello')
+      })
+
+      expect(roomId!).toBeNull()
+      expect(banner.error).toHaveBeenCalledWith('Failed to create room')
+    })
+
+    it('should display generic error for non-Error exceptions', async () => {
+      mockCreateNewRoom.mockRejectedValue('string error')
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello')
+      })
+
+      expect(banner.error).toHaveBeenCalledWith('Failed to create room')
+    })
   })
 
   describe('createAndNavigate', () => {

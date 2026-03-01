@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, afterEach } from 'vitest'
+import '@testing-library/jest-dom/vitest'
 import { server } from './msw-server'
 
 beforeAll(() => {

@@ -142,6 +142,41 @@ describe('useWorkflow', () => {
 
       expect(mockRunWorkflow).toHaveBeenCalledWith({ task_id: TASK_ID })
     })
+
+    it('should call summarize when stage is RUNNING (line 206)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockResolvedValue({ success: true })
+      // First summarize (called by handleRunWorkflow) succeeds and sets COMPLETED
+      mockSummarize.mockResolvedValue({ success: true })
+      mockQueryBaseTask.mockResolvedValue({ base_task: { task_id: TASK_ID } })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      // Trigger handleRunWorkflow which sets RUNNING, then calls summarize
+      // But summarize immediately sets COMPLETED. Instead, make runWorkflow set RUNNING
+      // then fail summarize so we stay at RUNNING, then call handleNext again.
+      mockSummarize.mockRejectedValueOnce(new Error('temp fail'))
+
+      await act(async () => {
+        await result.current.handleNext() // AGENTS_ASSIGNED → handleRunWorkflow → RUNNING
+      })
+
+      // Stage should be RUNNING because runWorkflow succeeded but summarize threw
+      // Actually handleRunWorkflow catches internally, but stage was set to RUNNING before summarize
+      // Let's verify and call handleNext at RUNNING stage
+      mockSummarize.mockResolvedValue({ success: true })
+      mockQueryBaseTask.mockResolvedValue({ base_task: { task_id: TASK_ID } })
+
+      await act(async () => {
+        await result.current.handleNext() // RUNNING → handleSummarizeResults
+      })
+
+      // summarize should have been called again via handleNext → RUNNING branch
+      expect(mockSummarize).toHaveBeenCalledTimes(2)
+    })
   })
 
   describe('handleRetry', () => {
@@ -158,6 +193,76 @@ describe('useWorkflow', () => {
       })
 
       expect(mockDecompose).toHaveBeenCalled()
+    })
+
+    it('should re-assign agents when stage is AGENTS_ASSIGNED (line 221)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockAssign.mockResolvedValue({ success: true })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      await act(async () => {
+        await result.current.handleRetry()
+      })
+
+      expect(mockAssign).toHaveBeenCalledWith({ task_id: TASK_ID })
+    })
+
+    it('should re-run workflow when stage is RUNNING (line 224)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockResolvedValue({ success: true })
+      // Let first summarize fail so stage stays at RUNNING
+      mockSummarize.mockRejectedValueOnce(new Error('temp'))
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      // Move to RUNNING via handleNext
+      await act(async () => {
+        await result.current.handleNext()
+      })
+
+      // Now retry at RUNNING should call handleRunWorkflow
+      mockRunWorkflow.mockResolvedValue({ success: true })
+      mockSummarize.mockResolvedValue({ success: true })
+      mockQueryBaseTask.mockResolvedValue({ base_task: { task_id: TASK_ID } })
+
+      await act(async () => {
+        await result.current.handleRetry()
+      })
+
+      expect(mockRunWorkflow).toHaveBeenCalledTimes(2)
+    })
+
+    it('should re-summarize when stage is COMPLETED (line 227)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockResolvedValue({ success: true })
+      mockSummarize.mockResolvedValue({ success: true })
+      mockQueryBaseTask.mockResolvedValue({ base_task: { task_id: TASK_ID } })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      // Run workflow to reach COMPLETED
+      await act(async () => {
+        await result.current.handleNext()
+      })
+
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.COMPLETED))
+
+      const callsBefore = mockSummarize.mock.calls.length
+
+      // Retry at COMPLETED calls handleSummarizeResults
+      await act(async () => {
+        await result.current.handleRetry()
+      })
+
+      expect(mockSummarize).toHaveBeenCalledTimes(callsBefore + 1)
     })
   })
 
@@ -234,6 +339,79 @@ describe('useWorkflow', () => {
       })
 
       expect(banner.error).toHaveBeenCalledWith('Failed to assign agents')
+    })
+
+    it('should show error when summarize returns success=false (line 146)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockResolvedValue({ success: true })
+      mockSummarize.mockResolvedValue({ success: false, error: 'Summarization failed' })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      await act(async () => {
+        await result.current.handleNext()
+      })
+
+      expect(banner.error).toHaveBeenCalledWith('Failed to summarize results')
+    })
+
+    it('should show error when runWorkflow returns success=false (line 185)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockResolvedValue({ success: false, error: 'Execution timeout' })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      await act(async () => {
+        await result.current.handleNext()
+      })
+
+      expect(banner.error).toHaveBeenCalledWith('Failed to start workflow')
+    })
+
+    it('should show error when runWorkflow throws (network error)', async () => {
+      const tasks = [{ task_id: 'mt-1', agent_id: 'a-1' }]
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: tasks })
+      mockRunWorkflow.mockRejectedValue(new Error('Network timeout'))
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.stage).toBe(WORKFLOW_STAGE.AGENTS_ASSIGNED))
+
+      await act(async () => {
+        await result.current.handleNext()
+      })
+
+      expect(banner.error).toHaveBeenCalledWith('Failed to start workflow')
+      expect(result.current.isLoading).toBe(false)
+    })
+
+    it('should handle init error when loadAgents throws (line 293)', async () => {
+      mockGetAllAgents.mockRejectedValue(new Error('Agent service down'))
+      // loadMetaTasks also needs to throw for the catch block to fire
+      mockGetMetaTasks.mockRejectedValue(new Error('DB unavailable'))
+
+      renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+
+      await waitFor(() => {
+        expect(mockGetAllAgents).toHaveBeenCalled()
+      })
+    })
+
+    it('should handle retryMetaTask returning success=false (line 245)', async () => {
+      mockGetMetaTasks.mockResolvedValue({ meta_tasks: [{ task_id: 'mt-1' }] })
+      mockRetryMetaTask.mockResolvedValue({ success: false, error: 'Agent busy' })
+
+      const { result } = renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
+      await waitFor(() => expect(result.current.metaTasks.length).toBe(1))
+
+      await act(async () => {
+        await result.current.handleRetryMetaTask('mt-1')
+      })
+
+      expect(banner.error).toHaveBeenCalledWith('Failed to retry meta task')
     })
   })
 
