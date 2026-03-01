@@ -14,9 +14,10 @@ class MockResizeObserver {
 globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
 vi.mock('@/components/agent-selector', () => ({
-  AgentSelector: ({ selectedAgents, onAgentAdd, availableAgents, loading, error }: {
+  AgentSelector: ({ selectedAgents, onAgentAdd, onAgentRemove, availableAgents, loading, error }: {
     selectedAgents: Record<string, Agent>
     onAgentAdd: (agent: Agent) => void
+    onAgentRemove: (agentId: string) => void
     availableAgents: Agent[]
     loading: boolean
     error: string | null
@@ -33,7 +34,12 @@ vi.mock('@/components/agent-selector', () => ({
           </button>
         ))}
       {Object.values(selectedAgents).map(a => (
-        <span key={a.agent_id} data-testid={`selected-${a.agent_id}`}>{a.agent_card.name}</span>
+        <span key={a.agent_id} data-testid={`selected-${a.agent_id}`}>
+          {a.agent_card.name}
+          <button data-testid={`remove-${a.agent_id}`} onClick={() => onAgentRemove(a.agent_id)}>
+            Remove
+          </button>
+        </span>
       ))}
     </div>
   ),
@@ -255,6 +261,30 @@ describe('RoomSettingForm', () => {
       await user.click(screen.getByTestId('add-agent-1'))
 
       expect(screen.getByTestId('selected-agent-1')).toBeInTheDocument()
+    })
+
+    it('should remove agent when clicking remove button (lines 137-143)', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <RoomSettingForm
+          {...defaultProps}
+          availableAgents={mockAgents}
+          requireRoomName={false}
+        />
+      )
+
+      // Add agent first
+      await user.click(screen.getByTestId('add-agent-1'))
+      expect(screen.getByTestId('selected-agent-1')).toBeInTheDocument()
+
+      // Remove it
+      await user.click(screen.getByTestId('remove-agent-1'))
+
+      // Should no longer be in selected list
+      expect(screen.queryByTestId('selected-agent-1')).not.toBeInTheDocument()
+      // Should reappear as addable
+      expect(screen.getByTestId('add-agent-1')).toBeInTheDocument()
     })
 
     it('should include selected agents in onSubmit', async () => {

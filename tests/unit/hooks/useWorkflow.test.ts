@@ -389,15 +389,29 @@ describe('useWorkflow', () => {
     })
 
     it('should handle init error when loadAgents throws (line 293)', async () => {
+      // To hit the outer initializeWorkflow catch (L292-296), we need an
+      // error to escape one of the inner callbacks' own try/catch. We achieve
+      // this by making getAllAgents reject, which enters loadAgents' catch,
+      // and then making banner.error itself throw — the re-thrown error
+      // propagates to the outer catch.
       mockGetAllAgents.mockRejectedValue(new Error('Agent service down'))
-      // loadMetaTasks also needs to throw for the catch block to fire
-      mockGetMetaTasks.mockRejectedValue(new Error('DB unavailable'))
+      const bannerError = banner.error as ReturnType<typeof vi.fn>
+      bannerError.mockImplementationOnce(() => {
+        throw new Error('banner.error also crashed')
+      })
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
       renderHook(() => useWorkflow({ baseTaskId: TASK_ID }))
 
       await waitFor(() => {
-        expect(mockGetAllAgents).toHaveBeenCalled()
+        expect(consoleSpy).toHaveBeenCalledWith(
+          'Error initializing workflow:',
+          expect.any(Error)
+        )
       })
+
+      consoleSpy.mockRestore()
     })
 
     it('should handle retryMetaTask returning success=false (line 245)', async () => {
