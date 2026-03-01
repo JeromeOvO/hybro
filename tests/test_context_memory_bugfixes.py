@@ -96,16 +96,23 @@ class TestCompactionSweep:
         mock_compaction_svc = AsyncMock()
         mock_compaction_svc.compact_if_needed = AsyncMock(return_value=mock_result)
 
-        mock_rooms_coll = MagicMock()
-        mock_rooms_cursor = AsyncMock()
-        mock_rooms_cursor.__aiter__ = AsyncMock(return_value=iter([]))
-        mock_rooms_coll.find.return_value = mock_rooms_cursor
-
-        async def _room_docs():
+        # Build a chainable cursor mock for room_memories_collection.find().batch_size()
+        async def _room_mem_docs():
             yield {"room_id": "room_1"}
 
+        mock_mem_cursor = MagicMock()
+        mock_mem_cursor.batch_size.return_value = _room_mem_docs()
+
         mock_mem_coll = MagicMock()
-        mock_mem_coll.find.return_value = _room_docs()
+        mock_mem_coll.find.return_value = mock_mem_cursor
+
+        # Build async cursor for rooms_collection.find() (active rooms)
+        async def _no_active_rooms():
+            return
+            yield  # noqa: makes this an async generator
+
+        mock_rooms_coll = MagicMock()
+        mock_rooms_coll.find.return_value = _no_active_rooms()
 
         mock_mongodb = MagicMock()
         mock_mongodb.room_memories_collection = mock_mem_coll
@@ -128,21 +135,31 @@ class TestCompactionSweep:
 
         sweep = CompactionSweep(interval_minutes=60)
 
+        mock_result = CompactionResult(
+            room_id="idle_room",
+            compacted_count=1,
+            tokens_saved=100,
+        )
         mock_compaction_svc = AsyncMock()
-        mock_compaction_svc.compact_if_needed = AsyncMock(return_value=None)
+        mock_compaction_svc.compact_if_needed = AsyncMock(return_value=mock_result)
 
+        # Active rooms cursor (rooms with processing_message_id set)
         async def _active_rooms():
             yield {"room_id": "active_room"}
 
         mock_rooms_coll = MagicMock()
         mock_rooms_coll.find.return_value = _active_rooms()
 
+        # Room memories cursor: 2 rooms (one active, one idle)
         async def _room_mem_docs():
             yield {"room_id": "active_room"}
             yield {"room_id": "idle_room"}
 
+        mock_mem_cursor = MagicMock()
+        mock_mem_cursor.batch_size.return_value = _room_mem_docs()
+
         mock_mem_coll = MagicMock()
-        mock_mem_coll.find.return_value = _room_mem_docs()
+        mock_mem_coll.find.return_value = mock_mem_cursor
 
         mock_mongodb = MagicMock()
         mock_mongodb.room_memories_collection = mock_mem_coll
@@ -265,7 +282,7 @@ class TestMemorySearchHydration:
         mock_coll = MagicMock()
         mock_coll.find.return_value = _mock_cursor()
 
-        with patch("database.mongodb.mongodb") as mock_mongodb:
+        with patch("services.memory_search_service.mongodb") as mock_mongodb:
             mock_mongodb.conversation_content_collection = mock_coll
             await service._hydrate_results_from_storage(results, "room_1")
 
@@ -294,7 +311,7 @@ class TestMemorySearchHydration:
 
         mock_coll = MagicMock()
 
-        with patch("database.mongodb.mongodb") as mock_mongodb:
+        with patch("services.memory_search_service.mongodb") as mock_mongodb:
             mock_mongodb.conversation_content_collection = mock_coll
             await service._hydrate_results_from_storage(results, "room_1")
 
@@ -357,6 +374,14 @@ class TestLegacyTokenFallback:
     def test_select_turns_within_budget_handles_zero_tokens(self, mock_compaction_config):
         from services.context_assembly_service import ContextAssemblyService
 
+        mock_compaction_config.context_model_window = 32000
+        mock_compaction_config.context_system_prompt_tokens = 2000
+        mock_compaction_config.context_tool_schema_tokens = 3000
+        mock_compaction_config.context_response_reserve_tokens = 4000
+        mock_compaction_config.context_room_pct = 0.15
+        mock_compaction_config.context_history_pct = 0.60
+        mock_compaction_config.context_task_pct = 0.25
+
         service = ContextAssemblyService()
 
         legacy_turn = _make_turn(
@@ -389,6 +414,14 @@ class TestSearchToContextIntegration:
     def test_search_results_appear_in_supervisor_context(self, mock_compaction_config):
         from models.search import MemorySearchResult, MemorySourceType
         from services.context_assembly_service import ContextAssemblyService
+
+        mock_compaction_config.context_model_window = 32000
+        mock_compaction_config.context_system_prompt_tokens = 2000
+        mock_compaction_config.context_tool_schema_tokens = 3000
+        mock_compaction_config.context_response_reserve_tokens = 4000
+        mock_compaction_config.context_room_pct = 0.15
+        mock_compaction_config.context_history_pct = 0.60
+        mock_compaction_config.context_task_pct = 0.25
 
         service = ContextAssemblyService()
 

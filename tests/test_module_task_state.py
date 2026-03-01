@@ -1,0 +1,205 @@
+"""
+Unit tests for TaskStateManager module.
+
+Tests cover:
+- get_task: null-safe accessor
+- state_str: enum/string conversion
+- transition_task: terminal-state guard, state mutation, persist/notify flags
+- cancel_remaining_queue: batch cancellation
+"""
+
+import pytest
+from collections import deque
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from a2a.types import TaskState, TaskStatus
+
+from modules.TaskStateManager import TaskStateManager, get_task, state_str
+from models.room import RoomAgentMessage
+
+
+def _make_message_with_task(state: TaskState | None = None) -> RoomAgentMessage:
+    """Helper to create a RoomAgentMessage with an embedded Task."""
+    task = MagicMock()
+    if state is not None:
+        task.status = TaskStatus(state=state)
+    else:
+        task.status = None
+
+    content = MagicMock()
+    content.message_task = task
+
+    msg = MagicMock(spec=RoomAgentMessage)
+    msg.message_content = content
+    msg.message_id = "msg-001"
+    msg.task_updated_at = None
+    msg.step_number = 1
+    msg.total_steps = 3
+    msg.task_content = "Test task"
+    return msg
+
+
+# =============================================================================
+# get_task Tests
+# =============================================================================
+
+
+class TestGetTask:
+    def test_returns_task_when_present(self):
+        msg = _make_message_with_task(TaskState.submitted)
+        assert get_task(msg) is not None
+
+    def test_returns_none_when_content_is_none(self):
+        msg = MagicMock()
+        msg.message_content = None
+        assert get_task(msg) is None
+
+    def test_returns_none_when_task_is_none(self):
+        msg = MagicMock()
+        msg.message_content = MagicMock()
+        msg.message_content.message_task = None
+        assert get_task(msg) is None
+
+
+# =============================================================================
+# state_str Tests
+# =============================================================================
+
+
+class TestStateStr:
+    def test_extracts_enum_value(self):
+        assert state_str(TaskState.working) == "working"
+
+    def test_passes_through_string(self):
+        assert state_str("custom-state") == "custom-state"
+
+    def test_handles_non_enum_non_string(self):
+        assert state_str(42) == "42"
+
+
+# =============================================================================
+# transition_task Tests
+# =============================================================================
+
+
+class TestTransitionTask:
+    @pytest.fixture
+    def tsm(self):
+        room_svc = MagicMock()
+        room_svc.update_agent_message_by_message_id = AsyncMock(
+            return_value=MagicMock(success=True)
+        )
+        notif_svc = MagicMock()
+        notif_svc.send_task_update = AsyncMock()
+        return TaskStateManager(room_svc, notif_svc)
+
+    @pytest.mark.asyncio
+    async def test_transitions_non_terminal_state(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        await tsm.transition_task(msg, TaskState.working)
+
+        task = get_task(msg)
+        assert task.status.state == TaskState.working
+
+    @pytest.mark.asyncio
+    async def test_blocks_terminal_to_terminal_transition(self, tsm):
+        """Completed task should not be overwritten."""
+        msg = _make_message_with_task(TaskState.completed)
+        await tsm.transition_task(msg, TaskState.failed)
+
+        task = get_task(msg)
+        assert task.status.state == TaskState.completed
+
+    @pytest.mark.asyncio
+    async def test_blocks_failed_to_working_transition(self, tsm):
+        msg = _make_message_with_task(TaskState.failed)
+        await tsm.transition_task(msg, TaskState.working)
+
+        task = get_task(msg)
+        assert task.status.state == TaskState.failed
+
+    @pytest.mark.asyncio
+    async def test_persists_by_default(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        await tsm.transition_task(msg, TaskState.working)
+        tsm.room_services.update_agent_message_by_message_id.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_persist_when_disabled(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        await tsm.transition_task(msg, TaskState.working, persist=False)
+        tsm.room_services.update_agent_message_by_message_id.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notifies_when_ctx_provided(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        ctx = MagicMock()
+        await tsm.transition_task(msg, TaskState.working, ctx=ctx)
+        tsm.notification_service.send_task_update.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_notify_when_no_ctx(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        await tsm.transition_task(msg, TaskState.working)
+        tsm.notification_service.send_task_update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_notify_when_disabled(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        ctx = MagicMock()
+        await tsm.transition_task(msg, TaskState.working, ctx=ctx, notify=False)
+        tsm.notification_service.send_task_update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_attaches_error_message(self, tsm):
+        msg = _make_message_with_task(TaskState.submitted)
+        await tsm.transition_task(msg, TaskState.failed, error="boom")
+
+        task = get_task(msg)
+        assert task.status.state == TaskState.failed
+        assert task.status.message is not None
+
+    @pytest.mark.asyncio
+    async def test_noop_when_no_task(self, tsm):
+        msg = MagicMock()
+        msg.message_content = None
+        await tsm.transition_task(msg, TaskState.working)
+        tsm.room_services.update_agent_message_by_message_id.assert_not_called()
+
+
+# =============================================================================
+# cancel_remaining_queue Tests
+# =============================================================================
+
+
+class TestCancelRemainingQueue:
+    @pytest.fixture
+    def tsm(self):
+        room_svc = MagicMock()
+        room_svc.update_agent_message_by_message_id = AsyncMock(
+            return_value=MagicMock(success=True)
+        )
+        notif_svc = MagicMock()
+        return TaskStateManager(room_svc, notif_svc)
+
+    @pytest.mark.asyncio
+    async def test_cancels_current_and_queued(self, tsm):
+        current = _make_message_with_task(TaskState.working)
+        q1 = _make_message_with_task(TaskState.submitted)
+        q2 = _make_message_with_task(TaskState.submitted)
+
+        await tsm.cancel_remaining_queue(deque([q1, q2]), current)
+
+        assert get_task(current).status.state == TaskState.canceled
+        assert get_task(q1).status.state == TaskState.canceled
+        assert get_task(q2).status.state == TaskState.canceled
+
+    @pytest.mark.asyncio
+    async def test_skips_already_terminal_in_queue(self, tsm):
+        already_done = _make_message_with_task(TaskState.completed)
+        pending = _make_message_with_task(TaskState.submitted)
+
+        await tsm.cancel_remaining_queue(deque([already_done, pending]))
+
+        assert get_task(already_done).status.state == TaskState.completed
+        assert get_task(pending).status.state == TaskState.canceled
