@@ -37,11 +37,13 @@ from modules.TaskStateManager import (
     state_str,
 )
 from services.a2a_constants import (
+    INTERACTIVE_STATES,  # noqa: F401 — needed by callers / upcoming usage
     TERMINAL_STATES,
     SyntheticTaskId,
     is_failure_state,
     is_terminal_state,
 )
+from services.task_notification_service import notify_task_update
 
 logger = get_logger(__name__)
 
@@ -394,7 +396,16 @@ class ResponseProcessor:
         logger.info(
             "ResponseProcessor: Streaming cancelled for message %s", ctx.user_message_id
         )
-        await self.tsm.transition_task(ctx.current_message, TaskState.canceled, ctx=ctx)
+        await self.tsm.transition_task(
+            ctx.current_message, TaskState.canceled, persist=True
+        )
+        if ctx.task_info:
+            await notify_task_update(
+                message_id=ctx.current_message.message_id,
+                state=TaskState.canceled,
+                room_id=ctx.room_id,
+                user_id=ctx.current_message.user_id or "",
+            )
         # NOTE: Do NOT send processing_status here — QueueExecutor handles
         # workflow-level SSE after all siblings are persisted.
         await self._try_cancel_remote_task(ctx.current_message, ctx.agent_card)
@@ -410,8 +421,17 @@ class ResponseProcessor:
         error_message = a2a_response.root.error.model_dump_json()
         logger.error("ResponseProcessor: Agent error: %s", error_message)
         await self.tsm.transition_task(
-            ctx.current_message, TaskState.failed, error=error_message, ctx=ctx
+            ctx.current_message, TaskState.failed, error=error_message,
+            persist=True,
         )
+        if ctx.task_info:
+            await notify_task_update(
+                message_id=ctx.current_message.message_id,
+                state=TaskState.failed,
+                room_id=ctx.room_id,
+                user_id=ctx.current_message.user_id or "",
+                error=error_message,
+            )
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
         return ProcessingStatus.FAILED, streaming_state.full_response_text
@@ -499,7 +519,7 @@ class ResponseProcessor:
         if task:
             if is_terminal_state(state):
                 await self.tsm.transition_task(
-                    ctx.current_message, state, persist=True, notify=False
+                    ctx.current_message, state, persist=True
                 )
             else:
                 task.status = TaskStatus(state=state)
@@ -613,8 +633,13 @@ class ResponseProcessor:
             await self.tsm.transition_task(
                 ctx.current_message,
                 TaskState.completed,
-                ctx=ctx,
-                content=streaming_state.full_response_text,
+                persist=True,
+            )
+            await notify_task_update(
+                message_id=ctx.current_message.message_id,
+                state=TaskState.completed,
+                room_id=ctx.room_id,
+                user_id=ctx.current_message.user_id or "",
             )
 
         if already_terminal:
@@ -631,13 +656,17 @@ class ResponseProcessor:
                 if not final_error:
                     final_error = f"Task {final_state_value}"
 
-            await self.tsm.notify_task(
-                ctx,
-                final_state_value,
-                content=streaming_state.full_response_text
-                if final_state == TaskState.completed
-                else None,
-                error=final_error,
+            # Persist streaming content before notifying so DB has the correct data
+            if streaming_state.full_response_text:
+                ctx.current_message.message_content.message_text = (
+                    streaming_state.full_response_text
+                )
+            await self.tsm.persist_message(ctx.current_message)
+            await notify_task_update(
+                message_id=ctx.current_message.message_id,
+                state=final_state,
+                room_id=ctx.room_id,
+                user_id=ctx.current_message.user_id or "",
             )
 
             if is_failure_state(final_state):
@@ -769,8 +798,16 @@ class ResponseProcessor:
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled, ctx=ctx if task_info else None
+                current_message, TaskState.canceled,
+                persist=True,
             )
+            if task_info:
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.canceled,
+                    room_id=room_id,
+                    user_id=current_message.user_id or "",
+                )
             return False, "", None
 
         # Call the agent
@@ -804,8 +841,16 @@ class ResponseProcessor:
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled, ctx=ctx if task_info else None
+                current_message, TaskState.canceled,
+                persist=True,
             )
+            if task_info:
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.canceled,
+                    room_id=room_id,
+                    user_id=current_message.user_id or "",
+                )
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None
         except Exception as exc:
@@ -814,8 +859,16 @@ class ResponseProcessor:
                 current_message,
                 TaskState.failed,
                 error=str(exc),
-                ctx=ctx if task_info else None,
+                persist=True,
             )
+            if task_info:
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
+                    room_id=room_id,
+                    user_id=current_message.user_id or "",
+                    error=str(exc),
+                )
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
 
@@ -826,8 +879,16 @@ class ResponseProcessor:
                 message_id,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled, ctx=ctx if task_info else None
+                current_message, TaskState.canceled,
+                persist=True,
             )
+            if task_info:
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.canceled,
+                    room_id=room_id,
+                    user_id=current_message.user_id or "",
+                )
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None
 
@@ -867,8 +928,13 @@ class ResponseProcessor:
             await self.tsm.transition_task(
                 current_message,
                 TaskState.completed,
-                ctx=ctx if task_info else None,
-                content=full_response_text,
+                persist=True,
+            )
+            await notify_task_update(
+                message_id=current_message.message_id,
+                state=TaskState.completed,
+                room_id=room_id,
+                user_id=current_message.user_id or "",
             )
 
             if not task_info:
@@ -932,8 +998,16 @@ class ResponseProcessor:
                     message_id,
                 )
                 await self.tsm.transition_task(
-                    current_message, TaskState.canceled, ctx=ctx if task_info else None
+                    current_message, TaskState.canceled,
+                    persist=True,
                 )
+                if task_info:
+                    await notify_task_update(
+                        message_id=current_message.message_id,
+                        state=TaskState.canceled,
+                        room_id=room_id,
+                        user_id=current_message.user_id or "",
+                    )
                 await self._try_cancel_remote_task(current_message, agent_card)
                 return False, "", None
 
@@ -953,6 +1027,18 @@ class ResponseProcessor:
                 logger.warning(
                     "ResponseProcessor: Polling timed out for task %s",
                     message_id,
+                )
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error="Task polling timed out",
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=message_id,
+                    state=TaskState.failed,
+                    room_id=ctx.room_id,
+                    user_id=ctx.current_message.user_id or "",
+                    error="Task polling timed out",
                 )
                 return True, None, None
 
@@ -989,11 +1075,11 @@ class ResponseProcessor:
             final_error = extract_error_message(completed_task) or f"Task {state_value}"
 
         if task_info:
-            await self.tsm.notify_task(
-                ctx,
-                state,
-                content=final_content,
-                error=final_error,
+            await notify_task_update(
+                message_id=message_id,
+                state=state,
+                room_id=ctx.room_id,
+                user_id=ctx.current_message.user_id or "",
             )
         else:
             logger.info(

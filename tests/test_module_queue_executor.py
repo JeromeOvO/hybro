@@ -89,7 +89,7 @@ class TestCheckRateLimit:
         assert is_limited is True
         qe.sse_manager.send_rate_limit_error.assert_called_once()
         qe.tsm.transition_task.assert_called_once_with(
-            msg, TaskState.canceled, persist=True, notify=False
+            msg, TaskState.canceled, persist=True
         )
 
     @pytest.mark.asyncio
