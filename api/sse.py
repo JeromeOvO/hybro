@@ -74,6 +74,7 @@ async def stream_room_messages(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Content-Type": "text/event-stream",
+            "X-Accel-Buffering": "no",
         },
     )
 
