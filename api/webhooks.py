@@ -431,8 +431,8 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
         status_event = TaskStatusUpdateEvent.model_validate(payload["statusUpdate"])
         # Convert to Task object (note: no artifacts in status-only update)
         return Task(
-            id=status_event.taskId,
-            context_id=status_event.contextId,
+            id=status_event.task_id,
+            context_id=status_event.context_id,
             status=status_event.status,
         )
 
