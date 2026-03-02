@@ -589,3 +589,201 @@ class TestMaxContextCharsEnforcement:
 
         assert len(result.context) <= MAX_CONTEXT_CHARS + 50
         assert result.was_truncated is True
+
+
+# =========================================================================
+# Test: _parse_v2_action case-insensitive parsing
+# =========================================================================
+
+
+class TestParseV2ActionCaseInsensitive:
+    """Tests for case-insensitive action parsing in _parse_v2_action.
+
+    The LLM may return action strings in any case (DELEGATE, delegate, Delegate).
+    The parser must normalize to lowercase before matching the ActionType enum.
+    """
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        mock_openai = MagicMock()
+        return RoomSupervisorService(openai_service=mock_openai)
+
+    @pytest.mark.parametrize("action_str,expected_action", [
+        ("delegate", "delegate"),
+        ("DELEGATE", "delegate"),
+        ("Delegate", "delegate"),
+        ("synthesize", "synthesize"),
+        ("SYNTHESIZE", "synthesize"),
+        ("clarify", "clarify"),
+        ("CLARIFY", "clarify"),
+        ("done", "done"),
+        ("DONE", "done"),
+        ("Done", "done"),
+    ])
+    def test_parses_any_case(self, service, action_str, expected_action):
+        """Action strings in any case should be recognized."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": action_str,
+            "reasoning": "test",
+            "targets": [],
+            "synthesis_instruction": None,
+            "clarification_question": None,
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType(expected_action)
+
+    def test_unknown_action_defaults_to_done(self, service):
+        """Unrecognized action strings should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": "INVALID_ACTION",
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_missing_action_defaults_to_done(self, service):
+        """Missing action key should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_delegate_with_targets(self, service):
+        """DELEGATE (uppercase) with targets should parse targets correctly."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": "DELEGATE",
+            "reasoning": "Send to agent",
+            "targets": [
+                {"agent_id": "agent-1", "agent_name": "TestAgent", "task": "Do something"},
+            ],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DELEGATE
+        assert len(action.targets) == 1
+        assert action.targets[0].agent_id == "agent-1"
+        assert action.targets[0].task == "Do something"
+
+    def test_null_action_defaults_to_done(self, service):
+        """LLM returning null for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {"action": None, "reasoning": "test", "targets": []}
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_numeric_action_defaults_to_done(self, service):
+        """LLM returning a number for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {"action": 42, "reasoning": "test", "targets": []}
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_object_action_defaults_to_done(self, service):
+        """LLM returning an object for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": {"type": "delegate"},
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+
+# =========================================================================
+# Test: TrajectoryStatus enum serialization (no Pydantic warnings)
+# =========================================================================
+
+
+class TestTrajectoryStatusSerialization:
+    """Verify that SupervisorTrajectory serializes cleanly when status is set
+    via TrajectoryStatus enum members (not raw strings).
+
+    Regression test for the Pydantic serialization warning:
+    'Expected `enum` - serialized value may not be as expected'
+    """
+
+    def test_enum_status_serializes_without_warning(self):
+        """model_dump(mode='json') with enum status should not warn."""
+        import warnings
+        from models.supervisor_v2 import (
+            SupervisorTrajectory,
+            TrajectoryStatus,
+        )
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = TrajectoryStatus.COMPLETED
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            data = trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) == 0
+
+        assert data["status"] == "completed"
+
+    @pytest.mark.parametrize("status", [
+        "completed", "failed", "canceled", "running", "awaiting_input",
+    ])
+    def test_all_statuses_roundtrip_cleanly(self, status):
+        """Every TrajectoryStatus value should serialize and deserialize."""
+        import warnings
+        from models.supervisor_v2 import (
+            SupervisorTrajectory,
+            TrajectoryStatus,
+        )
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = TrajectoryStatus(status)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            data = trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) == 0
+
+        assert data["status"] == status
+
+        restored = SupervisorTrajectory.model_validate(data)
+        assert restored.status == TrajectoryStatus(status)
+
+    def test_raw_string_triggers_pydantic_warning(self):
+        """Assigning a raw string (not enum) to status should trigger a
+        Pydantic serialization warning — proving the old code was broken."""
+        import warnings
+        from models.supervisor_v2 import SupervisorTrajectory
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = "completed"  # type: ignore[assignment]
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) > 0, (
+                "Expected Pydantic warning when status is a raw string, "
+                "not a TrajectoryStatus enum member"
+            )
