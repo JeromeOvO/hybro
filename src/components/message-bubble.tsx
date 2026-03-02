@@ -58,6 +58,9 @@ interface EntityBubbleProps {
  */
 function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const displayContent = message.content || "No message content"
+  const isLongMessage = displayContent.length > 500
+  const [isExpanded, setIsExpanded] = useState(false)
+  const toggleButtonRef = useRef<HTMLButtonElement>(null)
 
   return (
     <div className="flex justify-end w-full">
@@ -70,9 +73,55 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
             {formatTimestamp(message.timestamp)}
           </span>
         </div>
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">
+        <div
+          className={cn(
+            "text-sm leading-relaxed",
+            !isExpanded && isLongMessage ? "line-clamp-4" : "whitespace-pre-wrap"
+          )}
+        >
           <LinkifiedContent content={displayContent} />
         </div>
+
+        {isLongMessage && (
+          <button
+            ref={toggleButtonRef}
+            onClick={() => {
+              const next = !isExpanded
+              const buttonEl = toggleButtonRef.current
+              const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+              const prevBottom = buttonEl?.getBoundingClientRect().bottom
+
+              setIsExpanded(next)
+
+              if (buttonEl && container && !next && typeof prevBottom === 'number') {
+                container.dataset.programmaticScroll = 'true'
+                requestAnimationFrame(() => {
+                  const newBottom = buttonEl.getBoundingClientRect().bottom
+                  const delta = newBottom - prevBottom
+                  if (delta !== 0) {
+                    container.scrollTop += delta
+                  }
+                  requestAnimationFrame(() => {
+                    container.dataset.programmaticScroll = 'false'
+                  })
+                })
+              }
+            }}
+            className="flex items-center gap-1 text-xs mt-3 font-medium transition-colors text-secondary-foreground/70 hover:text-secondary-foreground"
+          >
+            {isExpanded ? (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                Show more
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   )
