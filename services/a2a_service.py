@@ -437,62 +437,6 @@ class A2AService:
 
         raise A2AServiceError(f"Unexpected response kind: {result.kind}")
 
-    async def send_message_with_task_tracking(
-        self,
-        room_id: str,
-        user_id: str,
-        agent_card: AgentCard,
-        message: Message,
-        agent_id: str | None = None,
-        related_message_id: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Send message to agent with task tracking for long-running operations.
-
-        This method:
-        1. Creates a placeholder task record to get message_id and webhook token
-        2. Sends message to agent with push notification config (if supported)
-        3. Handles Message response (fast path) or Task response (async path)
-        4. Returns appropriate response for frontend
-
-        Args:
-            room_id: Room this message belongs to
-            user_id: User who sent the message
-            agent_card: The agent's card
-            message: A2A Message to send
-            agent_id: Optional agent ID for frontend rendering
-            related_message_id: Optional room user message ID that initiated the task
-
-        Returns:
-            For Message response: {"type": "message", "content": "..."}
-            For Task response: {"type": "task", "message_id": "...", "status": "..."}
-            For Interactive states: {"type": "task", "status": "input_required", ...}
-        """
-        # Create task record first
-        task_info = await self.create_task_for_tracking(
-            room_id=room_id,
-            user_id=user_id,
-            agent_card=agent_card,
-            message=message,
-            agent_id=agent_id,
-            related_message_id=related_message_id,
-        )
-
-        # Send message to agent
-        response = await self.send_message_to_tracked_agent(
-            agent_card=agent_card,
-            message=message,
-            message_id=task_info["message_id"],
-            webhook_token=task_info["webhook_token"],
-            context_id=task_info["context_id"],
-        )
-
-        # Add created_at to response if not present
-        if "created_at" not in response and task_info.get("created_at"):
-            response["created_at"] = task_info["created_at"]
-
-        return response
-
     def _message_to_completed_task(self, message: Message, context_id: str) -> Task:
         """Convert a Message response to a completed Task."""
         from a2a.types import Artifact
