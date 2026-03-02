@@ -1151,7 +1151,7 @@ class RoomServices:
         Returns ``False`` if the pending clarification is stale, missing, or
         otherwise invalid — the caller should fall through to a fresh V2 run.
         """
-        from models.supervisor_v2 import RoomConfig, SupervisorTrajectory
+        from models.supervisor_v2 import RoomConfig, SupervisorTrajectory, TrajectoryStatus
 
         original_msg = (
             await self.database_service.get_room_user_message_by_message_id(
@@ -1222,7 +1222,7 @@ class RoomServices:
         # All checks passed — prepare the user message for clarify-resume.
         # Set the user's reply on the trajectory so the supervisor sees it.
         trajectory.clarify_user_reply = message_text
-        trajectory.status = "running"
+        trajectory.status = TrajectoryStatus.RUNNING
 
         agent_registry = self._build_agent_registry(agents, selected_agent_set)
 

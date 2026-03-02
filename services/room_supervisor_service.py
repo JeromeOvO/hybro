@@ -386,13 +386,15 @@ class RoomSupervisorService:
         """Parse the LLM JSON response into a ``SupervisorAction``."""
         from models.supervisor_v2 import DelegateTarget
 
-        action_str = response_json.get("action", "done")
+        raw_action = response_json.get("action", "done")
+        action_str = str(raw_action).lower() if raw_action is not None else "done"
         try:
             action_type = ActionType(action_str)
         except ValueError:
             logger.warning(
-                "Supervisor V2: unknown action '%s', defaulting to DONE",
+                "Supervisor V2: unknown action '%s' (raw: '%s'), defaulting to DONE",
                 action_str,
+                raw_action,
             )
             action_type = ActionType.DONE
 
