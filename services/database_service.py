@@ -973,6 +973,87 @@ class DatabaseService:
             )
             return False
 
+    async def update_agent_message_task_state(
+        self, message_id: str, state: str,
+    ) -> bool:
+        """Update only ``message_content.message_task.status.state`` on an
+        agent message.  Used by HITL to persist input-required / completed."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"message_content.message_task.status.state": state}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to update task state on agent message %s: %s",
+                message_id, e,
+            )
+            return False
+
+    async def _ensure_message_task_metadata(self, message_id: str) -> None:
+        """Ensure ``message_content.message_task.metadata`` is a dict, not null.
+
+        MongoDB's ``$set`` with dotted paths cannot create nested fields when an
+        intermediate element is explicitly ``null``.  This idempotent helper
+        converts a null metadata to ``{}`` so subsequent dotted ``$set`` calls
+        succeed.
+        """
+        await self.mongo.db.room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "message_content.message_task.metadata": None,
+            },
+            {"$set": {"message_content.message_task.metadata": {}}},
+        )
+
+    async def persist_hitl_user_answer(
+        self, message_id: str, user_answer: str,
+    ) -> bool:
+        """Persist the user's HITL answer on the agent message for DB hydration."""
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"message_content.message_task.metadata.user_answer": user_answer}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to persist user answer on agent message %s: %s",
+                message_id, e,
+            )
+            return False
+
+    async def persist_hitl_group_metadata(
+        self,
+        message_id: str,
+        group_id: str,
+        group_total: int | None = None,
+        group_index: int | None = None,
+    ) -> bool:
+        """Persist HITL group context on the agent message for DB hydration."""
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            updates: dict = {
+                "message_content.message_task.metadata.hitl_group_id": group_id,
+            }
+            if group_total is not None:
+                updates["message_content.message_task.metadata.hitl_group_total"] = group_total
+            if group_index is not None:
+                updates["message_content.message_task.metadata.hitl_group_index"] = group_index
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to persist HITL group metadata on agent message %s: %s",
+                message_id, e,
+            )
+            return False
+
     async def enable_task_tracking_on_message(
         self,
         message_id: str,
@@ -1622,13 +1703,18 @@ class DatabaseService:
             return False
 
     async def fenced_update_hitl_request(
-        self, request_id: str, claim_id: str, **updates
+        self, request_id: str, claim_id: str, updates: dict | None = None, **kw_updates
     ) -> bool:
-        """Fenced update: only applies if claim_id matches (ownership check)."""
+        """Fenced update: only applies if claim_id matches (ownership check).
+
+        Accepts updates as a dict (useful when update keys collide with
+        parameter names like ``claim_id``) and/or as keyword arguments.
+        """
+        merged = {**(updates or {}), **kw_updates}
         try:
             result = await self.mongo.db.hitl_requests.update_one(
                 {"request_id": request_id, "claim_id": claim_id},
-                {"$set": updates},
+                {"$set": merged},
             )
             return result.modified_count > 0
         except Exception as e:
@@ -1684,15 +1770,50 @@ class DatabaseService:
             )
             return []
 
+    async def get_hitl_group_requests(
+        self, group_id: str
+    ) -> list[dict]:
+        """Get all HITL requests belonging to a group (any status)."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"group_id": group_id}
+            ).sort("group_index", 1)
+            return await cursor.to_list(length=100)
+        except Exception as e:
+            logger.error("Failed to get HITL group %s: %s", group_id, e)
+            return []
+
+    async def count_pending_in_hitl_group(
+        self, group_id: str
+    ) -> int:
+        """Count how many requests in a group are still pending or processing."""
+        try:
+            return await self.mongo.db.hitl_requests.count_documents(
+                {"group_id": group_id, "status": {"$in": ["pending", "processing"]}}
+            )
+        except Exception as e:
+            logger.error("Failed to count pending in HITL group %s: %s", group_id, e)
+            return -1
+
     async def count_hitl_requests_for_message(
         self, continuation_message_id: str
     ) -> int:
-        """Count active (non-canceled) HITL requests for a continuation message."""
+        """Count distinct clarification rounds for a continuation message.
+
+        Each multi-question group counts as one round (only the first question,
+        ``group_index == 0``, is counted).  Non-grouped requests each count as
+        one round.  Canceled requests are excluded.
+        """
         try:
             return await self.mongo.db.hitl_requests.count_documents(
                 {
                     "continuation_message_id": continuation_message_id,
                     "status": {"$ne": "canceled"},
+                    "$or": [
+                        {"group_index": None},
+                        {"group_index": {"$exists": False}},
+                        {"group_index": 0},
+                    ],
                 }
             )
         except Exception as e:

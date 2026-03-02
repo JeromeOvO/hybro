@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+from uuid import uuid4
 
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
@@ -594,7 +595,7 @@ class RoomMessageCenter:
         continuation: dict,
         paused_message_id: str,
         task_result_text: str | None,
-    ) -> bool:
+    ) -> RunStatus:
         """Resume a V2 supervisor loop after an interrupt.
 
         Handles all three interrupt kinds:
@@ -627,7 +628,7 @@ class RoomMessageCenter:
                 "in continuation. message_id=%s",
                 paused_message_id,
             )
-            return False
+            return RunStatus.FAILED
 
         # 1. Deserialize trajectory
         try:
@@ -645,7 +646,7 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: corrupted trajectory data",
             )
-            return False
+            return RunStatus.FAILED
 
         # 2. Read and validate interrupt_kind
         raw_kind = continuation.get("interrupt_kind", "push_notification")
@@ -767,7 +768,7 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: room not found",
             )
-            return False
+            return RunStatus.FAILED
 
         # 5b. Refresh conversation_context from room memory (§7.6).
         # The serialized context may be stale after a push-notification pause
@@ -914,7 +915,7 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: executor failed",
             )
-            return False
+            return RunStatus.FAILED
 
         # 8. Handle the result
         await self._handle_v2_run_result(
@@ -935,7 +936,7 @@ class RoomMessageCenter:
                 "status": result.status,
             },
         )
-        return result.status != RunStatus.FAILED
+        return result.status
 
     @staticmethod
     def _append_paused_result_to_trajectory(
@@ -1140,23 +1141,43 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
+                synthesis_emitted = False
                 if result.synthesis_text:
+                    synth_message_id = str(uuid4())
+                    try:
+                        await self.sse_manager.send_task_submitted(
+                            room_id=room_id,
+                            message_id=synth_message_id,
+                            task_id=synth_message_id,
+                            agent_name="Agent",
+                            agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+                            status="working",
+                            related_message_id=user_message_id,
+                            task_content="Summarizing agent responses…",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "RoomMessageCenter: Failed to send synthesis task_submitted SSE"
+                        )
                     try:
                         await self.room_coordinator_service.emit_synthesis_message(
                             room_id=room_id,
                             room_user_message_id=user_message_id,
                             synthesis_text=result.synthesis_text,
                             coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+                            message_id=synth_message_id,
                         )
+                        synthesis_emitted = True
                     except Exception as e:
                         logger.error(
                             "RoomMessageCenter: V2 synthesis emission failed: %s",
                             e,
                             exc_info=True,
                         )
-                await self.room_coordinator_service.on_room_user_message_completed(
-                    room_id, user_message_id
-                )
+                if not synthesis_emitted:
+                    await self.room_coordinator_service.on_room_user_message_completed(
+                        room_id, user_message_id
+                    )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
@@ -1363,19 +1384,26 @@ class RoomMessageCenter:
                     message_id, continuation
                 )
             try:
-                result = await self._resume_supervisor_v2(
+                resume_status = await self._resume_supervisor_v2(
                     continuation, message_id, task_result_text
                 )
-                # On success, clear the continuation (it was re-saved above).
-                if interrupt_kind == "hitl_supervisor":
-                    await self.database_service.get_and_clear_continuation_on_user_message(
-                        message_id
-                    )
-                else:
-                    await self.database_service.get_and_clear_continuation_on_message(
-                        message_id
-                    )
-                return result
+                # Only clear the old continuation if the supervisor loop
+                # actually finished.  When it re-interrupted (e.g. a second
+                # HITL CLARIFY), SupervisorExecutor saved a fresh continuation
+                # that must NOT be cleared.
+                if resume_status not in (
+                    RunStatus.AWAITING_INPUT,
+                    RunStatus.PAUSED,
+                ):
+                    if interrupt_kind == "hitl_supervisor":
+                        await self.database_service.get_and_clear_continuation_on_user_message(
+                            message_id
+                        )
+                    else:
+                        await self.database_service.get_and_clear_continuation_on_message(
+                            message_id
+                        )
+                return resume_status != RunStatus.FAILED
             except Exception:
                 logger.exception(
                     "RoomMessageCenter: V2 resume failed — continuation preserved "

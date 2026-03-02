@@ -212,6 +212,7 @@ class RoomCoordinatorService:
         room_user_message_id: str,
         synthesis_text: str,
         coordinator_agent_id: str = CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+        message_id: str | None = None,
     ) -> None:
         """Emit a synthesis/summary message to the room.
 
@@ -223,12 +224,14 @@ class RoomCoordinatorService:
             room_user_message_id: The user message ID this synthesis relates to
             synthesis_text: The synthesis text content
             coordinator_agent_id: The agent ID to use for the message
+            message_id: Optional pre-generated message ID (for linking with task_submitted)
         """
         await self._create_and_emit_summary_message(
             room_id=room_id,
             room_user_message_id=room_user_message_id,
             summary_text=synthesis_text,
             coordinator_agent_id=coordinator_agent_id,
+            message_id=message_id,
         )
 
     async def _create_and_emit_summary_message(
@@ -237,6 +240,7 @@ class RoomCoordinatorService:
         room_user_message_id: str,
         summary_text: str,
         coordinator_agent_id: str = CoordinatorAgentId.NON_DEBATE_SUMMARY,
+        message_id: str | None = None,
     ) -> None:
         """
         Create a coordinator summary RoomAgentMessage and emit it via SSE.
@@ -247,6 +251,8 @@ class RoomCoordinatorService:
             summary_text: The summary text content
             coordinator_agent_id: The agent ID to use for the summary message
                                   (e.g., "debate_summary" or "non_debate_summary")
+            message_id: Optional pre-generated message ID (reuses existing
+                        task_submitted bubble instead of creating a new one)
         """
         # Build an A2A-style message and task for storage, similar to
         # RoomServices._generate_agent_message_content.
@@ -280,7 +286,7 @@ class RoomCoordinatorService:
 
         summary_agent_message = RoomAgentMessage(
             room_id=room_id,
-            message_id=str(uuid4()),
+            message_id=message_id or str(uuid4()),
             agent_id=coordinator_agent_id,
             related_message_id=room_user_message_id,
             user_id=user_id,

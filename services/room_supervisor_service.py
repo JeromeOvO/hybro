@@ -66,8 +66,18 @@ Output ONLY valid JSON matching the schema below.
    - Include relevant context from prior results when the agent needs it.
 2. SYNTHESIZE: All needed agent results are collected. Produce a unified answer.
    - Only use when 2+ agents have responded and their results need combining.
-3. CLARIFY: The user's message is ambiguous. Ask a clarification question.
-   - Use sparingly — only when you truly cannot determine which agent to use.
+3. CLARIFY: The user's message is ambiguous or needs confirmation.
+   - Use sparingly — only when you truly cannot proceed without user input.
+   - Put each question in a separate object inside the "questions" array.
+     Each object has "prompt" (the question text), "prompt_type", and optional "choices".
+   - "prompt_type" controls how the user responds:
+     * "text"         — open-ended reply (default). Use when you need free-form input.
+     * "choice"       — multiple-choice. Provide a "choices" array. Use when there are
+                         clear, enumerable options (e.g., destinations, themes, formats).
+     * "confirmation" — yes / no approval. Use when you need the user to approve or
+                         reject a proposed plan or action before proceeding.
+   - When you need multiple pieces of information, create a separate question for each.
+     The user will see them as paginated cards and answer one at a time.
 4. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
 
 ## Rules
@@ -89,7 +99,9 @@ Output ONLY valid JSON matching the schema below.
     {{"agent_id": "uuid", "agent_name": "Name", "task": "What to do"}}
   ],
   "synthesis_instruction": "How to combine results" | null,
-  "clarification_question": "What to ask the user" | null
+  "questions": [
+    {{"prompt": "Your question", "prompt_type": "text" | "choice" | "confirmation", "choices": ["A", "B"] | null}}
+  ] | null
 }}"""
 
 SUPERVISOR_V2_USER_PROMPT = """{debate_mode_note}
@@ -384,7 +396,7 @@ class RoomSupervisorService:
 
     def _parse_v2_action(self, response_json: dict) -> SupervisorAction:
         """Parse the LLM JSON response into a ``SupervisorAction``."""
-        from models.supervisor_v2 import DelegateTarget
+        from models.supervisor_v2 import ClarifyQuestion, DelegateTarget
 
         raw_action = response_json.get("action", "done")
         action_str = str(raw_action).lower() if raw_action is not None else "done"
@@ -422,12 +434,58 @@ class RoomSupervisorService:
             )
             action_type = ActionType.DONE
 
+        # Sanitize CLARIFY fields — LLM may return unexpected types
+        raw_prompt_type = response_json.get("prompt_type")
+        prompt_type = (
+            raw_prompt_type
+            if isinstance(raw_prompt_type, str)
+            and raw_prompt_type in ("text", "choice", "confirmation")
+            else None
+        )
+
+        raw_choices = response_json.get("choices")
+        choices = (
+            raw_choices
+            if isinstance(raw_choices, list)
+            and all(isinstance(c, str) for c in raw_choices)
+            else None
+        )
+
+        # Parse structured questions array (multi-question CLARIFY)
+        parsed_questions: list[ClarifyQuestion] | None = None
+        raw_questions = response_json.get("questions")
+        if isinstance(raw_questions, list) and raw_questions:
+            valid = []
+            for q in raw_questions:
+                if not isinstance(q, dict) or not isinstance(q.get("prompt"), str):
+                    continue
+                q_pt = q.get("prompt_type")
+                q_choices = q.get("choices")
+                valid.append(ClarifyQuestion(
+                    prompt=q["prompt"],
+                    prompt_type=(
+                        q_pt if isinstance(q_pt, str)
+                        and q_pt in ("text", "choice", "confirmation")
+                        else None
+                    ),
+                    choices=(
+                        q_choices if isinstance(q_choices, list)
+                        and all(isinstance(c, str) for c in q_choices)
+                        else None
+                    ),
+                ))
+            if valid:
+                parsed_questions = valid
+
         return SupervisorAction(
             action=action_type,
             reasoning=response_json.get("reasoning", ""),
             targets=targets,
             synthesis_instruction=response_json.get("synthesis_instruction"),
             clarification_question=response_json.get("clarification_question"),
+            prompt_type=prompt_type,
+            choices=choices,
+            questions=parsed_questions,
         )
 
     @staticmethod

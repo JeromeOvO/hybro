@@ -92,10 +92,20 @@ class HITLRequest(BaseModel):
     a2a_context_id: str | None = None
     continuation_message_id: str | None = None
 
+    # Frontend display: when set, the SSE event uses this as `message_id`
+    # instead of continuation_message_id.  This prevents supervisor CLARIFY
+    # HITL prompts from overwriting the user's own chat message entity.
+    display_message_id: str | None = None
+
     # The question
     prompt: str
     prompt_type: HITLPromptType = HITLPromptType.TEXT
     choices: list[str] | None = None
+
+    # Multi-question grouping (set when a single CLARIFY emits N questions)
+    group_id: str | None = None
+    group_total: int | None = None
+    group_index: int | None = None
 
     # Lifecycle
     status: HITLStatus = HITLStatus.PENDING

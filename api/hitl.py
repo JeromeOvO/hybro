@@ -43,7 +43,19 @@ async def get_pending_hitl_requests(
     await verify_room_ownership(room_id, user)
 
     requests = await hitl_service.get_pending_requests(room_id)
-    return {"requests": [r.model_dump(mode="json") for r in requests]}
+    return {
+        "requests": [
+            {
+                **r.model_dump(mode="json"),
+                "message_id": (
+                    r.display_message_id
+                    or r.continuation_message_id
+                    or r.user_message_id
+                ),
+            }
+            for r in requests
+        ]
+    }
 
 
 @router.post("/{request_id}/cancel")

@@ -26,6 +26,11 @@ from models.memory import (
     TurnRole,
     TurnRepresentation,
 )
+from models.supervisor_v2 import (
+    RunStatus,
+    SupervisorRunResult,
+    SupervisorTrajectory,
+)
 
 
 # =========================================================================
@@ -705,8 +710,64 @@ class TestParseV2ActionCaseInsensitive:
 
 
 # =========================================================================
-# Test: TrajectoryStatus enum serialization (no Pydantic warnings)
+# Test: _parse_v2_action prompt_type/choices sanitization
 # =========================================================================
+
+
+class TestParseV2ActionClarifySanitization:
+    """Tests that _parse_v2_action sanitizes prompt_type and choices from LLM output."""
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        mock_openai = MagicMock()
+        return RoomSupervisorService(openai_service=mock_openai)
+
+    def _clarify_json(self, **overrides):
+        base = {
+            "action": "clarify",
+            "reasoning": "need info",
+            "targets": [],
+            "clarification_question": "Which one?",
+        }
+        base.update(overrides)
+        return base
+
+    def test_valid_prompt_type_text(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="text"))
+        assert action.prompt_type == "text"
+
+    def test_valid_prompt_type_choice_with_choices(self, service):
+        action = service._parse_v2_action(
+            self._clarify_json(prompt_type="choice", choices=["A", "B", "C"])
+        )
+        assert action.prompt_type == "choice"
+        assert action.choices == ["A", "B", "C"]
+
+    def test_valid_prompt_type_confirmation(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="confirmation"))
+        assert action.prompt_type == "confirmation"
+
+    def test_invalid_prompt_type_number_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type=42))
+        assert action.prompt_type is None
+
+    def test_invalid_prompt_type_unknown_string_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="multiple_choice"))
+        assert action.prompt_type is None
+
+    def test_choices_non_list_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(choices="not a list"))
+        assert action.choices is None
+
+    def test_choices_list_with_non_strings_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(choices=["ok", 123, None]))
+        assert action.choices is None
+
+    def test_missing_prompt_type_is_none(self, service):
+        action = service._parse_v2_action(self._clarify_json())
+        assert action.prompt_type is None
+        assert action.choices is None
 
 
 class TestTrajectoryStatusSerialization:
@@ -787,3 +848,188 @@ class TestTrajectoryStatusSerialization:
                 "Expected Pydantic warning when status is a raw string, "
                 "not a TrajectoryStatus enum member"
             )
+
+
+# =========================================================================
+# Tests: _handle_v2_run_result — supervisor synthesis vs default summary
+# =========================================================================
+
+
+class TestHandleV2RunResultSummaryDedup:
+    """Verify that the default coordinator summary is skipped when the
+    supervisor already emitted its own synthesis, and that it acts as a
+    fallback when synthesis emission fails."""
+
+    @pytest.fixture
+    def rmc(self):
+        """Build a RoomMessageCenter with key collaborators mocked."""
+        with (
+            patch("modules.RoomMessageCenter.db_service") as mock_db,
+            patch("modules.RoomMessageCenter.sse_manager") as mock_sse,
+            patch("modules.RoomMessageCenter.room_coordinator_service") as mock_coord,
+            patch("modules.RoomMessageCenter.room_services"),
+            patch("modules.RoomMessageCenter.notification_service"),
+            patch("modules.RoomMessageCenter.a2a_service"),
+            patch("modules.RoomMessageCenter.task_service"),
+            patch("modules.RoomMessageCenter.agent_resolver_service"),
+            patch("modules.RoomMessageCenter.room_memory_service"),
+            patch("modules.RoomMessageCenter.room_supervisor_service"),
+            patch("modules.RoomMessageCenter.rate_limit_service"),
+            patch("modules.RoomMessageCenter.debate_service"),
+        ):
+            mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+            mock_db.update_room_user_message_by_message_id = AsyncMock()
+            mock_sse.send_task_submitted = AsyncMock()
+            mock_sse.send_processing_status = AsyncMock()
+            mock_coord.emit_synthesis_message = AsyncMock()
+            mock_coord.on_room_user_message_completed = AsyncMock()
+
+            from modules.RoomMessageCenter import RoomMessageCenter
+
+            rmc = RoomMessageCenter()
+            yield rmc
+
+    @pytest.fixture
+    def completed_result_with_synthesis(self):
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=SupervisorTrajectory(),
+            synthesis_text="Final synthesis.",
+        )
+
+    @pytest.fixture
+    def completed_result_without_synthesis(self):
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=SupervisorTrajectory(),
+            synthesis_text=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesis_emitted_skips_default_summary(
+        self, rmc, completed_result_with_synthesis
+    ):
+        await rmc._handle_v2_run_result(
+            result=completed_result_with_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_synthesis_calls_default_summary(
+        self, rmc, completed_result_without_synthesis
+    ):
+        await rmc._handle_v2_run_result(
+            result=completed_result_without_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_not_awaited()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
+            "room-1", "msg-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesis_emission_failure_falls_back_to_default_summary(
+        self, rmc, completed_result_with_synthesis
+    ):
+        rmc.room_coordinator_service.emit_synthesis_message.side_effect = RuntimeError(
+            "LLM down"
+        )
+        await rmc._handle_v2_run_result(
+            result=completed_result_with_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
+            "room-1", "msg-1"
+        )
+
+
+# =========================================================================
+# Test: _parse_v2_action multi-question CLARIFY parsing
+# =========================================================================
+
+
+class TestParseV2ActionMultiQuestion:
+    """Tests that _parse_v2_action correctly parses the questions array."""
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        return RoomSupervisorService(
+            openai_service=MagicMock(),
+            database_service=MagicMock(),
+        )
+
+    def test_parses_valid_questions_array(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need more info",
+            "questions": [
+                {"prompt": "Travel dates?", "prompt_type": "text"},
+                {"prompt": "Budget?", "prompt_type": "choice", "choices": ["Low", "High"]},
+                {"prompt": "Proceed?", "prompt_type": "confirmation"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 3
+        assert action.questions[0].prompt == "Travel dates?"
+        assert action.questions[0].prompt_type == "text"
+        assert action.questions[1].choices == ["Low", "High"]
+        assert action.questions[2].prompt_type == "confirmation"
+
+    def test_falls_back_to_clarification_question_when_no_questions(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "clarification_question": "What dates?",
+        })
+        assert action.questions is None
+        assert action.clarification_question == "What dates?"
+
+    def test_ignores_questions_with_invalid_prompts(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [
+                {"prompt": 123},
+                {"prompt": "Valid question?", "prompt_type": "text"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 1
+        assert action.questions[0].prompt == "Valid question?"
+
+    def test_sanitizes_invalid_prompt_type_in_questions(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [
+                {"prompt": "Q1?", "prompt_type": "invalid_type"},
+                {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 2
+        assert action.questions[0].prompt_type is None
+        assert action.questions[1].choices is None
+
+    def test_empty_questions_array_yields_none(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [],
+        })
+        assert action.questions is None
+
+    def test_questions_array_not_a_list_yields_none(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": "not a list",
+        })
+        assert action.questions is None

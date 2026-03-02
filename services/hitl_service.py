@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-MAX_HITL_ROUNDS = 3
+MAX_HITL_ROUNDS = 15
 
 
 class HITLService:
@@ -83,23 +83,32 @@ class HITLService:
         a2a_task_id: str | None = None,
         a2a_context_id: str | None = None,
         continuation_message_id: str | None = None,
+        display_message_id: str | None = None,
         expires_in_hours: float = 24.0,
+        group_id: str | None = None,
+        group_total: int | None = None,
+        group_index: int | None = None,
     ) -> HITLRequest | None:
         """Create and emit an HITL request.
 
         Returns the created request, or None if max rounds exceeded.
         """
         if continuation_message_id:
-            existing = await self.database_service.count_hitl_requests_for_message(
-                continuation_message_id
-            )
-            if existing >= MAX_HITL_ROUNDS:
-                logger.warning(
-                    "Max HITL rounds (%d) exceeded for message %s",
-                    MAX_HITL_ROUNDS,
-                    continuation_message_id,
+            # For grouped questions, only count the first question (group_index == 0)
+            # against the per-message round limit.  Questions 1..N in the same group
+            # are part of the same clarification round.
+            is_first_in_group = group_id is None or group_index in (None, 0)
+            if is_first_in_group:
+                existing = await self.database_service.count_hitl_requests_for_message(
+                    continuation_message_id
                 )
-                return None
+                if existing >= MAX_HITL_ROUNDS:
+                    logger.warning(
+                        "Max HITL rounds (%d) exceeded for message %s",
+                        MAX_HITL_ROUNDS,
+                        continuation_message_id,
+                    )
+                    return None
 
         request = HITLRequest(
             room_id=room_id,
@@ -114,7 +123,11 @@ class HITLService:
             a2a_task_id=a2a_task_id,
             a2a_context_id=a2a_context_id,
             continuation_message_id=continuation_message_id,
+            display_message_id=display_message_id,
             expires_at=utcnow() + timedelta(hours=expires_in_hours),
+            group_id=group_id,
+            group_total=group_total,
+            group_index=group_index,
         )
 
         # 1. Persist FIRST (so it survives SSE drops)
@@ -125,6 +138,22 @@ class HITLService:
                 "Failed to persist HITL request %s", request.request_id
             )
             return None
+
+        # 1b. Mark the display agent message as input-required in DB
+        # so page refresh loads the correct state.
+        # Also persist group metadata for multi-question groups so
+        # convertApiMessageToIncoming can reconstruct group context.
+        if display_message_id:
+            await self.database_service.update_agent_message_task_state(
+                display_message_id, "input-required"
+            )
+            if group_id is not None:
+                await self.database_service.persist_hitl_group_metadata(
+                    display_message_id,
+                    group_id=group_id,
+                    group_total=group_total,
+                    group_index=group_index,
+                )
 
         # 2. Emit SSE event
         await self._emit_hitl_event(
@@ -186,10 +215,13 @@ class HITLService:
         request = HITLRequest(**{k: v for k, v in claimed_doc.items() if k != "_id"})
         if request.room_id != room_id:
             await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id,
-                status=HITLStatus.PENDING.value,
-                claim_id=None,
-                user_input=None, responded_at=None, responded_by_user_id=None,
+                request_id, claim_id, {
+                    "status": HITLStatus.PENDING.value,
+                    "claim_id": None,
+                    "user_input": None,
+                    "responded_at": None,
+                    "responded_by_user_id": None,
+                },
             )
             raise HTTPException(403, "Room mismatch")
 
@@ -199,6 +231,27 @@ class HITLService:
         # the stale checker from reclaiming a legitimately long-running route.
         import asyncio
 
+        # For grouped HITL requests, only the last answered question
+        # triggers the actual supervisor resume.
+        is_group = request.group_id is not None
+        is_last_in_group = True
+        if is_group:
+            remaining = await self.database_service.count_pending_in_hitl_group(
+                request.group_id
+            )
+            if remaining < 0:
+                logger.warning(
+                    "Failed to count pending in HITL group %s — "
+                    "treating as last-in-group to avoid permanent stall",
+                    request.group_id,
+                )
+                is_last_in_group = True
+            else:
+                # The current request is already "processing" (claimed in Phase 1),
+                # so it is included in the count.  remaining <= 1 means only this
+                # request is still pending/processing — all others are responded.
+                is_last_in_group = remaining <= 1
+
         async def _lease_heartbeat() -> None:
             while True:
                 await asyncio.sleep(self.LEASE_HEARTBEAT_SECONDS)
@@ -207,63 +260,84 @@ class HITLService:
                     responded_at=utcnow(),
                 )
 
-        heartbeat_task = asyncio.create_task(_lease_heartbeat())
-        try:
-            if request.source == "agent":
-                await self._handle_agent_response(request, user_input)
-            elif request.source == "supervisor":
-                await self._handle_supervisor_response(request, user_input)
-        except HTTPException:
-            await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id,
-                status=HITLStatus.PENDING.value,
-                claim_id=None,
-                user_input=None, responded_at=None, responded_by_user_id=None,
-            )
-            raise
-        except Exception as exc:
-            logger.error(
-                "HITL routing failed for request %s: %s",
-                request_id,
-                exc,
-                exc_info=True,
-            )
-            await self.database_service.fenced_update_hitl_request(
-                request_id, claim_id,
-                status=HITLStatus.PENDING.value,
-                claim_id=None,
-                user_input=None, responded_at=None, responded_by_user_id=None,
-            )
-            await self._emit_hitl_event(
-                room_id=room_id,
-                event_type=HITLEventType.ERROR,
-                request=request,
-                error=str(exc),
-            )
-            raise HTTPException(
-                502,
-                f"Failed to deliver response to {request.source}: {exc}",
-            )
-        finally:
-            heartbeat_task.cancel()
+        if not is_group or is_last_in_group:
+            heartbeat_task = asyncio.create_task(_lease_heartbeat())
             try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+                if request.source == "agent":
+                    await self._handle_agent_response(request, user_input)
+                elif request.source == "supervisor":
+                    if is_group:
+                        group_docs = await self.database_service.get_hitl_group_requests(
+                            request.group_id
+                        )
+                        parts = []
+                        for gd in group_docs:
+                            q_prompt = gd.get("prompt", "")
+                            if gd.get("request_id") == request_id:
+                                q_answer = user_input
+                            else:
+                                q_answer = gd.get("user_input") or ""
+                            parts.append(f"Q: {q_prompt}\nA: {q_answer}")
+                        combined_input = "\n\n".join(parts)
+                        await self._handle_supervisor_response(request, combined_input)
+                    else:
+                        await self._handle_supervisor_response(request, user_input)
+            except HTTPException:
+                await self.database_service.fenced_update_hitl_request(
+                    request_id, claim_id, {
+                        "status": HITLStatus.PENDING.value,
+                        "claim_id": None,
+                        "user_input": None,
+                        "responded_at": None,
+                        "responded_by_user_id": None,
+                    },
+                )
+                raise
+            except Exception as exc:
+                logger.error(
+                    "HITL routing failed for request %s: %s",
+                    request_id,
+                    exc,
+                    exc_info=True,
+                )
+                await self.database_service.fenced_update_hitl_request(
+                    request_id, claim_id, {
+                        "status": HITLStatus.PENDING.value,
+                        "claim_id": None,
+                        "user_input": None,
+                        "responded_at": None,
+                        "responded_by_user_id": None,
+                    },
+                )
+                await self._emit_hitl_event(
+                    room_id=room_id,
+                    event_type=HITLEventType.ERROR,
+                    request=request,
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    502,
+                    f"Failed to deliver response to {request.source}: {exc}",
+                )
+            finally:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
 
-        # Phase 2b: Stamp routing_completed_at (fenced).
-        # If our claim was reclaimed, this is a no-op — we bail.
-        stamped = await self.database_service.fenced_update_hitl_request(
-            request_id, claim_id,
-            routing_completed_at=utcnow(),
-        )
-        if not stamped:
-            logger.warning(
-                "HITL request %s claim_id %s no longer matches — "
-                "reclaimed by recovery. Abandoning finalization.",
+            # Phase 2b: Stamp routing_completed_at (fenced).
+            stamped = await self.database_service.fenced_update_hitl_request(
                 request_id, claim_id,
+                routing_completed_at=utcnow(),
             )
-            return {"status": "ok", "request_id": request_id, "reclaimed": True}
+            if not stamped:
+                logger.warning(
+                    "HITL request %s claim_id %s no longer matches — "
+                    "reclaimed by recovery. Abandoning finalization.",
+                    request_id, claim_id,
+                )
+                return {"status": "ok", "request_id": request_id, "reclaimed": True}
 
         # Phase 3: Finalize processing -> responded (fenced).
         finalized = await self.database_service.fenced_update_hitl_request(
@@ -288,6 +362,12 @@ class HITLService:
             event_type=HITLEventType.INPUT_RECEIVED,
             request=request,
         )
+
+        # Persist user's answer on the agent message for DB hydration
+        if request.display_message_id:
+            await self.database_service.persist_hitl_user_answer(
+                request.display_message_id, user_input,
+            )
 
         logger.info(
             "hitl_response_handled",
@@ -537,7 +617,9 @@ class HITLService:
         data: dict = {
             "request_id": request.request_id,
             "message_id": (
-                request.continuation_message_id or request.user_message_id
+                request.display_message_id
+                or request.continuation_message_id
+                or request.user_message_id
             ),
             "source": request.source,
         }
@@ -552,6 +634,10 @@ class HITLService:
                 "agent_name": request.agent_name,
                 "source_step_id": request.source_step_id,
             })
+            if request.group_id is not None:
+                data["group_id"] = request.group_id
+                data["group_total"] = request.group_total
+                data["group_index"] = request.group_index
         else:
             message_type = "hitl_status_update"
             _status_map = {
