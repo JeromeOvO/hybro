@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
-from api.webhooks import notify_task_update
+from services.task_notification_service import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
@@ -249,9 +249,10 @@ class StaleTaskChecker:
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
                 await notify_task_update(
                     message_id=message_id,
-                    task=current_task,
+                    state=new_state,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
+                    send_processing_status=True,
                 )
             else:
                 # Still working - timestamp already touched by update_task_on_message
@@ -414,9 +415,10 @@ class StaleTaskChecker:
 
         await notify_task_update(
             message_id=message_id,
-            task=failed_task,
+            state=TaskState.failed,
             room_id=msg.room_id,
             user_id=msg.user_id or "",
+            send_processing_status=True,
         )
 
     async def _cleanup_stuck_processing_status(self) -> None:

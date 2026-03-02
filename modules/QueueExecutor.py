@@ -29,6 +29,7 @@ from modules.ResponseProcessor import ResponseProcessor
 from modules.TaskStateManager import TaskStateManager, get_task
 from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
+from services.task_notification_service import notify_task_update
 
 if TYPE_CHECKING:
     from services.a2a_service import A2AService
@@ -148,7 +149,7 @@ class QueueExecutor:
             if len(message_queue) > 0:
                 for msg in message_queue:
                     await self.tsm.transition_task(
-                        msg, TaskState.canceled, persist=True, notify=False
+                        msg, TaskState.canceled, persist=True
                     )
                 canceled_ids = [msg.message_id for msg in message_queue]
                 message_queue.clear()
@@ -213,7 +214,7 @@ class QueueExecutor:
                         user_message_id,
                     )
                     await self.tsm.transition_task(
-                        current_message, TaskState.canceled, persist=True, notify=False
+                        current_message, TaskState.canceled, persist=True
                     )
                     queue_result = QueueResult.CANCELED
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
@@ -362,11 +363,17 @@ class QueueExecutor:
                         intended_agent_id = allowed[0]
                 if intended_agent_id:
                     current_message.agent_id = intended_agent_id
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=error_text,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=error_text,
-                    agent_id=intended_agent_id,
+                    user_id=current_message.user_id or "",
+                    error=error_text,
                 )
                 return None
             return agent
@@ -380,11 +387,17 @@ class QueueExecutor:
                 current_message.agent_id,
                 current_message.message_id,
             )
-            await self.tsm.fail_task_and_notify(
+            await self.tsm.transition_task(
+                current_message, TaskState.failed,
+                error="The assigned agent could not be found.",
+                persist=True,
+            )
+            await notify_task_update(
+                message_id=current_message.message_id,
+                state=TaskState.failed,
                 room_id=room_id,
-                message=current_message,
-                error_text="The assigned agent could not be found.",
-                agent_id=current_message.agent_id,
+                user_id=current_message.user_id or "",
+                error="The assigned agent could not be found.",
             )
             return None
 
@@ -406,11 +419,17 @@ class QueueExecutor:
                     or "The assigned agent is no longer available and no alternative could be found."
                 )
                 current_message.agent_id = original_agent_id
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=error_text,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=error_text,
-                    agent_id=original_agent_id,
+                    user_id=current_message.user_id or "",
+                    error=error_text,
                 )
                 return None
             return reassigned
@@ -452,7 +471,7 @@ class QueueExecutor:
                 system_requests_limit=rate_limit_result.system_requests_limit,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled, persist=True, notify=False
+                current_message, TaskState.canceled, persist=True
             )
             return True
 
@@ -562,14 +581,17 @@ class QueueExecutor:
                     exc,
                     exc_info=True,
                 )
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=f"Agent streaming failed: {exc}",
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=f"Agent streaming failed: {exc}",
-                    agent_id=current_message.agent_id,
-                    agent_card=agent.agent_card,
-                    step_number=step_number,
-                    total_steps=total_steps,
+                    user_id=current_message.user_id or "",
+                    error=f"Agent streaming failed: {exc}",
                 )
                 return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
@@ -740,9 +762,13 @@ class QueueExecutor:
                 return ResumeResult(success=True)
             if queue_processing_result.result == QueueResult.FAILED:
                 await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.ERROR, user_message_id
+                    room_id, SSEProcessingStatus.FAILED, user_message_id
                 )
-                return ResumeResult(success=False)
+                return ResumeResult(
+                    success=False,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
             if queue_processing_result.result == QueueResult.CANCELED:
                 return ResumeResult(success=True)
 
