@@ -68,6 +68,10 @@ interface RoomChatInputProps {
   quote?: QuoteData | null
   /** Callback to clear the current quote. */
   onClearQuote?: () => void
+  /**
+   * Content above the editor (e.g. HITL Questions panel).
+   */
+  topSlot?: React.ReactNode
 }
 
 export function RoomChatInput({
@@ -94,6 +98,7 @@ export function RoomChatInput({
   onExternalValueConsumed,
   quote,
   onClearQuote,
+  topSlot,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -712,6 +717,9 @@ export function RoomChatInput({
       )}>
         {/* Inner container with actual border */}
         <div className="relative flex flex-col rounded-3xl bg-background/80 backdrop-blur-sm border border-transparent overflow-hidden">
+          {/* Top slot (e.g. HITL Questions panel) */}
+          {topSlot}
+
           {/* Expand/Collapse toggle - shown when content overflows or already expanded */}
           {(isOverflowing || isEditorExpanded) && (
             <button
@@ -727,29 +735,6 @@ export function RoomChatInput({
               )}
             </button>
           )}
-          {/* Group Selector - Top section */}
-          {showGroupSelector && (
-            <div className="px-5 pt-3 pb-2">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <GroupSelector
-                  selectedGroup={selectedGroup}
-                  onGroupChange={onGroupChange || (() => { })}
-                  groups={groups}
-                  loadingGroups={loadingGroups}
-                  roomAgentCount={roomAgentCount}
-                  mentionedAgents={mentionedAgents}
-                  onCreateGroup={onCreateGroup}
-                  onEditGroup={onEditGroup}
-                  onDeleteGroup={onDeleteGroup}
-                  agentNameMap={agentNameMap}
-                  disabled={disabled}
-                  isOverride={isOverride}
-                  onClearOverride={onClearOverride}
-                />
-              </div>
-            </div>
-          )}
-
           {/* Quote preview */}
           {quote && (
             <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2 text-sm">
@@ -801,56 +786,80 @@ export function RoomChatInput({
             />
           </div>
 
-          {/* Controls */}
-          <div className="flex items-center justify-end px-5 pb-4 pt-2">
+          {/* Controls: GroupSelector left, Send/Stop right */}
+          <div className="flex items-center justify-between px-5 pb-5 pt-2">
+            {/* Group selector (left) */}
+            {showGroupSelector && (
+              <div className="flex items-center text-sm text-muted-foreground">
+                <GroupSelector
+                  selectedGroup={selectedGroup}
+                  onGroupChange={onGroupChange || (() => { })}
+                  groups={groups}
+                  loadingGroups={loadingGroups}
+                  roomAgentCount={roomAgentCount}
+                  mentionedAgents={mentionedAgents}
+                  onCreateGroup={onCreateGroup}
+                  onEditGroup={onEditGroup}
+                  onDeleteGroup={onDeleteGroup}
+                  agentNameMap={agentNameMap}
+                  disabled={disabled}
+                  isOverride={isOverride}
+                  onClearOverride={onClearOverride}
+                />
+              </div>
+            )}
+            {!showGroupSelector && <div />}
+
+            {/* Send / Stop button (right) */}
+            <div className="flex items-center">
             {sending ? (
               <div className="relative">
                 <Button
                   disabled
-                  size="lg"
+                  size="icon"
                   className={cn(
-                    "h-11 w-11 rounded-full p-0",
+                    "h-8 w-8 rounded-full p-0",
                     "bg-gradient-to-br from-primary to-primary/80"
                   )}
                   title="Sending message..."
                 >
-                  <div className="h-5 w-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                  <div className="h-4 w-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
                 </Button>
                 <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
               </div>
             ) : cancelling && processing ? (
               <Button
                 disabled
-                size="lg"
+                size="icon"
                 className={cn(
-                  "h-11 w-11 rounded-full p-0",
+                  "h-8 w-8 rounded-full p-0",
                   "bg-destructive/60",
                 )}
                 title="Cancelling..."
               >
-                <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               </Button>
             ) : processing ? (
               <Button
                 onClick={onCancel}
-                size="lg"
+                size="icon"
                 className={cn(
-                  "h-11 w-11 rounded-full p-0",
+                  "h-8 w-8 rounded-full p-0",
                   "bg-primary/80",
                   "hover:scale-105 active:scale-95 transition-all duration-200",
                   "shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30"
                 )}
                 title="Stop processing"
               >
-                <Square className="h-4 w-4" />
+                <Square className="h-3.5 w-3.5" />
               </Button>
             ) : (
               <Button
                 onClick={handleSubmit}
                 disabled={!isReadyToSend}
-                size="lg"
+                size="icon"
                 className={cn(
-                  "h-11 w-11 rounded-full p-0 relative overflow-hidden",
+                  "h-8 w-8 rounded-full p-0 relative overflow-hidden",
                   "transition-all duration-300",
                   "hover:scale-105 active:scale-95",
                   "disabled:opacity-30 disabled:hover:scale-100 disabled:shadow-none",
@@ -862,9 +871,10 @@ export function RoomChatInput({
                 )}
                 title="Send message (Enter)"
               >
-                <Send className="h-4 w-4 relative z-10" />
+                <Send className="h-3.5 w-3.5 relative z-10" />
               </Button>
             )}
+            </div>
           </div>
         </div>
       </div>

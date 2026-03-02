@@ -17,8 +17,8 @@ correlate to the pending HITL request.
 Once the backend HITL system is implemented, the frontend needs:
 
 1. Handling for two new SSE event types (`hitl_input_requested`, `hitl_status_update`).
-2. An inline reply form embedded in the task-status card.
-3. An API client for `POST /api/v1/hitl/respond`.
+2. A collapsible HITL panel rendered in `RoomChatInput`'s `topSlot`, with text/choice/confirmation variants.
+3. An API client for `POST /api/v1/rooms/:roomId/hitl/respond`.
 4. Reconnect catch-up logic to restore missed HITL requests.
 5. Expiry handling for timed-out requests.
 
@@ -98,7 +98,7 @@ exists.
 
 ### 3.2 REST Endpoints
 
-**Submit reply**: `POST /api/v1/hitl/respond`
+**Submit reply**: `POST /api/v1/rooms/:roomId/hitl/respond`
 
 ```json
 // Request
@@ -108,7 +108,7 @@ exists.
 { "success": true, "request_id": "abc123" }
 ```
 
-**Pending requests** (for reconnect catch-up): `GET /api/v1/hitl/requests/{room_id}/pending`
+**Pending requests** (for reconnect catch-up): `GET /api/v1/rooms/:roomId/hitl/pending`
 
 ```json
 // Response
@@ -135,7 +135,7 @@ exists.
 
 ```
 HITLPromptType: "text" | "choice" | "confirmation"
-HITLStatus:     "pending" | "responded" | "expired" | "canceled"
+HITLStatus:     "pending" | "responded" | "expired" | "canceled" | "error"
 ```
 
 ---
@@ -155,9 +155,9 @@ SSE stream
     │                          │
     │                 MessageEntity (message store)
     │                          │
-    │                 task-status-message.tsx
+    │                 RoomChatInput topSlot → HitlPanel
     │                          │
-    │                 HitlInlineReplyForm
+    │                 HitlQuestionForm
     │                          │
     │                 respondToHitl() API call
     │                          │
@@ -178,8 +178,9 @@ SSE stream
    optional `choices`.
 2. `handleSSEMessage` creates/updates a `MessageEntity` with HITL fields, setting
    `displayType` to `task-status`.
-3. `task-status-message.tsx` detects the HITL fields and renders an inline reply form
-   (text input, choice buttons, or confirmation buttons depending on `prompt_type`).
+3. The `HitlPanel` (rendered in `RoomChatInput` topSlot) detects unresolved HITL requests
+   and renders a `HitlQuestionForm` (text input, choice buttons, or confirmation buttons
+   depending on `prompt_type`). The `task-status-message` bubble is hidden while HITL is active.
 4. User submits reply. The form calls `respondToHitl(request_id, user_input)`.
 5. On success, locally mark `hitlResolved: true` (optimistic). Backend emits
    `hitl_status_update` with `status: "responded"` to confirm.
@@ -410,10 +411,11 @@ export interface HitlPendingRequest {
 
 Add to `src/lib/api/index.ts` barrel export.
 
-### 5.6 `src/components/task-status-message.tsx` — Embed inline reply form
+### 5.6 `src/components/hitl-inline-reply-form.tsx` — HitlPanel & HitlQuestionForm
 
-Modify the `input-required` rendering branch. When `hitlRequestId` is present and
-`hitlResolved` is false, render `HitlInlineReplyForm` below the prompt text.
+The `HitlPanel` component renders in `RoomChatInput`'s `topSlot`. When unresolved HITL
+requests exist (from `useActiveHitlRequests`), it shows a collapsible panel with pagination.
+Each request renders a `HitlQuestionForm` that handles the three prompt types.
 
 New props on `TaskStatusMessageProps`:
 
@@ -433,15 +435,15 @@ Renders one of three variants based on `promptType`:
 
 | `promptType` | UI Rendered |
 |---|---|
-| `text` | Text input + "Send" button |
+| `text` | Text input + "Continue" button |
 | `choice` | Radio buttons for each `choices` item + "Submit" button |
 | `confirmation` | Two buttons: "Approve" / "Reject" |
 
 States: `idle`, `submitting` (spinner on button, input disabled), `submitted`
 (success message, form hidden), `error` (red text, retry enabled).
 
-On submit: calls `onHitlSubmit(requestId, userInput)`. The parent
-(`task-status-message.tsx`) passes a handler that calls `respondToHitl()` and
+On submit: calls `onSubmit(requestId, userInput)`. The parent (`page.tsx`)
+passes `respondToHitlRequest` which calls the HITL API and
 optimistically sets `hitlResolved: true` on the message entity.
 
 **Accessibility**: The inline reply form must:
@@ -457,36 +459,34 @@ optimistically sets `hitlResolved: true` on the message entity.
 ### 5.7a HITL UI Specification — Visual Layouts
 
 This section defines the exact visual structure of the HITL inline reply form as
-rendered inside the `task-status-message.tsx` `input-required` card.
+rendered inside the `RoomChatInput` component's `topSlot` as a collapsible `HitlPanel`.
 
-**Prerequisites**: Install `RadioGroup` from shadcn/ui (`npx shadcn@latest add radio-group`).
-All other primitives (`Input`, `Textarea`, `Button`, `Label`, `Form`) already exist.
+**Prerequisites**: Install `Collapsible` from shadcn/ui (`npx shadcn@latest add collapsible`).
+All other primitives (`Input`, `Button`) already exist.
 
-#### Container: `input-required` Task Card (Existing)
+#### Container: `RoomChatInput` topSlot (Collapsible Panel)
 
-The HITL form renders **inside** the existing amber-themed `input-required` card.
-The card already has this visual structure:
+The HITL panel renders **above** the chat input editor via the `topSlot` prop.
+When an active (unresolved) HITL request exists, the panel appears:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  border-amber-200  bg-amber-50  (dark: border-amber-500/20 │
-│                                  bg-amber-500/12)           │
-│                                                             │
-│  ┌──┐  Agent Name          ⚠ Input required · Step 2/5     │
-│  │⚠ │  ────────────                                        │
-│  └──┘                                                       │
+│  ⓘ Questions                                    ▲ 1/2 ▼  △ │  ← header: collapse toggle + pagination
 │                                                             │
 │  "Which date range should I search?"  ← hitlPrompt         │
 │                                                             │
-│  ┌─────────────────────────────── NEW: HITL FORM ──┐       │
-│  │  (varies by promptType — see below)              │       │
-│  └──────────────────────────────────────────────────┘       │
+│  ┌───────────────────────── HITL FORM ──────────────┐      │
+│  │  (varies by promptType — text/choice/confirmation) │      │
+│  └──────────────────────────────────────────────────┘      │
 │                                                             │
-│  ⏱ 12s elapsed                                              │
+├─────────────────────────────────────────────────────────────┤
+│  [chat editor / text area]                                  │
+│  ─── GroupSelector ──────────────────────── Submit ─────── │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The form is inserted between the prompt text and the elapsed timer, separated by an
+The `task-status-message` bubble is **hidden** (`return null`) when an active HITL request
+exists (`hitlResolved === false`). Once resolved, it shows "Input provided" as a static label.
 amber-themed `border-t` on the form container (not a `<Separator>` component, because
 the border needs to match the amber card color scheme).
 
@@ -498,7 +498,7 @@ Most common variant. Free-form text reply.
 ┌─ HITL Form (text) ──────────────────────────────────────────┐
 │                                                              │
 │  ┌──────────────────────────────────────────┐  ┌─────────┐  │
-│  │  Type your reply...                      │  │  Send ➤ │  │
+│  │  Type your reply...                      │  │ Continue│  │
 │  └──────────────────────────────────────────┘  └─────────┘  │
 │                                                              │
 │  (error state:)                                              │
@@ -535,7 +535,7 @@ Most common variant. Free-form text reply.
       size="sm"
       className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
     >
-      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send'}
+      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Continue'}
     </Button>
   </div>
   {error && (
@@ -720,7 +720,9 @@ resolution type:
 
 The theme transition (amber → red for expired/canceled) happens naturally because
 `hitl_status_update` handler sets `taskStatus` to `'failed'` or `'canceled'`, which
-changes the task-status-message rendering branch.
+changes the task-status-message rendering branch. When HITL is active (`hitlResolved === false`),
+the task-status-message returns `null` (hidden). Once resolved (`hitlResolved === true`), it
+shows "Input provided".
 
 ### 5.8 `src/components/room-messages.tsx` — Pass HITL props to TaskStatusMessage
 
@@ -793,7 +795,7 @@ replies.
 
 | Decision | Rationale |
 |---|---|
-| Inline form inside task-status card (not chat input) | Prevents confusion about which request the reply targets. Multiple agents could have concurrent HITL requests. |
+| Collapsible HITL panel in `RoomChatInput` topSlot (not inline in task-status card) | Provides a Cursor/Codex-style experience. Panel is always visible near the input area, supports pagination for multiple concurrent HITL requests, and collapses when not needed. |
 | HITL fields on MessageEntity (not separate store) | HITL requests are 1:1 with message entities. Co-locating keeps rendering simple. |
 | Optimistic `hitlResolved` on submit | Removes the form immediately for responsive UX. If the API fails, the form reappears with error state. |
 | Reconnect catch-up via REST | SSE events are fire-and-forget. If the user misses `hitl_input_requested` during a disconnect, the pending request endpoint restores state. |
@@ -806,6 +808,8 @@ replies.
 | Scenario | Behavior |
 |---|---|
 | `respondToHitl()` returns HTTP error | Show inline error below the form. Re-enable the submit button. Do not set `hitlResolved`. |
+| `respondToHitl()` returns 409 Conflict | Request was already claimed. Keep the optimistic state (panel dismissed, user reply shown). |
+| `respondToHitl()` times out (AbortError) | The backend is still processing the supervisor resume (can take 60-120s). Keep the optimistic state; the eventual `hitl_status_update` SSE will reconcile. The HITL respond call uses a 180s timeout (vs 60s default) to reduce the likelihood of this path. |
 | HITL request expired (SSE `hitl_status_update` with `status: "expired"`) | Remove the form. Show expiry message in the card. Transition card to failed state. |
 | HITL request canceled (user canceled the processing) | Remove the form. Show "Canceled" state on the card. |
 | SSE disconnect during pending HITL | On reconnect, `fetchPendingHitlRequests` restores the form. |
