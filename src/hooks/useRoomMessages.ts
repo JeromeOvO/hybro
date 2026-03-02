@@ -48,6 +48,35 @@ export function useMessagesHydrated(): boolean {
 }
 
 /**
+ * Active HITL requests — entities with unresolved HITL state.
+ * Re-renders only when the set of active HITL entities changes.
+ */
+export function useActiveHitlRequests(): MessageEntity[] {
+  return useMessageStore(
+    useShallow(s => {
+      const all = s.orderedIds
+        .map(id => s.entities[id])
+        .filter((e): e is MessageEntity => !!e && !!e.hitlRequestId)
+
+      // Collect group IDs that still have at least one unanswered question
+      const activeGroupIds = new Set<string>()
+      for (const e of all) {
+        if (e.hitlGroupId && !e.hitlResolved && !e.hitlUserAnswer) {
+          activeGroupIds.add(e.hitlGroupId)
+        }
+      }
+
+      return all.filter(e => {
+        // Non-grouped: show only if unresolved
+        if (!e.hitlGroupId) return !e.hitlResolved
+        // Grouped: show all questions in groups that still have unanswered ones
+        return activeGroupIds.has(e.hitlGroupId)
+      })
+    })
+  )
+}
+
+/**
  * The current room ID tracked by the message store.
  */
 export function useMessageStoreRoomId(): string | null {

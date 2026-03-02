@@ -8,7 +8,7 @@ import { BannerHost } from "@/components/ui/banner"
 import { SettingsDialogProvider } from "@/components/settings/settings-dialog-provider"
 
 export const metadata: Metadata = {
-  title: "Hybro AI",
+  title: "HYBRO AI",
   description: "Chat with AI agents",
 }
 

@@ -96,6 +96,24 @@ export async function convertApiMessageToIncoming(
     senderName = 'Unknown'
   }
 
+  // ── Extract persisted HITL user answer ───────────────────
+  let hitlUserAnswer: string | undefined
+  const maybeUserAnswer = messageTask?.metadata?.user_answer
+  if (typeof maybeUserAnswer === 'string') {
+    hitlUserAnswer = maybeUserAnswer
+  }
+
+  // ── Extract persisted HITL group metadata ───────────────
+  let hitlGroupId: string | undefined
+  let hitlGroupTotal: number | undefined
+  let hitlGroupIndex: number | undefined
+  const meta = messageTask?.metadata
+  if (meta) {
+    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
+    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
+    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
+  }
+
   // ── Build IncomingMessage ────────────────────────────────────
   return {
     id: apiMessage.message_id,
@@ -124,5 +142,10 @@ export async function convertApiMessageToIncoming(
     taskCreatedAt: apiMessage.message_created_at
       ? normalizeTimestampOrNow(apiMessage.message_created_at)
       : undefined,
+
+    hitlUserAnswer,
+    hitlGroupId,
+    hitlGroupTotal,
+    hitlGroupIndex,
   }
 }

@@ -108,6 +108,9 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
           totalSteps={entity.totalSteps}
           taskContent={entity.taskContent}
           taskCreatedAt={entity.taskCreatedAt || entity.timestamp}
+          hitlPrompt={entity.hitlPrompt}
+          hitlResolved={entity.hitlResolved}
+          hitlUserAnswer={entity.hitlUserAnswer}
         />
       )
   }

@@ -57,18 +57,31 @@ export function applyUpsert(
   // ── Build the new entity ──
   const resolvedEphemeral = incoming.isEphemeral ?? existing?.isEphemeral ?? false
 
+  // Merge first so displayType is computed from the *final* field values,
+  // not the raw incoming (which may omit taskStatus, causing a false
+  // agent-bubble resolution when the existing entity has input-required).
+  const merged = mergeIncoming(existing, incoming)
+
+  // For displayType resolution:
+  // - If incoming explicitly provides taskStatus (including null to clear), use it.
+  // - If incoming sets isEphemeral=true without taskStatus, this is a streaming
+  //   transition (agent_token) — use undefined so resolveDisplayType sees
+  //   ephemeral-without-task → agent-bubble.
+  // - Otherwise, use the merged (existing) taskStatus to preserve the current
+  //   display card (e.g. HITL answered entities keep their task-status card).
+  let displayTaskStatus = merged.taskStatus
+  if (incoming.taskStatus !== undefined) {
+    displayTaskStatus = incoming.taskStatus ?? undefined
+  } else if (incoming.isEphemeral === true) {
+    displayTaskStatus = undefined
+  }
+
   const displayType = resolveDisplayType({
-    messageType: incoming.messageType,
-    taskStatus: incoming.taskStatus ?? undefined,
-    content: incoming.content,
+    messageType: merged.messageType,
+    taskStatus: displayTaskStatus,
+    content: merged.content,
     isEphemeral: resolvedEphemeral,
   })
-
-  // Merge: preserve fields not present in incoming, overlay incoming fields,
-  // then set computed/provenance fields.
-  // For nullable fields (taskError, taskStatusMessage), we must distinguish
-  // between `undefined` (not provided → keep existing) and `null` (explicitly clear).
-  const merged = mergeIncoming(existing, incoming)
 
   const entity: MessageEntity = {
     ...merged,
@@ -116,6 +129,16 @@ function mergeIncoming(
       taskUpdatedAt: incoming.taskUpdatedAt,
       stepNumber: incoming.stepNumber,
       totalSteps: incoming.totalSteps,
+      hitlRequestId: incoming.hitlRequestId,
+      hitlPrompt: incoming.hitlPrompt,
+      hitlPromptType: incoming.hitlPromptType,
+      hitlChoices: incoming.hitlChoices,
+      hitlExpiresAt: incoming.hitlExpiresAt,
+      hitlResolved: incoming.hitlResolved,
+      hitlGroupId: incoming.hitlGroupId,
+      hitlGroupTotal: incoming.hitlGroupTotal,
+      hitlGroupIndex: incoming.hitlGroupIndex,
+      hitlUserAnswer: incoming.hitlUserAnswer,
     }
   }
 
@@ -140,6 +163,16 @@ function mergeIncoming(
     taskUpdatedAt: incoming.taskUpdatedAt !== undefined ? incoming.taskUpdatedAt : existing.taskUpdatedAt,
     stepNumber: incoming.stepNumber !== undefined ? incoming.stepNumber : existing.stepNumber,
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
+    hitlRequestId: incoming.hitlRequestId !== undefined ? incoming.hitlRequestId : existing.hitlRequestId,
+    hitlPrompt: incoming.hitlPrompt !== undefined ? incoming.hitlPrompt : existing.hitlPrompt,
+    hitlPromptType: incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
+    hitlChoices: incoming.hitlChoices !== undefined ? incoming.hitlChoices : existing.hitlChoices,
+    hitlExpiresAt: incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
+    hitlResolved: incoming.hitlResolved !== undefined ? incoming.hitlResolved : existing.hitlResolved,
+    hitlGroupId: incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
+    hitlGroupTotal: incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
+    hitlGroupIndex: incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
+    hitlUserAnswer: incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : existing.hitlUserAnswer,
   }
 }
 
@@ -150,6 +183,17 @@ function mergeIncoming(
  */
 function coalesce<T>(incomingVal: T | undefined, existingVal: T): T {
   return incomingVal === undefined ? existingVal : incomingVal
+}
+
+function arraysShallowEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a == null && b == null) return true
+  if (!Array.isArray(a) || !Array.isArray(b)) return a === b
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 /**
@@ -183,6 +227,16 @@ export function isNoOpUpdate(
     existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.hitlResolved      === coalesce(incoming.hitlResolved, existing.hitlResolved) &&
+    existing.hitlPrompt        === coalesce(incoming.hitlPrompt, existing.hitlPrompt) &&
+    existing.hitlRequestId     === coalesce(incoming.hitlRequestId, existing.hitlRequestId) &&
+    existing.hitlPromptType    === coalesce(incoming.hitlPromptType, existing.hitlPromptType) &&
+    existing.hitlExpiresAt     === coalesce(incoming.hitlExpiresAt, existing.hitlExpiresAt) &&
+    arraysShallowEqual(existing.hitlChoices, coalesce(incoming.hitlChoices, existing.hitlChoices)) &&
+    existing.hitlGroupId       === coalesce(incoming.hitlGroupId, existing.hitlGroupId) &&
+    existing.hitlGroupTotal    === coalesce(incoming.hitlGroupTotal, existing.hitlGroupTotal) &&
+    existing.hitlGroupIndex    === coalesce(incoming.hitlGroupIndex, existing.hitlGroupIndex) &&
+    existing.hitlUserAnswer    === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
     existing.displayType       === incomingDisplayType
   )

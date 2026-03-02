@@ -8,6 +8,8 @@ import {
   updateRoomExtendInfo
 } from '@/lib/api/room'
 import { cancelMessage } from '@/lib/api/sse'
+import { fetchPendingHitlRequests } from '@/lib/api/hitl'
+import { ApiError } from '@/lib/api-client'
 import { banner } from "@/components/ui/banner"
 import { useQuery } from '@tanstack/react-query'
 import type { QuoteData } from '@/components/message-bubble'
@@ -59,6 +61,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Ref to prevent duplicate calls
   const isProcessingRef = useRef(false)
 
+  // Atomically clear both the Zustand processing flag and the synchronous
+  // ref guard. Every callsite that ends the processing lifecycle must use
+  // this helper instead of calling setProcessing(false) directly.
+  const clearProcessing = useCallback(() => {
+    setProcessing(false)
+    isProcessingRef.current = false
+  }, [setProcessing])
+
   // Track current processing message ID for cancellation
   const currentProcessingMessageId = useRef<string | null>(null)
 
@@ -77,6 +87,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // When true, a reconciliation refetch fires after processing completes to catch
   // any missed events. When false (happy path), the refetch is skipped entirely.
   const sseHadDisconnectionRef = useRef(false)
+
+  // O(1) lookup index: maps HITL request_id → message entity id
+  const hitlRequestIndex = useRef(new Map<string, string>())
 
   // Clean up cancel timeout on unmount
   useEffect(() => {
@@ -258,6 +271,71 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           `${incomingMessages.length - filtered.length} filtered)`
         )
       }
+
+      // Overlay HITL state after DB hydration to avoid race with SSE reconnect.
+      // Pending requests get hitlResolved=false; input-required messages NOT in
+      // the pending set are already resolved and get hitlResolved=true.
+      try {
+        const hitlRes = await fetchPendingHitlRequests(targetRoomId, getToken)
+        const hitlStore = useMessageStore.getState()
+        if (hitlStore.roomId !== targetRoomId) return
+
+        const pendingMessageIds = new Set<string>()
+        if (hitlRes.requests?.length) {
+          console.log(`🔔 Hydration: overlaying ${hitlRes.requests.length} pending HITL request(s)`)
+          for (const req of hitlRes.requests) {
+            pendingMessageIds.add(req.message_id)
+            let resolvedName = req.agent_name
+            if (!resolvedName && req.agent_id) {
+              resolvedName = await getAgentName(req.agent_id)
+            }
+            hitlStore.upsertMessage({
+              id: req.message_id,
+              roomId: targetRoomId,
+              messageType: 'agent',
+              content: req.prompt || '',
+              senderName: resolvedName || 'Agent',
+              timestamp: normalizeTimestampOrNow(req.created_at),
+              agentId: req.agent_id,
+              taskStatus: 'input-required' as TaskState,
+              hitlRequestId: req.request_id,
+              hitlPrompt: req.prompt,
+              hitlPromptType: req.prompt_type || 'text',
+              hitlChoices: req.choices,
+              hitlExpiresAt: req.expires_at,
+              hitlResolved: false,
+              hitlGroupId: req.group_id ?? undefined,
+              hitlGroupTotal: req.group_total ?? undefined,
+              hitlGroupIndex: req.group_index ?? undefined,
+            }, 'sse')
+            hitlRequestIndex.current.set(req.request_id, req.message_id)
+          }
+        }
+
+        // Mark input-required messages from DB hydration that are NOT pending as already resolved.
+        // Only check messages that came from this hydration batch, not SSE-created entities.
+        const hydratedIds = new Set(filtered.map(m => m.id))
+        for (const entity of Object.values(hitlStore.entities)) {
+          if (
+            entity.roomId === targetRoomId &&
+            entity.taskStatus === 'input-required' &&
+            hydratedIds.has(entity.id) &&
+            !pendingMessageIds.has(entity.id)
+          ) {
+            hitlStore.upsertMessage({
+              id: entity.id,
+              roomId: targetRoomId,
+              messageType: 'agent',
+              content: entity.content,
+              senderName: entity.senderName,
+              timestamp: entity.timestamp,
+              hitlResolved: true,
+            }, 'sse')
+          }
+        }
+      } catch (hitlErr) {
+        console.error('[HITL] Failed to overlay HITL state during hydration:', hitlErr)
+      }
     } catch (error) {
       console.error(`❌ Failed to load messages for room ${targetRoomId}:`, error)
       // Mark as hydrated on error to avoid infinite loading
@@ -302,6 +380,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     placeholderDismissedRef.current = false
     cancelTimedOutRef.current = false
     sseHadDisconnectionRef.current = false
+    hitlRequestIndex.current.clear()
     if (cancelTimeoutRef.current) {
       clearTimeout(cancelTimeoutRef.current)
       cancelTimeoutRef.current = null
@@ -315,17 +394,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // The previous room's processing continues server-side; when the user
     // returns, the restore effect re-enables processing from room data.
     setSending(false)
-    setProcessing(false)
+    clearProcessing()
     setCancelling(false)
     setSseConnected(false)
     setSseError(null)
-    isProcessingRef.current = false
     currentProcessingMessageId.current = null
 
     // Initialize normalized store for this room
     useMessageStore.getState().setRoom(roomId)
     hydrationStartedRef.current = null
-  }, [roomId, setSending, setProcessing, setCancelling, setSseConnected, setSseError])
+  }, [roomId, setSending, clearProcessing, setCancelling, setSseConnected, setSseError])
 
   // Hydrate from DB once room data is available.
   // Gating on `room` ensures the room query has completed and pre-populated
@@ -444,6 +522,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               senderName: agentName,
               agentId: sseMessage.data.agent_id,
               timestamp: msgTimestamp,
+              taskStatus: null,
               isEphemeral: false,
             }, 'sse')
           }
@@ -497,8 +576,21 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             if (!currentProcessingMessageId.current && sseMessage.data.message_id) {
               currentProcessingMessageId.current = sseMessage.data.message_id
             }
+            if (!placeholderDismissedRef.current) {
+              store.upsertMessage({
+                id: getProcessingPlaceholderId(),
+                roomId,
+                messageType: 'agent',
+                content: '',
+                senderName: 'HYBRO AI',
+                taskStatus: TASK_STATE.WORKING,
+                taskContent: 'Supervisor is analyzing your request…',
+                timestamp: new Date().toISOString(),
+                isEphemeral: true,
+              }, 'optimistic')
+            }
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
-            setProcessing(false)
+            clearProcessing()
             setCancelling(false)
             if (cancelTimeoutRef.current) {
               clearTimeout(cancelTimeoutRef.current)
@@ -673,7 +765,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               }, 'sse')
             }
 
-            setProcessing(false)
+            clearProcessing()
             setCancelling(false)
             if (cancelTimeoutRef.current) {
               clearTimeout(cancelTimeoutRef.current)
@@ -704,10 +796,108 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         }
         break
 
+      case 'hitl_input_requested': {
+        console.log('🔔 HITL input requested via SSE:', sseMessage.data)
+        if (sseMessage.data) {
+          const { request_id, message_id, prompt, prompt_type, choices,
+                  agent_name, agent_id, step_number, total_steps, expires_at,
+                  group_id, group_total, group_index } = sseMessage.data
+          if (request_id && message_id) {
+            store.removeMessage(getProcessingPlaceholderId())
+            placeholderDismissedRef.current = true
+
+            let resolvedAgentName = agent_name
+            if (!resolvedAgentName && agent_id) {
+              resolvedAgentName = await getAgentName(agent_id)
+            }
+            store.upsertMessage({
+              id: message_id,
+              roomId,
+              messageType: 'agent',
+              content: prompt || '',
+              senderName: resolvedAgentName || 'Agent',
+              timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+              agentId: agent_id,
+              taskStatus: 'input-required' as TaskState,
+              hitlRequestId: request_id,
+              hitlPrompt: prompt,
+              hitlPromptType: (prompt_type as 'text' | 'choice' | 'confirmation') || 'text',
+              hitlChoices: choices,
+              hitlExpiresAt: expires_at,
+              hitlResolved: false,
+              hitlGroupId: group_id ?? undefined,
+              hitlGroupTotal: group_total ?? undefined,
+              hitlGroupIndex: group_index ?? undefined,
+              stepNumber: step_number,
+              totalSteps: total_steps,
+            }, 'sse')
+            hitlRequestIndex.current.set(request_id, message_id)
+          }
+        }
+        break
+      }
+
+      case 'hitl_status_update': {
+        console.log('🔔 HITL status update via SSE:', sseMessage.data)
+        if (sseMessage.data) {
+          const { request_id, status: hitlStatus, error_message } = sseMessage.data
+          if (request_id) {
+            const entityId = hitlRequestIndex.current.get(request_id)
+            const entity = entityId ? store.entities[entityId] : undefined
+            if (entity) {
+              // Guard: if a newer HITL request has already replaced this one
+              // on the same entity (same message_id, different request_id),
+              // skip the stale status update to avoid hiding the new form.
+              if (entity.hitlRequestId && entity.hitlRequestId !== request_id) {
+                console.log('🔔 Skipping stale hitl_status_update for', request_id,
+                  '— entity now owns', entity.hitlRequestId)
+                hitlRequestIndex.current.delete(request_id)
+                break
+              }
+
+              let resolvedTaskStatus = entity.taskStatus
+              let resolvedTaskError: string | null = null
+              let resolvedContent = entity.content
+              let resolved = true
+              if (hitlStatus === 'expired') {
+                resolvedTaskStatus = 'failed' as TaskState
+                resolvedTaskError = error_message || 'Request expired'
+                resolvedContent = error_message || entity.content
+              } else if (hitlStatus === 'canceled') {
+                resolvedTaskStatus = 'canceled' as TaskState
+                resolvedTaskError = error_message || 'Request canceled'
+                resolvedContent = error_message || entity.content
+              } else if (hitlStatus === 'error') {
+                // Backend reverts request to PENDING on routing failure —
+                // keep the form open so the user can retry.
+                resolved = false
+                resolvedTaskError = error_message || 'Delivery failed — you can retry'
+              }
+
+              store.upsertMessage({
+                id: entity.id,
+                roomId,
+                messageType: 'agent',
+                content: resolvedContent,
+                senderName: entity.senderName,
+                timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+                hitlResolved: resolved,
+                taskStatus: resolvedTaskStatus,
+                taskError: resolvedTaskError,
+              }, 'sse')
+              if (resolved) {
+                hitlRequestIndex.current.delete(request_id)
+              }
+            }
+          }
+        }
+        break
+      }
+
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, getProcessingPlaceholderId, roomId, setProcessing, setCancelling, reconcileWithDb])
+  }, [getAgentName, getProcessingPlaceholderId, roomId, setProcessing, clearProcessing, setCancelling, reconcileWithDb])
 
   // Initialize SSE connection
   const {
@@ -730,6 +920,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // If SSE drops while agents are working, we may have missed events and need
   // to reconcile with DB after processing completes.
   // Also promote any partial streaming content to entity content.
+  // On reconnect, restore any pending HITL requests.
+  const prevSseConnectedRef = useRef(false)
   useEffect(() => {
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
@@ -762,7 +954,48 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       }
       streamingBuffer.clear()
     }
-  }, [sseConnected, processing, roomId])
+
+    // HITL reconnect catch-up: restore pending HITL requests after SSE reconnects
+    if (sseConnected && !prevSseConnectedRef.current && roomId) {
+      fetchPendingHitlRequests(roomId, getToken)
+        .then(async (res) => {
+          if (res.requests?.length) {
+            console.log(`🔔 Restoring ${res.requests.length} pending HITL request(s)`)
+            const msgStore = useMessageStore.getState()
+            for (const req of res.requests) {
+              let resolvedName = req.agent_name
+              if (!resolvedName && req.agent_id) {
+                resolvedName = await getAgentName(req.agent_id)
+              }
+              msgStore.upsertMessage({
+                id: req.message_id,
+                roomId,
+                messageType: 'agent',
+                content: req.prompt || '',
+                senderName: resolvedName || 'Agent',
+                timestamp: normalizeTimestampOrNow(req.created_at),
+                agentId: req.agent_id,
+                taskStatus: 'input-required' as TaskState,
+                hitlRequestId: req.request_id,
+                hitlPrompt: req.prompt,
+                hitlPromptType: req.prompt_type || 'text',
+                hitlChoices: req.choices,
+                hitlExpiresAt: req.expires_at,
+                hitlResolved: false,
+                hitlGroupId: req.group_id ?? undefined,
+                hitlGroupTotal: req.group_total ?? undefined,
+                hitlGroupIndex: req.group_index ?? undefined,
+              }, 'sse')
+              hitlRequestIndex.current.set(req.request_id, req.message_id)
+            }
+          }
+        })
+        .catch((err) => {
+          console.error('[HITL] Failed to fetch pending requests on reconnect:', err)
+        })
+    }
+    prevSseConnectedRef.current = sseConnected
+  }, [sseConnected, processing, roomId, getToken, getAgentName])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
@@ -892,8 +1125,20 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       const messageId = createResponse.message_id || createResponse.message?.message_id || ""
 
       if (!messageId) {
-        console.warn('SendMessage returned no message_id; keeping optimistic message')
-        return true
+        console.error('SendMessage returned no message_id; treating as failure')
+
+        // Rollback optimistic messages
+        const msgStoreNoId = useMessageStore.getState()
+        msgStoreNoId.removeMessage(tempMessageId)
+        msgStoreNoId.removeMessage(getProcessingPlaceholderId())
+
+        banner.error('Message sent but server returned no ID. Please try again.')
+
+        clearProcessing()
+        currentProcessingMessageId.current = null
+        isProcessingRef.current = false
+
+        return false
       }
 
       // Step 2: Swap temp ID to real ID in normalized store
@@ -949,15 +1194,18 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         console.error('Failed to reconcile messages after error:', reloadError)
       }
 
-      setProcessing(false)
+      clearProcessing()
       currentProcessingMessageId.current = null
 
       return false
     } finally {
       setSending(false)
-      isProcessingRef.current = false
+      // NOTE: Do NOT clear isProcessingRef here on the success path.
+      // It stays true until processing completes (via SSE terminal events)
+      // to prevent a race window where the user could double-send between
+      // setProcessing(true) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, setProcessing, setCancelling, getProcessingPlaceholderId, reconcileWithDb])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, setProcessing, clearProcessing, setCancelling, getProcessingPlaceholderId, reconcileWithDb])
 
   // Cancel ongoing message processing
   const cancelProcessing = useCallback(async () => {
@@ -982,7 +1230,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (cancelling) {
           cancelTimedOutRef.current = true
           setCancelling(false)
-          setProcessing(false)
+          clearProcessing()
           banner.warning('Cancellation timed out — the agent may still be running')
         }
       }, 15000)
@@ -994,7 +1242,102 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken, setCancelling, setProcessing, roomId])
+  }, [getToken, setCancelling, clearProcessing, roomId])
+
+  // Respond to a HITL request — inline Q&A display pattern:
+  // 1. Mark agent message resolved + embed answer  2. Optionally show processing placeholder (last in group)
+  const respondToHitlRequest = useCallback(async (requestId: string, userInput: string) => {
+    const entityId = hitlRequestIndex.current.get(requestId)
+    const store = useMessageStore.getState()
+    const entity = entityId ? store.entities[entityId] : undefined
+
+    const processingPlaceholderId = getProcessingPlaceholderId()
+
+    // Determine if this is the last unanswered question in its group
+    const isGrouped = entity?.hitlGroupId != null
+    let isLastInGroup = true
+    if (isGrouped && entity?.hitlGroupId) {
+      const allEntities = Object.values(store.entities)
+      const siblings = allEntities.filter(e => e.hitlGroupId === entity.hitlGroupId && e.id !== entity.id)
+      const unresolvedSiblings = siblings.filter(e => !e.hitlResolved && !e.hitlUserAnswer)
+      isLastInGroup = unresolvedSiblings.length === 0
+    }
+
+    // Optimistic: mark resolved and embed the user's answer inline
+    if (entity) {
+      store.upsertMessage({
+        id: entity.id,
+        roomId,
+        messageType: 'agent',
+        content: entity.content,
+        senderName: entity.senderName,
+        timestamp: entity.timestamp,
+        hitlResolved: true,
+        hitlUserAnswer: userInput,
+      }, 'optimistic')
+    }
+    hitlRequestIndex.current.delete(requestId)
+
+    // Only show processing placeholder after the LAST question in a group (or non-grouped)
+    if (isLastInGroup) {
+      placeholderDismissedRef.current = false
+      store.upsertMessage({
+        id: processingPlaceholderId,
+        roomId,
+        messageType: 'agent',
+        content: '',
+        senderName: 'HYBRO AI',
+        taskStatus: TASK_STATE.WORKING,
+        taskContent: 'Processing your input...',
+        timestamp: new Date(Date.now() + 1).toISOString(),
+        isEphemeral: true,
+      }, 'optimistic')
+      setProcessing(true)
+      isProcessingRef.current = true
+    }
+
+    try {
+      const { respondToHitl } = await import('@/lib/api/hitl')
+      await respondToHitl(roomId, requestId, userInput, getToken)
+    } catch (err) {
+      // 409 Conflict = request already responded/processing — treat as success.
+      if (err instanceof ApiError && err.status === 409) {
+        console.log('HITL respond returned 409 (already handled) — keeping optimistic state')
+        return
+      }
+
+      // AbortError (timeout) — the backend is still processing the supervisor
+      // resume which can take 60-120s. Keep the optimistic state; the eventual
+      // hitl_status_update SSE will reconcile.
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log('HITL respond timed out — backend still processing, keeping optimistic state')
+        return
+      }
+
+      // Genuine failure — rollback optimistic updates so the HITL form reappears
+      if (entity) {
+        store.upsertMessage({
+          id: entity.id,
+          roomId,
+          messageType: 'agent',
+          content: entity.content,
+          senderName: entity.senderName,
+          timestamp: entity.timestamp,
+          hitlResolved: false,
+          hitlUserAnswer: undefined,
+        }, 'optimistic')
+      }
+      if (entityId) {
+        hitlRequestIndex.current.set(requestId, entityId)
+      }
+      if (isLastInGroup) {
+        store.removeMessage(processingPlaceholderId)
+        clearProcessing()
+      }
+
+      throw err
+    }
+  }, [roomId, getToken, setProcessing, clearProcessing, getProcessingPlaceholderId])
 
   // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
   const refreshMessages = useCallback(async () => {
@@ -1073,6 +1416,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Actions
     sendUserMessage,
     cancelProcessing,
+    respondToHitlRequest,
     updateRoomSettings,
     refreshMessages,
     refreshRoomSetting,
