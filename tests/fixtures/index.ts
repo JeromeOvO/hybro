@@ -45,14 +45,10 @@ export function createTaskMessage(
   taskStatus: typeof TASK_STATE[keyof typeof TASK_STATE],
   overrides: Partial<IncomingMessage> = {}
 ): IncomingMessage {
-  const msg = createAgentMessage({
+  return createAgentMessage({
     taskStatus,
     ...overrides,
   })
-  if (!msg.taskId) {
-    msg.taskId = `task-${msg.id}`
-  }
-  return msg
 }
 
 export function createWorkingTask(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
