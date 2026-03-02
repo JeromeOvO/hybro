@@ -1491,7 +1491,6 @@ Decide which agent(s) should handle this message and why."""
             model=llm_model,
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.3,  # Lower temperature for consistent structured output
             timeout=30.0,
         )
 
@@ -1530,7 +1529,6 @@ Decide which agent(s) should handle this message and why."""
         response = await self.client.chat.completions.create(
             model=llm_model,
             messages=messages,
-            temperature=0.5,
             timeout=30.0,
         )
 

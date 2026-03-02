@@ -17,6 +17,8 @@ import math
 import time
 from datetime import datetime
 
+from pinecone.exceptions import NotFoundException as PineconeNotFoundException
+
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from database.mongodb import mongodb
@@ -66,6 +68,7 @@ class MemorySearchService:
     def __init__(self):
         self.openai_service = openai_service
         self.pinecone = pinecone_db
+        self._index_available: bool | None = None
 
     @property
     def config(self):
@@ -75,6 +78,40 @@ class MemorySearchService:
     def _pinecone_index(self):
         """Lazily-connected Pinecone index for memory search."""
         return self.pinecone.get_index(self.config.index_name)
+
+    def _is_index_available(self) -> bool:
+        """Check (and cache) whether the Pinecone index exists.
+
+        On the first call, probes the index with a lightweight
+        describe_index_stats request. The result is cached for the
+        lifetime of the process — the index either exists or it
+        doesn't (creating it requires a restart to pick up anyway).
+        """
+        if self._index_available is not None:
+            return self._index_available
+        try:
+            self._pinecone_index.describe_index_stats()
+            self._index_available = True
+            logger.info(
+                "MemorySearch: Pinecone index '%s' is available",
+                self.config.index_name,
+            )
+        except PineconeNotFoundException:
+            self._index_available = False
+            logger.warning(
+                "MemorySearch: Pinecone index '%s' not found — "
+                "vector search/indexing will be skipped until restart",
+                self.config.index_name,
+            )
+        except Exception as e:
+            logger.warning(
+                "MemorySearch: failed to probe Pinecone index '%s': %s — "
+                "will retry on next request",
+                self.config.index_name,
+                e,
+            )
+            return False
+        return self._index_available
 
     @property
     def _content_collection(self):
@@ -136,6 +173,8 @@ class MemorySearchService:
             vector_used = False
         else:
             vector_results = raw_results[0]
+            if not self._is_index_available():
+                vector_used = False
 
         if isinstance(raw_results[1], Exception):
             logger.warning(
@@ -225,6 +264,9 @@ class MemorySearchService:
             )
             return False
 
+        if not self._is_index_available():
+            return False
+
         try:
             embedding = await self.openai_service.get_embedding(content)
 
@@ -254,6 +296,12 @@ class MemorySearchService:
             )
             return True
 
+        except PineconeNotFoundException:
+            logger.debug(
+                "MemorySearch: Pinecone index '%s' not found — skipping indexing",
+                self.config.index_name,
+            )
+            return False
         except Exception as e:
             logger.warning(
                 f"MemorySearch: failed to index turn {turn.turn_id}: {e}"
@@ -269,6 +317,9 @@ class MemorySearchService:
         Returns:
             True if deletion succeeded, False otherwise
         """
+        if not self._is_index_available():
+            return False
+
         try:
             await asyncio.to_thread(
                 self._pinecone_index.delete,
@@ -278,6 +329,12 @@ class MemorySearchService:
                 f"MemorySearch: deleted index entries for room {room_id}"
             )
             return True
+        except PineconeNotFoundException:
+            logger.debug(
+                "MemorySearch: Pinecone index '%s' not found — skipping deletion",
+                self.config.index_name,
+            )
+            return False
         except Exception as e:
             logger.warning(
                 f"MemorySearch: failed to delete index for room {room_id}: {e}"
@@ -335,15 +392,25 @@ class MemorySearchService:
         Embeds the query and searches the room-memory index filtered to
         the target room_id.
         """
+        if not self._is_index_available():
+            return []
+
         embedding = await self.openai_service.get_embedding(query)
 
-        results = await asyncio.to_thread(
-            self._pinecone_index.query,
-            vector=embedding,
-            top_k=50,
-            include_metadata=True,
-            filter={"room_id": {"$eq": room_id}},
-        )
+        try:
+            results = await asyncio.to_thread(
+                self._pinecone_index.query,
+                vector=embedding,
+                top_k=50,
+                include_metadata=True,
+                filter={"room_id": {"$eq": room_id}},
+            )
+        except PineconeNotFoundException:
+            logger.debug(
+                "MemorySearch: Pinecone index '%s' not found — skipping vector search",
+                self.config.index_name,
+            )
+            return []
 
         matches = getattr(results, "matches", []) if results else []
         search_results = []

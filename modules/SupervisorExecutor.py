@@ -35,6 +35,7 @@ from models.supervisor_v2 import (
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
+    TrajectoryStatus,
     V2StepResult,
 )
 from models.processing import ProcessingStatus
@@ -145,7 +146,7 @@ class SupervisorExecutor:
                     completed_at=utcnow(),
                 )
                 trajectory.entries.append(done_entry)
-                trajectory.status = "completed"
+                trajectory.status = TrajectoryStatus.COMPLETED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -158,7 +159,7 @@ class SupervisorExecutor:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
-                trajectory.status = "canceled"
+                trajectory.status = TrajectoryStatus.CANCELED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -212,7 +213,7 @@ class SupervisorExecutor:
                             "trajectory_id": trajectory.trajectory_id,
                         },
                     )
-                    trajectory.status = "failed"
+                    trajectory.status = TrajectoryStatus.FAILED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -247,7 +248,7 @@ class SupervisorExecutor:
                         else await decide_coro
                     )
                 except CancellationError:
-                    trajectory.status = "canceled"
+                    trajectory.status = TrajectoryStatus.CANCELED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -367,7 +368,7 @@ class SupervisorExecutor:
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
                         entry.results = results
-                        trajectory.status = "running"
+                        trajectory.status = TrajectoryStatus.RUNNING
                         saved = await self._save_interrupted_state(
                             kind=InterruptKind.PUSH_NOTIFICATION,
                             trajectory=trajectory,
@@ -382,7 +383,7 @@ class SupervisorExecutor:
                             quoted_text=quoted_text,
                         )
                         if not saved:
-                            trajectory.status = "failed"
+                            trajectory.status = TrajectoryStatus.FAILED
                             return self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
@@ -416,7 +417,7 @@ class SupervisorExecutor:
                             )
 
                         entry.results = results
-                        trajectory.status = "awaiting_input"
+                        trajectory.status = TrajectoryStatus.AWAITING_INPUT
 
                         # Only create HITL for the FIRST awaiting agent
                         ar = awaiting[0]
@@ -443,7 +444,7 @@ class SupervisorExecutor:
                                 user_message_id,
                             )
                             entry.results = results
-                            trajectory.status = "failed"
+                            trajectory.status = TrajectoryStatus.FAILED
                             return self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
@@ -468,7 +469,7 @@ class SupervisorExecutor:
                             ),
                         )
                         if not saved:
-                            trajectory.status = "failed"
+                            trajectory.status = TrajectoryStatus.FAILED
                             return self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
@@ -510,7 +511,7 @@ class SupervisorExecutor:
                             completed_at=utcnow(),
                         )
                         trajectory.entries.append(done_entry)
-                        trajectory.status = "completed"
+                        trajectory.status = TrajectoryStatus.COMPLETED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -538,7 +539,7 @@ class SupervisorExecutor:
                         )
                         entry.completed_at = utcnow()
                         trajectory.entries.append(entry)
-                        trajectory.status = "completed"
+                        trajectory.status = TrajectoryStatus.COMPLETED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -556,7 +557,7 @@ class SupervisorExecutor:
                             else await synth_coro
                         )
                     except CancellationError:
-                        trajectory.status = "canceled"
+                        trajectory.status = TrajectoryStatus.CANCELED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -565,7 +566,7 @@ class SupervisorExecutor:
                         )
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
-                    trajectory.status = "completed"
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -583,7 +584,7 @@ class SupervisorExecutor:
                         completed_at=utcnow(),
                     )
                     trajectory.entries.append(entry)
-                    trajectory.status = "awaiting_input"
+                    trajectory.status = TrajectoryStatus.AWAITING_INPUT
 
                     from services.hitl_service import hitl_service
                     from models.hitl import HITLPromptType
@@ -614,7 +615,7 @@ class SupervisorExecutor:
                             "Max HITL rounds exceeded for message %s — failing trajectory",
                             user_message_id,
                         )
-                        trajectory.status = "failed"
+                        trajectory.status = TrajectoryStatus.FAILED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -639,7 +640,7 @@ class SupervisorExecutor:
                         ),
                     )
                     if not saved:
-                        trajectory.status = "failed"
+                        trajectory.status = TrajectoryStatus.FAILED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -669,7 +670,7 @@ class SupervisorExecutor:
                         completed_at=utcnow(),
                     )
                     trajectory.entries.append(entry)
-                    trajectory.status = "completed"
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -695,7 +696,7 @@ class SupervisorExecutor:
                 for r in e.results
             )
             if not has_completed_results:
-                trajectory.status = "failed"
+                trajectory.status = TrajectoryStatus.FAILED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -712,14 +713,14 @@ class SupervisorExecutor:
                     else await budget_synth_coro
                 )
             except CancellationError:
-                trajectory.status = "canceled"
+                trajectory.status = TrajectoryStatus.CANCELED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
                     ),
                 )
-            trajectory.status = "completed"
+            trajectory.status = TrajectoryStatus.COMPLETED
             return self._log_and_return(
                 room_id, trajectory,
                 SupervisorRunResult(
@@ -729,7 +730,7 @@ class SupervisorExecutor:
                 ),
             )
 
-        trajectory.status = "failed"
+        trajectory.status = TrajectoryStatus.FAILED
         return self._log_and_return(
             room_id, trajectory,
             SupervisorRunResult(
