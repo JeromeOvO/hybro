@@ -129,16 +129,13 @@ class ResponseProcessor:
                 agent_card.name,
             )
             task_info = await self.a2a_service.create_task_for_tracking(
-                room_id,
-                current_message.user_id or "unknown",
+                current_message,
                 agent_card,
                 prepared_message,
-                agent_id=current_message.agent_id,
-                related_message_id=current_message.related_message_id,
                 step_number=step_number,
                 total_steps=total_steps,
-                message_id=current_message.message_id,
             )
+
             created_at = task_info.get("created_at")
 
             task_content = current_message.task_content
@@ -623,6 +620,12 @@ class ResponseProcessor:
         )
 
         task = get_task(ctx.current_message)
+        if not task:
+            logger.warning(
+                "ResponseProcessor: _finalize_streaming: no in-memory task for message %s; "
+                "task_update SSE will not be sent via this path",
+                ctx.current_message.message_id,
+            )
         already_terminal = task and task.status and is_terminal_state(task.status.state)
 
         if task and not already_terminal:

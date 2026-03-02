@@ -82,6 +82,13 @@ async def notify_task_update(
     """
     state_value = state.value if hasattr(state, "value") else str(state)
 
+    logger.info(
+        "notify_task_update called: message_id=%s state=%s room_id=%s",
+        message_id,
+        state_value,
+        room_id,
+    )
+
     # --- Idempotency check ------------------------------------------------
     # If update_last_notified_state fails (DB error), we proceed with the
     # notification anyway — a duplicate SSE is harmless whereas a missed SSE

@@ -34,6 +34,7 @@ from common.utils.logger import get_logger
 from config.settings import settings
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
+from models.room import RoomAgentMessage
 from services.a2a_constants import (
     INTERACTIVE_STATES,
     SyntheticTaskId,
@@ -165,15 +166,12 @@ class A2AService:
 
     async def create_task_for_tracking(
         self,
-        room_id: str,
-        user_id: str,
+        current_message: RoomAgentMessage,
         agent_card: AgentCard,
         message: Message,
-        agent_id: str | None = None,
-        related_message_id: str | None = None,
+        *,
         step_number: int | None = None,
         total_steps: int | None = None,
-        message_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Create task tracking fields for a room agent message.
@@ -181,17 +179,16 @@ class A2AService:
         This sets up task tracking on an existing room_agent_message, allowing
         callers to send SSE events before the blocking agent call.
 
+        The in-memory ``current_message`` is updated atomically with the DB
+        write: ``message_content.message_task`` is set to the placeholder
+        Task and ``has_task_tracking`` is set to True.
+
         Args:
-            room_id: Room this task belongs to
-            user_id: User who initiated the task
+            current_message: The RoomAgentMessage to enable tracking on
             agent_card: The agent's card
             message: A2A Message to send
-            agent_id: Optional agent ID for frontend rendering
-            related_message_id: Optional room user message ID that initiated the task
             step_number: Current step number in the workflow (1-indexed)
             total_steps: Total number of steps in the workflow
-            message_id: The room_agent_message ID to update with task tracking
-                       (used in webhook URLs)
 
         Returns:
             Dict with message_id, created_at, context_id, webhook_token, step_number, total_steps
@@ -199,6 +196,10 @@ class A2AService:
         from common.utils.time import utcnow
         from services.a2a_constants import NON_TERMINAL_STATES
         from services.database_service import db_service
+
+        room_id = current_message.room_id
+        user_id = current_message.user_id or "unknown"
+        message_id = current_message.message_id
 
         # Check task limits before creating
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
@@ -209,7 +210,6 @@ class A2AService:
         except ValueError as e:
             raise A2AServiceError(str(e)) from e
 
-        # message_id is required and used in webhook URLs
         if not message_id:
             raise A2AServiceError("message_id is required for task tracking")
 
@@ -245,6 +245,11 @@ class A2AService:
                 f"Failed to persist task tracking for message {message_id}. "
                 "The message document may not exist."
             )
+
+        # Keep the in-memory object in sync with what was written to the DB.
+        if current_message.message_content:
+            current_message.message_content.message_task = placeholder_task
+        current_message.has_task_tracking = True
 
         return {
             "message_id": message_id,
