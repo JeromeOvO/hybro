@@ -18,9 +18,12 @@ import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
 import { streamingBuffer } from '@/stores/streaming-buffer'
+import { TypewriterManager } from '@/stores/typewriter'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { normalizeTimestampOrNow, isStale } from '@/lib/time'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
+
+const typewriterManager = new TypewriterManager()
 
 interface UseRoomWebhookProps {
   roomId: string
@@ -306,6 +309,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     // Clear streaming buffer on room switch
     streamingBuffer.clear()
+    typewriterManager.finishAll()
 
     // Reset UI flags so the new room starts with clean state.
     // The previous room's processing continues server-side; when the user
@@ -425,6 +429,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
           streamingBuffer.finalize(messageId)
+          typewriterManager.finish(messageId)
 
           if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
             const agentName = await getAgentName(sseMessage.data.agent_id)
@@ -449,6 +454,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         // Token streaming: append to ephemeral buffer, not the message store
         const { message_id, agent_id, token } = sseMessage.data || {}
         if (!message_id || !token) break
+
+        // Real streaming supersedes any active typewriter for this message
+        typewriterManager.abort(message_id)
 
         // Ignore tokens for messages that already have authoritative content
         // (task_update/agent_response already arrived with final content)
@@ -629,14 +637,41 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           }
 
           if (isTerminalState(status)) {
+            const hadRealStreaming = streamingBuffer.isStreaming(messageId)
             streamingBuffer.finalize(messageId)
+            typewriterManager.finish(messageId)
 
-            store.upsertMessage({
-              ...baseMsg,
-              content,
-              isEphemeral: false,
-              ...taskFields,
-            }, 'sse')
+            if (!hadRealStreaming && content && status === TASK_STATE.COMPLETED) {
+              // Non-streaming agent: use typewriter for progressive reveal.
+              // Create ephemeral placeholder so the agent-bubble renders immediately,
+              // then feed content through StreamingBuffer via TypewriterManager.
+              store.upsertMessage({
+                ...baseMsg,
+                content: '',
+                isEphemeral: true,
+                ...taskFields,
+                taskStatus: undefined,
+              }, 'sse')
+
+              const finalContent = content
+              const finalTaskFields = taskFields
+              typewriterManager.start(messageId, finalContent, () => {
+                streamingBuffer.finalize(messageId)
+                store.upsertMessage({
+                  ...baseMsg,
+                  content: finalContent,
+                  isEphemeral: false,
+                  ...finalTaskFields,
+                }, 'sse')
+              })
+            } else {
+              store.upsertMessage({
+                ...baseMsg,
+                content,
+                isEphemeral: false,
+                ...taskFields,
+              }, 'sse')
+            }
 
             setProcessing(false)
             setCancelling(false)
@@ -699,6 +734,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       sseHadDisconnectionRef.current = true
+
+      // Finish any active typewriters so their content is committed
+      typewriterManager.finishAll()
 
       // Promote partial streaming content to entity content on disconnect.
       // Use 'optimistic' source so Rule 2 (SSE wins over DB for non-terminal)
