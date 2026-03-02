@@ -72,6 +72,7 @@ function ChatPageContent() {
         roomName: string
         selectedAgents: Agent[]
         debateMode: boolean
+        useSupervisor: boolean
     } | null>(null)
 
     // Pre-configure room when agentId is in URL params
@@ -92,6 +93,7 @@ function ChatPageContent() {
                     roomName: `Chat with ${agent.agent_card.name}`,
                     selectedAgents: [chatAgent],
                     debateMode: false,
+                    useSupervisor: false,
                 })
             } else {
                 console.error("Failed to load agent for chat:", response.error)
@@ -147,6 +149,7 @@ function ChatPageContent() {
                 preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
             ),
             debateMode: preConfiguredRoom.debateMode,
+            useSupervisor: preConfiguredRoom.useSupervisor,
         }
     }, [preConfiguredRoom])
 
@@ -171,7 +174,8 @@ function ChatPageContent() {
                 ...(preConfiguredRoom ? {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
-                    debateMode: preConfiguredRoom.debateMode
+                    debateMode: preConfiguredRoom.debateMode,
+                    useSupervisor: preConfiguredRoom.useSupervisor,
                 } : {}),
                 targetGroup: gm.selectedGroup
             }
@@ -206,12 +210,13 @@ function ChatPageContent() {
     const handleRoomSettingsUpdate = async (
         roomName: string,
         selectedAgents: { [agentId: string]: Agent },
-        debateMode: boolean
+        options: { debateMode: boolean; useSupervisor: boolean }
     ) => {
         setPreConfiguredRoom({
             roomName,
             selectedAgents: Object.values(selectedAgents),
-            debateMode,
+            debateMode: options.debateMode,
+            useSupervisor: options.useSupervisor,
         })
         setDialogOpen(false)
     }

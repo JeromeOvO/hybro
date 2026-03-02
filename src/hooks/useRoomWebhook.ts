@@ -209,6 +209,13 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     return extendInfo.debateMode || false
   }, [room])
 
+  // Get supervisor mode from room's extend_info
+  const getSupervisorMode = useCallback((): boolean => {
+    if (!room?.extend_info) return false
+    const extendInfo = room.extend_info as { use_supervisor?: boolean }
+    return extendInfo.use_supervisor || false
+  }, [room])
+
   // ── DB Hydration: load messages into normalized store on room entry ──
 
   const hydrateFromDb = useCallback(async (targetRoomId: string) => {
@@ -723,12 +730,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   const updateRoomSettings = useCallback(async (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    debateMode: boolean
+    options: { debateMode: boolean; useSupervisor: boolean }
   ) => {
     if (!room) {
       banner.error('Room data not available')
       return false
     }
+
+    const { debateMode, useSupervisor } = options
 
     try {
       setUpdatingRoom(true)
@@ -740,7 +749,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           agent.agent_card.name,  // value: agent name
         ])
       )
-      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode })
+      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode, useSupervisor })
 
       // Update room name if changed
       if (roomName !== room.room_name) {
@@ -756,20 +765,25 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         throw new Error(`Failed to update room agents: ${agentResponse.error}`)
       }
 
-      // Update extend_info with debate mode using the new API
+      // Update extend_info if debateMode or useSupervisor changed
       const currentDebateMode = getDebateMode()
-      if (debateMode !== currentDebateMode) {
+      const currentSupervisorMode = getSupervisorMode()
+      if (debateMode !== currentDebateMode || useSupervisor !== currentSupervisorMode) {
         const updatedExtendInfo = {
           ...(room.extend_info as object || {}),
-          debateMode
+          debateMode,
+          use_supervisor: useSupervisor,
         }
 
         const extendInfoResponse = await updateRoomExtendInfo(roomId, updatedExtendInfo)
         if (!extendInfoResponse.success) {
-          throw new Error(`Failed to update debate mode: ${extendInfoResponse.error}`)
+          throw new Error(`Failed to update room settings: ${extendInfoResponse.error}`)
         }
 
-        console.log('✅ Debate mode updated:', debateMode ? 'ENABLED' : 'DISABLED')
+        console.log('✅ Room extend_info updated:', {
+          debateMode: debateMode ? 'ENABLED' : 'DISABLED',
+          supervisor: useSupervisor ? 'ENABLED' : 'DISABLED',
+        })
       }
 
       // Reload room settings to get updated data from backend
@@ -785,7 +799,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom])
+  }, [room, roomId, roomQuery, getDebateMode, getSupervisorMode, setUpdatingRoom])
 
   // Complete user message sending workflow - using unified SendMessage API
   const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData) => {
@@ -962,7 +976,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     return Object.entries(room.room_agent_set).map(([id, name]) => ({ id, name }))
   }, [room])
 
-  // Get current room data for form initialization - now includes debate mode
+  // Get current room data for form initialization
   const getRoomFormData = useCallback(() => {
     if (!room) return null
 
@@ -972,9 +986,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       selectedAgents: room.room_agent_set || {},
       roomOwnerId: room.room_owner_id || '',
       roomOwnerName: room.room_owner_name || '',
-      debateMode: getDebateMode()
+      debateMode: getDebateMode(),
+      useSupervisor: getSupervisorMode(),
     }
-  }, [room, getDebateMode])
+  }, [room, getDebateMode, getSupervisorMode])
 
   // Toggle SSE connection
   const toggleSSE = useCallback(() => {

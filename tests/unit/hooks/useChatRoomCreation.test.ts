@@ -181,7 +181,7 @@ describe('useChatRoomCreation', () => {
         'Test User',
         defaultProps.getToken,
         { 'agent-1': 'Test Agent' },
-        { debateMode: true, initialMessage: 'Hello world' },
+        { debateMode: true, use_supervisor: false, initialMessage: 'Hello world' },
         undefined
       )
     })

@@ -16,8 +16,9 @@ interface CreateRoomOptions {
   selectedAgents?: Agent[]
   appliedFromGroup?: string
   debateMode?: boolean
+  useSupervisor?: boolean
   roomName?: string
-  targetGroup?: string  // Group to use for the first message
+  targetGroup?: string
 }
 
 export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
@@ -71,6 +72,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       selectedAgents = [], 
       appliedFromGroup,
       debateMode = false,
+      useSupervisor = false,
       roomName: customRoomName,
       targetGroup
     } = options
@@ -108,9 +110,9 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         ? `${displayMessage.substring(0, 30)}...` 
         : displayMessage) || 'New Chat'
 
-      // Create room with settings
       const extendInfo = {
         debateMode,
+        use_supervisor: useSupervisor,
         initialMessage: userMessage
       }
 
