@@ -2,6 +2,8 @@ import asyncio
 from collections import deque
 from uuid import uuid4
 
+from a2a.types import TaskState
+
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
@@ -22,7 +24,7 @@ from modules.QueueExecutor import QueueExecutor, QueueResult
 from modules.ResponseProcessor import ResponseProcessor
 from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
-from services.a2a_constants import SSEProcessingStatus
+from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_resolver_service import agent_resolver_service
 from services.database_service import db_service
@@ -264,6 +266,9 @@ class RoomMessageCenter:
                 room_user_message_id,
                 details="Failed to process agent messages",
             )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id
+            )
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
@@ -298,6 +303,84 @@ class RoomMessageCenter:
         return OrchestrationResponse(
             room_id=room_id, success=True, error=None, status_code=200
         )
+
+    async def _notify_all_non_terminal_tasks_failed(
+        self,
+        room_id: str,
+        user_message_id: str,
+    ) -> None:
+        """Safety net: send ``task_update`` SSE for every agent message under
+        *user_message_id* whose task is still in a non-terminal state.
+
+        Called after ``processing_status: FAILED`` (or CANCELED) is sent so
+        that individual task bubbles in the frontend also transition to their
+        correct final state.  The idempotency check inside
+        ``notify_task_update`` ensures messages already notified as terminal
+        are skipped (no double-notification).
+        """
+        from services.task_notification_service import notify_task_update
+
+        try:
+            agent_messages = (
+                await self.database_service
+                .get_room_agent_messages_by_related_message_id(user_message_id)
+            )
+        except Exception:
+            logger.exception(
+                "RoomMessageCenter: Failed to query agent messages for "
+                "safety-net notification on user_message_id=%s",
+                user_message_id,
+            )
+            return
+
+        for msg in agent_messages:
+            if not msg.has_task_tracking:
+                continue
+
+            task = (
+                msg.message_content.message_task
+                if msg.message_content
+                else None
+            )
+            if not task or not task.status:
+                continue
+
+            state = task.status.state
+            if is_terminal_state(state):
+                # Already terminal — notify in case the SSE was missed,
+                # but idempotency in notify_task_update will skip duplicates.
+                try:
+                    await notify_task_update(
+                        message_id=msg.message_id,
+                        state=state,
+                        room_id=room_id,
+                        user_id=msg.user_id or "",
+                    )
+                except Exception:
+                    logger.exception(
+                        "RoomMessageCenter: safety-net notify_task_update failed "
+                        "for already-terminal message %s",
+                        msg.message_id,
+                    )
+                continue
+
+            # Non-terminal task: transition to failed in DB, then notify.
+            await self.tsm.transition_task(
+                msg, TaskState.failed, error="Processing failed"
+            )
+            try:
+                await notify_task_update(
+                    message_id=msg.message_id,
+                    state=TaskState.failed,
+                    room_id=room_id,
+                    user_id=msg.user_id or "",
+                )
+            except Exception:
+                logger.exception(
+                    "RoomMessageCenter: safety-net notify_task_update failed "
+                    "for message %s",
+                    msg.message_id,
+                )
 
     def _validate_room_message_request(
         self, request: OrchestrationRequest
@@ -560,6 +643,9 @@ class RoomMessageCenter:
                 room_user_message_id,
                 details="Supervisor execution failed unexpectedly",
             )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id
+            )
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -645,6 +731,9 @@ class RoomMessageCenter:
                 SSEProcessingStatus.FAILED,
                 user_message_id,
                 details="V2 resume: corrupted trajectory data",
+            )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
             )
             return RunStatus.FAILED
 
@@ -767,6 +856,9 @@ class RoomMessageCenter:
                 SSEProcessingStatus.FAILED,
                 user_message_id,
                 details="V2 resume: room not found",
+            )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
             )
             return RunStatus.FAILED
 
@@ -914,6 +1006,9 @@ class RoomMessageCenter:
                 SSEProcessingStatus.FAILED,
                 user_message_id,
                 details="V2 resume: executor failed",
+            )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
             )
             return RunStatus.FAILED
 
@@ -1235,6 +1330,9 @@ class RoomMessageCenter:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
+                await self._notify_all_non_terminal_tasks_failed(
+                    room_id, user_message_id
+                )
                 self.sse_manager.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
@@ -1255,6 +1353,9 @@ class RoomMessageCenter:
                     SSEProcessingStatus.FAILED,
                     user_message_id,
                     details="V2 supervisor execution failed",
+                )
+                await self._notify_all_non_terminal_tasks_failed(
+                    room_id, user_message_id
                 )
 
         # Clean up cancellation token for all terminal statuses.
@@ -1424,6 +1525,10 @@ class RoomMessageCenter:
         )
 
         if not result.success:
+            if result.room_id and result.user_message_id:
+                await self._notify_all_non_terminal_tasks_failed(
+                    result.room_id, result.user_message_id
+                )
             return False
 
         if result.needs_completion and result.room_id and result.user_message_id:

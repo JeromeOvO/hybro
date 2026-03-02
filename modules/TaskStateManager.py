@@ -1,9 +1,13 @@
 """TaskStateManager — single-responsibility module for task state transitions.
 
-All state transitions (persist to MongoDB + notify frontend via SSE) go
-through this class.  The key invariant is that ``transition_task`` persists
-**by default**, so a developer must *actively opt out* — inverting the old
-failure mode where "forgot to persist" was the common bug.
+All state transitions (persist to MongoDB) go through this class.
+The key invariant is that ``transition_task`` persists **by default**, so a
+developer must *actively opt out* — inverting the old failure mode where
+"forgot to persist" was the common bug.
+
+Terminal/interactive **notifications** are handled by
+``services.task_notification_service.notify_task_update`` (separate concern).
+Non-terminal streaming progress notifications still use ``notify_task``.
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from collections import deque
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from a2a.types import AgentCard, Message, Role, Task, TaskState, TaskStatus, TextPart
+from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -107,17 +111,16 @@ class TaskStateManager:
         message: RoomAgentMessage,
         new_state: TaskState,
         *,
-        ctx: ProcessingContext | None = None,
         error: str | None = None,
-        content: str | None = None,
-        notify: bool = True,
         persist: bool = True,
     ) -> None:
         """Single entry point for all task state transitions.
 
-        Always persists by default. Always notifies by default (when *ctx* is
-        provided).  Callers opt out explicitly (e.g., ``notify=False`` for batch
-        queue cleanup).
+        Always persists by default.  Callers opt out explicitly
+        (e.g., ``persist=False`` for batch queue cleanup).
+
+        Terminal/interactive notifications are the caller's responsibility
+        via ``services.task_notification_service.notify_task_update``.
 
         The terminal-state guard prevents overwriting a ``completed``,
         ``failed``, ``canceled``, or ``rejected`` status — making double-
@@ -150,48 +153,9 @@ class TaskStateManager:
         if persist:
             await self.persist_message(message)
 
-        if notify and ctx:
-            await self.notify_task(ctx, new_state, content=content, error=error)
-
     # ------------------------------------------------------------------
     # Convenience wrappers
     # ------------------------------------------------------------------
-
-    async def fail_task_and_notify(
-        self,
-        *,
-        room_id: str,
-        message: RoomAgentMessage,
-        error_text: str,
-        agent_id: str | None,
-        agent_card: AgentCard | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-    ) -> None:
-        """Persist a failed TaskStatus on *message* and send the failure notification.
-
-        Delegates state persistence to ``transition_task`` (which includes the
-        terminal-state guard) and then sends the notification via
-        ``notification_service`` with the full set of display parameters.
-
-        *step_number* / *total_steps* default to the values stored on *message*
-        when not supplied explicitly.  *agent_card* is forwarded to the
-        notification service so it can resolve the agent display-name.
-        """
-        await self.transition_task(
-            message, TaskState.failed, error=error_text, persist=True, notify=False
-        )
-        await self.notification_service.send_task_update(
-            room_id=room_id,
-            message_id=message.message_id,
-            status=TaskState.failed,
-            error=error_text,
-            agent_id=agent_id,
-            agent_card=agent_card,
-            step_number=step_number if step_number is not None else message.step_number,
-            total_steps=total_steps if total_steps is not None else message.total_steps,
-            task_content=message.task_content,
-        )
 
     async def cancel_remaining_queue(
         self,
@@ -210,5 +174,5 @@ class TaskStateManager:
 
         for msg in messages_to_cancel:
             await self.transition_task(
-                msg, TaskState.canceled, persist=True, notify=False
+                msg, TaskState.canceled, persist=True
             )

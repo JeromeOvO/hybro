@@ -4,7 +4,7 @@ Unit tests for TaskStateManager module.
 Tests cover:
 - get_task: null-safe accessor
 - state_str: enum/string conversion
-- transition_task: terminal-state guard, state mutation, persist/notify flags
+- transition_task: terminal-state guard, state mutation, persist flag
 - cancel_remaining_queue: batch cancellation
 """
 
@@ -131,23 +131,10 @@ class TestTransitionTask:
         tsm.room_services.update_agent_message_by_message_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_notifies_when_ctx_provided(self, tsm):
-        msg = _make_message_with_task(TaskState.submitted)
-        ctx = MagicMock()
-        await tsm.transition_task(msg, TaskState.working, ctx=ctx)
-        tsm.notification_service.send_task_update.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_skips_notify_when_no_ctx(self, tsm):
+    async def test_no_longer_notifies_directly(self, tsm):
+        """transition_task no longer sends notifications — that's notify_task_update's job."""
         msg = _make_message_with_task(TaskState.submitted)
         await tsm.transition_task(msg, TaskState.working)
-        tsm.notification_service.send_task_update.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_notify_when_disabled(self, tsm):
-        msg = _make_message_with_task(TaskState.submitted)
-        ctx = MagicMock()
-        await tsm.transition_task(msg, TaskState.working, ctx=ctx, notify=False)
         tsm.notification_service.send_task_update.assert_not_called()
 
     @pytest.mark.asyncio

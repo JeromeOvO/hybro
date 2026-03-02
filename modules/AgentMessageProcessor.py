@@ -23,6 +23,7 @@ from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
 from modules.TaskStateManager import get_task
+from services.task_notification_service import notify_task_update
 
 if TYPE_CHECKING:
     from models.agent import Agent
@@ -124,14 +125,17 @@ class AgentMessageProcessor:
                     exc,
                     exc_info=True,
                 )
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=f"Agent streaming failed: {exc}",
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=f"Agent streaming failed: {exc}",
-                    agent_id=current_message.agent_id,
-                    agent_card=agent.agent_card,
-                    step_number=step_number,
-                    total_steps=total_steps,
+                    user_id=current_message.user_id or "",
+                    error=f"Agent streaming failed: {exc}",
                 )
                 return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
