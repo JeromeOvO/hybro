@@ -6,11 +6,11 @@ import {
   CheckCircle, 
   XCircle, 
   Clock, 
-  AlertTriangle, 
   KeyRound,
   Sparkles,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  MessageCircleQuestion
 } from 'lucide-react'
 import { type TaskState, isTerminalState, isFailureState, PROCESSING_STATUS, TASK_STATE } from '@/lib/types/sse'
 import { elapsedSeconds, formatElapsedTime } from '@/lib/time'
@@ -28,6 +28,9 @@ interface TaskStatusMessageProps {
   totalSteps?: number // Total number of steps
   taskContent?: string // The task description being processed
   taskCreatedAt?: string // Task creation timestamp for elapsed time calculation
+  hitlPrompt?: string
+  hitlResolved?: boolean
+  hitlUserAnswer?: string
   onComplete?: (content: string) => void
   onError?: (error: string) => void
 }
@@ -145,6 +148,9 @@ export function TaskStatusMessage({
   totalSteps: initialTotalSteps,
   taskContent,
   taskCreatedAt,
+  hitlPrompt,
+  hitlResolved,
+  hitlUserAnswer,
   onComplete,
   onError,
 }: TaskStatusMessageProps) {
@@ -218,13 +224,14 @@ export function TaskStatusMessage({
     }
   }, [initialStatus, initialContent, initialError, initialStatusMessage, initialStepNumber, initialTotalSteps, status, stepNumber, totalSteps, handleUpdate])
 
-  // Elapsed time counter (only for non-terminal states)
+  // Elapsed time counter (only for non-terminal states and unresolved HITL)
   useEffect(() => {
     if (isTerminalState(status)) return
+    if (hitlResolved === true) return
     
     const interval = setInterval(() => setElapsed(e => e + 1), 1000)
     return () => clearInterval(interval)
-  }, [status])
+  }, [status, hitlResolved])
 
   // Toggle handler for collapse/expand with scroll stabilization
   const handleToggle = useCallback(() => {
@@ -334,10 +341,14 @@ export function TaskStatusMessage({
     )
   }
 
-  // Input required state
+  // Input required state — when HITL is active (hitlResolved === false),
+  // the chat input bar's HitlPanel handles interaction; hide the bubble entirely.
   if (status === TASK_STATE.INPUT_REQUIRED) {
-    const inputContent = statusMessage || "The agent needs additional information to continue."
-    const isLong = inputContent.length > LONG_CONTENT_THRESHOLD
+    if (hitlResolved === false) {
+      return null
+    }
+    const isHitlResponded = hitlResolved === true
+    const inputContent = hitlPrompt || content || statusMessage || "The agent needs additional information to continue."
     return (
       <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/12 message-bubble text-amber-700 dark:text-amber-400">
@@ -347,30 +358,32 @@ export function TaskStatusMessage({
                 agentId={agentId}
                 agentName={agentName}
                 avatarClassName="w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 bg-amber-100 dark:bg-amber-500/15 border-amber-300 dark:border-amber-500/30"
-                avatarChildren={<AlertTriangle className="h-3 w-3 text-amber-600 dark:text-amber-400" />}
+                avatarChildren={<MessageCircleQuestion className="h-3 w-3 text-amber-600 dark:text-amber-400" />}
                 nameClassName="text-amber-700 dark:text-amber-400"
               />
               <StepIndicator stepNumber={stepNumber} totalSteps={totalSteps} />
             </div>
             <span className="text-xs text-amber-700 dark:text-amber-400 font-medium">
-              Input required
+              {isHitlResponded ? 'Input provided' : 'Input required'}
             </span>
           </div>
-          <div className={`text-sm text-amber-700 dark:text-amber-300${!isExpanded && isLong ? ' line-clamp-4' : ''}`}>
+          <div className="text-sm text-amber-700 dark:text-amber-300">
             <MarkdownContent content={inputContent} />
           </div>
-          {isLong && (
-            <CollapseToggle
-              isExpanded={isExpanded}
-              onToggle={handleToggle}
-              colorClass="text-amber-700 dark:text-amber-400"
-              toggleRef={toggleButtonRef}
-            />
+          {isHitlResponded && hitlUserAnswer && (
+            <div className="mt-2 pt-2 border-t border-amber-200 dark:border-amber-500/20">
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mb-1">Your answer:</p>
+              <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-100/50 dark:bg-amber-500/8 rounded-md px-3 py-1.5">
+                {hitlUserAnswer}
+              </p>
+            </div>
           )}
-          <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            {formatElapsedTime(elapsed)} elapsed
-          </p>
+          {!isHitlResponded && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {formatElapsedTime(elapsed)} elapsed
+            </p>
+          )}
         </div>
       </div>
     )

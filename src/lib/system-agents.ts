@@ -10,6 +10,16 @@ export interface SystemAgentInfo {
 }
 
 export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
+  supervisor_hitl: {
+    name: 'Question & Answer',
+    description:
+      'A built-in agent that facilitates human-in-the-loop interactions, collecting clarifications and confirmations from the user.',
+  },
+  supervisor_synthesis: {
+    name: 'Agent',
+    description:
+      'A built-in agent that synthesizes and summarizes results from multiple specialist agents coordinated by the supervisor.',
+  },
   debate_summary: {
     name: 'Debate Coordinator',
     description:
