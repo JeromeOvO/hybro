@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
-import { MessageCircleMore } from "lucide-react"
+import { MessageCircleMore, Target } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
 // Schema with required room name (for editing existing rooms)
@@ -29,6 +29,7 @@ const formSchemaRequired = z.object({
   }).max(50, {
     message: "Room name must be less than 50 characters.",
   }),
+  useSupervisor: z.boolean(),
   debateMode: z.boolean(),
 })
 
@@ -37,17 +38,24 @@ const formSchemaOptional = z.object({
   roomName: z.string().max(50, {
     message: "Room name must be less than 50 characters.",
   }).optional().or(z.literal('')),
+  useSupervisor: z.boolean(),
   debateMode: z.boolean(),
 })
 
 interface RoomFormData {
   roomName: string
-  selectedAgents: { [agentId: string]: string } // agent_id -> agent_name mapping
-  debateMode?: boolean // Add debateMode to interface
+  selectedAgents: { [agentId: string]: string }
+  debateMode?: boolean
+  useSupervisor?: boolean
+}
+
+export interface RoomModeOptions {
+  debateMode: boolean
+  useSupervisor: boolean
 }
 
 interface RoomSettingFormProps {
-  onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }, debateMode: boolean) => void
+  onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }, options: RoomModeOptions) => void
   isSubmitting?: boolean
   availableAgents?: Agent[]
   loadingAgents?: boolean
@@ -90,6 +98,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
+      useSupervisor: false,
       debateMode: false,
     },
   })
@@ -102,7 +111,8 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       // Set room name
       form.setValue('roomName', initialData.roomName)
       
-      // Set debate mode from initialData
+      // Set supervisor and debate mode from initialData
+      form.setValue('useSupervisor', initialData.useSupervisor || false)
       form.setValue('debateMode', initialData.debateMode || false)
       
       // Convert agent mapping back to selected agents
@@ -143,10 +153,11 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   }
 
   function handleSubmit(values: z.infer<typeof formSchemaOptional>) {
-    // roomName can be optional when requireRoomName is false; fall back to empty string
     const roomName = values.roomName ?? ""
-    const debateMode = values.debateMode ?? false
-    onSubmit(roomName, selectedAgents, debateMode)
+    onSubmit(roomName, selectedAgents, {
+      debateMode: values.debateMode ?? false,
+      useSupervisor: values.useSupervisor ?? false,
+    })
   }
 
   // Reset form function
@@ -181,6 +192,33 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
                 />
               </FormControl>
               <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <Separator />
+
+        {/* Supervisor Mode Switch */}
+        <FormField
+          control={form.control}
+          name="useSupervisor"
+          render={({ field }) => (
+            <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 bg-card">
+              <div className="space-y-0.5 flex-1">
+                <FormLabel className="text-base flex items-center gap-2">
+                  <Target className="h-4 w-4" />
+                  Supervisor Mode
+                </FormLabel>
+                <FormDescription className="text-sm">
+                  Enable AI supervisor to coordinate agents with an adaptive planning loop
+                </FormDescription>
+              </div>
+              <FormControl>
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
             </FormItem>
           )}
         />

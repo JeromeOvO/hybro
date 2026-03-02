@@ -145,9 +145,9 @@ export default function RoomChatPage() {
   const handleRoomSettingsUpdate = async (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    debateMode: boolean
+    options: { debateMode: boolean; useSupervisor: boolean }
   ) => {
-    const success = await updateRoomSettings(roomName, selectedAgents, debateMode)
+    const success = await updateRoomSettings(roomName, selectedAgents, options)
     if (success) {
       setDialogOpen(false)
     }
