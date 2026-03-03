@@ -258,6 +258,13 @@ class SupervisorExecutor:
                     )
                 trajectory.total_supervisor_calls += 1
 
+            # Clear one-shot HITL reply after it has been consumed by decide_next
+            # so it doesn't re-appear in subsequent loop iterations.
+            if trajectory.hitl_user_reply:
+                trajectory.hitl_user_reply = None
+            if trajectory.clarify_user_reply:
+                trajectory.clarify_user_reply = None
+
             logger.info(
                 "supervisor_action_decided",
                 extra={
@@ -316,6 +323,49 @@ class SupervisorExecutor:
                         synthesis_instruction=action.synthesis_instruction,
                         clarification_question=action.clarification_question,
                     )
+
+            # --- Guard: CLARIFY cap — only one round per user message ---
+            if action.action == ActionType.CLARIFY:
+                prior_clarifies = sum(
+                    1 for e in trajectory.entries
+                    if e.action.action == ActionType.CLARIFY
+                )
+                if prior_clarifies >= 1:
+                    logger.warning(
+                        "supervisor_clarify_cap_reached",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                            "prior_clarifies": prior_clarifies,
+                        },
+                    )
+                    healthy_agents = [
+                        a for a in agent_registry if a.is_healthy
+                    ]
+                    if healthy_agents:
+                        target_agent = healthy_agents[0]
+                        action = SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=(
+                                "Clarification cap reached. Proceeding "
+                                "with the information already gathered."
+                            ),
+                            targets=[
+                                DelegateTarget(
+                                    agent_id=target_agent.agent_id,
+                                    agent_name=target_agent.agent_name,
+                                    task=message_text,
+                                )
+                            ],
+                        )
+                    else:
+                        action = SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning=(
+                                "Clarification cap reached and no "
+                                "healthy agents available."
+                            ),
+                        )
 
             # --- Execute the action ---
             match action.action:

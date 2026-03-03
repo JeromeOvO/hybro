@@ -68,6 +68,12 @@ Output ONLY valid JSON matching the schema below.
    - Only use when 2+ agents have responded and their results need combining.
 3. CLARIFY: The user's message is ambiguous or needs confirmation.
    - Use sparingly — only when you truly cannot proceed without user input.
+   - NEVER re-ask questions the user has already answered. If the trajectory
+     shows a CLARIFY step followed by a "User's Clarification Reply", treat
+     those answers as final and proceed to DELEGATE or DONE.
+   - After receiving user replies, you MUST move forward (DELEGATE or DONE).
+     Do not ask follow-up clarification unless the user's answer is genuinely
+     unintelligible or contradictory.
    - Put each question in a separate object inside the "questions" array.
      Each object has "prompt" (the question text), "prompt_type", and optional "choices".
    - "prompt_type" controls how the user responds:
@@ -87,6 +93,8 @@ Output ONLY valid JSON matching the schema below.
 - If an agent's result changes what you planned to do next, simply adapt.
 - Do NOT delegate to agents that are unhealthy (status: unhealthy).
 - You have a maximum of {max_steps} actions. Use SYNTHESIZE or DONE before the limit.
+- You may CLARIFY at most once. After you receive the user's answers, you MUST
+  proceed with DELEGATE — do not issue another CLARIFY.
 
 ## Room Conversation Background
 {conversation_context}
@@ -343,7 +351,7 @@ class RoomSupervisorService:
                             tag = f"{r.agent_name}(FAILED)"
                         summary_parts.append(tag)
                 elif action_type == "CLARIFY":
-                    summary_parts.append("CLARIFY asked")
+                    summary_parts.append("CLARIFY(answered)")
                 elif action_type == "DONE":
                     summary_parts.append("DONE")
                 else:
@@ -377,9 +385,13 @@ class RoomSupervisorService:
                         f"{response_preview}"
                     )
             elif entry.action.action == ActionType.CLARIFY:
-                lines.append(
-                    f"  Asked user: {entry.action.clarification_question}"
-                )
+                if entry.action.questions:
+                    for qi, q in enumerate(entry.action.questions, 1):
+                        lines.append(f"  Question {qi}: {q.prompt}")
+                elif entry.action.clarification_question:
+                    lines.append(
+                        f"  Asked user: {entry.action.clarification_question}"
+                    )
             elif entry.action.action == ActionType.SYNTHESIZE:
                 lines.append(
                     f"  Instruction: {entry.action.synthesis_instruction}"
@@ -387,7 +399,11 @@ class RoomSupervisorService:
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
 
-        if trajectory.clarify_user_reply:
+        if trajectory.hitl_user_reply:
+            lines.append(
+                f"\n### User's Clarification Reply\n{trajectory.hitl_user_reply}"
+            )
+        elif trajectory.clarify_user_reply:
             lines.append(
                 f"\n### User's Clarification Reply\n{trajectory.clarify_user_reply}"
             )

@@ -247,10 +247,16 @@ class HITLService:
                 )
                 is_last_in_group = True
             else:
-                # The current request is already "processing" (claimed in Phase 1),
-                # so it is included in the count.  remaining <= 1 means only this
-                # request is still pending/processing — all others are responded.
                 is_last_in_group = remaining <= 1
+            logger.info(
+                "hitl_group_last_check",
+                extra={
+                    "request_id": request_id,
+                    "group_id": request.group_id,
+                    "remaining": remaining,
+                    "is_last_in_group": is_last_in_group,
+                },
+            )
 
         async def _lease_heartbeat() -> None:
             while True:
