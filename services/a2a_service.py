@@ -352,6 +352,7 @@ class A2AService:
                     message=Message(
                         role=Role.agent,
                         parts=[TextPart(text=f"Failed to contact agent: {str(e)}")],
+                        message_id=str(uuid4()),
                     ),
                 ),
             )
@@ -372,6 +373,7 @@ class A2AService:
                     message=Message(
                         role=Role.agent,
                         parts=[TextPart(text=f"Agent error: {error_msg}")],
+                        message_id=str(uuid4()),
                     ),
                 ),
             )
@@ -886,6 +888,7 @@ class A2AService:
         reply_message = Message(
             role=Role.user,
             parts=[TextPart(text=user_input)],
+            message_id=str(uuid4()),
             task_id=task_id,
             context_id=context_id,
             reference_task_ids=[task_id],
