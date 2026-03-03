@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
@@ -257,6 +258,13 @@ class SupervisorExecutor:
                     )
                 trajectory.total_supervisor_calls += 1
 
+            # Clear one-shot HITL reply after it has been consumed by decide_next
+            # so it doesn't re-appear in subsequent loop iterations.
+            if trajectory.hitl_user_reply:
+                trajectory.hitl_user_reply = None
+            if trajectory.clarify_user_reply:
+                trajectory.clarify_user_reply = None
+
             logger.info(
                 "supervisor_action_decided",
                 extra={
@@ -315,6 +323,49 @@ class SupervisorExecutor:
                         synthesis_instruction=action.synthesis_instruction,
                         clarification_question=action.clarification_question,
                     )
+
+            # --- Guard: CLARIFY cap — only one round per user message ---
+            if action.action == ActionType.CLARIFY:
+                prior_clarifies = sum(
+                    1 for e in trajectory.entries
+                    if e.action.action == ActionType.CLARIFY
+                )
+                if prior_clarifies >= 1:
+                    logger.warning(
+                        "supervisor_clarify_cap_reached",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                            "prior_clarifies": prior_clarifies,
+                        },
+                    )
+                    healthy_agents = [
+                        a for a in agent_registry if a.is_healthy
+                    ]
+                    if healthy_agents:
+                        target_agent = healthy_agents[0]
+                        action = SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=(
+                                "Clarification cap reached. Proceeding "
+                                "with the information already gathered."
+                            ),
+                            targets=[
+                                DelegateTarget(
+                                    agent_id=target_agent.agent_id,
+                                    agent_name=target_agent.agent_name,
+                                    task=message_text,
+                                )
+                            ],
+                        )
+                    else:
+                        action = SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning=(
+                                "Clarification cap reached and no "
+                                "healthy agents available."
+                            ),
+                        )
 
             # --- Execute the action ---
             match action.action:
@@ -588,40 +639,96 @@ class SupervisorExecutor:
 
                     from services.hitl_service import hitl_service
                     from models.hitl import HITLPromptType
+                    from models.supervisor_v2 import ClarifyQuestion
 
-                    hitl_prompt_type = HITLPromptType.TEXT
-                    if action.prompt_type:
-                        try:
-                            hitl_prompt_type = HITLPromptType(action.prompt_type)
-                        except ValueError:
-                            pass
-
-                    request = await hitl_service.request_input(
-                        room_id=room_id,
-                        user_message_id=user_message_id,
-                        source="supervisor",
-                        prompt=(
-                            action.clarification_question
-                            or "The supervisor needs your input."
-                        ),
-                        prompt_type=hitl_prompt_type,
-                        choices=action.choices,
-                        source_step_id=str(step_number + 1),
-                        continuation_message_id=user_message_id,
-                    )
-
-                    if request is None:
-                        logger.warning(
-                            "Max HITL rounds exceeded for message %s — failing trajectory",
-                            user_message_id,
-                        )
-                        trajectory.status = TrajectoryStatus.FAILED
-                        return self._log_and_return(
-                            room_id, trajectory,
-                            SupervisorRunResult(
-                                status=RunStatus.FAILED, trajectory=trajectory
+                    # Build questions list — prefer structured questions[],
+                    # fall back to legacy clarification_question string.
+                    questions: list[ClarifyQuestion]
+                    if action.questions:
+                        questions = action.questions
+                    else:
+                        legacy_pt = action.prompt_type
+                        questions = [ClarifyQuestion(
+                            prompt=(
+                                action.clarification_question
+                                or "The supervisor needs your input."
                             ),
+                            prompt_type=legacy_pt,
+                            choices=action.choices,
+                        )]
+
+                    group_id = uuid4().hex if len(questions) > 1 else None
+                    last_request = None
+                    created_messages: list[str] = []
+                    created_request_ids: list[str] = []
+
+                    async def _cleanup_clarify_artifacts() -> None:
+                        """Cancel HITL requests and delete agent messages created in this CLARIFY."""
+                        for rid in created_request_ids:
+                            try:
+                                await hitl_service.cancel_request(rid, room_id)
+                            except Exception:
+                                logger.warning("Failed to cancel orphaned HITL request %s", rid)
+                        for mid in created_messages:
+                            try:
+                                await self.database_service.delete_room_agent_message_by_message_id(mid)
+                            except Exception:
+                                logger.warning("Failed to delete orphaned HITL agent message %s", mid)
+
+                    for qi, q in enumerate(questions):
+                        q_prompt_type = HITLPromptType.TEXT
+                        if q.prompt_type:
+                            try:
+                                q_prompt_type = HITLPromptType(q.prompt_type)
+                            except ValueError:
+                                pass
+
+                        hitl_agent_message = self.room_services.create_agent_message(
+                            room_id=room_id,
+                            related_message_id=user_message_id,
+                            agent_id="supervisor_hitl",
+                            content=q.prompt,
+                            user_id=request_user_id,
+                            step_number=step_number + 1,
+                            task_content=q.prompt,
                         )
+                        await self.database_service.add_room_agent_message(
+                            hitl_agent_message
+                        )
+                        created_messages.append(hitl_agent_message.message_id)
+
+                        request = await hitl_service.request_input(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            source="supervisor",
+                            prompt=q.prompt,
+                            prompt_type=q_prompt_type,
+                            choices=q.choices,
+                            agent_id="supervisor_hitl",
+                            agent_name="Question & Answer",
+                            source_step_id=str(step_number + 1),
+                            continuation_message_id=user_message_id,
+                            display_message_id=hitl_agent_message.message_id,
+                            group_id=group_id,
+                            group_total=len(questions) if group_id else None,
+                            group_index=qi if group_id else None,
+                        )
+
+                        if request is None:
+                            logger.warning(
+                                "HITL request_input failed for message %s (q %d/%d) — cleaning up",
+                                user_message_id, qi + 1, len(questions),
+                            )
+                            await _cleanup_clarify_artifacts()
+                            trajectory.status = TrajectoryStatus.FAILED
+                            return self._log_and_return(
+                                room_id, trajectory,
+                                SupervisorRunResult(
+                                    status=RunStatus.FAILED, trajectory=trajectory
+                                ),
+                            )
+                        created_request_ids.append(request.request_id)
+                        last_request = request
 
                     saved = await self._save_interrupted_state(
                         kind=InterruptKind.HITL_SUPERVISOR,
@@ -636,10 +743,15 @@ class SupervisorExecutor:
                         request_user_id=request_user_id,
                         quoted_text=quoted_text,
                         hitl_request_id=(
-                            request.request_id if request else None
+                            last_request.request_id if last_request else None
                         ),
                     )
                     if not saved:
+                        logger.warning(
+                            "Failed to save continuation for message %s — cleaning up %d requests",
+                            user_message_id, len(created_request_ids),
+                        )
+                        await _cleanup_clarify_artifacts()
                         trajectory.status = TrajectoryStatus.FAILED
                         return self._log_and_return(
                             room_id, trajectory,

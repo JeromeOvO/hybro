@@ -85,6 +85,14 @@ class DelegateTarget(BaseModel):
     task: str
 
 
+class ClarifyQuestion(BaseModel):
+    """A single question within a CLARIFY action's questions array."""
+
+    prompt: str
+    prompt_type: str | None = None
+    choices: list[str] | None = None
+
+
 class SupervisorAction(BaseModel):
     """Single next-action decision produced by the Supervisor LLM."""
 
@@ -101,6 +109,7 @@ class SupervisorAction(BaseModel):
     clarification_question: str | None = None
     prompt_type: str | None = None
     choices: list[str] | None = None
+    questions: list[ClarifyQuestion] | None = None
 
 
 # =========================================================================

@@ -1855,7 +1855,7 @@ A2A agents are external services. They might not handle multi-turn `input_requir
 
 ```python
 # 1. Max rounds per task
-MAX_HITL_ROUNDS = 3
+MAX_HITL_ROUNDS = 10
 
 async def request_input(self, ...):
     # Count existing HITL requests for this continuation

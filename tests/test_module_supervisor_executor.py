@@ -5,6 +5,7 @@ Tests cover:
 - _log_and_return: passes through result, includes trajectory metadata
 - _checkpoint_trajectory: persists trajectory snapshot, handles missing message
 - _save_interrupted_state: saves trajectory on unexpected failure
+- CLARIFY cleanup compensation: orphan requests are canceled on failure
 """
 
 import pytest
@@ -130,3 +131,119 @@ class TestCheckpointTrajectory:
         trajectory = SupervisorTrajectory()
         result = await se._checkpoint_trajectory("msg-1", trajectory)
         assert result is None
+
+
+# =============================================================================
+# CLARIFY cleanup compensation Tests
+# =============================================================================
+
+
+class TestClarifyCleanupCompensation:
+    """Tests that the CLARIFY handler cleans up HITL requests and messages
+    when _save_interrupted_state fails or request_input returns None mid-group."""
+
+    @pytest.fixture
+    def se(self):
+        return _make_supervisor_executor()
+
+    def _make_room_config(self):
+        cfg = MagicMock()
+        cfg.is_debate_mode = False
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_cancels_requests_when_save_interrupted_state_fails(self, se):
+        """If all questions are created but continuation save fails,
+        all HITL requests and messages must be cleaned up."""
+        from models.supervisor_v2 import (
+            SupervisorAction, ActionType, ClarifyQuestion,
+        )
+
+        req_a = MagicMock()
+        req_a.request_id = "req-a"
+        req_b = MagicMock()
+        req_b.request_id = "req-b"
+
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(side_effect=[req_a, req_b])
+        hitl_mock.cancel_request = AsyncMock()
+
+        agent_msg = MagicMock(message_id="msg-agent-1")
+        se.room_services.create_agent_message.return_value = agent_msg
+        se.database_service.add_room_agent_message = AsyncMock()
+        se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
+
+        action = SupervisorAction(
+            action=ActionType.CLARIFY,
+            reasoning="need info",
+            questions=[
+                ClarifyQuestion(prompt="Q1?"),
+                ClarifyQuestion(prompt="Q2?"),
+            ],
+        )
+
+        se.supervisor_service.decide_next = AsyncMock(return_value=action)
+        se._save_interrupted_state = AsyncMock(return_value=False)
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        with patch("services.hitl_service.hitl_service", hitl_mock):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="umsg-1",
+                message_text="Hello",
+                agent_registry=[],
+                room_config=self._make_room_config(),
+                request_user_id="user-1",
+            )
+
+        assert result.status == "failed"
+        assert hitl_mock.cancel_request.await_count == 2
+        hitl_mock.cancel_request.assert_any_await("req-a", "room-1")
+        hitl_mock.cancel_request.assert_any_await("req-b", "room-1")
+
+    @pytest.mark.asyncio
+    async def test_cancels_prior_requests_when_request_input_returns_none(self, se):
+        """If request_input returns None mid-group (e.g. max rounds),
+        previously created requests must be canceled."""
+        from models.supervisor_v2 import (
+            SupervisorAction, ActionType, ClarifyQuestion,
+        )
+
+        req_a = MagicMock()
+        req_a.request_id = "req-a"
+
+        hitl_mock = AsyncMock()
+        hitl_mock.request_input = AsyncMock(side_effect=[req_a, None])
+        hitl_mock.cancel_request = AsyncMock()
+
+        agent_msg = MagicMock(message_id="msg-agent-1")
+        se.room_services.create_agent_message.return_value = agent_msg
+        se.database_service.add_room_agent_message = AsyncMock()
+        se.database_service.delete_room_agent_message_by_message_id = AsyncMock()
+
+        action = SupervisorAction(
+            action=ActionType.CLARIFY,
+            reasoning="need info",
+            questions=[
+                ClarifyQuestion(prompt="Q1?"),
+                ClarifyQuestion(prompt="Q2?"),
+            ],
+        )
+
+        se.supervisor_service.decide_next = AsyncMock(return_value=action)
+        se._checkpoint_trajectory = AsyncMock(return_value=MagicMock())
+
+        with patch("services.hitl_service.hitl_service", hitl_mock):
+            result = await se.run(
+                room_id="room-1",
+                user_message_id="umsg-1",
+                message_text="Hello",
+                agent_registry=[],
+                room_config=self._make_room_config(),
+                request_user_id="user-1",
+            )
+
+        assert result.status == "failed"
+        assert hitl_mock.cancel_request.await_count == 1
+        hitl_mock.cancel_request.assert_awaited_once_with("req-a", "room-1")
+        assert se.database_service.delete_room_agent_message_by_message_id.await_count == 2
