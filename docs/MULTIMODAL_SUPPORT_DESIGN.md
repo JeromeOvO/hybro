@@ -1,6 +1,7 @@
 # Multi-Modality Support Design
 
-**Status**: Not started
+> **Status: Not Started** — Design approved, pending implementation. 4 independent phases.
+
 **Depends on**: None (phases are independently shippable)
 **Relationship to other docs**:
 - `ARTIFACT_RENDERING_DESIGN.md` is Phase 1 Output — rendering A2A artifact parts

@@ -1,6 +1,7 @@
 # Task Retry Design — Retry UI for Failed Tasks
 
-**Status**: Not started
+> **Status: Not Started** — Design approved, pending implementation.
+
 **Depends on**: None (backend APIs exist for re-sending messages)
 **Decoupled from**: All other frontend design docs **except** `MULTIMODAL_SUPPORT_DESIGN.md` Phase 3 — the `retryMessage` snippet forwards `attachments` to `sendUserMessage`, which requires the 4-arg signature introduced by Phase 3. **If implemented before Phase 3**, remove the `attachments` parameter from the `sendUserMessage` calls in `retryMessage` (§4.6); the retry will be text-only but fully functional. Re-add the parameter when Phase 3 lands.
 

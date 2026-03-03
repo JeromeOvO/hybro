@@ -798,15 +798,15 @@ This is used for complex multi-agent workflows where tasks are decomposed, assig
 
 ### 15.1 Architecture Issues
 
-#### `useRoomWebhook` is a God Hook (~944 lines)
+#### `useRoomWebhook` is a God Hook (~1400 lines)
 
 **File:** `src/hooks/useRoomWebhook.ts`
 
-The central room orchestration hook manages SSE handling, message sending, room settings, cancellation, DB hydration, reconciliation, agent name resolution, placeholder lifecycle, and timeout safety nets — all in one function. It holds **8 refs** for tracking internal state and has a dependency array on `sendUserMessage` that spans nearly a full screen.
+The central room orchestration hook manages SSE handling, message sending, room settings, cancellation, DB hydration, reconciliation, agent name resolution, placeholder lifecycle, timeout safety nets, HITL reconnect catch-up, and streaming buffer coordination — all in one function. Since the original audit (~944 lines), HITL support, token streaming, and supervisor toggle were successfully integrated, growing the hook to ~1400 lines. The decomposition concern is now more urgent.
 
 **Risk:** High cognitive load for contributors; hard to test in isolation; any change can introduce subtle regressions across unrelated features.
 
-**Recommendation:** Split into focused composable hooks: `useRoomHydration`, `useSSEMessageHandler`, `useSendMessage`, `useCancelProcessing`, `useAgentNameResolver`. The current `useRoomWebhook` would become a thin orchestrator that wires them together.
+**Recommendation:** Split into focused composable hooks: `useRoomHydration`, `useSSEMessageHandler`, `useSendMessage`, `useCancelProcessing`, `useAgentNameResolver`, `useHitlReconnect`. The current `useRoomWebhook` would become a thin orchestrator that wires them together.
 
 ---
 
@@ -816,7 +816,7 @@ The central room orchestration hook manages SSE handling, message sending, room 
 
 The entire workflow orchestration subsystem (decompose → assign → run → summarize) is **never imported** by any page or parent component. `WorkflowContainer` is only referenced within its own file. These files are dead code from a legacy multi-step orchestration approach that has been superseded by the SSE-based task flow.
 
-**Recommendation:** Remove or archive these files to reduce confusion. If the workflow UI is needed again, it should be rebuilt against the current SSE/message-store architecture.
+**Recommendation:** Remove or archive these files to reduce confusion. If the workflow UI is needed again, it should be rebuilt against the current SSE/message-store architecture. See `DEAD_CODE_CLEANUP.md` for the full removal plan.
 
 ---
 
@@ -826,7 +826,7 @@ The entire workflow orchestration subsystem (decompose → assign → run → su
 
 These Next.js API route proxy handlers forward requests to the backend, but the current `lib/api/*.ts` client layer bypasses them entirely via direct `getApiUrl()` calls. They add ~500 lines of maintenance burden with no active consumers.
 
-**Recommendation:** Remove unless there's a specific plan to use them (e.g., server-side token injection, rate limiting at edge).
+**Recommendation:** Remove unless there's a specific plan to use them (e.g., server-side token injection, rate limiting at edge). See `DEAD_CODE_CLEANUP.md` for the full removal plan.
 
 ---
 
@@ -909,7 +909,7 @@ This is mostly safe today (single-room-per-tab), but becomes a bug if the app ev
 
 #### Verbose `console.log` Throughout Production Code
 
-There are **~76 `console.log` calls** across hooks and API files (emoji-prefixed debug statements like `🚀`, `✅`, `❌`, `📨`). While `next.config.ts` has `removeConsole` configured, it only strips `console.log` in **production builds** — dev builds and staging environments still log extensively.
+There are **~84 `console.log` calls** across hooks and API files (emoji-prefixed debug statements like `🚀`, `✅`, `❌`, `📨`). While `next.config.ts` has `removeConsole` configured, it only strips `console.log` in **production builds** — dev builds and staging environments still log extensively.
 
 The API layer (`room.ts`, `orchestration.ts`) also logs full request/response payloads via `JSON.stringify(requestData, null, 2)`, which may expose sensitive data in dev consoles.
 
@@ -917,9 +917,9 @@ The API layer (`room.ts`, `orchestration.ts`) also logs full request/response pa
 
 ---
 
-#### Test Coverage Limited to Message Store
+#### Test Coverage Concentrated in Message Store
 
-Tests exist only for `stores/message-store/` (6 test files). There are **no tests** for:
+Tests exist for `stores/message-store/` (7 test files) and streaming-related stores (streaming-lifecycle, typewriter). There are **no tests** for:
 - Hooks (`useRoomWebhook`, `useRoomSSE`, `useChatRoomCreation`, `useGroupManagement`)
 - API client functions (`lib/api/*.ts`, `lib/api-client.ts`)
 - Components (room page, chat page, message rendering)
@@ -947,7 +947,7 @@ API functions mix naming conventions:
 
 #### Full Agent Catalog Loaded on Every Room Entry
 
-**File:** `src/hooks/useRoomWebhook.ts` (line 92)
+**File:** `src/hooks/useRoomWebhook.ts` (line 109)
 
 `allAgentsQuery` fetches the entire active agents list on room entry (staleTime 24h, so cached across rooms within a session). This is used for agent name resolution in SSE messages. For a platform with hundreds of registered agents, this payload will grow linearly.
 
@@ -977,15 +977,18 @@ Updating room settings fires up to 3 separate API calls sequentially: `updateRoo
 
 ### 15.6 Future Improvement Ideas
 
-| Area | Improvement | Impact |
-|---|---|---|
-| **Real-time** | Migrate SSE to WebSocket or `fetch()`-based streaming for header-based auth | Security, reliability |
-| **Offline** | Add optimistic message queue with retry for network failures | UX |
-| **Performance** | Message pagination + virtual scrolling | Scalability |
-| **Testing** | E2E tests with Playwright for critical flows (room creation → message → response) | Reliability |
-| **Observability** | Structured error reporting (Sentry/LogRocket) replacing console.log | Debugging |
-| **DX** | Storybook for component library (shadcn/ui + business components) | Development speed |
-| **API** | Typed API client generated from OpenAPI spec (backend → frontend types) | Type safety, DRY |
-| **State** | Persist partial message store in IndexedDB for instant room re-entry | UX |
-| **A11y** | Keyboard navigation audit for chat input, message list, and modals | Accessibility |
-| **i18n** | Extract hardcoded English strings into a localization framework | Internationalization |
+| Area | Improvement | Impact | Status |
+|---|---|---|---|
+| **Real-time** | Migrate SSE to WebSocket or `fetch()`-based streaming for header-based auth | Security, reliability | Open |
+| **Offline** | Add optimistic message queue with retry for network failures | UX | Open |
+| **Performance** | Message pagination + virtual scrolling | Scalability | Design doc: `MESSAGE_PAGINATION_DESIGN.md` |
+| **Testing** | E2E tests with Playwright for critical flows (room creation -> message -> response) | Reliability | Open |
+| **Observability** | Structured error reporting (Sentry/LogRocket) replacing console.log | Debugging | Open |
+| **DX** | Storybook for component library (shadcn/ui + business components) | Development speed | Open |
+| **API** | Typed API client generated from OpenAPI spec (backend -> frontend types) | Type safety, DRY | Open |
+| **State** | Persist partial message store in IndexedDB for instant room re-entry | UX | Open |
+| **A11y** | Keyboard navigation audit for chat input, message list, and modals | Accessibility | Open |
+| **i18n** | Extract hardcoded English strings into a localization framework | Internationalization | Open |
+| **Multi-modal** | Agent artifact rendering + user file uploads | Feature completeness | Design docs: `ARTIFACT_RENDERING_DESIGN.md`, `MULTIMODAL_SUPPORT_DESIGN.md` |
+| **Reliability** | Retry UI for failed tasks | UX | Design doc: `TASK_RETRY_DESIGN.md` |
+| **Maintenance** | Remove ~1,675 lines of dead code | Code health | Design doc: `DEAD_CODE_CLEANUP.md` |

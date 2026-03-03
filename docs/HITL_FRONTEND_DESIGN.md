@@ -1,6 +1,7 @@
 # HITL Frontend Design — Human-in-the-Loop Inline Reply
 
-**Status**: Not started
+> **Status: Implemented** | All planned features shipped.
+
 **Depends on**: Backend HITL implementation (`hybro-multi-agents-backend/docs/HITL_DESIGN.md` Phases 1-8)
 **Decoupled from**: All other frontend design docs (Artifact, Token Streaming, Supervisor Toggle, Pagination, Retry, Dead Code)
 
@@ -24,7 +25,10 @@ Once the backend HITL system is implemented, the frontend needs:
 
 ---
 
-## 2. Current State
+## 2. Current State (Pre-Implementation)
+
+> **Note**: This section describes the codebase state *before* HITL was implemented.
+> It is retained for historical context. For the current implementation, see Sections 5 and 11.
 
 ### SSE Type Union (`src/lib/types/sse.ts`)
 
@@ -105,7 +109,7 @@ exists.
 { "request_id": "abc123", "user_input": "2024-2026" }
 
 // Response
-{ "success": true, "request_id": "abc123" }
+{ "status": "ok", "request_id": "abc123" }
 ```
 
 **Pending requests** (for reconnect catch-up): `GET /api/v1/rooms/:roomId/hitl/pending`
@@ -181,7 +185,7 @@ SSE stream
 3. The `HitlPanel` (rendered in `RoomChatInput` topSlot) detects unresolved HITL requests
    and renders a `HitlQuestionForm` (text input, choice buttons, or confirmation buttons
    depending on `prompt_type`). The `task-status-message` bubble is hidden while HITL is active.
-4. User submits reply. The form calls `respondToHitl(request_id, user_input)`.
+4. User submits reply. The form calls `respondToHitl(roomId, requestId, userInput)`.
 5. On success, locally mark `hitlResolved: true` (optimistic). Backend emits
    `hitl_status_update` with `status: "responded"` to confirm.
 6. If the request expires before the user replies, backend emits `hitl_status_update`
@@ -255,17 +259,23 @@ hitlExpiresAt: incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : e
 hitlResolved: incoming.hitlResolved !== undefined ? incoming.hitlResolved : existing.hitlResolved,
 ```
 
-**`isNoOpUpdate`** — add these comparisons to the return expression:
+**`isNoOpUpdate`** — the implementation checks all 10 HITL fields for no-op detection:
 
 ```typescript
 existing.hitlResolved    === coalesce(incoming.hitlResolved, existing.hitlResolved) &&
 existing.hitlPrompt      === coalesce(incoming.hitlPrompt, existing.hitlPrompt) &&
 existing.hitlRequestId   === coalesce(incoming.hitlRequestId, existing.hitlRequestId) &&
+existing.hitlPromptType  === coalesce(incoming.hitlPromptType, existing.hitlPromptType) &&
+existing.hitlExpiresAt   === coalesce(incoming.hitlExpiresAt, existing.hitlExpiresAt) &&
+arraysShallowEqual(existing.hitlChoices, coalesce(incoming.hitlChoices, existing.hitlChoices)) &&
+existing.hitlGroupId     === coalesce(incoming.hitlGroupId, existing.hitlGroupId) &&
+existing.hitlGroupTotal  === coalesce(incoming.hitlGroupTotal, existing.hitlGroupTotal) &&
+existing.hitlGroupIndex  === coalesce(incoming.hitlGroupIndex, existing.hitlGroupIndex) &&
+existing.hitlUserAnswer  === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
 ```
 
-Only `hitlResolved`, `hitlPrompt`, and `hitlRequestId` need no-op checks because they
-are the only HITL fields that change on update (the others are set once at creation).
-If `hitlExpiresAt` becomes render-visible in the future, add it too.
+All 10 HITL fields participate in no-op detection. `hitlChoices` uses `arraysShallowEqual`
+since it's an array type.
 
 HITL messages arrive via `task_submitted` / `task_update` (which set `taskStatus` to
 `input-required`), so they already resolve to `task-status`. The existing logic is
@@ -365,49 +375,48 @@ form if the user refreshed the page while a HITL request was pending.
 import { apiPost, apiGet } from '../api-client'
 import { getApiUrl } from '../utils'
 
-const API_BASE_URL = getApiUrl('hitl')
-```
+function hitlUrl(roomId: string): string {
+  return getApiUrl(`rooms/${roomId}/hitl`)
+}
 
-**Import convention note**: This codebase uses `../api-client` for `apiPost`/`apiGet`
-and `../utils` for `getApiUrl` — NOT `./client`. The `getApiUrl` function already
-prepends the base URL and `/api/v1/` prefix (from `NEXT_PUBLIC_API_PREFIX`), so the
-argument must be just the service name (`'hitl'`), not a full path like `'/api/v1/hitl'`
-which would produce a double-prefix (`/api/v1//api/v1/hitl`). Follow the same pattern
-as `room.ts` line 16: `getApiUrl('roomCenter')`.
+export interface HitlRespondResponse {
+  status: string
+  request_id: string
+}
 
-```typescript
+export interface HitlPendingResponse {
+  requests: HitlPendingRequest[]
+}
+
+const HITL_RESPOND_TIMEOUT_MS = 180_000
+
 export async function respondToHitl(
+  roomId: string,
   requestId: string,
   userInput: string,
   getToken?: () => Promise<string | null>,
-): Promise<{ success: boolean; request_id: string }> {
-  return apiPost(`${API_BASE_URL}/respond`, {
+): Promise<HitlRespondResponse> {
+  return apiPost<HitlRespondResponse>(`${hitlUrl(roomId)}/respond`, {
     request_id: requestId,
     user_input: userInput,
-  }, getToken)
+  }, getToken, undefined, HITL_RESPOND_TIMEOUT_MS)
 }
 
 export async function fetchPendingHitlRequests(
   roomId: string,
   getToken?: () => Promise<string | null>,
-): Promise<{ requests: HitlPendingRequest[] }> {
-  return apiGet(`${API_BASE_URL}/requests/${roomId}/pending`, getToken)
-}
-
-export interface HitlPendingRequest {
-  request_id: string
-  message_id: string
-  source: 'agent' | 'supervisor'
-  agent_id?: string
-  agent_name?: string
-  prompt: string
-  prompt_type: 'text' | 'choice' | 'confirmation'
-  choices?: string[] | null
-  status: 'pending'
-  expires_at?: string
-  created_at: string
+): Promise<HitlPendingResponse> {
+  return apiGet<HitlPendingResponse>(`${hitlUrl(roomId)}/pending`, getToken)
 }
 ```
+
+The `hitlUrl(roomId)` helper generates a room-scoped base URL. Both functions take
+`roomId` as the first argument — the URL scheme is `rooms/{roomId}/hitl/respond` and
+`rooms/{roomId}/hitl/pending`. The respond call uses a 180-second timeout (vs 60s
+default) because the backend supervisor resume can take 60-120s.
+
+The `HitlPendingRequest` interface mirrors the backend's HITL request schema, including
+group fields (`group_id`, `group_total`, `group_index`) for multi-question HITL sessions.
 
 Add to `src/lib/api/index.ts` barrel export.
 
@@ -417,17 +426,17 @@ The `HitlPanel` component renders in `RoomChatInput`'s `topSlot`. When unresolve
 requests exist (from `useActiveHitlRequests`), it shows a collapsible panel with pagination.
 Each request renders a `HitlQuestionForm` that handles the three prompt types.
 
-New props on `TaskStatusMessageProps`:
+`TaskStatusMessage` receives only 3 HITL display props (no form interaction):
 
 ```typescript
-// HITL fields
-hitlRequestId?: string
 hitlPrompt?: string
-hitlPromptType?: 'text' | 'choice' | 'confirmation'
-hitlChoices?: string[] | null
 hitlResolved?: boolean
-onHitlSubmit?: (requestId: string, userInput: string) => Promise<void>
+hitlUserAnswer?: string
 ```
+
+These are used solely to control the `input-required` card's visual state (hidden while
+HITL is active, "Input provided" label once resolved). All interactive form logic lives
+in `HitlQuestionForm` inside `HitlPanel`.
 
 ### 5.7 New component: `src/components/hitl-inline-reply-form.tsx`
 
@@ -436,8 +445,8 @@ Renders one of three variants based on `promptType`:
 | `promptType` | UI Rendered |
 |---|---|
 | `text` | Text input + "Continue" button |
-| `choice` | Radio buttons for each `choices` item + "Submit" button |
-| `confirmation` | Two buttons: "Approve" / "Reject" |
+| `choice` | Custom styled option buttons with letter badges (`A`, `B`, `C`...) + "Other" text input |
+| `confirmation` | Two styled buttons: "Approve" (`A` badge, emerald) / "Reject" (`B` badge, red) |
 
 States: `idle`, `submitting` (spinner on button, input disabled), `submitted`
 (success message, form hidden), `error` (red text, retry enabled).
@@ -450,7 +459,7 @@ optimistically sets `hitlResolved: true` on the message entity.
 - Auto-focus the text input when the HITL card first appears (use `autoFocus` or a
   `useEffect` with `ref.focus()`).
 - Include an `aria-label` on the input: `"Reply to {agentName}"`.
-- For `choice` prompt type, use `role="radiogroup"` with `aria-label`.
+- For `choice` prompt type, use clear letter labels for each option button.
 - For `confirmation` prompt type, use descriptive button labels ("Approve" / "Reject")
   rather than generic "Yes" / "No".
 - Ensure keyboard navigation: `Enter` submits the text form, `Escape` does nothing
@@ -487,195 +496,28 @@ When an active (unresolved) HITL request exists, the panel appears:
 
 The `task-status-message` bubble is **hidden** (`return null`) when an active HITL request
 exists (`hitlResolved === false`). Once resolved, it shows "Input provided" as a static label.
-amber-themed `border-t` on the form container (not a `<Separator>` component, because
-the border needs to match the amber card color scheme).
 
-#### Variant A: `text` Prompt Type
+#### Implementation: `HitlQuestionForm` (3 prompt types)
 
-Most common variant. Free-form text reply.
+The form component (`hitl-inline-reply-form.tsx`) renders inside the `HitlPanel`
+collapsible. Each prompt type has a distinct interaction pattern:
 
-```
-┌─ HITL Form (text) ──────────────────────────────────────────┐
-│                                                              │
-│  ┌──────────────────────────────────────────┐  ┌─────────┐  │
-│  │  Type your reply...                      │  │ Continue│  │
-│  └──────────────────────────────────────────┘  └─────────┘  │
-│                                                              │
-│  (error state:)                                              │
-│  ✕ Failed to send reply. Try again.                         │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
+**Variant A: `text`** — Free-form text input with "Continue" button. Implemented as an
+`<Input>` + `<Button>` in a flex row. Submit on Enter (non-shift) or button click.
 
-**Implementation**:
+**Variant B: `choice`** — Custom styled option buttons (not `RadioGroup`). Each choice
+renders as a full-width `<button>` with a letter badge (`A`, `B`, `C`...) and
+selection ring. An "Other" option with a text `<Input>` is appended so users can provide
+a custom answer outside the predefined choices. Selection state is tracked via
+`selectedChoice` / `customChoice` with a `CUSTOM_CHOICE_SENTINEL` value. Submit sends
+either the selected predefined choice or the custom text.
 
-```tsx
-<form onSubmit={handleSubmit} className="mt-3 pt-3 border-t border-amber-200/60
-  dark:border-amber-500/20">
-  <div className="flex gap-2 items-start">
-    <Input
-      ref={inputRef}
-      value={input}
-      onChange={(e) => setInput(e.target.value)}
-      placeholder="Type your reply..."
-      disabled={isSubmitting}
-      aria-label={`Reply to ${agentName}`}
-      className="flex-1 bg-white/80 dark:bg-white/5 border-amber-300
-        dark:border-amber-500/30 focus-visible:ring-amber-400"
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault()
-          handleSubmit(e)
-        }
-      }}
-    />
-    <Button
-      type="submit"
-      disabled={isSubmitting || !input.trim()}
-      size="sm"
-      className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
-    >
-      {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Continue'}
-    </Button>
-  </div>
-  {error && (
-    <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
-      <XCircle className="h-3 w-3" />
-      {error}
-    </p>
-  )}
-</form>
-```
+**Variant C: `confirmation`** — Two styled `<button>` elements with letter badges:
+"Approve" (`A` badge, emerald theme, CheckCircle icon) and "Reject" (`B` badge, red
+theme, XCircle icon). Each button calls `handleConfirmation('approved' | 'rejected')`
+directly — no intermediate selection state, no `<form>` wrapper.
 
-**Styling rationale**: The form uses amber-tinted borders and the amber-600 primary
-button to stay within the `input-required` color scheme. The input background uses
-`bg-white/80` (light) / `bg-white/5` (dark) for subtle contrast against the amber card.
-
-#### Variant B: `choice` Prompt Type
-
-Renders radio buttons for predefined choices.
-
-```
-┌─ HITL Form (choice) ────────────────────────────────────────┐
-│                                                              │
-│  ○  2023-2024                                               │
-│  ◉  2024-2025                      (selected)               │
-│  ○  2025-2026                                               │
-│  ○  All available years                                     │
-│                                                              │
-│  ┌──────────┐                                               │
-│  │  Submit   │                                               │
-│  └──────────┘                                               │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Implementation**:
-
-```tsx
-<form onSubmit={handleSubmit} className="mt-3 pt-3 border-t border-amber-200/60
-  dark:border-amber-500/20">
-  <RadioGroup
-    value={selectedChoice}
-    onValueChange={setSelectedChoice}
-    aria-label={`Choose a response for ${agentName}`}
-    className="space-y-2"
-  >
-    {choices.map((choice, i) => (
-      <div key={i} className="flex items-center gap-2.5">
-        <RadioGroupItem
-          value={choice}
-          id={`hitl-choice-${requestId}-${i}`}
-          disabled={isSubmitting}
-          className="border-amber-400 text-amber-600
-            data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
-        />
-        <Label
-          htmlFor={`hitl-choice-${requestId}-${i}`}
-          className="text-sm font-normal cursor-pointer text-amber-900
-            dark:text-amber-100"
-        >
-          {choice}
-        </Label>
-      </div>
-    ))}
-  </RadioGroup>
-  <Button
-    type="submit"
-    disabled={isSubmitting || !selectedChoice}
-    size="sm"
-    className="mt-3 bg-amber-600 hover:bg-amber-700 text-white"
-  >
-    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Submit'}
-  </Button>
-  {error && (
-    <p className="mt-1.5 text-xs text-red-600 dark:text-red-400 flex items-center gap-1">
-      <XCircle className="h-3 w-3" />
-      {error}
-    </p>
-  )}
-</form>
-```
-
-**Prerequisite**: Run `npx shadcn@latest add radio-group` to install `RadioGroup` and
-`RadioGroupItem` into `src/components/ui/`. This adds `@radix-ui/react-radio-group`.
-
-#### Variant C: `confirmation` Prompt Type
-
-Binary decision. Two buttons, no text input.
-
-```
-┌─ HITL Form (confirmation) ──────────────────────────────────┐
-│                                                              │
-│  ┌─────────────┐    ┌──────────────┐                        │
-│  │  ✓ Approve   │    │  ✕ Reject    │                        │
-│  └─────────────┘    └──────────────┘                        │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Implementation**:
-
-```tsx
-<div className="mt-3 pt-3 border-t border-amber-200/60
-  dark:border-amber-500/20 flex gap-2">
-  <Button
-    onClick={() => handleConfirmation('approved')}
-    disabled={isSubmitting}
-    size="sm"
-    className="bg-emerald-600 hover:bg-emerald-700 text-white"
-  >
-    {isSubmitting && lastAction === 'approved'
-      ? <Loader2 className="h-4 w-4 animate-spin" />
-      : <><CheckCircle className="h-4 w-4 mr-1" /> Approve</>
-    }
-  </Button>
-  <Button
-    onClick={() => handleConfirmation('rejected')}
-    disabled={isSubmitting}
-    variant="outline"
-    size="sm"
-    className="border-red-300 text-red-600 hover:bg-red-50
-      dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10"
-  >
-    {isSubmitting && lastAction === 'rejected'
-      ? <Loader2 className="h-4 w-4 animate-spin" />
-      : <><XCircle className="h-4 w-4 mr-1" /> Reject</>
-    }
-  </Button>
-  {error && (
-    <p className="ml-2 self-center text-xs text-red-600 dark:text-red-400">
-      {error}
-    </p>
-  )}
-</div>
-```
-
-**Color choice**: Approve uses emerald (matching the "completed" task state), Reject
-uses red outline (matching the "failed" state). This gives users clear visual
-association: green = positive, red = negative.
-
-#### All Variants: State Transitions
+All variants share the same state machine:
 
 ```
 idle ──(user submits)──→ submitting ──(API success)──→ submitted
@@ -686,25 +528,33 @@ idle ──(user submits)──→ submitting ──(API success)──→ submi
 | State | Visual |
 |-------|--------|
 | `idle` | Form visible, inputs enabled, no spinner |
-| `submitting` | Inputs disabled, submit button shows `<Loader2 animate-spin />`, amber pulse overlay on card |
-| `submitted` | Form replaced with: `<p className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Reply sent</p>` |
+| `submitting` | Inputs disabled, active button shows `<Loader2 animate-spin />` |
+| `submitted` | Form replaced with: `<CheckCircle /> Reply sent` in emerald |
 | `error` | Form re-enabled, red error text below form, retry via re-submit |
 
-**Optimistic UX**: The `submitted` state appears immediately on API call (before
-response). If the backend returns an error, the state reverts to `error` and the form
-reappears.
+#### HitlPanel: Collapsible Container with Pagination
+
+The `HitlPanel` wraps `HitlQuestionForm` in a `<Collapsible>` from shadcn/ui. The header
+shows a `<HelpCircle>` icon, "Question" / "Questions (N/M answered)" label, and
+`<ChevronUp>` / `<ChevronDown>` pagination buttons with a `{current}/{total}` indicator.
+
+Integration in the room page:
+
+```tsx
+<RoomChatInput
+  topSlot={activeHitlRequests.length > 0
+    ? <HitlPanel requests={activeHitlRequests} onSubmit={respondToHitlRequest} />
+    : undefined
+  }
+/>
+```
+
+After submission, the panel auto-advances to the next unanswered question in the group.
 
 #### Form Entry Animation
 
-When the HITL form section appears (on `hitl_input_requested` SSE), use the same entry
-animation as the task card itself:
-
-```
-animate-in fade-in slide-in-from-bottom-1 duration-200
-```
-
-This is slightly faster than the card's `duration-300` to feel like an additive reveal
-rather than a competing animation.
+The panel container uses `animate-in fade-in duration-200` for a smooth entry when
+a new HITL request arrives via SSE.
 
 #### Resolved State: Form Removal
 
@@ -724,52 +574,34 @@ changes the task-status-message rendering branch. When HITL is active (`hitlReso
 the task-status-message returns `null` (hidden). Once resolved (`hitlResolved === true`), it
 shows "Input provided".
 
-### 5.8 `src/components/room-messages.tsx` — Pass HITL props to TaskStatusMessage
+### 5.8 `src/app/c/room/[id]/page.tsx` — Wire HitlPanel into RoomChatInput
 
-**Critical wiring step**: The current `task-status` case in `room-messages.tsx` (around
-line 97) passes only task fields to `<TaskStatusMessage>`. The new HITL props must be
-forwarded from the entity, and the `onHitlSubmit` handler must be wired in.
-
-Update the `case 'task-status'` rendering branch:
+**Critical wiring step**: The room page connects HITL to the UI via `RoomChatInput`'s
+`topSlot` prop. When unresolved HITL requests exist, a `<HitlPanel>` renders above the
+chat editor.
 
 ```tsx
-case 'task-status':
-  return (
-    <TaskStatusMessage
-      internalId={entity.id}
-      agentId={entity.agentId}
-      agentName={entity.senderName}
-      initialStatus={(entity.taskStatus || TASK_STATE.WORKING) as TaskState}
-      content={entity.content || null}
-      error={entity.taskError}
-      statusMessage={entity.taskStatusMessage}
-      stepNumber={entity.stepNumber}
-      totalSteps={entity.totalSteps}
-      taskContent={entity.taskContent}
-      taskCreatedAt={entity.taskCreatedAt || entity.timestamp}
-      // ── HITL props (new) ──
-      hitlRequestId={entity.hitlRequestId}
-      hitlPrompt={entity.hitlPrompt}
-      hitlPromptType={entity.hitlPromptType}
-      hitlChoices={entity.hitlChoices}
-      hitlResolved={entity.hitlResolved}
-      onHitlSubmit={onHitlSubmit}
-    />
-  )
+<RoomChatInput
+  topSlot={activeHitlRequests.length > 0
+    ? <HitlPanel requests={activeHitlRequests} onSubmit={respondToHitlRequest} />
+    : undefined
+  }
+/>
 ```
 
-The `onHitlSubmit` handler is provided by `useRoomWebhook` (or a parent wrapper) and
-passed down through `RoomMessagesProps`. Add it to the props interface:
+`activeHitlRequests` comes from the `useActiveHitlRequests()` selector (defined in
+`useRoomMessages.ts`), which filters message entities for those with
+`hitlResolved === false` and a non-empty `hitlRequestId`.
 
-```typescript
-interface RoomMessagesProps {
-  onQuote?: (data: QuoteData) => void
-  onHitlSubmit?: (requestId: string, userInput: string) => Promise<void>
-}
-```
+`respondToHitlRequest` is defined in `page.tsx` — it calls `respondToHitl()` from
+the HITL API client and optimistically sets `hitlResolved: true` on the entity.
 
-The handler calls `respondToHitl()` and optimistically sets `hitlResolved` on the entity.
-It is defined in `useRoomWebhook.ts` alongside `retryMessage` and `sendUserMessage`.
+Note: `TaskStatusMessage` receives only display-relevant HITL props (`hitlPrompt`,
+`hitlResolved`, `hitlUserAnswer`) — it does **not** receive `onHitlSubmit`,
+`hitlRequestId`, `hitlPromptType`, or `hitlChoices`. The interactive form lives
+entirely in `HitlPanel`, not in `TaskStatusMessage`.
+
+`RoomMessagesProps` has no HITL-related props — only `onQuote`.
 
 ---
 
@@ -813,7 +645,7 @@ replies.
 | HITL request expired (SSE `hitl_status_update` with `status: "expired"`) | Remove the form. Show expiry message in the card. Transition card to failed state. |
 | HITL request canceled (user canceled the processing) | Remove the form. Show "Canceled" state on the card. |
 | SSE disconnect during pending HITL | On reconnect, `fetchPendingHitlRequests` restores the form. |
-| Backend HITL not yet implemented | No `hitl_input_requested` events are emitted. The existing `input-required` display-only card continues to render as-is. The new code is inert until the backend is ready. |
+| Backend HITL events not enabled for a room | No `hitl_input_requested` events are emitted. The existing `input-required` display-only card continues to render as-is. The HITL panel code is inert — graceful degradation when the backend does not emit HITL events. |
 
 ---
 
@@ -839,3 +671,20 @@ replies.
   submits on user input, disappears on `hitl_status_update`.
 - Edge case: expiry during user typing (form should be replaced with expiry message).
 - Edge case: SSE reconnect restores pending HITL form.
+
+---
+
+## 11. Code References
+
+| Concept | File | Notes |
+|---|---|---|
+| Inline reply form (3 prompt types) | `src/components/hitl-inline-reply-form.tsx` | Text, choice, and confirmation variants with grouped question pagination |
+| REST API client | `src/lib/api/hitl.ts` | `respondToHitl()` and `fetchPendingHitlRequests()` |
+| HITL entity fields | `src/stores/message-store/types.ts` | 10 HITL fields on `MessageEntity` (lines 44-54) |
+| Upsert merge/no-op logic | `src/stores/message-store/upsert.ts` | HITL-aware conflict resolution |
+| Upsert tests | `src/stores/message-store/__tests__/hitl-upsert.test.ts` | 239 lines of HITL-specific upsert tests |
+| SSE event handlers | `src/hooks/useRoomWebhook.ts` | `hitl_input_requested` and `hitl_status_update` cases in `handleSSEMessage` |
+| Active requests selector | `src/hooks/useRoomMessages.ts` | `useActiveHitlRequests()` hook |
+| Chat input integration | `src/components/room-chat-input.tsx` | HitlPanel rendered in `topSlot` prop |
+| Task status card | `src/components/task-status-message.tsx` | `input-required` state rendering with resolved/unresolved indicators |
+| Reconnect catch-up | `src/hooks/useRoomWebhook.ts` | Fetches pending HITL requests on SSE reconnect (lines 958-997) |

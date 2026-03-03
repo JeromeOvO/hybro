@@ -1,6 +1,7 @@
 # Artifact Rendering Design — A2A Artifact Display
 
-**Status**: Not started
+> **Status: Not Started** — Design approved, pending implementation.
+
 **Depends on**: None (backend already emits `artifact_update` SSE events)
 **Decoupled from**: All other frontend design docs
 

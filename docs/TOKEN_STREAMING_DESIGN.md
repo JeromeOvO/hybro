@@ -1,6 +1,7 @@
 # Token Streaming Design — Real-time Agent Token Streaming
 
-**Status**: Implemented
+> **Status: Implemented** | All planned features shipped including typewriter fallback.
+
 **Depends on**: None (backend already emits `agent_token` SSE events)
 **Decoupled from**: All other frontend design docs
 
@@ -22,7 +23,10 @@ generates its response, dramatically improving perceived latency.
 
 ---
 
-## 2. Current State
+## 2. Current State (Pre-Implementation)
+
+> **Note**: This section describes the codebase state *before* token streaming was implemented.
+> It is retained for historical context. For the current implementation, see Sections 4 and 11.
 
 ### Backend SSE Emission
 
@@ -316,7 +320,7 @@ for (const [messageId, partial] of streamingBuffer.entries()) {
       content: partial,
       senderName: store.entities[messageId]?.senderName || 'Agent',
       timestamp: new Date().toISOString(),
-    }, 'sse')
+    }, 'optimistic')  // 'optimistic' source so DB reconciliation can overwrite with final content
   }
 }
 streamingBuffer.clear()
@@ -379,13 +383,13 @@ consider:
 
 - **Option A**: Render streaming text as plain `<pre>` with a monospace font, switch to
   full markdown rendering only after `agent_response` arrives (simplest, fastest).
-- **Option B**: Debounce markdown rendering to every 200ms during streaming, show raw
+- **Option B**: Debounce markdown rendering to every 50ms during streaming, show raw
   text in between (balanced).
 - **Option C**: Full markdown rendering on every frame (most visually appealing but
   potentially janky for complex markdown).
 
 **Recommended**: Option B — debounce markdown rendering during streaming. Use a ref to
-track the last-rendered markdown timestamp. If < 200ms since last render, show raw text;
+track the last-rendered markdown timestamp. If < 50ms since last render, show raw text;
 otherwise re-render markdown. On finalization, always render full markdown.
 
 **Layout performance note** (Vercel rule `rendering-content-visibility`): For very
@@ -440,7 +444,7 @@ No changes.
 | Finalize buffer on terminal `task_update` or `agent_response` | The backend sends `task_update` (not `agent_response`) when streaming completes. Both paths finalize the buffer. |
 | Convert task-status to agent-bubble on first token | When `task_submitted` arrives before `agent_token`, the entity is a task-status card. Setting `isEphemeral: true` triggers `resolveDisplayType` to return `agent-bubble`. |
 | Promote partial content on disconnect | Prevents data loss if SSE disconnects mid-stream. The partial text is better than nothing. |
-| Debounced markdown rendering | Full markdown parsing on every frame is too expensive. Debouncing at 200ms gives a smooth experience. |
+| Debounced markdown rendering | Full markdown parsing on every frame is too expensive. Throttling at 50ms gives a smooth experience with minimal jank. |
 | Client-side typewriter for non-streamed content | When content arrives all at once (agent doesn't stream), the `TypewriterManager` feeds text progressively into the streaming buffer so the existing cursor + throttled-render UI works transparently. Duration scales with content length (~800ms). |
 
 ---
@@ -497,3 +501,21 @@ No changes.
 - Unit test `StreamingCursor` component (trivial CSS-only component, 15 lines).
 - Performance test: simulate 1000 `agent_token` events at 100/sec, verify React
   re-renders stay at ~60fps. Mitigated by per-message snapshots and RAF batching.
+
+---
+
+## 11. Code References
+
+| Concept | File | Notes |
+|---|---|---|
+| Ephemeral streaming buffer | `src/stores/streaming-buffer.ts` | Raw mutable Map + `useSyncExternalStore`, RAF-batched notifications (~100 lines) |
+| Typewriter manager | `src/stores/typewriter.ts` | Progressive reveal for non-streaming agents, feeds into StreamingBuffer (~127 lines) |
+| Streaming content hook | `src/hooks/useStreamingContent.ts` | Per-message `useSyncExternalStore` subscription (~46 lines) |
+| Blinking cursor | `src/components/streaming-cursor.tsx` | CSS-animated cursor indicator (~14 lines) |
+| Agent bubble integration | `src/components/message-bubble.tsx` | `EntityAgentBubble` calls `useStreamingContent`, shows `StreamingCursor`, 50ms throttled markdown |
+| SSE `agent_token` handler | `src/hooks/useRoomWebhook.ts` | Appends tokens to `streamingBuffer`, creates placeholder entities |
+| Finalization | `src/hooks/useRoomWebhook.ts` | `streamingBuffer.finalize()` on `agent_response` or terminal `task_update` |
+| Typewriter trigger | `src/hooks/useRoomWebhook.ts` | Non-streaming agents get typewriter on terminal `task_update` |
+| SSE disconnect promotion | `src/hooks/useRoomWebhook.ts` | Partial buffer content promoted to entity on disconnect |
+| Streaming lifecycle tests | `src/stores/__tests__/streaming-lifecycle.test.ts` | Full lifecycle: token append, finalize, room switch cleanup |
+| Typewriter tests | `src/stores/__tests__/typewriter.test.ts` | Typewriter start/stop/cleanup |
