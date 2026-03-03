@@ -151,7 +151,7 @@ function AgentMessageBubbleInner({
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
   
   // Throttled markdown rendering during streaming (Option B from design doc).
-  // We keep a ref to the latest content and run a 200ms interval that picks
+  // We keep a ref to the latest content and run a 50ms interval that picks
   // up whatever is current. This avoids the "cancel-on-every-frame" problem
   // that a useEffect + setTimeout approach has when content changes at 60fps.
   const [debouncedContent, setDebouncedContent] = useState(message.content)
@@ -325,7 +325,7 @@ function AgentMessageBubbleInner({
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   
   // Determine display content:
-  // - During streaming: use debounced content for markdown rendering (throttled to 200ms)
+  // - During streaming: use debounced content for markdown rendering (throttled to 50ms)
   // - After streaming: use the final message content
   // - Fallback to "No message content" only when not streaming and content is empty
   const displayContent = isStreaming 

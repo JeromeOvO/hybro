@@ -1,6 +1,7 @@
 # Dead Code Cleanup — Removal Plan
 
-**Status**: Not started
+> **Status: Not Started** — Design approved, pending execution. ~1,675 lines across 13+ files.
+
 **Depends on**: None
 **Decoupled from**: All other frontend design docs
 

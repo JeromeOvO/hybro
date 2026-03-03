@@ -1,6 +1,7 @@
 # Message Pagination Design — Paginated Message Loading
 
-**Status**: Not started
+> **Status: Not Started** — Design approved, pending implementation. Requires backend pagination API.
+
 **Depends on**: Backend pagination API (contract specified in this document)
 **Decoupled from**: All other frontend design docs
 

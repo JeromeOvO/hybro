@@ -1,6 +1,7 @@
 # Supervisor Toggle Design — Supervisor V2 Room Setting
 
-**Status**: Not started
+> **Status: Implemented** | Core toggle shipped. Optional header badge and processing indicator deferred.
+
 **Depends on**: None (backend already reads `room.extend_info.use_supervisor`)
 **Decoupled from**: All other frontend design docs
 
@@ -152,19 +153,20 @@ const formSchemaOptional = z.object({
 form.setValue('useSupervisor', initialData.useSupervisor || false)
 ```
 
-**Submit handler**: Include `useSupervisor`:
+**Submit handler**: Include `useSupervisor` via the `RoomModeOptions` object:
 
 ```typescript
 function handleSubmit(values) {
-  const useSupervisor = values.useSupervisor ?? false
-  onSubmit(roomName, selectedAgents, debateMode, useSupervisor)
+  const options: RoomModeOptions = {
+    debateMode: values.debateMode ?? false,
+    useSupervisor: values.useSupervisor ?? false,
+  }
+  onSubmit(roomName, selectedAgents, options)
 }
 ```
 
-**DRY note on `onSubmit` signature**: After this change, `onSubmit` takes 4 positional
-args. If more room settings are added in the future, consider refactoring to an options
-object: `onSubmit(roomName, selectedAgents, { debateMode, useSupervisor })`. This
-refactor is optional for this change but recommended if a third toggle is added.
+**Note**: The actual implementation uses an options object (`RoomModeOptions`) rather
+than positional args, following the DRY recommendation below.
 
 **Props interface**: Update `onSubmit` and `RoomFormData`:
 
@@ -180,8 +182,7 @@ interface RoomSettingFormProps {
   onSubmit: (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    debateMode: boolean,
-    useSupervisor: boolean,
+    options: RoomModeOptions,
   ) => void
   // ... rest unchanged
 }
@@ -237,7 +238,7 @@ const updatedExtendInfo = {
 await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
 ```
 
-**Important**: The existing `updateRoomSettings` code (line 674-679) already performs a
+**Important**: The `updateRoomSettings` code (lines 1001-1073) already performs a
 shallow merge via `{ ...(room.extend_info as object || {}), debateMode }` to preserve
 keys like `initialMessage`. The snippet above follows the same pattern — do NOT replace
 the spread with a bare `{ debateMode, use_supervisor }` object, which would drop
@@ -247,14 +248,13 @@ Note the field name is `use_supervisor` (snake_case) to match the backend's
 `extend_info` key, while the form uses `useSupervisor` (camelCase) for JavaScript
 convention.
 
-Also update the `updateRoomSettings` function signature to accept `useSupervisor`:
+Also update the `updateRoomSettings` function signature to accept the options object:
 
 ```typescript
 const updateRoomSettings = async (
   roomName: string,
   selectedAgents: { [agentId: string]: Agent },
-  debateMode: boolean,
-  useSupervisor: boolean,
+  options: RoomModeOptions,
 ) => { ... }
 ```
 
@@ -367,3 +367,20 @@ to provide clearer feedback about what is happening.
   `extend_info` contains `use_supervisor: true`.
 - Edge case: room with no prior `extend_info` — verify `useSupervisor` defaults to
   `false`.
+
+---
+
+## 11. Code References
+
+| Concept | File | Notes |
+|---|---|---|
+| Switch UI | `src/components/room-setting-form.tsx` (lines 201-224) | `<Target>` icon + Switch toggle in card-styled FormItem |
+| Zod schema | `src/components/room-setting-form.tsx` (lines 26-43) | `useSupervisor: z.boolean()` in both required and optional schemas |
+| Submit handler | `src/components/room-setting-form.tsx` (lines 155-161) | Passes `RoomModeOptions { debateMode, useSupervisor }` to parent |
+| Backend persistence | `src/hooks/useRoomWebhook.ts` (lines 1001-1073) | `updateRoomSettings()` writes `use_supervisor` to `extend_info` |
+| Read-back | `src/hooks/useRoomWebhook.ts` (lines 229-233) | `getSupervisorMode()` reads `room.extend_info.use_supervisor` |
+
+### Deferred Items
+
+- Room header badge showing "Supervisor" when active (Section 5.1 of design).
+- Processing indicator change ("Supervisor coordinating agents...") (Section 5.2 of design).
