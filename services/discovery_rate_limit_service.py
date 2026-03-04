@@ -7,7 +7,7 @@ with sliding window counters. Tracks requests per API key and globally.
 Records are automatically cleaned up via MongoDB TTL index.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
@@ -51,7 +51,7 @@ class DiscoveryRateLimitService:
         if settings.discovery_rate_limit_per_key is None and settings.discovery_rate_limit_global is None:
             return
         
-        cutoff = datetime.now(datetime.UTC) - timedelta(hours=1)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
         
         # Check per-key limit
         if settings.discovery_rate_limit_per_key is not None:
@@ -128,7 +128,7 @@ class DiscoveryRateLimitService:
             oldest_time = oldest["timestamp"]
             # Time until oldest request expires = 1 hour from when it was made
             expires_at = oldest_time + timedelta(hours=1)
-            retry_after = (expires_at - datetime.now(datetime.UTC)).total_seconds()
+            retry_after = (expires_at - datetime.now(timezone.utc)).total_seconds()
             return max(1, int(retry_after))  # At least 1 second
         
         # Fallback to 1 hour if we can't find the oldest request
@@ -144,7 +144,7 @@ class DiscoveryRateLimitService:
         """
         await self._collection.insert_one({
             "key_id": api_key.key_id,
-            "timestamp": datetime.now(datetime.UTC),
+            "timestamp": datetime.now(timezone.utc),
         })
         
         logger.debug(
@@ -164,7 +164,7 @@ class DiscoveryRateLimitService:
         Returns:
             Dictionary with usage statistics
         """
-        cutoff = datetime.now(datetime.UTC) - timedelta(hours=1)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
         
         global_count = await self._collection.count_documents({
             "timestamp": {"$gt": cutoff},

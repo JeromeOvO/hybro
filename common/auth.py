@@ -47,6 +47,7 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
         HTTPException: If token is invalid or verification fails
     """
     try:
+
         # Use Clerk SDK to authenticate the request
         # The SDK handles JWKS fetching, caching, and JWT verification automatically
         # Create authentication options with secret key and authorized parties
@@ -62,7 +63,6 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
                 detail="Invalid or expired token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-
         # Extract user information from the verified token payload
         payload = request_state.payload
         if not payload:
@@ -72,8 +72,8 @@ async def verify_clerk_token_from_request(request: Request) -> ClerkUser:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        user_id = payload.get("sub")  # Subject claim contains user ID
-        session_id = payload.get("sid")  # Session ID claim
+        user_id = payload.get("sub") # Subject claim contains user ID
+        session_id = payload.get("sid") # Session ID claim
 
         if not user_id:
             raise HTTPException(

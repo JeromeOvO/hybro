@@ -237,3 +237,34 @@ class DiscoveryResponse(BaseModel):
     query: str  # The original search query
     agents: list[DiscoveryAgentResult]  # List of matching agents
     count: int  # Number of agents returned
+
+
+class APIKeyErrorResponse(BaseModel):
+    error: str
+    message: str
+
+
+class APIKeyItemResponse(BaseModel):
+    key_id: str
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    is_active: bool
+    usage_count: int
+
+
+class APIKeyListResponse(BaseModel):
+    keys: list[APIKeyItemResponse]
+    count: int
+
+
+class APIKeyCreateResponse(BaseModel):
+    key_id: str
+    name: str
+    created_at: datetime
+    api_key: str
+
+
+class APIKeyOperationResponse(BaseModel):
+    success: bool
+    message: str
