@@ -46,6 +46,7 @@ function HitlQuestionForm({
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const customChoiceRef = useRef<HTMLInputElement>(null)
+  const submittingRef = useRef(false)
 
   const isSubmitting = formState === 'submitting'
 
@@ -56,13 +57,15 @@ function HitlQuestionForm({
   }, [promptType])
 
   const handleSubmitValue = useCallback(async (value: string) => {
-    if (!value.trim()) return
+    if (!value.trim() || submittingRef.current) return
+    submittingRef.current = true
     setFormState('submitting')
     setError(null)
     try {
       await onSubmit(requestId, value)
       setFormState('submitted')
     } catch (err) {
+      submittingRef.current = false
       setFormState('error')
       setError(err instanceof Error ? err.message : 'Failed to send reply. Try again.')
     }

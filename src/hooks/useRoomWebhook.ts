@@ -994,8 +994,37 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           console.error('[HITL] Failed to fetch pending requests on reconnect:', err)
         })
     }
+
+    // Safety-net: if SSE reconnected after a gap during processing, the
+    // terminal processing_status SSE may have been the event that was lost.
+    // Schedule a deferred check against the room's persisted state. If the
+    // backend already cleared processing_message_id (it writes to DB before
+    // broadcasting), we know the terminal event was lost and can recover.
+    let safetyTimer: ReturnType<typeof setTimeout> | null = null
+    if (sseConnected && processing && sseHadDisconnectionRef.current) {
+      safetyTimer = setTimeout(async () => {
+        if (!sseHadDisconnectionRef.current) return
+        try {
+          const result = await roomQuery.refetch()
+          const freshRoom = result.data
+          if (freshRoom && !freshRoom.processing_message_id) {
+            console.log('🔄 Safety-net: backend confirms processing ended — clearing stuck spinner')
+            clearProcessing()
+            sseHadDisconnectionRef.current = false
+            reconcileWithDb(roomId)
+          }
+        } catch {
+          // Network error — next reconnect cycle or page refresh will retry
+        }
+      }, 15_000)
+    }
+
     prevSseConnectedRef.current = sseConnected
-  }, [sseConnected, processing, roomId, getToken, getAgentName])
+
+    return () => {
+      if (safetyTimer) clearTimeout(safetyTimer)
+    }
+  }, [sseConnected, processing, roomId, getToken, getAgentName, roomQuery, clearProcessing, reconcileWithDb])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
