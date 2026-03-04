@@ -18,6 +18,8 @@ from common.utils.logger import get_logger
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
+    ClarifyQuestion,
+    DelegateTarget,
     RoomConfig,
     StepStatus,
     SupervisorAction,
@@ -479,14 +481,89 @@ class RoomSupervisorService:
     # Hard guard against infinite same-agent re-delegation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _count_consecutive_outcomes(
+        target_ids: set[str],
+        trajectory: SupervisorTrajectory,
+        *,
+        count_success: bool,
+    ) -> dict[str, int]:
+        """Walk trajectory backwards, counting consecutive matching outcomes."""
+        counts: dict[str, int] = {aid: 0 for aid in target_ids}
+        for entry in reversed(trajectory.entries):
+            if entry.action.action != ActionType.DELEGATE:
+                break
+            matches = {
+                r.agent_id for r in entry.results
+                if r.success == count_success
+            }
+            matched = target_ids & matches
+            if not matched:
+                break
+            for aid in matched:
+                counts[aid] = counts.get(aid, 0) + 1
+        return counts
+
+    @staticmethod
+    def _strip_offenders(
+        action: SupervisorAction,
+        offender_ids: set[str],
+        label: str,
+        threshold: int,
+        reason_suffix: str,
+    ) -> SupervisorAction:
+        """Return a new action with offender targets removed, or DONE."""
+        offender_names = [
+            t.agent_name for t in action.targets if t.agent_id in offender_ids
+        ]
+        remaining = [
+            t for t in action.targets if t.agent_id not in offender_ids
+        ]
+        if remaining:
+            logger.warning(
+                "%s guard: stripping %s (%d %s) — delegating to remaining %s only",
+                label, offender_names, threshold, reason_suffix,
+                [t.agent_name for t in remaining],
+            )
+            return SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning=(
+                    f"Auto-filtered: {', '.join(offender_names)} "
+                    f"{reason_suffix} {threshold} times. "
+                    f"Delegating to {', '.join(t.agent_name for t in remaining)} only."
+                ),
+                targets=remaining,
+            )
+        logger.warning(
+            "%s guard: all targets %s hit %d %s — forcing DONE",
+            label, offender_names, threshold, reason_suffix,
+        )
+        return SupervisorAction(
+            action=ActionType.DONE,
+            reasoning=(
+                f"Auto-override: {', '.join(offender_names)} "
+                f"{reason_suffix} {threshold} consecutive times. "
+                f"No viable agents remaining."
+            ),
+        )
+
     def _guard_consecutive_redelegation(
         self,
         action: SupervisorAction,
         trajectory: SupervisorTrajectory,
         max_consecutive: int = 2,
+        max_consecutive_failures: int = 2,
     ) -> SupervisorAction:
-        """Filter out targets that have already been delegated to
-        ``max_consecutive`` times in a row with successful results.
+        """Filter out targets that have been delegated to repeatedly.
+
+        Checks two conditions (failure guard runs first):
+
+        1. **Consecutive failures** — if an agent has failed
+           ``max_consecutive_failures`` times in a row, strip it to avoid
+           wasting time on a broken/unreachable agent.
+        2. **Consecutive successes** — if an agent has succeeded
+           ``max_consecutive`` times in a row, strip it to prevent
+           semantic loops.
 
         - If no targets are offenders, returns the original action unchanged.
         - If only some targets are offenders, returns DELEGATE with the
@@ -495,58 +572,39 @@ class RoomSupervisorService:
         """
         target_ids = {t.agent_id for t in action.targets}
 
-        consecutive: dict[str, int] = {aid: 0 for aid in target_ids}
-        for entry in reversed(trajectory.entries):
-            if entry.action.action != ActionType.DELEGATE:
-                break
-            entry_successes = {r.agent_id for r in entry.results if r.success}
-            matched = target_ids & entry_successes
-            if not matched:
-                break
-            for aid in matched:
-                consecutive[aid] = consecutive.get(aid, 0) + 1
-
-        offenders = {aid for aid, c in consecutive.items() if c >= max_consecutive}
-        if not offenders:
-            return action
-
-        offender_names = [t.agent_name for t in action.targets if t.agent_id in offenders]
-        remaining = [t for t in action.targets if t.agent_id not in offenders]
-
-        if remaining:
-            logger.warning(
-                "Hard guard: stripping offender(s) %s (%d consecutive successes) "
-                "— delegating to remaining %s only",
-                offender_names,
-                max_consecutive,
-                [t.agent_name for t in remaining],
-            )
-            return SupervisorAction(
-                action=ActionType.DELEGATE,
-                reasoning=(
-                    f"Auto-filtered: {', '.join(offender_names)} already returned "
-                    f"{max_consecutive} consecutive successful responses. "
-                    f"Delegating to {', '.join(t.agent_name for t in remaining)} only."
-                ),
-                targets=remaining,
-            )
-
-        logger.warning(
-            "Hard guard: blocking re-delegation to %s (%d consecutive successes) — forcing DONE",
-            offender_names,
-            max_consecutive,
+        # --- Failure guard ---
+        fail_counts = self._count_consecutive_outcomes(
+            target_ids, trajectory, count_success=False,
         )
-        return SupervisorAction(
-            action=ActionType.DONE,
-            reasoning=(
-                f"Auto-override: {', '.join(offender_names)} already returned "
-                f"{max_consecutive} consecutive successful responses. Finalizing."
-            ),
+        fail_offenders = {
+            aid for aid, c in fail_counts.items()
+            if c >= max_consecutive_failures
+        }
+        if fail_offenders:
+            action = self._strip_offenders(
+                action, fail_offenders, "Failure",
+                max_consecutive_failures, "consecutive failures",
+            )
+            if action.action == ActionType.DONE:
+                return action
+            target_ids = {t.agent_id for t in action.targets}
+
+        # --- Success guard ---
+        success_counts = self._count_consecutive_outcomes(
+            target_ids, trajectory, count_success=True,
+        )
+        success_offenders = {
+            aid for aid, c in success_counts.items() if c >= max_consecutive
+        }
+        if not success_offenders:
+            return action
+        return self._strip_offenders(
+            action, success_offenders, "Success",
+            max_consecutive, "consecutive successes",
         )
 
     def _parse_v2_action(self, response_json: dict) -> SupervisorAction:
         """Parse the LLM JSON response into a ``SupervisorAction``."""
-        from models.supervisor_v2 import ClarifyQuestion, DelegateTarget
 
         raw_action = response_json.get("action", "done")
         action_str = str(raw_action).lower() if raw_action is not None else "done"

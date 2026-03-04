@@ -7,6 +7,7 @@ Covers:
 - All targets are offenders → DONE
 - Multiple offenders with one non-offender → DELEGATE with the survivor
 - Below threshold → no filtering
+- Consecutive failure guard — strips agents that keep failing
 """
 
 from datetime import datetime, timezone
@@ -48,6 +49,32 @@ def _entry_with_successes(agent_ids: list[str]) -> TrajectoryEntry:
                 task="test",
                 response_text="ok",
                 success=True,
+            )
+            for aid in agent_ids
+        ],
+        started_at=now,
+        completed_at=now,
+    )
+
+
+def _entry_with_failures(agent_ids: list[str]) -> TrajectoryEntry:
+    """Create a trajectory entry that delegated to the given agents, all failed."""
+    now = datetime.now(tz=timezone.utc)
+    return TrajectoryEntry(
+        step_number=1,
+        action=SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="test",
+            targets=[_target(aid, f"Agent-{aid}") for aid in agent_ids],
+        ),
+        results=[
+            V2StepResult(
+                step_number=1,
+                agent_id=aid,
+                agent_name=f"Agent-{aid}",
+                task="test",
+                response_text="error",
+                success=False,
             )
             for aid in agent_ids
         ],
@@ -218,3 +245,123 @@ class TestGuardTrajectoryBreaks:
         ])
         result = svc._guard_consecutive_redelegation(action, trajectory)
         assert result is action
+
+
+# ============================================================
+# Consecutive FAILURE guard tests
+# ============================================================
+
+
+class TestFailureGuardSingleAgent:
+    """When a single agent fails repeatedly, it should be stopped."""
+
+    def test_single_agent_two_consecutive_failures_returns_done(self):
+        svc = _make_service()
+        action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="retry",
+            targets=[_target("A", "Alpha")],
+        )
+        trajectory = SupervisorTrajectory(entries=[
+            _entry_with_failures(["A"]),
+            _entry_with_failures(["A"]),
+        ])
+        result = svc._guard_consecutive_redelegation(action, trajectory)
+        assert result.action == ActionType.DONE
+        assert "Alpha" in result.reasoning
+
+    def test_single_failure_below_threshold_is_allowed(self):
+        svc = _make_service()
+        action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="retry",
+            targets=[_target("A", "Alpha")],
+        )
+        trajectory = SupervisorTrajectory(entries=[
+            _entry_with_failures(["A"]),
+        ])
+        result = svc._guard_consecutive_redelegation(action, trajectory)
+        assert result is action
+
+
+class TestFailureGuardPartialFiltering:
+    """When some agents fail and others are new, only failed agents are stripped."""
+
+    def test_failing_A_plus_new_C_delegates_to_C_only(self):
+        svc = _make_service()
+        action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="need both",
+            targets=[_target("A", "Alpha"), _target("C", "Charlie")],
+        )
+        trajectory = SupervisorTrajectory(entries=[
+            _entry_with_failures(["A"]),
+            _entry_with_failures(["A"]),
+        ])
+        result = svc._guard_consecutive_redelegation(action, trajectory)
+        assert result.action == ActionType.DELEGATE
+        assert len(result.targets) == 1
+        assert result.targets[0].agent_id == "C"
+
+
+class TestFailureGuardCustomThreshold:
+    def test_custom_failure_threshold(self):
+        svc = _make_service()
+        action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="retry",
+            targets=[_target("A", "Alpha")],
+        )
+        trajectory = SupervisorTrajectory(entries=[
+            _entry_with_failures(["A"]),
+            _entry_with_failures(["A"]),
+        ])
+        result = svc._guard_consecutive_redelegation(
+            action, trajectory, max_consecutive_failures=3,
+        )
+        assert result is action
+
+
+class TestFailureAndSuccessGuardsCombined:
+    """Both guards should work in sequence: failure guard first, then success guard."""
+
+    def test_failure_offender_stripped_before_success_check(self):
+        svc = _make_service()
+        action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="delegate",
+            targets=[
+                _target("A", "Alpha"),
+                _target("B", "Bravo"),
+                _target("C", "Charlie"),
+            ],
+        )
+        now = datetime.now(tz=timezone.utc)
+        mixed_entry = TrajectoryEntry(
+            step_number=1,
+            action=SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning="test",
+                targets=[
+                    _target("A", "Alpha"),
+                    _target("B", "Bravo"),
+                ],
+            ),
+            results=[
+                V2StepResult(
+                    step_number=1, agent_id="A", agent_name="Alpha",
+                    task="test", response_text="err", success=False,
+                ),
+                V2StepResult(
+                    step_number=1, agent_id="B", agent_name="Bravo",
+                    task="test", response_text="ok", success=True,
+                ),
+            ],
+            started_at=now, completed_at=now,
+        )
+        trajectory = SupervisorTrajectory(entries=[mixed_entry, mixed_entry])
+        result = svc._guard_consecutive_redelegation(action, trajectory)
+        assert result.action == ActionType.DELEGATE
+        target_ids = {t.agent_id for t in result.targets}
+        assert "A" not in target_ids
+        assert "C" in target_ids
