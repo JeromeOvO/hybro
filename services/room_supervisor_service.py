@@ -485,10 +485,13 @@ class RoomSupervisorService:
         trajectory: SupervisorTrajectory,
         max_consecutive: int = 2,
     ) -> SupervisorAction:
-        """Override DELEGATE → DONE when the same agent has already been
-        delegated to ``max_consecutive`` times in a row with successful results.
+        """Filter out targets that have already been delegated to
+        ``max_consecutive`` times in a row with successful results.
 
-        Returns the original action unchanged if no override is needed.
+        - If no targets are offenders, returns the original action unchanged.
+        - If only some targets are offenders, returns DELEGATE with the
+          remaining (non-offender) targets.
+        - If *all* targets are offenders, returns DONE.
         """
         target_ids = {t.agent_id for t in action.targets}
 
@@ -507,10 +510,26 @@ class RoomSupervisorService:
         if not offenders:
             return action
 
-        offender_names = []
-        for t in action.targets:
-            if t.agent_id in offenders:
-                offender_names.append(t.agent_name)
+        offender_names = [t.agent_name for t in action.targets if t.agent_id in offenders]
+        remaining = [t for t in action.targets if t.agent_id not in offenders]
+
+        if remaining:
+            logger.warning(
+                "Hard guard: stripping offender(s) %s (%d consecutive successes) "
+                "— delegating to remaining %s only",
+                offender_names,
+                max_consecutive,
+                [t.agent_name for t in remaining],
+            )
+            return SupervisorAction(
+                action=ActionType.DELEGATE,
+                reasoning=(
+                    f"Auto-filtered: {', '.join(offender_names)} already returned "
+                    f"{max_consecutive} consecutive successful responses. "
+                    f"Delegating to {', '.join(t.agent_name for t in remaining)} only."
+                ),
+                targets=remaining,
+            )
 
         logger.warning(
             "Hard guard: blocking re-delegation to %s (%d consecutive successes) — forcing DONE",
