@@ -402,6 +402,10 @@ class TestPromptCacheOptimization:
         assert "{message_text}" in SUPERVISOR_V2_USER_PROMPT
         assert "{trajectory_summary}" in SUPERVISOR_V2_USER_PROMPT
         assert "{debate_mode_note}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{steps_completed}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{max_steps}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{steps_remaining}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{budget_warning}" in SUPERVISOR_V2_USER_PROMPT
 
     @pytest.mark.asyncio
     async def test_decide_next_passes_context_to_system_prompt(self):
