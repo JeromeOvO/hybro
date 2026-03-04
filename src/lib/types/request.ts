@@ -84,6 +84,9 @@ export interface AgentCenterRequest {
   agent?: Agent | null;
   agent_count?: number | null;
 }
+export interface APIKeyCreateRequest {
+  name: string;
+}
 export interface AgentCreate {
   agent_url: string;
   agent_card: AgentCard;
