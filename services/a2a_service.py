@@ -86,12 +86,16 @@ class A2AService:
             # If not 404, re-raise the error
             raise
 
+    AGENT_CARD_FETCH_TIMEOUT = 30.0
+    DEFAULT_REQUEST_TIMEOUT = 600.0
+    PUSH_NOTIFICATION_TIMEOUT = 60.0
+
     async def get_agent_card_from_url(self, agent_url: str) -> AgentCard:
         if not agent_url:
             raise IllgalParameterError()
 
         try:
-            httpx_client = httpx.AsyncClient(timeout=600.0)
+            httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
             card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
             return card
 
@@ -106,7 +110,7 @@ class A2AService:
             raise IllgalParameterError()
 
         try:
-            httpx_client = httpx.AsyncClient(timeout=600.0)
+            httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
             card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
             a2a_client = A2AClient(httpx_client, agent_card=card)
 
@@ -116,9 +120,11 @@ class A2AService:
             logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
             raise A2AServiceError() from e
 
-    async def create_a2a_client(self, agent_card: AgentCard) -> A2AClient:
+    async def create_a2a_client(
+        self, agent_card: AgentCard, timeout: float = DEFAULT_REQUEST_TIMEOUT
+    ) -> A2AClient:
         try:
-            httpx_client = httpx.AsyncClient(timeout=600.0)
+            httpx_client = httpx.AsyncClient(timeout=timeout)
             a2a_client = A2AClient(httpx_client, agent_card=agent_card)
             return a2a_client
 
@@ -338,9 +344,14 @@ class A2AService:
             params=payload,
         )
 
-        # Send to agent
+        # Send to agent — use a shorter timeout for push-notification agents
+        # since they should acknowledge immediately and deliver results via webhook.
         try:
-            a2a_client = await self.create_a2a_client(agent_card)
+            dispatch_timeout = (
+                self.PUSH_NOTIFICATION_TIMEOUT if push_config
+                else self.DEFAULT_REQUEST_TIMEOUT
+            )
+            a2a_client = await self.create_a2a_client(agent_card, timeout=dispatch_timeout)
             response = await a2a_client.send_message(send_message_request)
         except Exception as e:
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
