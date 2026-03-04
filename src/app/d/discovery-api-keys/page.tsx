@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAuth } from "@clerk/nextjs"
-import { Copy, KeyRound, Loader2, Plus, Trash2 } from "lucide-react"
+import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { createApiKey, deleteApiKey, listApiKeys } from "@/lib/api"
@@ -39,6 +39,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
+type StatusFilter = "active" | "inactive" | "all"
+
 function formatDate(dateValue: string | null | undefined): string {
   if (!dateValue) return "Never"
   const date = new Date(dateValue)
@@ -64,24 +66,47 @@ export default function DeveloperApiKeysPage() {
   const { getToken } = useAuth()
   const [keys, setKeys] = useState<APIKeyItemResponse[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<"unauthorized" | "error" | null>(null)
   const [creating, setCreating] = useState(false)
   const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null)
+  const STORAGE_KEY = "discovery-api-keys:hidden"
+  const [hiddenKeyIds, setHiddenKeyIds] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      return stored ? new Set<string>(JSON.parse(stored)) : new Set<string>()
+    } catch {
+      return new Set<string>()
+    }
+  })
   const [newKeyName, setNewKeyName] = useState("")
   const [createdKey, setCreatedKey] = useState<string | null>(null)
   const [createdKeyName, setCreatedKeyName] = useState<string>("")
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
 
   const activeCount = useMemo(
     () => keys.filter((key) => key.is_active).length,
     [keys]
   )
 
+  const filteredKeys = useMemo(() => {
+    const visible = keys.filter((k) => !hiddenKeyIds.has(k.key_id))
+    if (statusFilter === "active") return visible.filter((k) => k.is_active)
+    if (statusFilter === "inactive") return visible.filter((k) => !k.is_active)
+    return visible
+  }, [keys, statusFilter, hiddenKeyIds])
+
   const loadKeys = useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const response = await listApiKeys(getToken)
-      setKeys(response.keys.filter((k) => k.is_active))
-    } catch {
-      toast.error("Failed to load API keys")
+      setKeys(response.keys)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setLoadError("unauthorized")
+      } else {
+        setLoadError("error")
+      }
     } finally {
       setLoading(false)
     }
@@ -117,13 +142,25 @@ export default function DeveloperApiKeysPage() {
     try {
       setDeletingKeyId(keyId)
       await deleteApiKey(keyId, getToken)
-      setKeys((prev) => prev.filter((k) => k.key_id !== keyId))
+      setKeys((prev) =>
+        prev.map((k) => (k.key_id === keyId ? { ...k, is_active: false } : k))
+      )
       toast.success("API key deleted")
     } catch (error) {
       toast.error(getDeleteErrorMessage(error))
     } finally {
       setDeletingKeyId(null)
     }
+  }
+
+  function handleDismissKey(keyId: string) {
+    setHiddenKeyIds((prev) => {
+      const next = new Set(prev).add(keyId)
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify([...next]))
+      } catch {}
+      return next
+    })
   }
 
   async function handleCopyCreatedKey() {
@@ -136,6 +173,12 @@ export default function DeveloperApiKeysPage() {
     }
   }
 
+  const filterOptions: { label: string; value: StatusFilter }[] = [
+    { label: "Active", value: "active" },
+    { label: "Inactive", value: "inactive" },
+    { label: "All", value: "all" },
+  ]
+
   return (
     <div className="page-container">
       <div className="page-content space-y-6">
@@ -146,7 +189,7 @@ export default function DeveloperApiKeysPage() {
               API Key Management
             </CardTitle>
             <CardDescription>
-              Create and manage API keys for Discovery API access.
+            Create and manage API keys for programmatically access Hybro Agent Network.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -154,6 +197,7 @@ export default function DeveloperApiKeysPage() {
               <Input
                 value={newKeyName}
                 onChange={(event) => setNewKeyName(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") handleCreateKey() }}
                 placeholder="Key name (for example: Production)"
                 maxLength={100}
               />
@@ -170,13 +214,34 @@ export default function DeveloperApiKeysPage() {
                 Create key
               </Button>
             </div>
-            
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Your API Keys</CardTitle>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <CardTitle>Your API Keys</CardTitle>
+                <CardDescription className="mt-1">
+                  Deleted keys are permanently deactivated and cannot be reversed.
+                </CardDescription>
+              </div>
+              <div className="flex items-center rounded-lg border bg-muted/40 p-1 gap-1 shrink-0">
+                {filterOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setStatusFilter(opt.value)}
+                    className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+                      statusFilter === opt.value
+                        ? "bg-background shadow-sm text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -184,9 +249,24 @@ export default function DeveloperApiKeysPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Loading keys...
               </div>
-            ) : keys.length === 0 ? (
+            ) : loadError === "unauthorized" ? (
+              <div className="rounded-lg border border-dashed p-8 text-center space-y-2">
+                <p className="text-sm font-medium">You are not logged in.</p>
+                <p className="text-sm text-muted-foreground">Please log in to manage your API keys.</p>
+              </div>
+            ) : loadError === "error" ? (
+              <div className="rounded-lg border border-dashed p-8 text-center space-y-3">
+                <p className="text-sm font-medium">Failed to load keys. Please retry.</p>
+                <Button variant="outline" size="sm" onClick={loadKeys}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry
+                </Button>
+              </div>
+            ) : filteredKeys.length === 0 ? (
               <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-                No API keys yet. Create your first key above.
+                {keys.length === 0
+                  ? "No API keys yet. Create your first key above."
+                  : `No ${statusFilter === "all" ? "" : statusFilter + " "}keys found.`}
               </div>
             ) : (
               <div className="rounded-lg border border-border/50 overflow-hidden">
@@ -202,8 +282,11 @@ export default function DeveloperApiKeysPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {keys.map((key) => (
-                      <tr key={key.key_id} className="border-b last:border-0">
+                    {filteredKeys.map((key) => (
+                      <tr
+                        key={key.key_id}
+                        className={`border-b last:border-0 ${!key.is_active ? "opacity-50" : ""}`}
+                      >
                         <td className="px-4 py-3">
                           <div className="font-medium">{key.name}</div>
                         </td>
@@ -220,40 +303,68 @@ export default function DeveloperApiKeysPage() {
                         </td>
                         <td className="px-4 py-3 hidden sm:table-cell">{key.usage_count}</td>
                         <td className="px-4 py-3 text-right">
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-destructive hover:text-destructive"
-                                disabled={!key.is_active || deletingKeyId === key.key_id}
-                              >
-                                {deletingKeyId === key.key_id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
-                                )}
-                                <span className="ml-2">Delete</span>
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete API key?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This will deactivate the key immediately. Existing integrations using this key will stop working.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                  onClick={() => handleDeleteKey(key.key_id)}
+                          {key.is_active ? (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={deletingKeyId === key.key_id}
                                 >
-                                  Delete key
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                                  {deletingKeyId === key.key_id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                  <span className="ml-2">Delete</span>
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete API key?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    This will permanently deactivate &quot;{key.name}&quot;. Existing integrations using this key will stop working and this cannot be undone.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    onClick={() => handleDeleteKey(key.key_id)}
+                                  >
+                                    Delete key
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          ) : (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                >
+                                  Remove
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Remove from list?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    &quot;{key.name}&quot; will be removed from this page. 
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogCancel onClick={() => handleDismissKey(key.key_id)}>
+                                    Remove
+                                  </AlertDialogCancel>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -278,7 +389,7 @@ export default function DeveloperApiKeysPage() {
           <DialogHeader>
             <DialogTitle>Save your API key</DialogTitle>
             <DialogDescription>
-            Your API key is displayed only once. Please copy and store it in a secure location immediately.
+              Your API key for &quot;{createdKeyName}&quot; is displayed only once. Copy and store it in a secure location immediately.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
