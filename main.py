@@ -14,6 +14,7 @@ from api import (
     a2a_tasks,
     agent,
     agent_group,
+    discovery_api_keys,
     discovery,
     hitl,
     inspection_center,
@@ -231,6 +232,12 @@ app.include_router(
     prefix=api_prefix,
     tags=["discovery"],
     # Auth handled per-route via X-API-Key header in discovery.py
+)
+
+app.include_router(
+    discovery_api_keys.router,
+    prefix=api_prefix,
+    tags=["api_keys"],
 )
 
 app.include_router(
