@@ -20,10 +20,12 @@ import {
 import { RoomSettingForm } from '@/components/room-setting-form'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
+import { HitlPanel } from '@/components/hitl-inline-reply-form'
 import { GroupManagementModal } from '@/components/group-management-modal'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import { useActiveHitlRequests } from '@/hooks/useRoomMessages'
 import type { Agent } from '@/lib/types/agent'
 import type { QuoteData } from '@/components/message-bubble'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
@@ -53,6 +55,7 @@ export default function RoomChatPage() {
     updatingRoom,
     sendUserMessage,
     cancelProcessing,
+    respondToHitlRequest,
     updateRoomSettings,
     getRoomFormData,
     // SSE state
@@ -71,6 +74,9 @@ export default function RoomChatPage() {
 
   // Room agent count
   const roomAgentCount = room?.room_agent_set ? Object.keys(room.room_agent_set).length : 0
+
+  // Active HITL requests (for the panel above chat input)
+  const activeHitlRequests = useActiveHitlRequests()
 
   // Group management (extracted hook)
   const gm = useGroupManagement({
@@ -145,9 +151,9 @@ export default function RoomChatPage() {
   const handleRoomSettingsUpdate = async (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    debateMode: boolean
+    options: { debateMode: boolean; useSupervisor: boolean }
   ) => {
-    const success = await updateRoomSettings(roomName, selectedAgents, debateMode)
+    const success = await updateRoomSettings(roomName, selectedAgents, options)
     if (success) {
       setDialogOpen(false)
     }
@@ -345,6 +351,15 @@ export default function RoomChatPage() {
             onClearOverride={gm.handleClearOverride}
             quote={quote}
             onClearQuote={clearQuote}
+            topSlot={activeHitlRequests.length > 0
+              ? (
+                <HitlPanel
+                  requests={activeHitlRequests}
+                  onSubmit={respondToHitlRequest}
+                />
+              )
+              : undefined
+            }
           />
         </div>
       </div>

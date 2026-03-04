@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update'
+  type: 'connected' | 'user_message' | 'agent_response' | 'agent_token' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update'
   room_id: string
   timestamp: string
   data?: {
@@ -39,6 +39,21 @@ export interface SSEMessage {
     total_steps?: number // Total number of steps in the workflow
     // Task content (the description of what the agent is working on)
     task_content?: string
+    // Token streaming field (for agent_token events)
+    token?: string
+    // HITL fields (for hitl_input_requested)
+    request_id?: string
+    source?: 'agent' | 'supervisor'
+    prompt?: string
+    prompt_type?: 'text' | 'choice' | 'confirmation'
+    choices?: string[] | null
+    expires_at?: string
+    // HITL group fields (multi-question CLARIFY)
+    group_id?: string
+    group_total?: number
+    group_index?: number
+    // HITL status update fields
+    error_message?: string
   }
 }
 
@@ -123,6 +138,11 @@ export interface TaskUpdateEvent {
     task_content?: string     // The task description being processed
   }
 }
+
+// --- HITL (Human-in-the-Loop) Types ---
+
+export type HITLPromptType = 'text' | 'choice' | 'confirmation'
+export type HITLStatus = 'pending' | 'responded' | 'expired' | 'canceled' | 'error'
 
 // --- Internal Processing Status (SSE processing_status events) ---
 

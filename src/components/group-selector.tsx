@@ -169,6 +169,7 @@ export function GroupSelector({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
+            side="top"
             align="start"
             className="w-[min(90vw,18rem)] sm:w-72 sm:max-w-88 border border-border/50 shadow-lg z-50 bg-background/95 backdrop-blur-md max-h-[70vh] sm:max-h-72 overflow-hidden overflow-x-hidden p-0 pb-1"
           >

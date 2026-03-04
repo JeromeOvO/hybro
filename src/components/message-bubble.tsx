@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
+import { StreamingCursor } from './streaming-cursor'
+import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
 
 /** Lightweight UI type for passing quote data between components. */
@@ -48,6 +50,7 @@ interface EntityBubbleProps {
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
+  isStreaming?: boolean
 }
 
 /**
@@ -55,6 +58,9 @@ interface EntityBubbleProps {
  */
 function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const displayContent = message.content || "No message content"
+  const isLongMessage = displayContent.length > 500
+  const [isExpanded, setIsExpanded] = useState(false)
+  const toggleButtonRef = useRef<HTMLButtonElement>(null)
 
   return (
     <div className="flex justify-end w-full">
@@ -67,9 +73,55 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
             {formatTimestamp(message.timestamp)}
           </span>
         </div>
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">
+        <div
+          className={cn(
+            "text-sm leading-relaxed",
+            !isExpanded && isLongMessage ? "line-clamp-4" : "whitespace-pre-wrap"
+          )}
+        >
           <LinkifiedContent content={displayContent} />
         </div>
+
+        {isLongMessage && (
+          <button
+            ref={toggleButtonRef}
+            onClick={() => {
+              const next = !isExpanded
+              const buttonEl = toggleButtonRef.current
+              const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+              const prevBottom = buttonEl?.getBoundingClientRect().bottom
+
+              setIsExpanded(next)
+
+              if (buttonEl && container && !next && typeof prevBottom === 'number') {
+                container.dataset.programmaticScroll = 'true'
+                requestAnimationFrame(() => {
+                  const newBottom = buttonEl.getBoundingClientRect().bottom
+                  const delta = newBottom - prevBottom
+                  if (delta !== 0) {
+                    container.scrollTop += delta
+                  }
+                  requestAnimationFrame(() => {
+                    container.dataset.programmaticScroll = 'false'
+                  })
+                })
+              }
+            }}
+            className="flex items-center gap-1 text-xs mt-3 font-medium transition-colors text-secondary-foreground/70 hover:text-secondary-foreground"
+          >
+            {isExpanded ? (
+              <>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3.5 w-3.5" />
+                Show more
+              </>
+            )}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -77,6 +129,7 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
 
 /**
  * Agent message bubble - internal implementation using BubbleMessage shape.
+ * Supports streaming content with debounced markdown rendering.
  */
 function AgentMessageBubbleInner({
   message,
@@ -88,6 +141,7 @@ function AgentMessageBubbleInner({
   isUserExpanded = false,
   onUserToggle,
   onQuote,
+  isStreaming = false,
 }: EntityBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(
     defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
@@ -95,11 +149,53 @@ function AgentMessageBubbleInner({
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+  
+  // Throttled markdown rendering during streaming (Option B from design doc).
+  // We keep a ref to the latest content and run a 50ms interval that picks
+  // up whatever is current. This avoids the "cancel-on-every-frame" problem
+  // that a useEffect + setTimeout approach has when content changes at 60fps.
+  const [debouncedContent, setDebouncedContent] = useState(message.content)
+  const latestContentRef = useRef(message.content)
+  latestContentRef.current = message.content
+  
+  useEffect(() => {
+    if (!isStreaming) {
+      setDebouncedContent(message.content)
+      return
+    }
+    
+    // Immediately render the first frame
+    setDebouncedContent(message.content)
+    
+    // Then update at most every 50ms via interval
+    const interval = setInterval(() => {
+      setDebouncedContent(latestContentRef.current)
+    }, 50)
+    
+    return () => clearInterval(interval)
+  // Only re-run when streaming state changes, not on every content change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming])
+  
+  // When streaming ends, ensure we render the final content
+  useEffect(() => {
+    if (!isStreaming) {
+      setDebouncedContent(message.content)
+    }
+  }, [isStreaming, message.content])
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
   const quoteBtnRef = useRef<HTMLButtonElement | null>(null)
   const selectedTextRef = useRef<string>('')
+
+  const hideQuoteButton = useCallback(() => {
+    if (quoteBtnRef.current) {
+      quoteBtnRef.current.remove()
+      quoteBtnRef.current = null
+    }
+    selectedTextRef.current = ''
+  }, [])
 
   // Create or update quote button using native DOM to avoid React re-render
   const showQuoteButton = useCallback((top: number, left: number, text: string) => {
@@ -136,15 +232,7 @@ function AgentMessageBubbleInner({
 
     document.body.appendChild(btn)
     quoteBtnRef.current = btn
-  }, [message.id, message.sender_name, onQuote])
-
-  const hideQuoteButton = useCallback(() => {
-    if (quoteBtnRef.current) {
-      quoteBtnRef.current.remove()
-      quoteBtnRef.current = null
-    }
-    selectedTextRef.current = ''
-  }, [])
+  }, [message.id, message.sender_name, onQuote, hideQuoteButton])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -235,7 +323,14 @@ function AgentMessageBubbleInner({
     }
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
-  const displayContent = message.content || "No message content"
+  
+  // Determine display content:
+  // - During streaming: use debounced content for markdown rendering (throttled to 50ms)
+  // - After streaming: use the final message content
+  // - Fallback to "No message content" only when not streaming and content is empty
+  const displayContent = isStreaming 
+    ? (debouncedContent || '') 
+    : (message.content || "No message content")
   const isLongMessage = displayContent.length > 500
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
   const textColorClass = colors.text
@@ -289,7 +384,16 @@ function AgentMessageBubbleInner({
           )}
           onMouseUp={handleMouseUp}
         >
-          <MarkdownContent content={displayContent} />
+          {isStreaming ? (
+            // Streaming mode: show content with cursor
+            <>
+              {displayContent && <MarkdownContent content={displayContent} />}
+              <StreamingCursor />
+            </>
+          ) : (
+            // Final mode: show content or placeholder
+            <MarkdownContent content={displayContent} />
+          )}
         </div>
 
         {/* Expand/Collapse button */}
@@ -357,6 +461,9 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
+ * Supports real-time token streaming via StreamingBuffer (agent_token events)
+ * and typewriter-driven progressive reveal (non-streaming agents).
+ * Both paths feed through useStreamingContent so the component stays simple.
  */
 export function EntityAgentBubble({
   entity,
@@ -379,7 +486,19 @@ export function EntityAgentBubble({
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }) {
-  const bubble = entityToBubble(entity)
+  const { streamingText, isStreaming } = useStreamingContent(entity.id)
+
+  const displayContent = isStreaming ? streamingText : entity.content
+  const showAsStreaming = isStreaming
+
+  const bubble: BubbleMessage = {
+    id: entity.id,
+    content: displayContent,
+    sender_name: entity.senderName,
+    timestamp: entity.timestamp,
+    agent_id: entity.agentId,
+  }
+
   return (
     <AgentMessageBubbleInner
       message={bubble}
@@ -391,6 +510,7 @@ export function EntityAgentBubble({
       isUserExpanded={isUserExpanded}
       onUserToggle={onUserToggle}
       onQuote={onQuote}
+      isStreaming={showAsStreaming}
     />
   )
 }

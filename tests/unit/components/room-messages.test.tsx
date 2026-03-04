@@ -1,0 +1,152 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, cleanup } from '@testing-library/react'
+import { useMessageStore } from '@/stores/message-store'
+
+vi.mock('@/hooks/useStreamingContent', () => ({
+  useStreamingContent: vi.fn().mockReturnValue({ streamingText: '', isStreaming: false }),
+}))
+
+vi.mock('@/hooks/useAutoHideScroll', () => ({
+  useAutoHideScroll: vi.fn(),
+}))
+
+// jsdom doesn't implement scrollIntoView
+Element.prototype.scrollIntoView = vi.fn()
+
+function seedStore(messages: Array<{
+  id: string
+  content: string
+  senderName: string
+  messageType: 'user' | 'agent'
+  timestamp?: string
+  agentId?: string
+}>, hydrated = true) {
+  const store = useMessageStore.getState()
+  store.setRoom('room-1')
+
+  for (const m of messages) {
+    store.upsertMessage({
+      id: m.id,
+      roomId: 'room-1',
+      messageType: m.messageType,
+      content: m.content,
+      senderName: m.senderName,
+      timestamp: m.timestamp || new Date().toISOString(),
+      agentId: m.agentId,
+    }, 'db')
+  }
+
+  if (hydrated) {
+    store.markDbSynced()
+  }
+}
+
+async function renderMessages() {
+  const { RoomMessages } = await import('@/components/room-messages')
+  return render(<RoomMessages />)
+}
+
+describe('RoomMessages', () => {
+  beforeEach(() => {
+    useMessageStore.getState().clearRoom()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  describe('loading state', () => {
+    it('should show loading state when not hydrated', async () => {
+      seedStore([], false)
+      await renderMessages()
+      expect(screen.getByText('Loading messages...')).toBeTruthy()
+    })
+  })
+
+  describe('empty state', () => {
+    it('should show empty state when no messages exist', async () => {
+      seedStore([])
+      await renderMessages()
+      expect(screen.getByText('Start the conversation')).toBeTruthy()
+    })
+  })
+
+  describe('message rendering', () => {
+    it('should render user messages', async () => {
+      seedStore([{
+        id: 'msg-1',
+        content: 'Hello from user',
+        senderName: 'Alice',
+        messageType: 'user',
+      }])
+      await renderMessages()
+      expect(screen.getByText('Hello from user')).toBeTruthy()
+      expect(screen.getByText('Alice')).toBeTruthy()
+    })
+
+    it('should render agent messages', async () => {
+      seedStore([{
+        id: 'msg-1',
+        content: 'Agent response here',
+        senderName: 'Code Agent',
+        messageType: 'agent',
+        agentId: 'agent-1',
+      }])
+      await renderMessages()
+      expect(screen.getByText('Code Agent')).toBeTruthy()
+    })
+
+    it('should render multiple messages', async () => {
+      seedStore([
+        {
+          id: 'msg-1',
+          content: 'User question',
+          senderName: 'User',
+          messageType: 'user',
+          timestamp: '2024-01-01T00:00:00Z',
+        },
+        {
+          id: 'msg-2',
+          content: 'Agent answer',
+          senderName: 'Agent',
+          messageType: 'agent',
+          agentId: 'agent-1',
+          timestamp: '2024-01-01T00:00:01Z',
+        },
+      ])
+      await renderMessages()
+      expect(screen.getByText('User question')).toBeTruthy()
+      expect(screen.getByText('Agent')).toBeTruthy()
+    })
+  })
+
+  describe('expand/collapse controls', () => {
+    it('should show expand/collapse button when agent messages exist', async () => {
+      seedStore([{
+        id: 'msg-1',
+        content: 'Some agent response',
+        senderName: 'Agent',
+        messageType: 'agent',
+        agentId: 'agent-1',
+      }])
+      await renderMessages()
+      const btn = screen.queryByLabelText('Expand all messages') ||
+                  screen.queryByLabelText('Collapse all messages')
+      expect(btn).toBeTruthy()
+    })
+
+    it('should not show expand/collapse button when only user messages', async () => {
+      seedStore([{
+        id: 'msg-1',
+        content: 'User message only',
+        senderName: 'User',
+        messageType: 'user',
+      }])
+      await renderMessages()
+      const btn = screen.queryByLabelText('Expand all messages') ||
+                  screen.queryByLabelText('Collapse all messages')
+      expect(btn).toBeNull()
+    })
+  })
+})

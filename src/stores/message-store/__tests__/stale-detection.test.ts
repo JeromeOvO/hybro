@@ -126,4 +126,70 @@ describe('detectAndMarkStaleTasks', () => {
     const result = detectAndMarkStaleTasks(messages)
     expect(result[0].content).toBe('Was working on analysis')
   })
+
+  // --- Interactive state (HITL) expiry tests ---
+
+  it('does not mark input-required tasks with future hitlExpiresAt as stale', () => {
+    const messages = [
+      makeIncoming({
+        id: 'hitl-active',
+        taskStatus: TASK_STATE.INPUT_REQUIRED,
+        timestamp: '2026-02-17T10:00:00Z', // 2 hours old — would fail generic 10m check
+        hitlExpiresAt: '2026-02-18T10:00:00Z', // 22 hours from now
+      }),
+    ]
+    const result = detectAndMarkStaleTasks(messages)
+    expect(result[0].taskStatus).toBe(TASK_STATE.INPUT_REQUIRED)
+  })
+
+  it('marks input-required tasks with past hitlExpiresAt as expired', () => {
+    const messages = [
+      makeIncoming({
+        id: 'hitl-expired',
+        taskStatus: TASK_STATE.INPUT_REQUIRED,
+        timestamp: '2026-02-16T12:00:00Z',
+        hitlExpiresAt: '2026-02-17T11:00:00Z', // 1 hour ago
+      }),
+    ]
+    const result = detectAndMarkStaleTasks(messages)
+    expect(result[0].taskStatus).toBe(TASK_STATE.FAILED)
+    expect(result[0].taskError).toContain('expired')
+  })
+
+  it('uses 24h fallback for input-required tasks without hitlExpiresAt', () => {
+    const messages = [
+      makeIncoming({
+        id: 'hitl-no-expiry-recent',
+        taskStatus: TASK_STATE.INPUT_REQUIRED,
+        timestamp: '2026-02-17T11:00:00Z', // 1 hour old, well within 24h
+      }),
+    ]
+    const result = detectAndMarkStaleTasks(messages)
+    expect(result[0].taskStatus).toBe(TASK_STATE.INPUT_REQUIRED)
+  })
+
+  it('marks input-required tasks older than 24h (no hitlExpiresAt) as expired', () => {
+    const messages = [
+      makeIncoming({
+        id: 'hitl-no-expiry-old',
+        taskStatus: TASK_STATE.INPUT_REQUIRED,
+        timestamp: '2026-02-16T11:00:00Z', // 25 hours old
+      }),
+    ]
+    const result = detectAndMarkStaleTasks(messages)
+    expect(result[0].taskStatus).toBe(TASK_STATE.FAILED)
+    expect(result[0].taskError).toContain('expired')
+  })
+
+  it('does not mark auth-required tasks within 24h as stale', () => {
+    const messages = [
+      makeIncoming({
+        id: 'auth-active',
+        taskStatus: TASK_STATE.AUTH_REQUIRED,
+        timestamp: '2026-02-17T06:00:00Z', // 6 hours old
+      }),
+    ]
+    const result = detectAndMarkStaleTasks(messages)
+    expect(result[0].taskStatus).toBe(TASK_STATE.AUTH_REQUIRED)
+  })
 })

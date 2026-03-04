@@ -72,12 +72,13 @@ describe('useMessageStore', () => {
     it('does not change state for no-op updates', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(makeIncoming(), 'sse')
-      const v1 = useMessageStore.getState().version
+      const versionAfterFirst = useMessageStore.getState().version
 
       // Same message, same content → no-op
       store.upsertMessage(makeIncoming(), 'db')
       // Rule 2 actually blocks this because source is 'sse' and entity has no taskStatus
       // But without taskStatus, Rule 2 doesn't apply. Let's use a case that hits no-op.
+      expect(useMessageStore.getState().version).toBe(versionAfterFirst)
     })
   })
 

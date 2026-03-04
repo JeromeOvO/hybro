@@ -1,4 +1,5 @@
 import type { TaskState } from '@/lib/types/sse'
+import type { HITLPromptType } from '@/lib/types/sse'
 
 /** Which pipeline last wrote this entity. */
 export type MessageSource = 'db' | 'sse' | 'optimistic'
@@ -40,6 +41,18 @@ export interface MessageEntity {
   stepNumber?: number
   totalSteps?: number
 
+  // ── HITL (Human-in-the-Loop) ─────────────────────────────
+  hitlRequestId?: string
+  hitlPrompt?: string
+  hitlPromptType?: HITLPromptType
+  hitlChoices?: string[] | null
+  hitlExpiresAt?: string
+  hitlResolved?: boolean
+  hitlGroupId?: string
+  hitlGroupTotal?: number
+  hitlGroupIndex?: number
+  hitlUserAnswer?: string
+
   // ── Provenance & conflict resolution ──────────────────────
   source: MessageSource
   sourceVersion: number
@@ -65,7 +78,7 @@ export interface IncomingMessage {
   // All optional — omitted fields preserve existing values on update
   agentId?: string
   userId?: string
-  taskStatus?: TaskState
+  taskStatus?: TaskState | null
   taskError?: string | null
   taskStatusMessage?: string | null
   taskRequiresInput?: boolean
@@ -75,5 +88,15 @@ export interface IncomingMessage {
   taskUpdatedAt?: string
   stepNumber?: number
   totalSteps?: number
+  hitlRequestId?: string
+  hitlPrompt?: string
+  hitlPromptType?: HITLPromptType
+  hitlChoices?: string[] | null
+  hitlExpiresAt?: string
+  hitlResolved?: boolean
+  hitlGroupId?: string
+  hitlGroupTotal?: number
+  hitlGroupIndex?: number
+  hitlUserAnswer?: string
   isEphemeral?: boolean
 }

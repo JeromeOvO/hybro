@@ -45,7 +45,7 @@ const INITIAL_STATE = {
 }
 
 export const useMessageStore = create<MessageStoreState>()(
-  subscribeWithSelector((set, get) => ({
+  subscribeWithSelector((set) => ({
     ...INITIAL_STATE,
 
     upsertMessage: (incoming, source) => {
@@ -96,7 +96,8 @@ export const useMessageStore = create<MessageStoreState>()(
 
     removeMessage: (id) => set((state) => {
       if (!state.entities[id]) return state
-      const { [id]: _, ...rest } = state.entities
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { [id]: _removed, ...rest } = state.entities
       return {
         entities: rest,
         orderedIds: state.orderedIds.filter(oid => oid !== id),

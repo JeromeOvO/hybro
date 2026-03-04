@@ -2,10 +2,12 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { 
+  ArrowDown,
   ChevronsDownUp, 
   ChevronsUpDown,
   MessageCirclePlus,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
@@ -106,6 +108,9 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
           totalSteps={entity.totalSteps}
           taskContent={entity.taskContent}
           taskCreatedAt={entity.taskCreatedAt || entity.timestamp}
+          hitlPrompt={entity.hitlPrompt}
+          hitlResolved={entity.hitlResolved}
+          hitlUserAnswer={entity.hitlUserAnswer}
         />
       )
   }
@@ -193,6 +198,13 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
   const expandAll = useCallback(() => {
     setUserExpandedIds(new Set(allAgentIds))
   }, [allAgentIds])
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+    }
+  }, [])
 
   // Track if user is near bottom of scroll
   const checkIfNearBottom = useCallback(() => {
@@ -301,6 +313,21 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
           )}
         </div>
       </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={scrollToBottom}
+        className={cn(
+          "absolute bottom-4 left-1/2 -translate-x-1/2 h-9 w-9 p-0 rounded-full bg-muted/80 backdrop-blur-sm shadow-md hover:bg-muted hover:shadow-lg transition-all duration-200 z-10",
+          shouldAutoScroll || orderedIds.length === 0
+            ? "opacity-0 scale-90 pointer-events-none"
+            : "opacity-100 scale-100"
+        )}
+        aria-label="Scroll to bottom"
+        tabIndex={shouldAutoScroll ? -1 : 0}
+      >
+        <ArrowDown className="h-4 w-4" />
+      </Button>
     </div>
   )
 }
