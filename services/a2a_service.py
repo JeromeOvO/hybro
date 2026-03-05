@@ -455,11 +455,21 @@ class A2AService:
                 message_id, completed_task.model_dump(mode="json")
             )
 
-            return {
+            from common.utils.a2a_helpers import extract_parts
+
+            extracted = extract_parts(result.parts) if result.parts else None
+            non_text_parts = None
+            if extracted and extracted.has_non_text:
+                non_text_parts = extracted.file_parts + extracted.data_parts
+
+            resp = {
                 "type": "message",
                 "message_id": message_id,
                 "content": self._extract_text_from_message(result),
             }
+            if non_text_parts:
+                resp["parts"] = non_text_parts
+            return resp
 
         # Handle Task response (async path)
         if result.kind == "task":
@@ -472,12 +482,22 @@ class A2AService:
 
             # If already terminal, return content
             if is_terminal_state(state):
-                return {
+                from common.utils.a2a_helpers import extract_parts_from_artifacts
+
+                extracted = extract_parts_from_artifacts(result.artifacts) if result.artifacts else None
+                non_text_parts = None
+                if extracted and extracted.has_non_text:
+                    non_text_parts = extracted.file_parts + extracted.data_parts
+
+                resp = {
                     "type": "message",
                     "message_id": message_id,
                     "content": self._extract_text_from_task(result),
                     "status": state.value if hasattr(state, "value") else str(state),
                 }
+                if non_text_parts:
+                    resp["parts"] = non_text_parts
+                return resp
 
             # Handle interactive states
             if state in INTERACTIVE_STATES:
