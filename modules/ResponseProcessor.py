@@ -729,8 +729,8 @@ class ResponseProcessor:
     ) -> None:
         """Handle an 'artifact-update' event during streaming."""
         artifact_result = getattr(result, "artifact", None)
-        append = getattr(result, "append", False)
-        last_chunk = getattr(result, "last_chunk", False)
+        append = getattr(result, "append", False) or False
+        last_chunk = getattr(result, "last_chunk", False) or False
 
         task = get_task(ctx.current_message)
         if not artifact_result or not task:
@@ -939,12 +939,22 @@ class ResponseProcessor:
         if result.kind == "task":
             state = result.status.state
             state_value = state_str(state)
-            return {
+            parsed: dict[str, Any] = {
                 "type": "task",
                 "message_id": message_id,
                 "task_id": result.id,
                 "status": state_value,
             }
+            if is_terminal_state(state) and result.artifacts:
+                from common.utils.a2a_helpers import extract_parts_from_artifacts as _epfa
+
+                extracted_task = _epfa(result.artifacts)
+                if extracted_task.text:
+                    parsed["type"] = "message"
+                    parsed["content"] = extracted_task.text
+                if extracted_task.has_non_text:
+                    parsed["parts"] = extracted_task.file_parts + extracted_task.data_parts
+            return parsed
 
         return {"type": "message", "message_id": message_id, "content": ""}
 
