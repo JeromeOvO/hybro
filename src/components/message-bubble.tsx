@@ -596,9 +596,16 @@ export function EntityAgentBubble({
         onQuote={onQuote}
         isStreaming={showAsStreaming}
       />
-      {entity.artifacts && entity.artifacts.length > 0 && (
-        <ArtifactList artifacts={entity.artifacts} />
-      )}
+      {entity.artifacts && entity.artifacts.length > 0 && (() => {
+        const messageText = (entity.content || '').trim()
+        const nonDuplicate = entity.artifacts.filter((a) => {
+          const isTextOnly = a.parts.length > 0 && a.parts.every((p) => p.kind === 'text')
+          if (!isTextOnly) return true
+          const artifactText = a.parts.map((p) => p.text || '').join('').trim()
+          return artifactText !== messageText
+        })
+        return nonDuplicate.length > 0 ? <ArtifactList artifacts={nonDuplicate} /> : null
+      })()}
     </>
   )
 }
