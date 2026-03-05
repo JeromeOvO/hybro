@@ -15,6 +15,7 @@ from api import (
     agent,
     agent_group,
     discovery,
+    files,
     hitl,
     inspection_center,
     memory_center,
@@ -31,6 +32,7 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from jobs.compaction_sweep import compaction_sweep
 from jobs.stale_task_checker import stale_task_checker
+from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -118,6 +120,9 @@ async def lifespan(app: FastAPI):
     # Start background compaction sweep (§6 lossless compaction)
     await compaction_sweep.start()
 
+    # Start orphaned upload cleaner
+    await orphaned_upload_cleaner.start()
+
     try:
         yield
     finally:
@@ -126,6 +131,9 @@ async def lifespan(app: FastAPI):
 
         # Stop background compaction sweep
         await compaction_sweep.stop()
+
+        # Stop orphaned upload cleaner
+        await orphaned_upload_cleaner.stop()
 
         # Stop the agent health check service
         await agent_health_service.stop()
@@ -221,6 +229,13 @@ app.include_router(
     agent_group.router,
     prefix=api_prefix,
     tags=["agent_group"],
+    dependencies=[Depends(get_current_user)],
+)
+
+app.include_router(
+    files.router,
+    prefix=api_prefix,
+    tags=["files"],
     dependencies=[Depends(get_current_user)],
 )
 

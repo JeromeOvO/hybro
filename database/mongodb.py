@@ -249,6 +249,15 @@ class MongoDB:
             )
         return self.db.agent_memories
 
+    @property
+    def file_uploads_collection(self):
+        """Get file_uploads collection for multimodal file metadata."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.file_uploads
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -619,13 +628,23 @@ class MongoDB:
         return result.deleted_count > 0
 
     # room user message management
+    @staticmethod
+    def _strip_file_urls(doc: dict) -> None:
+        """Remove file_url from serialized attachments to prevent persistence."""
+        target = doc.get("$set", doc)
+        content = target.get("message_content")
+        if not content:
+            return
+        for att in content.get("attachments") or []:
+            att.pop("file_url", None)
+
     async def add_room_user_message(self, room_user_message: RoomUserMessage) -> str:
         """
         Add a room user message to the database
         """
-        result = await self.room_user_messages_collection.insert_one(
-            room_user_message.model_dump(mode="json")
-        )
+        doc = room_user_message.model_dump(mode="json")
+        self._strip_file_urls(doc)
+        result = await self.room_user_messages_collection.insert_one(doc)
         return str(result.inserted_id)
 
     async def get_room_user_messages_by_room_id(
@@ -655,9 +674,13 @@ class MongoDB:
         """
         Update a room user message by message_id
         """
+        update_doc = {
+            "$set": room_user_message.model_dump(exclude_unset=True, mode="json")
+        }
+        self._strip_file_urls(update_doc)
         result = await self.room_user_messages_collection.update_one(
             {"message_id": message_id},
-            {"$set": room_user_message.model_dump(exclude_unset=True, mode="json")},
+            update_doc,
         )
         return result.modified_count > 0
 

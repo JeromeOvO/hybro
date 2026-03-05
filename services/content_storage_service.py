@@ -209,7 +209,7 @@ class ContentStorageService:
 
         Raises:
             ContentExpiredError: If the content is not found
-            NotImplementedError: If the storage type is not yet implemented (S3, URL)
+            NotImplementedError: If the storage type is not yet implemented (URL)
             ValueError: If the content reference is malformed
         """
         if content_ref.storage_type == StorageType.MONGODB:
@@ -224,8 +224,17 @@ class ContentStorageService:
             return content
 
         elif content_ref.storage_type == StorageType.S3:
-            # FUTURE: S3 retrieval for binary content
-            raise NotImplementedError("S3 expansion not yet implemented")
+            if not content_ref.s3_key:
+                raise ValueError(
+                    f"ContentReference for turn {turn_id} has no s3_key"
+                )
+
+            from services.s3_service import s3_service
+
+            content = await s3_service.download_text(content_ref.s3_key)
+            if content is None:
+                raise ContentExpiredError(turn_id, content_ref.s3_key)
+            return content
 
         elif content_ref.storage_type == StorageType.URL:
             # FUTURE: URL-based content retrieval (external web content).

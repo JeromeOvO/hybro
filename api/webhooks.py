@@ -22,7 +22,7 @@ from a2a.types import (
 )
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from common.utils.a2a_helpers import extract_text_from_artifacts
+from common.utils.a2a_helpers import extract_parts_from_artifacts, extract_text_from_artifacts
 from common.utils.logger import get_logger
 from modules.RoomMessageCenter import room_message_center
 from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
@@ -181,9 +181,16 @@ async def handle_a2a_webhook(
 
     # Extract content for queue resumption (if task completed successfully)
     task_result_text = None
+    task_result_parts = None
     if is_terminal_state(new_state):
         if new_state == TaskState.completed and updated_task.artifacts:
-            task_result_text = extract_text_from_artifacts(updated_task.artifacts)
+            extracted = extract_parts_from_artifacts(updated_task.artifacts)
+            task_result_text = extracted.text if extracted.text else None
+            task_result_parts = (
+                (extracted.file_parts + extracted.data_parts)
+                if extracted.has_non_text
+                else None
+            )
 
     if should_notify:
         background_tasks.add_task(
@@ -193,6 +200,7 @@ async def handle_a2a_webhook(
             room_id=current_msg.room_id,
             user_id=current_msg.user_id or "",
             send_processing_status=True,
+            parts=task_result_parts,
         )
 
     # 7. Resume queue processing if task reached terminal state and has continuation

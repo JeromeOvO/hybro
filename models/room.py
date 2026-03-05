@@ -48,10 +48,27 @@ class Message(BaseModel):
     message_created_at: datetime = Field(default_factory=utcnow)
 
 
+class UserAttachment(BaseModel):
+    """A file attached to a user message. Stored alongside message in MongoDB.
+
+    file_url is ephemeral -- generated from s3_key at read time via presigned
+    URL, never persisted.
+    """
+
+    file_id: str
+    s3_key: str
+    mime_type: str
+    file_name: str
+    size_bytes: int
+    file_url: str | None = Field(default=None, json_schema_extra={"readOnly": True})
+
+
 class MessageContent(BaseModel):
     # markdown
     message_text: str | None = None
     message_task: Task | None = None
+    attachments: list[UserAttachment] | None = None
+    content_summary: dict | None = None
 
 
 class RoomMessage(Message):

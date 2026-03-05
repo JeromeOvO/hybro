@@ -54,6 +54,8 @@ class MessageStreamingState:
 
     full_response_text: str = ""
     accumulated_parts: list[Part] = field(default_factory=list)
+    non_text_parts: list[dict] = field(default_factory=list)
+    inline_conversion_count: int = 0
     agent_message_id: str | None = None
     message_added_to_history: bool = False
 
@@ -82,6 +84,155 @@ class ResponseProcessor:
         self.a2a_service = a2a_service
         self.task_service = task_service
         self.database_service = database_service
+        self._s3_service = None
+
+    @property
+    def s3_service(self):
+        if self._s3_service is None:
+            from services.s3_service import s3_service
+
+            self._s3_service = s3_service
+        return self._s3_service
+
+    async def _convert_inline_bytes_to_s3(
+        self, artifact, room_id: str, message_id: str,
+        conversion_counter: list[int] | None = None,
+    ) -> None:
+        """Convert inline base64 bytes in artifact parts to S3 URIs.
+
+        ``conversion_counter`` is a single-element list ``[count]`` shared
+        across calls for the same message so the per-message cap is enforced.
+        """
+        from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+
+        if not artifact.parts:
+            return
+
+        if conversion_counter is None:
+            conversion_counter = [0]
+
+        for i, part in enumerate(artifact.parts):
+            root = getattr(part, "root", part)
+            if getattr(root, "kind", None) != "file":
+                continue
+            file_content = getattr(root, "file", None)
+            if not file_content:
+                continue
+            raw_bytes = getattr(file_content, "bytes", None)
+            if not raw_bytes:
+                continue
+
+            if conversion_counter[0] >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
+                logger.warning(
+                    "Inline base64 conversion cap (%d) reached: room=%s message=%s — skipping remaining",
+                    MAX_INLINE_CONVERSIONS_PER_MESSAGE, room_id, message_id,
+                )
+                break
+
+            import base64
+            import io
+
+            try:
+                decoded = base64.b64decode(raw_bytes)
+            except Exception:
+                logger.warning(
+                    "Invalid base64 in artifact part: room=%s message=%s part=%d — skipping",
+                    room_id, message_id, i,
+                )
+                continue
+
+            mime = getattr(file_content, "mime_type", None) or getattr(
+                file_content, "mimeType", "application/octet-stream"
+            )
+            ext = mime.split("/")[-1] if "/" in mime else "bin"
+            s3_key = f"artifacts/{room_id}/{message_id}/inline-{conversion_counter[0]}.{ext}"
+
+            try:
+                await self.s3_service.upload_file(
+                    file_data=io.BytesIO(decoded),
+                    s3_key=s3_key,
+                    content_type=mime,
+                    content_length=len(decoded),
+                )
+                presigned_url = await self.s3_service.generate_presigned_url(s3_key)
+                file_content.bytes = None
+                file_content.uri = presigned_url
+                conversion_counter[0] += 1
+            except Exception:
+                logger.error(
+                    "Failed to upload inline base64 to S3: room=%s message=%s part=%d",
+                    room_id,
+                    message_id,
+                    i,
+                    exc_info=True,
+                )
+
+    async def _convert_streaming_parts_to_s3(
+        self,
+        non_text_parts: list[dict],
+        room_id: str,
+        message_id: str,
+        *,
+        converted_so_far: int = 0,
+    ) -> int:
+        """Convert inline base64 bytes in accumulated streaming file parts to S3 URIs.
+
+        Delegates to the shared helper in a2a_helpers.  Returns the updated
+        running total so callers can keep the per-message cap accurate.
+        """
+        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+
+        return await convert_inline_bytes_to_s3(
+            non_text_parts, room_id, message_id,
+            converted_so_far=converted_so_far,
+        )
+
+    @staticmethod
+    def _materialize_non_text_parts_as_artifact(
+        task, non_text_parts: list[dict]
+    ) -> None:
+        """Wrap accumulated non-text streaming parts into an A2A artifact.
+
+        This ensures the multimodal data is persisted in the DB alongside
+        any artifacts produced by ``artifact_update`` events, so that
+        ``notify_task_update`` / hydration can recover them after reconnect.
+
+        Uses ``a2a.types.Artifact`` / ``a2a.types.Part`` (RootModel wrapper)
+        to stay compatible with the task serializer.
+        """
+        from uuid import uuid4
+
+        from a2a.types import Artifact as A2AArtifact
+        from a2a.types import DataPart, FilePart
+        from a2a.types import Part as A2APart
+
+        if not non_text_parts:
+            return
+
+        wrapped_parts: list[A2APart] = []
+        for p in non_text_parts:
+            kind = p.get("kind")
+            try:
+                if kind == "file":
+                    wrapped_parts.append(A2APart(root=FilePart(**p)))
+                elif kind == "data":
+                    wrapped_parts.append(A2APart(root=DataPart(**p)))
+            except Exception:
+                logger.warning("Skipping invalid non-text part during materialization: %s", kind)
+
+        if not wrapped_parts:
+            return
+
+        if task.artifacts is None:
+            task.artifacts = []
+
+        artifact = A2AArtifact(
+            artifact_id=uuid4().hex,
+            parts=wrapped_parts,
+            name="streaming-multimodal",
+            metadata={"source": "streaming_non_text"},
+        )
+        task.artifacts.append(artifact)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -373,7 +524,9 @@ class ResponseProcessor:
                         result, ctx, streaming_state
                     )
                 case "artifact-update":
-                    await self._handle_stream_artifact_update(result, ctx)
+                    await self._handle_stream_artifact_update(
+                        result, ctx, streaming_state
+                    )
 
         return await self._finalize_streaming(ctx, streaming_state)
 
@@ -440,17 +593,21 @@ class ResponseProcessor:
         streaming_state: MessageStreamingState,
     ) -> None:
         """Handle a 'message' event during streaming."""
+        from common.utils.a2a_helpers import extract_parts
+
         message_list = result.parts
         streaming_state.accumulated_parts.extend(message_list)
 
         if streaming_state.agent_message_id is None:
             streaming_state.agent_message_id = result.message_id
 
-        content = "".join(
-            part.root.text if part.root and hasattr(part.root, "text") else ""
-            for part in message_list
-        )
+        extracted = extract_parts(message_list)
+        content = extracted.text
         streaming_state.full_response_text += content
+
+        if extracted.has_non_text:
+            streaming_state.non_text_parts.extend(extracted.file_parts)
+            streaming_state.non_text_parts.extend(extracted.data_parts)
 
         task = get_task(ctx.current_message)
         if task:
@@ -568,6 +725,7 @@ class ResponseProcessor:
         self,
         result,
         ctx: ProcessingContext,
+        streaming_state: MessageStreamingState,
     ) -> None:
         """Handle an 'artifact-update' event during streaming."""
         artifact_result = getattr(result, "artifact", None)
@@ -595,14 +753,30 @@ class ResponseProcessor:
         else:
             task.artifacts.append(artifact_result)
 
+        # Convert inline base64 to S3 URIs before persistence and SSE.
+        # Share the counter across chunks via streaming_state so the
+        # per-message cap is enforced across the whole streaming session.
+        shared_counter = [streaming_state.inline_conversion_count]
+        await self._convert_inline_bytes_to_s3(
+            artifact_result, ctx.room_id, ctx.current_message.message_id,
+            conversion_counter=shared_counter,
+        )
+        streaming_state.inline_conversion_count = shared_counter[0]
+
         await self.tsm.persist_message(ctx.current_message)
 
         if ctx.send_sse:
+            # Explicitly serialize to dict so json.dumps doesn't choke on Pydantic models
+            artifact_dict = (
+                artifact_result.model_dump()
+                if hasattr(artifact_result, "model_dump")
+                else artifact_result
+            )
             await self.sse_manager.send_artifact_update(
                 ctx.room_id,
                 ctx.current_message.message_id,
                 ctx.current_message.agent_id,
-                artifact_result,
+                artifact_dict,
                 append=append,
                 last_chunk=last_chunk,
             )
@@ -627,6 +801,23 @@ class ResponseProcessor:
                 ctx.current_message.message_id,
             )
         already_terminal = task and task.status and is_terminal_state(task.status.state)
+
+        # Convert inline base64 file parts to S3 URIs and materialize them
+        # as a task artifact *before* persisting / notifying, so that the DB
+        # always contains the multimodal data and clients that reconnect
+        # after missing the real-time SSE can still hydrate them.
+        if streaming_state.non_text_parts:
+            new_total = await self._convert_streaming_parts_to_s3(
+                streaming_state.non_text_parts,
+                ctx.room_id,
+                ctx.current_message.message_id,
+                converted_so_far=streaming_state.inline_conversion_count,
+            )
+            streaming_state.inline_conversion_count = new_total
+            if task:
+                self._materialize_non_text_parts_as_artifact(
+                    task, streaming_state.non_text_parts,
+                )
 
         if task and not already_terminal:
             if streaming_state.full_response_text:
@@ -659,7 +850,6 @@ class ResponseProcessor:
                 if not final_error:
                     final_error = f"Task {final_state_value}"
 
-            # Persist streaming content before notifying so DB has the correct data
             if streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
@@ -674,6 +864,16 @@ class ResponseProcessor:
 
             if is_failure_state(final_state):
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
+
+        # Send non-text parts via agent_response for real-time clients
+        if streaming_state.non_text_parts and ctx.send_sse:
+            await self.sse_manager.send_agent_response(
+                ctx.room_id,
+                ctx.current_message.message_id,
+                ctx.current_message.agent_id,
+                streaming_state.full_response_text,
+                parts=streaming_state.non_text_parts,
+            )
 
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
@@ -724,17 +924,17 @@ class ResponseProcessor:
         result = raw_response.root.result
 
         if result.kind == "message":
-            texts = []
-            for part in result.parts or []:
-                if hasattr(part, "text") and part.text:
-                    texts.append(part.text)
-                elif hasattr(part, "root") and hasattr(part.root, "text"):
-                    texts.append(part.root.text)
-            return {
+            from common.utils.a2a_helpers import extract_parts
+
+            extracted = extract_parts(result.parts or [])
+            parsed: dict[str, Any] = {
                 "type": "message",
                 "message_id": message_id,
-                "content": "".join(texts),
+                "content": extracted.text,
             }
+            if extracted.has_non_text:
+                parsed["parts"] = extracted.file_parts + extracted.data_parts
+            return parsed
 
         if result.kind == "task":
             state = result.status.state
@@ -926,8 +1126,21 @@ class ResponseProcessor:
         # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
+            non_text_parts = response.get("parts")
             if full_response_text:
                 current_message.message_content.message_text = full_response_text
+
+            # Convert inline base64 file parts to S3 URIs
+            if non_text_parts:
+                await self._convert_streaming_parts_to_s3(
+                    non_text_parts, room_id, message_id,
+                )
+                task = get_task(current_message)
+                if task:
+                    self._materialize_non_text_parts_as_artifact(
+                        task, non_text_parts,
+                    )
+
             await self.tsm.transition_task(
                 current_message,
                 TaskState.completed,
@@ -938,6 +1151,7 @@ class ResponseProcessor:
                 state=TaskState.completed,
                 room_id=room_id,
                 user_id=current_message.user_id or "",
+                parts=non_text_parts if non_text_parts else None,
             )
 
             if not task_info:
@@ -954,6 +1168,7 @@ class ResponseProcessor:
                     agent_id=current_message.agent_id,
                     step_number=step_number,
                     total_steps=total_steps,
+                    parts=non_text_parts if non_text_parts else None,
                 )
             return True, full_response_text, None
 

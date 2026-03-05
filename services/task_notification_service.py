@@ -44,6 +44,7 @@ async def notify_task_update(
     user_id: str,
     error: str | None = None,
     send_processing_status: bool = False,
+    parts: list[dict] | None = None,
 ) -> bool:
     """Idempotent, DB-backed SSE notification for task state changes.
 
@@ -147,7 +148,12 @@ async def notify_task_update(
 
     if task:
         if state == TaskState.completed and task.artifacts:
-            content = extract_text_from_artifacts(task.artifacts)
+            from common.utils.a2a_helpers import extract_parts_from_artifacts
+
+            extracted = extract_parts_from_artifacts(task.artifacts)
+            content = extracted.text if extracted.text else None
+            if parts is None and extracted.has_non_text:
+                parts = extracted.file_parts + extracted.data_parts
             if not content:
                 for i, artifact in enumerate(task.artifacts):
                     logger.warning(
@@ -250,6 +256,12 @@ async def notify_task_update(
     task_content = room_agent_message.task_content
 
     # --- Send the SSE -----------------------------------------------------
+    # Convert any inline base64 file bytes to S3 URIs before broadcasting
+    if parts:
+        from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+
+        await convert_inline_bytes_to_s3(parts, room_id, message_id)
+
     await notification_service.send_task_update(
         room_id=room_id,
         message_id=message_id,
@@ -266,6 +278,7 @@ async def notify_task_update(
         step_number=room_agent_message.step_number,
         total_steps=room_agent_message.total_steps,
         task_content=task_content,
+        parts=parts,
     )
 
     logger.info("Sent SSE notification for task %s state %s", message_id, state)

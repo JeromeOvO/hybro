@@ -16,6 +16,7 @@ dependencies = [
     "a2a-sdk>=0.3.0",
     "a2a-server>=0.1.7",
     "absl-py>=2.3.0",
+    "aioboto3>=13.0.0",
     "aiofiles>=24.1.0",
     "aiohappyeyeballs>=2.6.1",
     "aiohttp>=3.12.13",

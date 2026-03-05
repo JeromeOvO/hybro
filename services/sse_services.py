@@ -181,6 +181,7 @@ class SSEManager:
         agent_id: str,
         content: str,
         related_message_id: str = None,
+        parts: list[dict] | None = None,
     ):
         """send agent response"""
         data = {
@@ -190,6 +191,8 @@ class SSEManager:
             "related_message_id": related_message_id,
             "timestamp": utcnow().isoformat(),
         }
+        if parts:
+            data["parts"] = parts
         await self.broadcast_to_room(room_id, "agent_response", data)
 
     async def send_agent_token(
@@ -408,23 +411,10 @@ class SSEManager:
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
+        parts: list[dict] | None = None,
     ):
         """
         Send task update event when task state changes.
-
-        Args:
-            room_id: The room ID
-            message_id: The message ID (used for task tracking and frontend message identification)
-            status: The new task status
-            content: Content if task completed
-            error: Error message if task failed
-            requires_input: True if input_required state
-            requires_auth: True if auth_required state
-            status_message: Human-readable status message from agent
-            created_at: Task creation timestamp (for consistent ordering)
-            step_number: Current step number in the workflow (1-indexed)
-            total_steps: Total number of steps in the workflow
-            task_content: The task description/content being processed
         """
         data = {
             "message_id": message_id,
@@ -443,6 +433,8 @@ class SSEManager:
             "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
+        if parts:
+            data["parts"] = parts
         await self.broadcast_to_room(room_id, "task_update", data)
 
     def get_room_status(self, room_id: str) -> dict:

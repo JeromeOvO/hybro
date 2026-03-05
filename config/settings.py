@@ -106,6 +106,14 @@ class Settings(BaseSettings):
     memory_search_max_snippet_chars: int = 500  # Max chars per snippet
     memory_search_index_name: str = "room-memory"  # Pinecone index for memory
 
+    # AWS S3 (file uploads and binary content storage)
+    s3_bucket_name: str = ""
+    s3_region: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    s3_presigned_url_ttl: int = 3600  # presigned URL validity in seconds
+    max_file_size_mb: int = 50
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -65,6 +65,13 @@ PATCH = {
     # Orchestration center
     "orchestration.room_message_center": "api.orchestration_center.room_message_center",
     "orchestration.workflow_center": "api.orchestration_center.workflow_center",
+    # File upload / S3
+    "files.verify_room_ownership": "api.files.verify_room_ownership",
+    "files.file_upload_service": "api.files.file_upload_service",
+    "s3_service": "services.s3_service.s3_service",
+    "file_upload_service": "services.file_upload_service.file_upload_service",
+    "room_services.mongodb": "services.room_services.mongodb",
+    "room_services.s3_service": "services.room_services.s3_service",
 }
 
 
@@ -590,3 +597,48 @@ def patch_agent_deps(mock_agent_center):
     )
     with patch(PATCH["agent.agent_center"], mock_agent_center):
         yield mock_agent_center
+
+
+# =============================================================================
+# S3 / File Upload Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_s3_service():
+    """Create a mock S3 service with common methods."""
+    mock = AsyncMock()
+    mock.upload_file = AsyncMock(return_value="uploads/room1/f1/test.png")
+    mock.generate_presigned_url = AsyncMock(return_value="https://s3.example.com/presigned")
+    mock.batch_presigned_urls = AsyncMock(
+        return_value={"uploads/room1/f1/test.png": "https://s3.example.com/presigned"}
+    )
+    mock.delete_file = AsyncMock()
+    mock.delete_prefix = AsyncMock()
+    mock.head_file = AsyncMock(return_value={"ContentLength": 1024})
+    mock.download_text = AsyncMock(return_value="text content")
+    return mock
+
+
+@pytest.fixture
+def sample_file_upload_metadata():
+    """Factory for file upload metadata dicts (as stored in MongoDB)."""
+    def _make(
+        file_id="f_test_001",
+        room_id="room_test_123",
+        user_id="user_test_123",
+        mime_type="image/png",
+        file_name="test.png",
+        size_bytes=2048,
+    ):
+        return {
+            "file_id": file_id,
+            "room_id": room_id,
+            "user_id": user_id,
+            "s3_key": f"uploads/{room_id}/{file_id}/{file_name}",
+            "mime_type": mime_type,
+            "file_name": file_name,
+            "size_bytes": size_bytes,
+            "uploaded_at": FROZEN_TIME.isoformat(),
+        }
+    return _make

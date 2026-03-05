@@ -238,7 +238,7 @@ IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 DOCUMENT_MIME_TYPES = {"application/pdf", "text/plain", "text/csv",
                        "application/json"}
 ALLOWED_MIME_TYPES = IMAGE_MIME_TYPES | DOCUMENT_MIME_TYPES
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 MAX_ATTACHMENT_REFS_PER_REQUEST = 50  # DoS guard on raw (pre-dedup) ref count
 
@@ -442,7 +442,7 @@ S3_REGION=us-east-1
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 S3_PRESIGNED_URL_TTL=3600
-MAX_FILE_SIZE_MB=10
+MAX_FILE_SIZE_MB=50
 ```
 
 #### `config/settings.py` additions
@@ -456,7 +456,7 @@ s3_region: str = "us-east-1"
 aws_access_key_id: str = ""
 aws_secret_access_key: str = ""
 s3_presigned_url_ttl: int = 3600
-max_file_size_mb: int = 10
+max_file_size_mb: int = 50
 ```
 
 These are auto-mapped from env vars by Pydantic `BaseSettings` (e.g., `S3_BUCKET_NAME` -> `s3_bucket_name`).
@@ -1645,7 +1645,7 @@ async def _convert_inline_bytes_to_s3(
     """Convert any inline base64 bytes in artifact parts to S3 URIs.
 
     Some agents return images as base64 in FilePart.file.bytes instead of
-    URIs. This inflates SSE payloads (10MB image = 13.3MB base64 JSON).
+    URIs. This inflates SSE payloads (50MB file = ~67MB base64 JSON).
     Converting to S3 keeps SSE payloads small.
 
     Mutates the artifact in place.
@@ -2551,11 +2551,11 @@ class TestRoomDeletionCascade:
 
 | Risk | Mitigation |
 |------|-----------|
-| Malicious file upload (XSS via SVG, zip bombs) | Server-side MIME allowlist (no SVG), file size limit (10MB), magic byte validation |
+| Malicious file upload (XSS via SVG, zip bombs) | Server-side MIME allowlist (no SVG), file size limit (50MB), magic byte validation |
 | Presigned URL leakage | Short TTL (1 hour), room-scoped access check before URL generation |
 | Base64 payload size in SSE | Convert inline bytes to S3 URIs before SSE broadcast (section 6.6) |
 | Content-type spoofing | Validate actual file content (magic bytes) against declared MIME type |
-| Memory exhaustion from large uploads | File size limit (10MB) enforced before S3 upload; `aioboto3` async upload keeps event loop non-blocking |
+| Memory exhaustion from large uploads | File size limit (50MB) enforced before S3 upload; `aioboto3` async upload keeps event loop non-blocking |
 | S3 bucket access | IAM role scoped to single bucket, no public access, presigned URLs only |
 | SSRF via URL storage type | `StorageType.URL` remains `NotImplementedError` (blocked per `CONTEXT_MEMORY_SYSTEM_DESIGN.md` section 6.8) |
 | Unbounded agent S3 writes | `MAX_INLINE_CONVERSIONS_PER_MESSAGE = 20` cap on base64-to-S3 conversions per message; excess parts left as-is |

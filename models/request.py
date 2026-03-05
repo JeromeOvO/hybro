@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.agent import Agent, AgentStatus
 from models.memory import ChatContext, RoomMemory
-from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
+from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage, UserAttachment
 from models.task import BaseTask, MetaTask, TaskSession
 
 
@@ -229,6 +229,15 @@ class RoomCenterRoomSettingRequest(BaseModel):
     )
 
 
+class UserAttachmentRequest(BaseModel):
+    """Wire format from frontend. Only file_id is used server-side; all metadata
+    is resolved from the file_uploads collection to prevent spoofing.
+    """
+
+    file_id: str
+    file_url: str | None = None
+
+
 class RoomCenterUserMessageRequest(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
@@ -239,6 +248,8 @@ class RoomCenterUserMessageRequest(BaseModel):
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomUserMessage | None = None
+    attachments: list[UserAttachmentRequest] | None = None
+    inline_file_ids: list[str] | None = None
 
 
 class RoomCenterAgentMessageRequest(BaseModel):
@@ -264,6 +275,7 @@ class RoomCenterMemoryRequest(BaseModel):
         None  # {agent_id: agent_name} for cleaning mentions
     )
     user_id: str | None = None  # User ID for attribution in conversation history
+    attachments: list[UserAttachment] | None = None
 
 
 class RoomCenterRoomMessageRequest(BaseModel):
