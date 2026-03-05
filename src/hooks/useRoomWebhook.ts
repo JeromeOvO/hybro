@@ -872,7 +872,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 data: p.data as Record<string, unknown> | undefined,
               }
             }),
-            isStreaming: !last_chunk,
+            isStreaming: isAppend ? !last_chunk : false,
           }
           const merged = mergeArtifacts(existing?.artifacts, artifactData, isAppend)
           store.upsertMessage({
