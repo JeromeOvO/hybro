@@ -770,6 +770,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             messageType: 'agent' as const,
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
+            timestamp: new Date().toISOString(),
           }
 
           const existing = store.entities[messageId]
@@ -855,7 +856,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
           const existing = store.entities[message_id]
           const artifactData = {
-            artifactId: artifact.artifact_id || artifact.artifactId,
+            artifactId: artifact.artifact_id || (artifact as Record<string, unknown>).artifactId as string,
             name: artifact.name,
             parts: (artifact.parts || []).map((p: Record<string, unknown>) => {
               const fileData = p.file as Record<string, unknown> | undefined

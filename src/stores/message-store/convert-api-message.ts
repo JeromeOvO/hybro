@@ -135,12 +135,12 @@ export async function convertApiMessageToIncoming(
   let artifacts: ArtifactData[] | undefined
   const rawArtifacts = messageTask?.artifacts as Record<string, unknown>[] | undefined
   if (Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
-    artifacts = rawArtifacts
+    const mapped = rawArtifacts
       .map((a) => {
         const rawParts = a.parts as Record<string, unknown>[] | undefined
         if (!Array.isArray(rawParts) || rawParts.length === 0) return null
 
-        const parts: ArtifactPart[] = rawParts
+        const parts = rawParts
           .map((p) => {
             const root = (p.root ?? p) as Record<string, unknown>
             const kind = (root.kind as string) || 'text'
@@ -158,7 +158,7 @@ export async function convertApiMessageToIncoming(
               data: root.data as Record<string, unknown> | undefined,
             }
           })
-          .filter((p): p is ArtifactPart => p !== null)
+          .filter((p): p is NonNullable<typeof p> => p !== null) as ArtifactPart[]
 
         if (parts.length === 0) return null
         return {
@@ -167,7 +167,8 @@ export async function convertApiMessageToIncoming(
           parts,
         }
       })
-      .filter((a): a is ArtifactData => a !== null)
+      .filter((a): a is NonNullable<typeof a> => a !== null) as ArtifactData[]
+    artifacts = mapped
     if (artifacts.length === 0) artifacts = undefined
   }
 
