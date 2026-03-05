@@ -34,6 +34,10 @@ logger = get_logger(__name__)
 MAX_HITL_ROUNDS = 15
 
 
+class ContinuationLostError(RuntimeError):
+    """The supervisor continuation for this HITL request no longer exists."""
+
+
 class HITLService:
     """Manages the human-in-the-loop interaction lifecycle."""
 
@@ -299,6 +303,26 @@ class HITLService:
                     },
                 )
                 raise
+            except ContinuationLostError as exc:
+                logger.warning(
+                    "HITL request %s — continuation lost, canceling: %s",
+                    request_id, exc,
+                )
+                await self.database_service.fenced_update_hitl_request(
+                    request_id, claim_id, {
+                        "status": HITLStatus.CANCELED.value,
+                        "claim_id": None,
+                    },
+                )
+                await self._emit_hitl_event(
+                    room_id=room_id,
+                    event_type=HITLEventType.INPUT_CANCELED,
+                    request=request,
+                )
+                raise HTTPException(
+                    410,
+                    "The supervisor session has expired. Please send a new message.",
+                ) from exc
             except Exception as exc:
                 logger.error(
                     "HITL routing failed for request %s: %s",
@@ -422,7 +446,7 @@ class HITLService:
             request.continuation_message_id
         )
         if not continuation:
-            raise RuntimeError(
+            raise ContinuationLostError(
                 f"No continuation found for message {request.continuation_message_id} — "
                 "the supervisor loop may have already been cleaned up or recovered"
             )
