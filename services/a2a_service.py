@@ -324,6 +324,7 @@ class A2AService:
             configuration=MessageSendConfiguration(
                 acceptedOutputModes=["text/plain"],
                 push_notification_config=push_config,
+                blocking=False if push_config else None,
             ),
         )
 
@@ -909,6 +910,7 @@ class A2AService:
             message=reply_message,
             configuration=MessageSendConfiguration(
                 push_notification_config=push_config,
+                blocking=False,
             ),
         )
 
