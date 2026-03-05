@@ -521,10 +521,16 @@ class RoomMessageCenter:
                     )
 
         try:
+            from services.room_services import build_turn_content
+
+            message_text = build_turn_content(
+                user_message.message_content.message_text or "",
+                user_message.message_content.attachments,
+            )
             result = await self.supervisor_executor.run(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
-                message_text=user_message.message_content.message_text or "",
+                message_text=message_text,
                 agent_registry=agent_registry,
                 room_config=room_config,
                 conversation_context=conversation_context,

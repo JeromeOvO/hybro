@@ -44,9 +44,60 @@ from services.a2a_constants import (
 logger = get_logger(__name__)
 
 
+PLATFORM_SUPPORTED_MODES = {
+    "text/plain",
+    "text/markdown",
+    "text/html",
+    "text/csv",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/webm",
+    "video/mp4",
+    "video/webm",
+    "application/json",
+    "application/pdf",
+    "application/xml",
+    "application/zip",
+}
+
+MODE_TO_MIMES: dict[str, set[str]] = {
+    "text": {"text/plain"},
+    "image": {"image/png", "image/jpeg", "image/gif", "image/webp"},
+    "audio": {"audio/wav", "audio/mpeg", "audio/mp4", "audio/webm"},
+    "video": {"video/mp4", "video/webm"},
+    "json": {"application/json"},
+    "form": {"text/plain"},
+    "markdown": {"text/markdown", "text/plain"},
+}
+
+
 class A2AService:
     def __init__(self):
         pass
+
+    def _resolve_accepted_modes(self, agent_card: AgentCard) -> list[str]:
+        """Intersect agent's output modes with platform capabilities."""
+        raw_modes = getattr(agent_card, "default_output_modes", None)
+        agent_modes = set(raw_modes if raw_modes is not None else ["text"])
+
+        agent_mime_modes: set[str] = set()
+        for mode in agent_modes:
+            if "/" in mode:
+                agent_mime_modes.add(mode)
+            elif mode in MODE_TO_MIMES:
+                agent_mime_modes.update(MODE_TO_MIMES[mode])
+            else:
+                agent_mime_modes.add("text/plain")
+
+        accepted = agent_mime_modes & PLATFORM_SUPPORTED_MODES
+        if not accepted:
+            accepted = {"text/plain"}
+        return sorted(accepted)
 
     async def _fetch_agent_card_with_fallback(
         self, httpx_client: httpx.AsyncClient, agent_url: str
@@ -322,7 +373,7 @@ class A2AService:
         payload = MessageSendParams(
             message=message,
             configuration=MessageSendConfiguration(
-                acceptedOutputModes=["text/plain"],
+                accepted_output_modes=self._resolve_accepted_modes(agent_card),
                 push_notification_config=push_config,
                 blocking=False if push_config else None,
             ),
@@ -527,7 +578,7 @@ class A2AService:
             payload = MessageSendParams(
                 message=message,
                 configuration=MessageSendConfiguration(
-                    acceptedOutputModes=["text/plain"]
+                    accepted_output_modes=self._resolve_accepted_modes(agent_card)
                 ),
             )
 
@@ -580,7 +631,9 @@ class A2AService:
 
         payload = MessageSendParams(
             message=message,
-            configuration=MessageSendConfiguration(acceptedOutputModes=["text/plain"]),
+            configuration=MessageSendConfiguration(
+                accepted_output_modes=self._resolve_accepted_modes(agent_card)
+            ),
         )
 
         stream_request = SendStreamingMessageRequest(
@@ -644,7 +697,9 @@ class A2AService:
 
         payload = MessageSendParams(
             message=message,
-            configuration=MessageSendConfiguration(acceptedOutputModes=["text/plain"]),
+            configuration=MessageSendConfiguration(
+                accepted_output_modes=self._resolve_accepted_modes(aegnt_card)
+            ),
         )
 
         supports_streaming = (

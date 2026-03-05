@@ -1,0 +1,179 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_REFS_PER_REQUEST
+from models.request import RoomCenterUserMessageRequest, UserAttachmentRequest
+from models.response import RoomCenterUserMessageResponse
+from models.room import MessageContent, RoomUserMessage, UserAttachment
+from services.room_services import RoomServices
+
+
+@pytest.fixture
+def room_svc():
+    svc = RoomServices()
+    svc.database_service = MagicMock()
+    svc.sse_manager = MagicMock()
+    svc.room_memory_service = MagicMock()
+    return svc
+
+
+def _user_msg():
+    return RoomUserMessage(
+        room_id="room1",
+        message_id="msg1",
+        message_type="user",
+        message_content=MessageContent(message_text="hi"),
+    )
+
+
+def _file_meta(file_id, room_id="room1"):
+    return {
+        "file_id": file_id,
+        "room_id": room_id,
+        "s3_key": f"uploads/{room_id}/{file_id}/file.png",
+        "mime_type": "image/png",
+        "file_name": "file.png",
+        "size_bytes": 1024,
+    }
+
+
+class TestDualSourceMerge:
+    async def test_top_level_only(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id="f1")],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(
+                return_value=_file_meta("f1")
+            )
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert err is None
+        assert len(msg.message_content.attachments) == 1
+        assert msg.message_content.attachments[0].file_id == "f1"
+
+    async def test_inline_only(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            inline_file_ids=["f1"],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(
+                return_value=_file_meta("f1")
+            )
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert err is None
+        assert len(msg.message_content.attachments) == 1
+
+    async def test_dedup_across_sources(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id="f1")],
+            inline_file_ids=["f1"],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(
+                return_value=_file_meta("f1")
+            )
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert err is None
+        assert len(msg.message_content.attachments) == 1
+
+    async def test_merged_from_both_sources(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id="f1")],
+            inline_file_ids=["f2"],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(
+                side_effect=lambda q: _file_meta(q["file_id"]) if q["room_id"] == "room1" else None
+            )
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert err is None
+        assert len(msg.message_content.attachments) == 2
+
+    async def test_no_attachments_noop(self, room_svc):
+        request = RoomCenterUserMessageRequest(room_id="room1")
+        msg = _user_msg()
+        err = await room_svc._resolve_and_apply_attachments(request, msg)
+        assert err is None
+        assert msg.message_content.attachments is None
+
+
+class TestCrossRoomRejection:
+    async def test_file_from_different_room_rejected(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id="f1")],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(return_value=None)
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert isinstance(err, RoomCenterUserMessageResponse)
+        assert err.status_code == 404
+        assert not err.success
+
+
+class TestMergedLimitEnforcement:
+    async def test_exceeds_max_attachments(self, room_svc):
+        ids = [f"f{i}" for i in range(MAX_ATTACHMENTS_PER_MESSAGE + 1)]
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id=fid) for fid in ids],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock()
+            err = await room_svc._resolve_and_apply_attachments(request, msg)
+
+        assert isinstance(err, RoomCenterUserMessageResponse)
+        assert err.status_code == 400
+
+
+class TestContentSummary:
+    async def test_content_summary_generated(self, room_svc):
+        request = RoomCenterUserMessageRequest(
+            room_id="room1",
+            attachments=[UserAttachmentRequest(file_id="f1")],
+        )
+        msg = _user_msg()
+
+        with patch("database.mongodb.mongodb") as mock_db:
+            mock_db.file_uploads_collection.find_one = AsyncMock(
+                return_value=_file_meta("f1")
+            )
+            await room_svc._resolve_and_apply_attachments(request, msg)
+
+        summary = msg.message_content.content_summary
+        assert summary is not None
+        assert summary["has_images"] is True
+        assert summary["attachment_count"] == 1
+
+
+class TestPreDedupGuard:
+    def test_extract_attachments_rejects_over_limit(self):
+        from api.room_center import _extract_attachments
+
+        attachments = [{"file_id": f"f{i}"} for i in range(MAX_ATTACHMENT_REFS_PER_REQUEST + 1)]
+        request_data = {"attachments": attachments}
+        message = None
+        result_atts, result_inline, err = _extract_attachments(request_data, message)
+        assert err is not None
+        assert not err.success

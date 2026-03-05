@@ -464,6 +464,7 @@ class RoomMemoryService:
         new_message = request.memory_content
         room_agent_set = request.room_agent_set or {}
         user_id = request.user_id
+        attachments = request.attachments
 
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
 
@@ -474,10 +475,13 @@ class RoomMemoryService:
             if new_message:
                 # Clean @mentions before storing
                 clean_message = clean_mention_format(new_message, room_agent_set)
+                from services.room_services import build_turn_content
+
+                turn_content = build_turn_content(clean_message, attachments)
                 memory_content = add_turn_to_history(
                     memory_content=memory_content,
                     role="user",
-                    content=clean_message,
+                    content=turn_content,
                     user_id=user_id,
                 )
 
@@ -512,13 +516,15 @@ class RoomMemoryService:
                     extract_turn_notes,
                 )
                 from models.memory import ConversationTurn, TurnRole
+                from services.room_services import build_turn_content
 
+                turn_content = build_turn_content(clean_message, attachments)
                 turn = ConversationTurn(
                     role=TurnRole.USER,
-                    content=clean_message,
+                    content=turn_content,
                     user_id=user_id,
-                    estimated_tokens_full=estimate_tokens(clean_message),
-                    turn_notes=extract_turn_notes(clean_message),
+                    estimated_tokens_full=estimate_tokens(turn_content),
+                    turn_notes=extract_turn_notes(turn_content),
                 )
 
                 modified, matched = await self.database_service.push_and_trim_conversation_turn(

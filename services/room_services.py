@@ -4,7 +4,10 @@ from datetime import timedelta
 from uuid import uuid4
 
 from a2a.types import (
+    FileWithUri,
+    FilePart,
     Message,
+    Part,
     Role,
     Task,
     TaskArtifactUpdateEvent,
@@ -22,6 +25,8 @@ from common.utils.context_utils import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
+from dataclasses import dataclass
+from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent
 from models.request import (
     AgentCenterRequest,
@@ -45,6 +50,7 @@ from models.room import (
     RoomAgentMessage,
     RoomMessage,
     RoomUserMessage,
+    UserAttachment,
 )
 from models.room_services_models import ParseResult
 from services.a2a_constants import SSEProcessingStatus, is_terminal_state
@@ -60,6 +66,36 @@ from services.task_service import task_service
 logger = get_logger(__name__)
 
 
+def _human_size(size_bytes: int) -> str:
+    """Format bytes as human-readable string: 512B, 245KB, 1.2MB."""
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.0f}KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
+
+
+def build_turn_content(
+    message_text: str, attachments: list[UserAttachment] | None
+) -> str:
+    """Build conversation turn content with optional attachment annotations."""
+    content = message_text or ""
+    if attachments:
+        descriptions = []
+        for att in attachments:
+            size_str = _human_size(att.size_bytes) if att.size_bytes else "unknown size"
+            descriptions.append(f"{att.file_name} ({att.mime_type}, {size_str})")
+        content += f"\n[Attachments: {', '.join(descriptions)}]"
+    return content
+
+
+@dataclass
+class _ResolvedAttachments:
+    attachments: list[UserAttachment]
+    content_summary: dict | None
+
+
 class RoomServices:
     def __init__(self):
         self.database_service = db_service  # Use singleton
@@ -71,6 +107,15 @@ class RoomServices:
         self.room_memory_service = room_memory_service  # Use singleton
         self.sse_manager = sse_manager  # Use singleton
         self.task_service = task_service  # Use singleton
+        self._s3_service = None
+
+    @property
+    def s3_service(self):
+        if self._s3_service is None:
+            from services.s3_service import s3_service
+
+            self._s3_service = s3_service
+        return self._s3_service
 
     # === room_agent_set normalization helpers ===
     @staticmethod
@@ -451,12 +496,10 @@ class RoomServices:
             )
 
         room_id = request.room_id
+
+        # Delete the room record first to confirm ownership/existence
         success = await self.database_service.delete_room_by_room_id(room_id)
-        if success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=None, success=True, error=None, status_code=200
-            )
-        else:
+        if not success:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id,
                 room=None,
@@ -464,6 +507,180 @@ class RoomServices:
                 error="Failed to delete room",
                 status_code=500,
             )
+
+        # Cascade delete child data after room deletion is confirmed
+        from database.mongodb import mongodb
+
+        # S3 cleanup first — if this fails, file_uploads metadata remains for
+        # the orphan cleaner to reconcile on its next pass.
+        s3_cleanup_ok = True
+        try:
+            from services.s3_service import s3_service
+
+            await s3_service.delete_prefix(f"uploads/{room_id}/")
+            await s3_service.delete_prefix(f"artifacts/{room_id}/")
+        except Exception:
+            s3_cleanup_ok = False
+            logger.warning(
+                "S3 cleanup failed for room %s; orphan job will retry", room_id
+            )
+
+        await mongodb.room_user_messages_collection.delete_many({"room_id": room_id})
+        await mongodb.room_agent_messages_collection.delete_many({"room_id": room_id})
+        await mongodb.room_memories_collection.delete_many({"room_id": room_id})
+        if s3_cleanup_ok:
+            await mongodb.file_uploads_collection.delete_many({"room_id": room_id})
+        await mongodb.conversation_content_collection.delete_many({"room_id": room_id})
+
+        return RoomCenterRoomSettingResponse(
+            room_id=room_id, room=None, success=True, error=None, status_code=200
+        )
+
+    # --- Attachment resolution helpers ---
+
+    async def _resolve_attachments(
+        self,
+        file_ids: list[str],
+        room_id: str,
+    ) -> "_ResolvedAttachments | RoomCenterUserMessageResponse":
+        """Resolve file_id list to server-authoritative UserAttachment objects."""
+        from database.mongodb import mongodb
+
+        if len(file_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message",
+                status_code=400,
+            )
+
+        attachments: list[UserAttachment] = []
+        for file_id in file_ids:
+            file_meta = await mongodb.file_uploads_collection.find_one(
+                {"file_id": file_id, "room_id": room_id}
+            )
+            if not file_meta:
+                return RoomCenterUserMessageResponse(
+                    message_id=None,
+                    message=None,
+                    success=False,
+                    error=f"File {file_id} not found",
+                    status_code=404,
+                )
+            attachments.append(
+                UserAttachment(
+                    file_id=file_id,
+                    s3_key=file_meta["s3_key"],
+                    mime_type=file_meta["mime_type"],
+                    file_name=file_meta["file_name"],
+                    size_bytes=file_meta["size_bytes"],
+                )
+            )
+
+        content_summary = None
+        if attachments:
+            mime_types = [a.mime_type for a in attachments]
+            content_summary = {
+                "has_images": any(m.startswith("image/") for m in mime_types),
+                "has_files": any(not m.startswith("image/") for m in mime_types),
+                "attachment_count": len(attachments),
+                "mime_types": mime_types,
+            }
+
+        return _ResolvedAttachments(
+            attachments=attachments, content_summary=content_summary
+        )
+
+    async def _resolve_and_apply_attachments(
+        self,
+        request: RoomCenterUserMessageRequest,
+        user_message: RoomUserMessage,
+    ) -> RoomCenterUserMessageResponse | None:
+        """Collect file_ids from both sources, resolve, and apply to message.
+
+        Returns an error response if validation fails, or None on success.
+        """
+        file_ids: list[str] = []
+        seen: set[str] = set()
+
+        if request.attachments:
+            for att in request.attachments:
+                if att.file_id not in seen:
+                    file_ids.append(att.file_id)
+                    seen.add(att.file_id)
+
+        if request.inline_file_ids:
+            for fid in request.inline_file_ids:
+                if fid not in seen:
+                    file_ids.append(fid)
+                    seen.add(fid)
+
+        if user_message.message_content:
+            user_message.message_content.attachments = None
+            user_message.message_content.content_summary = None
+
+        if file_ids:
+            resolved = await self._resolve_attachments(file_ids, request.room_id)
+            if isinstance(resolved, RoomCenterUserMessageResponse):
+                return resolved
+            user_message.message_content.attachments = resolved.attachments
+            user_message.message_content.content_summary = resolved.content_summary
+
+        return None
+
+    FILE_CAPABLE_EXACT = frozenset({"file", "*/*"})
+    FILE_CAPABLE_PREFIXES = frozenset({"image/", "audio/", "video/"})
+    FILE_CAPABLE_MIMES = frozenset(
+        {
+            "application/pdf",
+            "application/octet-stream",
+            "application/zip",
+            "application/x-tar",
+            "application/gzip",
+        }
+    )
+
+    async def _build_message_parts(
+        self,
+        text: str,
+        attachments: list[UserAttachment] | None,
+        agent_card,
+    ) -> list:
+        """Build A2A message parts from text and optional attachments."""
+        parts = [TextPart(text=text)]
+
+        if not attachments:
+            return parts
+
+        agent_input_modes_raw = getattr(agent_card, "default_input_modes", None)
+        if agent_input_modes_raw is None:
+            agent_input_modes_raw = getattr(agent_card, "defaultInputModes", None)
+        agent_input_modes = set(agent_input_modes_raw or ["text"])
+
+        supports_files = bool(
+            agent_input_modes & self.FILE_CAPABLE_EXACT
+            or agent_input_modes & self.FILE_CAPABLE_MIMES
+            or any(
+                any(m.startswith(prefix) for prefix in self.FILE_CAPABLE_PREFIXES)
+                for m in agent_input_modes
+            )
+        )
+
+        if supports_files:
+            for att in attachments:
+                presigned_url = await self.s3_service.generate_presigned_url(att.s3_key)
+                parts.append(
+                    FilePart(
+                        file=FileWithUri(
+                            uri=presigned_url,
+                            mime_type=att.mime_type,
+                            name=att.file_name,
+                        )
+                    )
+                )
+
+        return parts
 
     # room user message management
     def parse_agent_mentions(
@@ -1424,6 +1641,12 @@ class RoomServices:
             )
 
         user_message = request.message
+
+        # Resolve attachments from both sources before persistence
+        att_err = await self._resolve_and_apply_attachments(request, user_message)
+        if att_err is not None:
+            return att_err
+
         if not await self._persist_user_message(user_message):
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -1641,6 +1864,7 @@ class RoomServices:
                     memory_content=user_message.message_content.message_text,
                     room_agent_set=room_agent_set,  # Pass for cleaning @mentions
                     user_id=user_message.user_id,
+                    attachments=user_message.message_content.attachments,
                 )
             )
         )
@@ -1859,6 +2083,11 @@ class RoomServices:
                 status_code=400,
             )
 
+        # Resolve attachments before persistence
+        att_err = await self._resolve_and_apply_attachments(request, message)
+        if att_err is not None:
+            return att_err
+
         # Save user message
         add_message_success = await self.database_service.add_room_user_message(message)
         if not add_message_success:
@@ -1882,7 +2111,9 @@ class RoomServices:
         room_memory_initialize_or_update_response = (
             await self.room_memory_service.initialize_or_update_room_memory(
                 RoomCenterMemoryRequest(
-                    room_id=room_id, memory_content=message.message_content.message_text
+                    room_id=room_id,
+                    memory_content=message.message_content.message_text,
+                    attachments=message.message_content.attachments,
                 )
             )
         )
@@ -2286,6 +2517,48 @@ class RoomServices:
             # Log but continue with original message if context building fails
             logger.warning(f"Failed to build context for agent message: {e}")
 
+        # Append file parts from user attachments if the agent supports them
+        try:
+            from database.mongodb import mongodb
+
+            # Trace back through agent message chain to find the originating user message.
+            # In chained mention flows, later agents have related_message_id pointing to
+            # a previous agent message, not the user message directly.
+            # Use a visited set for cycle detection instead of a fixed hop cap so
+            # arbitrarily long chains still resolve correctly.
+            user_msg = None
+            trace_id = message.related_message_id
+            visited: set[str] = set()
+            while trace_id and trace_id not in visited:
+                visited.add(trace_id)
+                user_msg = await mongodb.get_room_user_message_by_message_id(trace_id)
+                if user_msg:
+                    break
+                agent_msg = await mongodb.get_room_agent_message_by_message_id(
+                    trace_id
+                )
+                trace_id = (
+                    agent_msg.related_message_id if agent_msg else None
+                )
+
+            user_attachments = (
+                user_msg.message_content.attachments
+                if user_msg and user_msg.message_content
+                else None
+            )
+            if user_attachments:
+                agent_obj = await self.database_service.get_agent_by_agent_id(agent_id)
+                agent_card_obj = agent_obj.agent_card if agent_obj else None
+                if agent_card_obj:
+                    file_parts = await self._build_message_parts(
+                        "", user_attachments, agent_card_obj
+                    )
+                    for p in file_parts:
+                        if not isinstance(p, TextPart):
+                            agent_message.parts.append(Part(root=p))
+        except Exception as e:
+            logger.warning("Failed to append attachment parts to agent message: %s", e)
+
         # Return the prepared message without sending
         # RoomMessageCenter will handle the actual sending with streaming support
         return RoomCenterAgentMessageResponse(
@@ -2371,6 +2644,28 @@ class RoomServices:
         messages = await self.database_service.get_room_user_messages_by_room_id(
             room_id
         )
+
+        # Inject presigned URLs for attachments
+        s3_keys = []
+        for msg in messages:
+            if msg.message_content and msg.message_content.attachments:
+                for att in msg.message_content.attachments:
+                    s3_keys.append(att.s3_key)
+
+        if s3_keys:
+            try:
+                from services.s3_service import s3_service
+
+                url_map = await s3_service.batch_presigned_urls(s3_keys)
+                for msg in messages:
+                    if msg.message_content and msg.message_content.attachments:
+                        for att in msg.message_content.attachments:
+                            att.file_url = url_map.get(att.s3_key, "")
+            except Exception:
+                logger.warning(
+                    "Failed to generate presigned URLs for room %s", room_id
+                )
+
         return RoomCenterUserMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
         )

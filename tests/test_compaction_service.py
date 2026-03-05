@@ -291,8 +291,8 @@ class TestContentStorageService:
         assert exc_info.value.document_id == doc_id
 
     @pytest.mark.asyncio
-    async def test_expand_content_reference_s3_not_implemented(self, service):
-        """Should raise NotImplementedError for S3 storage."""
+    async def test_expand_content_reference_s3_success(self, service):
+        """Should download text from S3 when storage type is S3."""
         content_ref = ContentReference(
             storage_type=StorageType.S3,
             s3_bucket="test-bucket",
@@ -300,7 +300,39 @@ class TestContentStorageService:
             created_at=datetime.now(),
         )
 
-        with pytest.raises(NotImplementedError):
+        with patch("services.s3_service.s3_service") as mock_s3:
+            mock_s3.download_text = AsyncMock(return_value="S3 content here")
+            result = await service.expand_content_reference(content_ref, "turn-123")
+
+        assert result == "S3 content here"
+
+    @pytest.mark.asyncio
+    async def test_expand_content_reference_s3_not_found(self, service):
+        """Should raise ContentExpiredError when S3 object is missing."""
+        content_ref = ContentReference(
+            storage_type=StorageType.S3,
+            s3_bucket="test-bucket",
+            s3_key="missing-key",
+            created_at=datetime.now(),
+        )
+
+        with patch("services.s3_service.s3_service") as mock_s3:
+            mock_s3.download_text = AsyncMock(return_value=None)
+            with pytest.raises(ContentExpiredError) as exc_info:
+                await service.expand_content_reference(content_ref, "turn-123")
+
+        assert exc_info.value.turn_id == "turn-123"
+
+    @pytest.mark.asyncio
+    async def test_expand_content_reference_s3_missing_key(self, service):
+        """Should raise ValueError when S3 content ref has no s3_key."""
+        content_ref = ContentReference(
+            storage_type=StorageType.S3,
+            s3_bucket="test-bucket",
+            created_at=datetime.now(),
+        )
+
+        with pytest.raises(ValueError, match="no s3_key"):
             await service.expand_content_reference(content_ref, "turn-123")
 
     @pytest.mark.asyncio

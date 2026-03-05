@@ -1,18 +1,62 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from common.auth import ClerkUser, get_current_user
+from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     OrchestrationRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
+from models.response import RoomCenterUserMessageResponse
 from modules.RoomMessageCenter import room_message_center
 from modules.RoomCenter import RoomCenter
 from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
+
+
+def _extract_attachments(request_data: dict, message: dict | None):
+    """Extract attachment info from both top-level and inline sources.
+
+    Returns (attachments_list_or_None, inline_file_ids_or_None, error_response_or_None).
+    If error_response is not None, the caller should return it immediately.
+    """
+    attachments = request_data.get("attachments")
+
+    msg_content = (message if isinstance(message, dict) else {}).get("message_content")
+    msg_content = msg_content if isinstance(msg_content, dict) else {}
+    raw_inline_attachments = msg_content.pop("attachments", None)
+
+    top_level_count = len(attachments) if isinstance(attachments, list) else 0
+    inline_count = (
+        len(raw_inline_attachments) if isinstance(raw_inline_attachments, list) else 0
+    )
+    if top_level_count + inline_count > MAX_ATTACHMENT_REFS_PER_REQUEST:
+        return (
+            None,
+            None,
+            RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=(
+                    f"Too many attachment references ({top_level_count + inline_count}); "
+                    f"maximum {MAX_ATTACHMENT_REFS_PER_REQUEST} per request"
+                ),
+                status_code=400,
+            ),
+        )
+
+    inline_file_ids: list[str] = []
+    if raw_inline_attachments and isinstance(raw_inline_attachments, list):
+        for item in raw_inline_attachments:
+            fid = item.get("file_id") if isinstance(item, dict) else None
+            if fid and isinstance(fid, str):
+                inline_file_ids.append(fid)
+
+    return attachments, inline_file_ids or None, None
 
 
 async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
@@ -174,7 +218,16 @@ async def create_and_parse_user_message(
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    attachments, inline_file_ids, err = _extract_attachments(request_data, message)
+    if err is not None:
+        return err
+
+    room_center_request = RoomCenterUserMessageRequest(
+        room_id=room_id,
+        message=message,
+        attachments=attachments,
+        inline_file_ids=inline_file_ids,
+    )
     room_center_response = await room_center.create_and_parse_user_message(
         room_center_request
     )
@@ -225,7 +278,16 @@ async def send_message(
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    attachments, inline_file_ids, err = _extract_attachments(request_data, message)
+    if err is not None:
+        return err
+
+    room_center_request = RoomCenterUserMessageRequest(
+        room_id=room_id,
+        message=message,
+        attachments=attachments,
+        inline_file_ids=inline_file_ids,
+    )
     room_center_response = await room_center.send_message_to_room(
         room_center_request, target_group
     )
