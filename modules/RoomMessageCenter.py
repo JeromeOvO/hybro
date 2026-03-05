@@ -156,24 +156,54 @@ class RoomMessageCenter:
             token = self.sse_manager.create_token(room_user_message_id)
 
         # --- V2 Supervisor branch ---
-        # Since Phase 5, all supervisor-enabled rooms use the V2 adaptive loop.
         # The primary signal is supervisor_v2=True in extend_info (set by
-        # _prepare_for_supervisor_v2).  As a safety net, also check the room's
-        # use_supervisor flag so that a missed preparation doesn't silently
-        # fall through to the QueueExecutor path (which no longer has
-        # supervisor hooks).
+        # _prepare_for_supervisor_v2).
         is_supervisor_v2 = (
             user_message
             and isinstance(user_message.extend_info, dict)
             and user_message.extend_info.get("supervisor_v2", False)
         )
-        if not is_supervisor_v2 and user_message:
+        if is_supervisor_v2:
+            return await self._process_supervisor_v2(
+                user_message=user_message,
+                room_id=room_id,
+                room_user_message_id=room_user_message_id,
+                user_id=user_id,
+                quoted_text=quoted_text,
+                token=token,
+            )
+
+        # --- QueueExecutor path (legacy routing, @mentions, etc.) ---
+        # Query pre-created agent messages.  Both the legacy parse path and
+        # the @mentions flow create RoomAgentMessage records during Phase 1
+        # (send_message_to_room).  The V2 supervisor loop does NOT pre-create
+        # agent messages — it generates them dynamically — so this query is
+        # only reached for non-V2 messages.
+        query_response = (
+            await self.room_services.inquiry_agent_messages_by_related_message_id(
+                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
+            )
+        )
+        if not query_response.success:
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=query_response.error,
+                status_code=500,
+            )
+
+        has_pending_agent_messages = bool(query_response.message_list)
+
+        # Safety net: supervisor-enabled room but no V2 flag and no
+        # pre-created agent messages (e.g. @mentions).  This catches genuine
+        # bugs where _prepare_for_supervisor_v2 was skipped.
+        if not has_pending_agent_messages and user_message:
             room = await self.database_service.get_room_by_room_id(room_id)
             if room and isinstance(room.extend_info, dict) and room.extend_info.get("use_supervisor"):
                 logger.error(
                     "RoomMessageCenter: Room %s has use_supervisor=True but user "
-                    "message %s lacks supervisor_v2 flag — V2 data was not "
-                    "prepared. Failing instead of falling through to legacy path.",
+                    "message %s lacks supervisor_v2 flag and has no pre-created "
+                    "agent messages. Failing instead of silently doing nothing.",
                     room_id,
                     room_user_message_id,
                 )
@@ -187,31 +217,6 @@ class RoomMessageCenter:
                     error="Supervisor V2 data not prepared for this message",
                     status_code=500,
                 )
-        if is_supervisor_v2:
-            return await self._process_supervisor_v2(
-                user_message=user_message,
-                room_id=room_id,
-                room_user_message_id=room_user_message_id,
-                user_id=user_id,
-                quoted_text=quoted_text,
-                token=token,
-            )
-
-        # --- V1 / legacy path (unchanged) ---
-
-        # Query agent messages to process
-        query_response = (
-            await self.room_services.inquiry_agent_messages_by_related_message_id(
-                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
-            )
-        )
-        if not query_response.success:
-            return OrchestrationResponse(
-                room_id=room_id,
-                success=False,
-                error=query_response.error,
-                status_code=500,
-            )
 
         # Process all agent messages in sequence
         message_queue = (

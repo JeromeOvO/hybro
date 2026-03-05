@@ -123,13 +123,17 @@ class TestHandleA2AWebhookAuth:
 
     @pytest.mark.asyncio
     async def test_rejects_missing_token(self, mock_db_service):
-        """Should raise 401 when Authorization header is empty."""
+        """Should raise 401 when both auth headers are empty."""
         mock_request = MagicMock()
         mock_request.json = AsyncMock(return_value={})
         mock_bg = MagicMock()
 
         with pytest.raises(HTTPException) as exc:
-            await handle_a2a_webhook(mock_request, "msg-001", mock_bg, authorization="")
+            await handle_a2a_webhook(
+                mock_request, "msg-001", mock_bg,
+                authorization="",
+                x_a2a_notification_token="",
+            )
         assert exc.value.status_code == 401
         assert "Missing" in exc.value.detail
 
@@ -145,9 +149,57 @@ class TestHandleA2AWebhookAuth:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer bad-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer bad-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_accepts_x_a2a_notification_token_header(self, mock_db_service):
+        """Should authenticate via X-A2A-Notification-Token (A2A spec header)."""
+        mock_db_service.verify_webhook_token_for_task = AsyncMock(
+            return_value=(False, "invalid_token")
+        )
+        mock_request = MagicMock()
+        mock_bg = MagicMock()
+
+        with patch(PATCH["webhooks.db_service"], mock_db_service):
+            with pytest.raises(HTTPException) as exc:
+                await handle_a2a_webhook(
+                    mock_request, "msg-001", mock_bg,
+                    authorization="",
+                    x_a2a_notification_token="my-opaque-token",
+                )
+        # Should reach token verification (not fail with "Missing")
+        assert exc.value.status_code == 401
+        assert "Invalid" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_x_a2a_token_takes_precedence_over_bearer(self, mock_db_service):
+        """X-A2A-Notification-Token should be preferred over Authorization: Bearer."""
+        captured_tokens = []
+
+        async def capture_token(message_id, token):
+            captured_tokens.append(token)
+            return (True, "")
+
+        mock_db_service.verify_webhook_token_for_task = capture_token
+        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "task": {"id": "t1", "contextId": "c1", "status": {"state": "working"}}
+        })
+        mock_bg = MagicMock()
+
+        with patch(PATCH["webhooks.db_service"], mock_db_service):
+            with pytest.raises(HTTPException):
+                await handle_a2a_webhook(
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer legacy-token",
+                    x_a2a_notification_token="a2a-spec-token",
+                )
+        assert captured_tokens[0] == "a2a-spec-token"
 
     @pytest.mark.asyncio
     async def test_returns_404_when_task_not_found(self, mock_db_service):
@@ -161,7 +213,9 @@ class TestHandleA2AWebhookAuth:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer some-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer some-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 404
 
@@ -177,7 +231,9 @@ class TestHandleA2AWebhookAuth:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer some-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer some-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 500
 
@@ -234,7 +290,9 @@ class TestHandleA2AWebhookFlow:
 
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             result = await handle_a2a_webhook(
-                mock_request, "msg-001", mock_bg, authorization="Bearer valid-token"
+                mock_request, "msg-001", mock_bg,
+                authorization="Bearer valid-token",
+                x_a2a_notification_token="",
             )
 
         assert result["status"] == "accepted"
@@ -261,7 +319,9 @@ class TestHandleA2AWebhookFlow:
 
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             result = await handle_a2a_webhook(
-                mock_request, "msg-001", mock_bg, authorization="Bearer valid-token"
+                mock_request, "msg-001", mock_bg,
+                authorization="Bearer valid-token",
+                x_a2a_notification_token="",
             )
 
         assert result["status"] == "already_terminal"
@@ -290,7 +350,9 @@ class TestHandleA2AWebhookFlow:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer valid-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer valid-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 404
 
@@ -309,7 +371,9 @@ class TestHandleA2AWebhookFlow:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer valid-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer valid-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 400
 
@@ -335,6 +399,8 @@ class TestHandleA2AWebhookFlow:
         with patch(PATCH["webhooks.db_service"], mock_db_service):
             with pytest.raises(HTTPException) as exc:
                 await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg, authorization="Bearer valid-token"
+                    mock_request, "msg-001", mock_bg,
+                    authorization="Bearer valid-token",
+                    x_a2a_notification_token="",
                 )
         assert exc.value.status_code == 500

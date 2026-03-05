@@ -67,6 +67,7 @@ async def handle_a2a_webhook(
     message_id: str,
     background_tasks: BackgroundTasks,
     authorization: str = Header(default=""),
+    x_a2a_notification_token: str = Header(default="", alias="X-A2A-Notification-Token"),
 ) -> dict[str, Any]:
     """
     Receive task updates from A2A agents.
@@ -77,20 +78,27 @@ async def handle_a2a_webhook(
     - artifactUpdate: TaskArtifactUpdateEvent for streaming artifacts
     - message: Message object for direct responses
 
-    Security: Validates Bearer token against stored hash.
+    Security: Validates token against stored hash. Accepts the token from either
+    the A2A-spec ``X-A2A-Notification-Token`` header or a legacy ``Authorization:
+    Bearer <token>`` header.
+
     Idempotency: Safe to call multiple times with same status.
 
     Args:
         request: FastAPI request object
         message_id: The message ID (used for task tracking)
         background_tasks: FastAPI background tasks
-        authorization: Authorization header with Bearer token
+        authorization: Legacy Authorization header with Bearer token
+        x_a2a_notification_token: A2A-spec push notification token header
 
     Returns:
         Status response
     """
     # 1. Extract and validate token (hash-based, not plaintext comparison)
-    token = authorization.replace("Bearer ", "") if authorization else ""
+    # Prefer the A2A-spec header; fall back to Authorization: Bearer for legacy callers
+    token = x_a2a_notification_token or (
+        authorization.replace("Bearer ", "") if authorization else ""
+    )
 
     if not token:
         logger.warning(f"Webhook for task {message_id}: Missing authorization token")
@@ -279,11 +287,10 @@ def parse_stream_response(payload: dict[str, Any], message_id: str) -> Task:
         )
 
     # Fallback: Try parsing as raw Task (backwards compatibility)
-    # This handles non-compliant agents that send Task directly
+    # The a2a-python SDK's BasePushNotificationSender sends raw Task objects
     if "id" in payload and "status" in payload:
-        logger.warning(
-            f"Webhook for task {message_id}: Received raw Task (not StreamResponse). "
-            "Agent should send StreamResponse format per A2A spec."
+        logger.debug(
+            f"Webhook for task {message_id}: Received raw Task (not StreamResponse envelope)"
         )
         return Task.model_validate(payload)
 
