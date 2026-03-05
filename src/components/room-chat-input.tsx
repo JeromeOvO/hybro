@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send, Square, AtSign, Maximize2, Minimize2, X, Quote } from 'lucide-react'
+import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
 import type { QuoteData } from './message-bubble'
+import type { PendingAttachment } from '@/lib/types/attachments'
+import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
+import { AttachmentPreview } from './attachment-preview'
 
 interface Agent {
   id: string
@@ -15,7 +19,7 @@ interface Agent {
 }
 
 interface RoomChatInputProps {
-  onSubmit: (message: string, targetGroup?: string, quote?: QuoteData | null) => void
+  onSubmit: (message: string, targetGroup?: string, quote?: QuoteData | null, attachments?: PendingAttachment[]) => void
   /**
    * When true, the editor itself is disabled (read-only).
    * For normal sending-state control, prefer using disableSend.
@@ -72,6 +76,10 @@ interface RoomChatInputProps {
    * Content above the editor (e.g. HITL Questions panel).
    */
   topSlot?: React.ReactNode
+  /** Current supervisor mode state. */
+  supervisorMode?: boolean
+  /** Callback when the user toggles supervisor mode from the + menu. */
+  onSupervisorChange?: (enabled: boolean) => void
 }
 
 export function RoomChatInput({
@@ -99,6 +107,8 @@ export function RoomChatInput({
   quote,
   onClearQuote,
   topSlot,
+  supervisorMode,
+  onSupervisorChange,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -106,6 +116,8 @@ export function RoomChatInput({
   const [selectedAgentIndex, setSelectedAgentIndex] = useState(0)
   const [isEditorExpanded, setIsEditorExpanded] = useState(false)
   const [isOverflowing, setIsOverflowing] = useState(false)
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const attachmentsRef = useRef<PendingAttachment[]>([])
   const editorRef = useRef<HTMLDivElement>(null)
   const suggestionsRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -118,6 +130,50 @@ export function RoomChatInput({
     () => Object.fromEntries(agents.map(a => [a.id, a.name])),
     [agents]
   )
+
+  const addFiles = (files: File[]) => {
+    const valid = files.filter(f => f.size <= MAX_FILE_SIZE && ACCEPTED_MIME_SET.has(f.type))
+    if (valid.length === 0) return
+    setAttachments(prev => {
+      const remaining = MAX_ATTACHMENTS - prev.length
+      if (remaining <= 0) {
+        toast.warning(`Maximum ${MAX_ATTACHMENTS} attachments allowed`)
+        return prev
+      }
+      const toAdd = valid.slice(0, remaining)
+      if (toAdd.length < valid.length) {
+        toast.warning(`Only ${remaining} more attachment${remaining === 1 ? '' : 's'} allowed — ${valid.length - toAdd.length} skipped`)
+      }
+      const pending: PendingAttachment[] = toAdd.map(file => {
+        const needsPreview = file.type.startsWith('image/') || file.type.startsWith('audio/') || file.type.startsWith('video/')
+        return {
+          id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          file,
+          previewUrl: needsPreview ? URL.createObjectURL(file) : null,
+          status: 'pending' as const,
+        }
+      })
+      const next = [...prev, ...pending]
+      attachmentsRef.current = next
+      return next
+    })
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => {
+      const target = prev.find(a => a.id === id)
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      const next = prev.filter(a => a.id !== id)
+      attachmentsRef.current = next
+      return next
+    })
+  }
+
+  useEffect(() => {
+    return () => {
+      attachmentsRef.current.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
+    }
+  }, [])
 
   // Reset selected index when filtered agents change
   useEffect(() => {
@@ -373,6 +429,18 @@ export function RoomChatInput({
 
   // Paste plain text preserving newlines and whitespace
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const items = Array.from(e.clipboardData.items)
+    const fileItems = items
+      .filter(item => item.kind === 'file')
+      .map(item => item.getAsFile())
+      .filter((f): f is File => f !== null)
+
+    if (fileItems.length > 0) {
+      e.preventDefault()
+      addFiles(fileItems)
+      return
+    }
+
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
     if (!editorRef.current) return
@@ -606,30 +674,37 @@ export function RoomChatInput({
 
   const handleSubmit = () => {
     const trimmedMessage = message.trim()
-    // If sending is disabled (e.g., previous message still processing), don't submit or clear
-    if (!trimmedMessage || disableSend || disabled) {
+    if ((!trimmedMessage && attachments.length === 0) || disableSend || disabled) {
       return
     }
 
-    if (trimmedMessage) {
-      // Determine target group: if mentions, use them; otherwise use selected group
+    if (trimmedMessage || attachments.length > 0) {
       const targetGroup = mentionedAgents.length > 0 ? undefined : selectedGroup
+      const submittedAttachments = attachments.length > 0 ? attachments : undefined
 
-      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup)
-      onSubmit(trimmedMessage, targetGroup, quote)
+      console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup, 'attachments:', attachments.length)
+
       setMessage('')
+      setAttachments([])
+      attachmentsRef.current = []
+
       if (editorRef.current) {
         editorRef.current.innerHTML = ''
       }
       setShowAgentSuggestions(false)
       setSelectedAgentIndex(0)
-      // Clear quote after sending
       onClearQuote?.()
+
+      // Submitted attachment blob URLs are NOT revoked here — they may
+      // still be needed by the new-room handoff flow.  Instead,
+      // sendUserMessage revokes them after the optimistic swap replaces
+      // blob URLs with server URLs in the message store.
+      onSubmit(trimmedMessage, targetGroup, quote, submittedAttachments)
     }
   }
 
   // Determine if message is ready to send
-  const isReadyToSend = message.trim() && !disableSend && !disabled
+  const isReadyToSend = (message.trim() || attachments.length > 0) && !disableSend && !disabled
 
   return (
     <div className="relative">
@@ -697,7 +772,14 @@ export function RoomChatInput({
       )}
 
       {/* Main input container with animated gradient border */}
-      <div className={cn(
+      <div
+        onDrop={(e) => {
+          e.preventDefault()
+          const files = Array.from(e.dataTransfer.files)
+          if (files.length > 0) addFiles(files)
+        }}
+        onDragOver={(e) => e.preventDefault()}
+        className={cn(
         "group/input relative flex flex-col rounded-3xl transition-all duration-500",
         "bg-gradient-to-b from-background via-background to-background/95",
         "shadow-lg hover:shadow-xl",
@@ -719,6 +801,9 @@ export function RoomChatInput({
         <div className="relative flex flex-col rounded-3xl bg-background/80 backdrop-blur-sm border border-transparent overflow-hidden">
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
+
+          {/* Attachment previews */}
+          <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
 
           {/* Expand/Collapse toggle - shown when content overflows or already expanded */}
           {(isOverflowing || isEditorExpanded) && (
@@ -786,11 +871,17 @@ export function RoomChatInput({
             />
           </div>
 
-          {/* Controls: GroupSelector left, Send/Stop right */}
-          <div className="flex items-center justify-between px-5 pb-5 pt-2">
-            {/* Group selector (left) */}
-            {showGroupSelector && (
-              <div className="flex items-center text-sm text-muted-foreground">
+          {/* Controls: Attach + GroupSelector left, Send/Stop right */}
+          <div className="flex items-center justify-between px-3 pb-3 pt-2">
+            {/* Attach + Group selector + Supervisor indicator (left) */}
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <FileAttachmentButton
+                onFiles={addFiles}
+                disabled={disabled || sending || processing}
+                supervisorMode={supervisorMode}
+                onSupervisorChange={onSupervisorChange}
+              />
+              {showGroupSelector && (
                 <GroupSelector
                   selectedGroup={selectedGroup}
                   onGroupChange={onGroupChange || (() => { })}
@@ -806,12 +897,24 @@ export function RoomChatInput({
                   isOverride={isOverride}
                   onClearOverride={onClearOverride}
                 />
-              </div>
-            )}
-            {!showGroupSelector && <div />}
+              )}
+              {supervisorMode && onSupervisorChange && (
+                <>
+                  <div className="h-4 w-px bg-border mx-0.5" />
+                  <button
+                    type="button"
+                    onClick={() => onSupervisorChange(false)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-400/10 transition-colors"
+                  >
+                    <ShipWheel className="h-4.5 w-4.5" />
+                    <span>Supervisor</span>
+                  </button>
+                </>
+              )}
+            </div>
 
             {/* Send / Stop button (right) */}
-            <div className="flex items-center">
+            <div className="flex items-center gap-1">
             {sending ? (
               <div className="relative">
                 <Button
@@ -845,13 +948,12 @@ export function RoomChatInput({
                 size="icon"
                 className={cn(
                   "h-8 w-8 rounded-full p-0",
-                  "bg-primary/80",
+                  "bg-muted text-muted-foreground",
                   "hover:scale-105 active:scale-95 transition-all duration-200",
-                  "shadow-sm shadow-primary/20 hover:shadow-md hover:shadow-primary/30"
                 )}
                 title="Stop processing"
               >
-                <Square className="h-3.5 w-3.5" />
+                <Square className="h-3.5 w-3.5 fill-current" />
               </Button>
             ) : (
               <Button
@@ -859,19 +961,17 @@ export function RoomChatInput({
                 disabled={!isReadyToSend}
                 size="icon"
                 className={cn(
-                  "h-8 w-8 rounded-full p-0 relative overflow-hidden",
+                  "h-8 w-8 rounded-full p-0",
                   "transition-all duration-300",
                   "hover:scale-105 active:scale-95",
-                  "disabled:opacity-30 disabled:hover:scale-100 disabled:shadow-none",
-                  isReadyToSend && [
-                    "bg-gradient-to-br from-primary via-primary to-primary/90",
-                    "shadow-md shadow-primary/30",
-                    "hover:shadow-lg hover:shadow-primary/40"
-                  ]
+                  "disabled:hover:scale-100 disabled:shadow-none disabled:cursor-default",
+                  isReadyToSend
+                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40"
+                    : "bg-primary/40 text-primary-foreground/70"
                 )}
                 title="Send message (Enter)"
               >
-                <Send className="h-3.5 w-3.5 relative z-10" />
+                <ArrowUp className="h-4 w-4" />
               </Button>
             )}
             </div>

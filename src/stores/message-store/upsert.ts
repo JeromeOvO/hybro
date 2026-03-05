@@ -1,7 +1,7 @@
 import type { TaskState } from '@/lib/types/sse'
 import { isTerminalState } from '@/lib/types/sse'
 import { resolveDisplayType } from './resolve-display-type'
-import type { MessageEntity, IncomingMessage, MessageSource } from './types'
+import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData } from './types'
 
 /**
  * Core upsert logic, extracted so it can be used by both single and batch writes.
@@ -81,6 +81,7 @@ export function applyUpsert(
     taskStatus: displayTaskStatus,
     content: merged.content,
     isEphemeral: resolvedEphemeral,
+    artifacts: merged.artifacts,
   })
 
   const entity: MessageEntity = {
@@ -139,6 +140,8 @@ function mergeIncoming(
       hitlGroupTotal: incoming.hitlGroupTotal,
       hitlGroupIndex: incoming.hitlGroupIndex,
       hitlUserAnswer: incoming.hitlUserAnswer,
+      artifacts: incoming.artifacts,
+      attachments: incoming.attachments,
     }
   }
 
@@ -173,6 +176,8 @@ function mergeIncoming(
     hitlGroupTotal: incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
     hitlUserAnswer: incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : existing.hitlUserAnswer,
+    artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
+    attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
   }
 }
 
@@ -214,6 +219,7 @@ export function isNoOpUpdate(
     taskStatus: (coalesce(incoming.taskStatus, existing.taskStatus) ?? undefined) as TaskState | undefined,
     content: incoming.content ?? existing.content,
     isEphemeral: incoming.isEphemeral ?? existing.isEphemeral,
+    artifacts: incoming.artifacts ?? existing.artifacts,
   })
 
   return (
@@ -238,7 +244,9 @@ export function isNoOpUpdate(
     existing.hitlGroupIndex    === coalesce(incoming.hitlGroupIndex, existing.hitlGroupIndex) &&
     existing.hitlUserAnswer    === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
-    existing.displayType       === incomingDisplayType
+    existing.displayType       === incomingDisplayType &&
+    existing.artifacts         === coalesce(incoming.artifacts, existing.artifacts) &&
+    existing.attachments       === coalesce(incoming.attachments, existing.attachments)
   )
 }
 
@@ -273,4 +281,35 @@ export function buildSortedIds(entities: Record<string, MessageEntity>): string[
       return a.id.localeCompare(b.id)
     })
     .map(e => e.id)
+}
+
+/**
+ * Merge an incoming artifact into an existing artifact list.
+ * - If append=true and artifact already exists, append new parts.
+ * - Otherwise replace the existing artifact with same ID.
+ * - New artifact IDs are appended to the list.
+ */
+export function mergeArtifacts(
+  existing: ArtifactData[] | undefined,
+  incoming: ArtifactData,
+  append: boolean = false,
+): ArtifactData[] {
+  const list = existing ? [...existing] : []
+  const idx = list.findIndex(a => a.artifactId === incoming.artifactId)
+
+  if (idx >= 0) {
+    if (append) {
+      list[idx] = {
+        ...list[idx],
+        parts: [...list[idx].parts, ...incoming.parts],
+        isStreaming: incoming.isStreaming ?? list[idx].isStreaming,
+      }
+    } else {
+      list[idx] = incoming
+    }
+  } else {
+    list.push(incoming)
+  }
+
+  return list
 }

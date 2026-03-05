@@ -6,6 +6,14 @@ vi.mock('@/components/group-selector', () => ({
   GroupSelector: () => <div data-testid="group-selector" />,
 }))
 
+// jsdom doesn't implement URL.createObjectURL / revokeObjectURL
+if (!globalThis.URL.createObjectURL) {
+  globalThis.URL.createObjectURL = vi.fn(() => 'blob:mock')
+}
+if (!globalThis.URL.revokeObjectURL) {
+  globalThis.URL.revokeObjectURL = vi.fn()
+}
+
 const defaultProps = {
   onSubmit: vi.fn(),
   agents: [
@@ -133,6 +141,27 @@ describe('RoomChatInput', () => {
     it('should not show expand button when content is not overflowing', () => {
       const { container } = renderInput()
       expect(container.querySelector('[title="Expand editor"]')).toBeNull()
+    })
+  })
+
+  describe('attachment limits', () => {
+    it('should cap attachments at MAX_ATTACHMENTS (10)', () => {
+      const createSpy = vi.spyOn(globalThis.URL, 'createObjectURL')
+      createSpy.mockReturnValue('blob:mock')
+
+      const { container } = renderInput()
+      const dropZone = container.querySelector('.group\\/input') || container.firstElementChild!
+
+      const files = Array.from({ length: 15 }, (_, i) =>
+        new File([`data-${i}`], `file-${i}.png`, { type: 'image/png' })
+      )
+
+      fireEvent.drop(dropZone, {
+        dataTransfer: { files, types: ['Files'] },
+      })
+
+      expect(createSpy).toHaveBeenCalledTimes(10)
+      createSpy.mockRestore()
     })
   })
 })

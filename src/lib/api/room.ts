@@ -196,11 +196,12 @@ export async function SendMessage(
   getToken?: () => Promise<string | null>,
   user_id?: string,
   user_name?: string,
-  target_group: string = "all_agents",  // Group ID: "all_agents", "room_team", or custom group ID
+  target_group: string = "all_agents",
   related_message_id?: string | null,
   quoted_text?: string | null,
+  attachments?: Array<{ file_id: string }>,
 ): Promise<RoomCenterUserMessageResponse> {
-  const requestData = {
+  const requestData: Record<string, unknown> = {
     room_id,
     user_id: user_id || "",
     user_name: user_name || "",
@@ -216,7 +217,11 @@ export async function SendMessage(
       },
       user_id: user_id || "",
       extend_info: quoted_text ? { quoted_text } : null
-    }
+    },
+  }
+
+  if (attachments && attachments.length > 0) {
+    requestData.attachments = attachments
   }
 
   console.log('🚀 Sending SendMessage request:', JSON.stringify(requestData, null, 2))

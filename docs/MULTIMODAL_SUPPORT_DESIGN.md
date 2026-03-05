@@ -264,7 +264,7 @@ async def upload_file(
     room_id: str = Form(...),
     user_id: str = Form(...),
 ):
-    # Validate: file size (< 10MB), MIME type (allowlist)
+    # Validate: file size (< 50MB), MIME type (allowlist)
     # Store: S3 or local filesystem (Phase 4 adds S3)
     # Return: { file_id, url, mime_type, file_name, size_bytes }
 ```
@@ -335,7 +335,7 @@ export interface PendingAttachment {
 /** Post-upload state: file stored on server, ready to send with message. */
 export interface AttachmentData {
   fileId: string
-  fileUrl: string
+  fileUrl?: string              // optional — backend injects presigned URLs on retrieval; may be absent if expired or stripped
   mimeType: string
   fileName: string
   sizeBytes?: number
@@ -517,24 +517,20 @@ export async function SendMessage(
   user_input: string,
   getToken?: () => Promise<string | null>,
   // ... existing params ...
-  attachments?: AttachmentData[],
+  attachments?: Array<{ file_id: string }>,
 )
 ```
 
-The `SendMessage` function accepts camelCase `AttachmentData` and serialises to
-snake_case for the backend wire format in the request body:
+The `SendMessage` function sends only `file_id` references. The backend resolves all
+metadata (mime_type, file_name, size_bytes, s3_key) server-side from `file_id` during
+`_resolve_attachments()`. This follows the backend trust model — client-supplied metadata
+is never trusted for persistence.
 
 ```typescript
-body: JSON.stringify({
-  // ... existing fields ...
-  attachments: attachments?.map(a => ({
-    file_id: a.fileId,
-    file_url: a.fileUrl,
-    mime_type: a.mimeType,
-    file_name: a.fileName,
-    size_bytes: a.sizeBytes,
-  })),
-})
+// In request body:
+if (attachments && attachments.length > 0) {
+  requestData.attachments = attachments  // [{ file_id: "..." }, ...]
+}
 ```
 
 **Modify user bubble rendering** (`src/components/message-bubble.tsx`):
@@ -553,7 +549,7 @@ attachments?: AttachmentData[]
 ```typescript
 interface AttachmentData {
   fileId: string
-  fileUrl: string
+  fileUrl?: string     // optional — presigned URL injected by backend on retrieval
   mimeType: string
   fileName: string
   sizeBytes?: number
@@ -658,7 +654,7 @@ Keeping them separate preserves single-responsibility.
 
 | Risk | Mitigation |
 |------|-----------|
-| Malicious file upload (XSS via SVG, zip bombs) | Server-side MIME validation, file size limit (10MB), SVG sanitization or rejection |
+| Malicious file upload (XSS via SVG, zip bombs) | Server-side MIME validation, file size limit (50MB), SVG sanitization or rejection |
 | Presigned URL leakage | Short TTL (1 hour), room-scoped access check before URL generation |
 | Base64 payload size in SSE | Prefer URI-based `FilePart` over `FileWithBytes` for large files. Backend should convert inline bytes to stored URLs before SSE broadcast. |
 | Content-type spoofing | Validate actual file content (magic bytes) against declared MIME type |

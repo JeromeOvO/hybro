@@ -19,6 +19,9 @@ import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
+import { mergeArtifacts } from '@/stores/message-store/upsert'
+import type { PendingAttachment } from '@/lib/types/attachments'
 import { streamingBuffer } from '@/stores/streaming-buffer'
 import { TypewriterManager } from '@/stores/typewriter'
 import { getAllActiveAgents } from '@/lib/api/agent'
@@ -486,6 +489,40 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
 
+    // Convert raw SSE `parts` (file/data) into ArtifactData[].
+    // Text parts are already carried in `content`, so only non-text parts
+    // are materialized here. Returns undefined when there are no non-text parts.
+    const partsToArtifacts = (
+      rawParts: Record<string, unknown>[] | undefined,
+      messageId: string,
+      existing: MessageEntity | undefined,
+    ): ArtifactData[] | undefined => {
+      if (!rawParts || rawParts.length === 0) return existing?.artifacts
+      const nonTextParts = rawParts
+        .filter((p) => (p.kind as string) !== 'text')
+        .map((p) => {
+          const fileData = p.file as Record<string, unknown> | undefined
+          return {
+            kind: ((p.kind as string) || 'text') as ArtifactPart['kind'],
+            text: p.text as string | undefined,
+            file: fileData ? {
+              uri: (fileData.uri as string | undefined),
+              bytes: (fileData.bytes as string | undefined),
+              mime_type: ((fileData.mime_type || fileData.mimeType) as string | undefined),
+              name: (fileData.name as string | undefined),
+            } : undefined,
+            data: p.data as Record<string, unknown> | undefined,
+          }
+        })
+      if (nonTextParts.length === 0) return existing?.artifacts
+      const inline: ArtifactData = {
+        artifactId: `${messageId}-parts`,
+        name: 'Response files',
+        parts: nonTextParts,
+      }
+      return mergeArtifacts(existing?.artifacts, inline, false)
+    }
+
     switch (sseMessage.type) {
       case 'user_message':
         console.log('📨 User message received via SSE')
@@ -513,6 +550,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             const agentName = await getAgentName(sseMessage.data.agent_id)
             const content = sseMessage.data.content
             const msgTimestamp = normalizeTimestampOrNow(sseMessage.timestamp)
+            const existing = store.entities[messageId]
+            const artifacts = partsToArtifacts(
+              sseMessage.data.parts as Record<string, unknown>[] | undefined,
+              messageId,
+              existing,
+            )
 
             store.upsertMessage({
               id: messageId,
@@ -524,6 +567,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               timestamp: msgTimestamp,
               taskStatus: null,
               isEphemeral: false,
+              ...(artifacts ? { artifacts } : {}),
             }, 'sse')
           }
         }
@@ -726,7 +770,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             messageType: 'agent' as const,
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
+            timestamp: new Date().toISOString(),
           }
+
+          const existing = store.entities[messageId]
+          const artifacts = partsToArtifacts(
+            sseMessage.data.parts as Record<string, unknown>[] | undefined,
+            messageId,
+            existing,
+          )
 
           if (isTerminalState(status)) {
             const hadRealStreaming = streamingBuffer.isStreaming(messageId)
@@ -737,12 +789,12 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               // Non-streaming agent: use typewriter for progressive reveal.
               // Create ephemeral placeholder so the agent-bubble renders immediately,
               // then feed content through StreamingBuffer via TypewriterManager.
+              // Omit taskStatus so resolveDisplayType picks "agent-bubble" (ephemeral + no status).
               store.upsertMessage({
                 ...baseMsg,
                 content: '',
                 isEphemeral: true,
-                ...taskFields,
-                taskStatus: undefined,
+                ...(artifacts ? { artifacts } : {}),
               }, 'sse')
 
               const finalContent = content
@@ -754,6 +806,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                   content: finalContent,
                   isEphemeral: false,
                   ...finalTaskFields,
+                  ...(artifacts ? { artifacts } : {}),
                 }, 'sse')
               })
             } else {
@@ -762,6 +815,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 content,
                 isEphemeral: false,
                 ...taskFields,
+                ...(artifacts ? { artifacts } : {}),
               }, 'sse')
             }
 
@@ -790,11 +844,49 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 ...baseMsg,
                 content,
                 ...taskFields,
+                ...(artifacts ? { artifacts } : {}),
               }, 'sse')
             }
           }
         }
         break
+
+      case 'artifact_update': {
+        if (sseMessage.data?.message_id && sseMessage.data?.artifact) {
+          const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
+          const existing = store.entities[message_id]
+          const artifactData = {
+            artifactId: artifact.artifact_id || (artifact as Record<string, unknown>).artifactId as string,
+            name: artifact.name,
+            parts: (artifact.parts || []).map((p: Record<string, unknown>) => {
+              const fileData = p.file as Record<string, unknown> | undefined
+              return {
+                kind: ((p.kind as string) || 'text') as ArtifactPart['kind'],
+                text: p.text as string | undefined,
+                file: fileData ? {
+                  uri: (fileData.uri as string | undefined),
+                  bytes: (fileData.bytes as string | undefined),
+                  mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
+                  name: (fileData.name as string | undefined),
+                } : undefined,
+                data: p.data as Record<string, unknown> | undefined,
+              }
+            }),
+            isStreaming: !last_chunk,
+          }
+          const merged = mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+          store.upsertMessage({
+            id: message_id,
+            roomId,
+            messageType: 'agent',
+            content: existing?.content || '',
+            senderName: existing?.senderName || 'Agent',
+            timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
+            artifacts: merged,
+          }, 'sse')
+        }
+        break
+      }
 
       case 'hitl_input_requested': {
         console.log('🔔 HITL input requested via SSE:', sseMessage.data)
@@ -1030,14 +1122,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   const updateRoomSettings = useCallback(async (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    options: { debateMode: boolean; useSupervisor: boolean }
+    options: { debateMode: boolean }
   ) => {
     if (!room) {
       banner.error('Room data not available')
       return false
     }
 
-    const { debateMode, useSupervisor } = options
+    const { debateMode } = options
 
     try {
       setUpdatingRoom(true)
@@ -1049,7 +1141,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           agent.agent_card.name,  // value: agent name
         ])
       )
-      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode, useSupervisor })
+      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode })
 
       // Update room name if changed
       if (roomName !== room.room_name) {
@@ -1065,14 +1157,17 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         throw new Error(`Failed to update room agents: ${agentResponse.error}`)
       }
 
-      // Update extend_info if debateMode or useSupervisor changed
+      // Only update debateMode in extend_info; supervisor mode is managed
+      // separately by the chat input toggle and handleSendMessage.
+      // Refetch room first to get the latest extend_info from backend,
+      // avoiding stale use_supervisor from the React Query cache.
       const currentDebateMode = getDebateMode()
-      const currentSupervisorMode = getSupervisorMode()
-      if (debateMode !== currentDebateMode || useSupervisor !== currentSupervisorMode) {
+      if (debateMode !== currentDebateMode) {
+        const freshRoom = await roomQuery.refetch()
+        const freshExtendInfo = (freshRoom.data?.extend_info as object) || {}
         const updatedExtendInfo = {
-          ...(room.extend_info as object || {}),
+          ...freshExtendInfo,
           debateMode,
-          use_supervisor: useSupervisor,
         }
 
         const extendInfoResponse = await updateRoomExtendInfo(roomId, updatedExtendInfo)
@@ -1082,7 +1177,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
         console.log('✅ Room extend_info updated:', {
           debateMode: debateMode ? 'ENABLED' : 'DISABLED',
-          supervisor: useSupervisor ? 'ENABLED' : 'DISABLED',
         })
       }
 
@@ -1099,10 +1193,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, roomQuery, getDebateMode, getSupervisorMode, setUpdatingRoom])
+  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom])
 
   // Complete user message sending workflow - using unified SendMessage API
-  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData) => {
+  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData, pendingAttachments?: PendingAttachment[]) => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
     }
@@ -1122,6 +1216,13 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       senderName: userName,
       userId,
       timestamp: currentTime,
+      attachments: pendingAttachments?.map(att => ({
+        fileId: att.id,
+        fileUrl: att.previewUrl || undefined,
+        mimeType: att.file.type,
+        fileName: att.file.name,
+        sizeBytes: att.file.size,
+      })),
     }, 'optimistic')
     msgStoreSend.upsertMessage({
       id: processingPlaceholderId,
@@ -1139,11 +1240,34 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       setSending(true)  // Show spinner during message creation & parsing
       isProcessingRef.current = true
 
+      // Upload pending attachments
+      let uploadedAttachments: Array<{ file_id: string }> | undefined
+      let uploadResponses: Map<string, { fileId: string; fileUrl: string; mimeType: string; fileName: string; sizeBytes: number }> | undefined
+      if (pendingAttachments && pendingAttachments.length > 0) {
+        const { uploadFile } = await import('@/lib/api/files')
+        uploadResponses = new Map()
+        const results = await Promise.all(
+          pendingAttachments.map(async (att) => {
+            const res = await uploadFile(att.file, roomId, getToken)
+            uploadResponses!.set(att.id, {
+              fileId: res.file_id,
+              fileUrl: res.file_url,
+              mimeType: res.mime_type,
+              fileName: res.file_name,
+              sizeBytes: res.size_bytes,
+            })
+            return { file_id: res.file_id }
+          })
+        )
+        uploadedAttachments = results
+      }
+
       // Step 1: Send user message to backend using unified SendMessage API
       const createResponse = await SendMessage(
         roomId, userInput, getToken, userId, userName, targetGroup,
         quoteData?.messageId ?? null,
         quoteData?.content ?? null,
+        uploadedAttachments,
       )
 
       if (!createResponse.success) {
@@ -1163,6 +1287,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
         banner.error('Message sent but server returned no ID. Please try again.')
 
+        // Revoke orphaned blob URLs since attachments have already been cleared
+        // from the input component and are unreachable by its cleanup.
+        if (pendingAttachments) {
+          for (const att of pendingAttachments) {
+            if (att.previewUrl) {
+              try { URL.revokeObjectURL(att.previewUrl) } catch { /* ignore */ }
+            }
+          }
+        }
+
         clearProcessing()
         currentProcessingMessageId.current = null
         isProcessingRef.current = false
@@ -1181,7 +1315,27 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         senderName: userName,
         userId,
         timestamp: currentTime,
+        attachments: pendingAttachments?.map(att => {
+          const uploaded = uploadResponses?.get(att.id)
+          return {
+            fileId: uploaded?.fileId || att.id,
+            fileUrl: uploaded?.fileUrl || att.previewUrl || undefined,
+            mimeType: uploaded?.mimeType || att.file.type,
+            fileName: uploaded?.fileName || att.file.name,
+            sizeBytes: uploaded?.sizeBytes || att.file.size,
+          }
+        }),
       }, 'optimistic')
+
+      // Blob preview URLs are no longer needed now that server URLs are in
+      // the store.  Revoke them to free browser blob memory.
+      if (pendingAttachments) {
+        for (const att of pendingAttachments) {
+          if (att.previewUrl) {
+            try { URL.revokeObjectURL(att.previewUrl) } catch { /* ignore */ }
+          }
+        }
+      }
 
       // Store message ID for potential cancellation
       currentProcessingMessageId.current = messageId
@@ -1214,6 +1368,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       msgStoreErr.removeMessage(getProcessingPlaceholderId())
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
+
+      // Revoke orphaned blob URLs since attachments have already been cleared
+      // from the input component and are unreachable by its cleanup.
+      if (pendingAttachments) {
+        for (const att of pendingAttachments) {
+          if (att.previewUrl) {
+            try { URL.revokeObjectURL(att.previewUrl) } catch { /* ignore */ }
+          }
+        }
+      }
 
       // Reconcile to recover any messages that might have been lost
       try {
@@ -1397,9 +1561,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       roomOwnerId: room.room_owner_id || '',
       roomOwnerName: room.room_owner_name || '',
       debateMode: getDebateMode(),
-      useSupervisor: getSupervisorMode(),
     }
-  }, [room, getDebateMode, getSupervisorMode])
+  }, [room, getDebateMode])
 
   // Toggle SSE connection
   const toggleSSE = useCallback(() => {
@@ -1441,6 +1604,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
     // Debate Mode
     debateMode: getDebateMode(),
+
+    // Supervisor Mode
+    supervisorMode: getSupervisorMode(),
 
     // Actions
     sendUserMessage,

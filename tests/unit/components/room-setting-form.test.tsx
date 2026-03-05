@@ -83,7 +83,7 @@ describe('RoomSettingForm', () => {
       render(<RoomSettingForm {...defaultProps} />)
 
       expect(screen.getByText('Debate Mode')).toBeInTheDocument()
-      expect(screen.getAllByRole('switch').length).toBeGreaterThanOrEqual(2)
+      expect(screen.getAllByRole('switch')).toHaveLength(1)
     })
 
     it('should show "Update Room" when isEditing is true', () => {
@@ -133,7 +133,7 @@ describe('RoomSettingForm', () => {
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: false, useSupervisor: false })
+        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: false })
       })
     })
 
@@ -162,7 +162,7 @@ describe('RoomSettingForm', () => {
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('My Test Room', expect.any(Object), { debateMode: false, useSupervisor: false })
+        expect(onSubmit).toHaveBeenCalledWith('My Test Room', expect.any(Object), { debateMode: false })
       })
     })
 
@@ -177,13 +177,13 @@ describe('RoomSettingForm', () => {
         />
       )
 
-      // Debate Mode is the second switch (after Supervisor Mode)
+      // Debate Mode is the only switch (Supervisor moved to chat input)
       const switches = screen.getAllByRole('switch')
-      await user.click(switches[1])
+      await user.click(switches[0])
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: true, useSupervisor: false })
+        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: true })
       })
     })
   })
@@ -308,7 +308,7 @@ describe('RoomSettingForm', () => {
         expect(onSubmit).toHaveBeenCalledWith(
           '',
           expect.objectContaining({ 'agent-1': mockAgents[0] }),
-          { debateMode: false, useSupervisor: false }
+          { debateMode: false }
         )
       })
     })
