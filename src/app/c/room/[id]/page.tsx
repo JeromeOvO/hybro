@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useClerk, useAuth } from '@clerk/nextjs'
+import { toast } from 'sonner'
 import { Settings, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -28,8 +29,10 @@ import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useActiveHitlRequests } from '@/hooks/useRoomMessages'
 import type { Agent } from '@/lib/types/agent'
 import type { QuoteData } from '@/components/message-bubble'
+import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 import { isWaitlistEnabled } from "@/lib/utils"
+import { updateRoomExtendInfo, inquiryRoomSetting } from '@/lib/api/room'
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -46,6 +49,8 @@ export default function RoomChatPage() {
   const handleQuote = useCallback((data: QuoteData) => setQuote(data), [])
   const clearQuote = useCallback(() => setQuote(null), [])
 
+  // Local supervisor mode toggle (synced from room, user can override before sending)
+  const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
   const {
     room,
     loading,
@@ -65,6 +70,8 @@ export default function RoomChatPage() {
     toggleSSE,
     // Debate mode
     debateMode,
+    // Supervisor mode (from room extend_info)
+    supervisorMode: roomSupervisorMode,
   } = useRoomWebhook({
     roomId,
     userId: user?.id,
@@ -74,6 +81,17 @@ export default function RoomChatPage() {
 
   // Room agent count
   const roomAgentCount = room?.room_agent_set ? Object.keys(room.room_agent_set).length : 0
+
+  // Sync local supervisor toggle from room data (re-syncs when roomId changes)
+  const lastSyncedRoomRef = useRef<string | null>(null)
+  const confirmedSupervisorRef = useRef(false)
+  useEffect(() => {
+    if (room && lastSyncedRoomRef.current !== roomId) {
+      lastSyncedRoomRef.current = roomId
+      setLocalSupervisorMode(roomSupervisorMode)
+      confirmedSupervisorRef.current = roomSupervisorMode
+    }
+  }, [room, roomId, roomSupervisorMode])
 
   // Active HITL requests (for the panel above chat input)
   const activeHitlRequests = useActiveHitlRequests()
@@ -133,7 +151,7 @@ export default function RoomChatPage() {
         : BUILTIN_GROUP_ALL_AGENTS
     )
 
-    sendUserMessage(pendingData.initialMessage, targetGroup).then((success) => {
+    sendUserMessage(pendingData.initialMessage, targetGroup, undefined, pendingData.attachments).then((success) => {
       if (!success) {
         // Re-store on failure so it can be retried
         useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
@@ -143,15 +161,44 @@ export default function RoomChatPage() {
   }, [room, loading, roomId, user?.id, sendUserMessage])
 
   // This function will be called when user clicks send button
-  const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null) => {
-    await sendUserMessage(userInput, targetGroup || gm.selectedGroup, quoteData ?? undefined)
+  const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
+    if (room && localSupervisorMode !== confirmedSupervisorRef.current) {
+      // Fetch fresh extend_info from backend to avoid overwriting a
+      // concurrent debateMode change with stale React Query cache data.
+      let freshExtendInfo: object = {}
+      try {
+        const freshRoom = await inquiryRoomSetting(roomId, getToken)
+        if (freshRoom.success && freshRoom.room?.extend_info) {
+          freshExtendInfo = freshRoom.room.extend_info as object
+        }
+      } catch {
+        freshExtendInfo = (room.extend_info as object) || {}
+      }
+      const updatedExtendInfo = {
+        ...freshExtendInfo,
+        use_supervisor: localSupervisorMode,
+      }
+      try {
+        const result = await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
+        if (result.success) {
+          confirmedSupervisorRef.current = localSupervisorMode
+        } else {
+          setLocalSupervisorMode(confirmedSupervisorRef.current)
+          toast.warning('Failed to update supervisor mode — message sent with previous setting')
+        }
+      } catch {
+        setLocalSupervisorMode(confirmedSupervisorRef.current)
+        toast.warning('Failed to update supervisor mode — message sent with previous setting')
+      }
+    }
+    await sendUserMessage(userInput, targetGroup || gm.selectedGroup, quoteData ?? undefined, attachments)
   }
 
   // Handle room settings update
   const handleRoomSettingsUpdate = async (
     roomName: string,
     selectedAgents: { [agentId: string]: Agent },
-    options: { debateMode: boolean; useSupervisor: boolean }
+    options: { debateMode: boolean }
   ) => {
     const success = await updateRoomSettings(roomName, selectedAgents, options)
     if (success) {
@@ -351,6 +398,8 @@ export default function RoomChatPage() {
             onClearOverride={gm.handleClearOverride}
             quote={quote}
             onClearQuote={clearQuote}
+            supervisorMode={localSupervisorMode}
+            onSupervisorChange={setLocalSupervisorMode}
             topSlot={activeHitlRequests.length > 0
               ? (
                 <HitlPanel

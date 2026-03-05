@@ -5,6 +5,7 @@ import { getAllActiveAgents } from '@/lib/api/agent'
 import { banner } from "@/components/ui/banner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
+import type { PendingAttachment } from '@/lib/types/attachments'
 
 interface UseChatRoomCreationProps {
   userId?: string
@@ -19,6 +20,7 @@ interface CreateRoomOptions {
   useSupervisor?: boolean
   roomName?: string
   targetGroup?: string
+  attachments?: PendingAttachment[]
 }
 
 export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
@@ -82,7 +84,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       return null
     }
 
-    if (!userMessage.trim()) {
+    if (!userMessage.trim() && !options.attachments?.length) {
       banner.error('Message cannot be empty')
       return null
     }
@@ -137,6 +139,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
           targetGroup,
+          attachments: options.attachments,
         })
         
         return roomId

@@ -38,6 +38,32 @@ describe('resolveDisplayType', () => {
     })).toBe('task-status')
   })
 
+  it('returns agent-bubble for completed task with artifacts but no content', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.COMPLETED,
+      content: '',
+      artifacts: [{ artifactId: 'a-1', parts: [{ kind: 'file', file: { uri: 'https://s3/img.png', mime_type: 'image/png' } }] }],
+    })).toBe('agent-bubble')
+  })
+
+  it('returns agent-bubble for completed task with artifacts and no content field', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.COMPLETED,
+      artifacts: [{ artifactId: 'a-2', parts: [{ kind: 'data', data: { key: 'value' } }] }],
+    })).toBe('agent-bubble')
+  })
+
+  it('returns task-status for completed task with empty artifacts array', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.COMPLETED,
+      content: '',
+      artifacts: [],
+    })).toBe('task-status')
+  })
+
   it('returns task-status for completed task with whitespace-only content', () => {
     expect(resolveDisplayType({
       messageType: 'agent',

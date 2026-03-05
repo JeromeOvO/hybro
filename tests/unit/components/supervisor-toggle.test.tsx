@@ -32,7 +32,7 @@ const mockAgents: Agent[] = [
   },
 ]
 
-describe('RoomSettingForm — Supervisor Toggle', () => {
+describe('RoomSettingForm — Supervisor Toggle migration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -41,49 +41,29 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
     cleanup()
   })
 
-  describe('rendering', () => {
-    it('should render Supervisor Mode toggle', () => {
+  describe('supervisor UI removed from form', () => {
+    it('should NOT render Supervisor Mode toggle (migrated to chat input)', () => {
       render(<RoomSettingForm onSubmit={vi.fn()} />)
 
-      expect(screen.getByText('Supervisor Mode')).toBeInTheDocument()
+      expect(screen.queryByText('Supervisor Mode')).not.toBeInTheDocument()
     })
 
-    it('should render Supervisor Mode description text', () => {
+    it('should still render Debate Mode toggle', () => {
       render(<RoomSettingForm onSubmit={vi.fn()} />)
 
-      expect(
-        screen.getByText(/enable ai supervisor to coordinate agents/i)
-      ).toBeInTheDocument()
-    })
-
-    it('should render both Supervisor and Debate Mode toggles independently', () => {
-      render(<RoomSettingForm onSubmit={vi.fn()} />)
-
-      expect(screen.getByText('Supervisor Mode')).toBeInTheDocument()
       expect(screen.getByText('Debate Mode')).toBeInTheDocument()
-
-      const switches = screen.getAllByRole('switch')
-      expect(switches.length).toBeGreaterThanOrEqual(2)
     })
 
-    it('should render Supervisor Mode before Debate Mode in DOM order', () => {
+    it('should only have one switch (Debate Mode)', () => {
       render(<RoomSettingForm onSubmit={vi.fn()} />)
 
-      const supervisorLabel = screen.getByText('Supervisor Mode')
-      const debateLabel = screen.getByText('Debate Mode')
-
-      // Supervisor should appear before Debate in the document
-      const allElements = document.querySelectorAll('.text-base')
-      const labels = Array.from(allElements).map(el => el.textContent)
-      const supervisorIdx = labels.findIndex(t => t?.includes('Supervisor Mode'))
-      const debateIdx = labels.findIndex(t => t?.includes('Debate Mode'))
-
-      expect(supervisorIdx).toBeLessThan(debateIdx)
+      const switches = screen.getAllByRole('switch')
+      expect(switches).toHaveLength(1)
     })
   })
 
-  describe('form submission', () => {
-    it('should submit with useSupervisor=false by default', async () => {
+  describe('form submission excludes supervisor', () => {
+    it('should submit with only debateMode (no useSupervisor)', async () => {
       const onSubmit = vi.fn()
       const user = userEvent.setup()
 
@@ -100,98 +80,12 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
         expect(onSubmit).toHaveBeenCalledWith(
           '',
           expect.any(Object),
-          { debateMode: false, useSupervisor: false },
+          { debateMode: false },
         )
       })
     })
 
-    it('should submit with useSupervisor=true when toggled on', async () => {
-      const onSubmit = vi.fn()
-      const user = userEvent.setup()
-
-      render(
-        <RoomSettingForm
-          onSubmit={onSubmit}
-          requireRoomName={false}
-        />
-      )
-
-      // Find the Supervisor Mode switch specifically
-      const switches = screen.getAllByRole('switch')
-      // Supervisor Mode toggle is the first switch (rendered before Debate Mode)
-      const supervisorSwitch = switches[0]
-      await user.click(supervisorSwitch)
-
-      await user.click(screen.getByRole('button', { name: /Create Room/ }))
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(
-          '',
-          expect.any(Object),
-          { debateMode: false, useSupervisor: true },
-        )
-      })
-    })
-
-    it('should submit with both Supervisor and Debate toggled on', async () => {
-      const onSubmit = vi.fn()
-      const user = userEvent.setup()
-
-      render(
-        <RoomSettingForm
-          onSubmit={onSubmit}
-          requireRoomName={false}
-        />
-      )
-
-      const switches = screen.getAllByRole('switch')
-      // Toggle both switches on
-      for (const sw of switches) {
-        await user.click(sw)
-      }
-
-      await user.click(screen.getByRole('button', { name: /Create Room/ }))
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(
-          '',
-          expect.any(Object),
-          { debateMode: true, useSupervisor: true },
-        )
-      })
-    })
-
-    it('should include useSupervisor alongside room name and agents', async () => {
-      const onSubmit = vi.fn()
-      const user = userEvent.setup()
-
-      render(
-        <RoomSettingForm
-          onSubmit={onSubmit}
-          requireRoomName
-          availableAgents={mockAgents}
-        />
-      )
-
-      await user.type(screen.getByLabelText(/Room Name/), 'My Test Room')
-
-      const switches = screen.getAllByRole('switch')
-      await user.click(switches[0]) // Supervisor on
-
-      await user.click(screen.getByRole('button', { name: /Create Room/ }))
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(
-          'My Test Room',
-          expect.any(Object),
-          { debateMode: false, useSupervisor: true },
-        )
-      })
-    })
-  })
-
-  describe('initialData', () => {
-    it('should initialize useSupervisor=true from initialData', async () => {
+    it('should not include useSupervisor even when initialData has it', async () => {
       const onSubmit = vi.fn()
       const user = userEvent.setup()
 
@@ -204,36 +98,6 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
             roomName: 'Existing Room',
             selectedAgents: { 'agent-1': 'Research Bot' },
             debateMode: false,
-            useSupervisor: true,
-          }}
-        />
-      )
-
-      // Submit without changing anything to verify initial state propagates
-      await user.click(screen.getByRole('button', { name: /Create Room/ }))
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(
-          'Existing Room',
-          expect.any(Object),
-          { debateMode: false, useSupervisor: true },
-        )
-      })
-    })
-
-    it('should default useSupervisor to false when initialData has no useSupervisor', async () => {
-      const onSubmit = vi.fn()
-      const user = userEvent.setup()
-
-      render(
-        <RoomSettingForm
-          onSubmit={onSubmit}
-          requireRoomName={false}
-          availableAgents={mockAgents}
-          initialData={{
-            roomName: 'Old Room',
-            selectedAgents: {},
-            debateMode: true,
           }}
         />
       )
@@ -241,15 +105,13 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(
-          'Old Room',
-          expect.any(Object),
-          { debateMode: true, useSupervisor: false },
-        )
+        const opts = onSubmit.mock.calls[0][2]
+        expect(opts).toEqual({ debateMode: false })
+        expect(opts).not.toHaveProperty('useSupervisor')
       })
     })
 
-    it('should initialize both supervisor and debate from initialData', async () => {
+    it('should submit debateMode from initialData without supervisor', async () => {
       const onSubmit = vi.fn()
       const user = userEvent.setup()
 
@@ -262,7 +124,6 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
             roomName: 'Full Config Room',
             selectedAgents: { 'agent-1': 'Research Bot' },
             debateMode: true,
-            useSupervisor: true,
           }}
         />
       )
@@ -273,7 +134,31 @@ describe('RoomSettingForm — Supervisor Toggle', () => {
         expect(onSubmit).toHaveBeenCalledWith(
           'Full Config Room',
           expect.any(Object),
-          { debateMode: true, useSupervisor: true },
+          { debateMode: true },
+        )
+      })
+    })
+
+    it('should toggle debateMode correctly', async () => {
+      const onSubmit = vi.fn()
+      const user = userEvent.setup()
+
+      render(
+        <RoomSettingForm
+          onSubmit={onSubmit}
+          requireRoomName={false}
+        />
+      )
+
+      const switches = screen.getAllByRole('switch')
+      await user.click(switches[0])
+      await user.click(screen.getByRole('button', { name: /Create Room/ }))
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          '',
+          expect.any(Object),
+          { debateMode: true },
         )
       })
     })

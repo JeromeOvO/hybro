@@ -1,10 +1,12 @@
 import { create } from 'zustand'
+import type { PendingAttachment } from '@/lib/types/attachments'
 
 type RoomId = string
 
 interface PendingRoomData {
   initialMessage: string
   targetGroup?: string
+  attachments?: PendingAttachment[]
 }
 
 interface RoomUiState {

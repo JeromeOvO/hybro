@@ -1,5 +1,22 @@
 import type { TaskState } from '@/lib/types/sse'
 import type { HITLPromptType } from '@/lib/types/sse'
+import type { AttachmentData } from '@/lib/types/attachments'
+
+/** A single part within an A2A artifact. */
+export interface ArtifactPart {
+  kind: 'text' | 'file' | 'data'
+  text?: string
+  file?: { uri?: string; bytes?: string; mime_type?: string; name?: string }
+  data?: Record<string, unknown>
+}
+
+/** An artifact emitted by an agent, stored alongside the message entity. */
+export interface ArtifactData {
+  artifactId: string
+  name?: string
+  parts: ArtifactPart[]
+  isStreaming?: boolean
+}
 
 /** Which pipeline last wrote this entity. */
 export type MessageSource = 'db' | 'sse' | 'optimistic'
@@ -60,6 +77,12 @@ export interface MessageEntity {
   isEphemeral: boolean
   createdAt: number
   updatedAt: number
+
+  // ── Multimodal artifacts ──────────────────────────────────
+  artifacts?: ArtifactData[]
+
+  // ── User attachments ──────────────────────────────────────
+  attachments?: AttachmentData[]
 }
 
 /**
@@ -99,4 +122,6 @@ export interface IncomingMessage {
   hitlGroupIndex?: number
   hitlUserAnswer?: string
   isEphemeral?: boolean
+  artifacts?: ArtifactData[]
+  attachments?: AttachmentData[]
 }

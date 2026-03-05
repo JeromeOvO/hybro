@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/tooltip"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
+import type { QuoteData } from "@/components/message-bubble"
+import type { PendingAttachment } from "@/lib/types/attachments"
 import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import { RoomSettingForm } from "@/components/room-setting-form"
@@ -68,11 +70,13 @@ function ChatPageContent() {
     const [loadingAgent, setLoadingAgent] = useState(false)
     const [dialogOpen, setDialogOpen] = useState(false)
 
+    // Local supervisor mode toggle for the + menu
+    const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
+
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
         roomName: string
         selectedAgents: Agent[]
         debateMode: boolean
-        useSupervisor: boolean
     } | null>(null)
 
     // Pre-configure room when agentId is in URL params
@@ -93,7 +97,6 @@ function ChatPageContent() {
                     roomName: `Chat with ${agent.agent_card.name}`,
                     selectedAgents: [chatAgent],
                     debateMode: false,
-                    useSupervisor: false,
                 })
             } else {
                 console.error("Failed to load agent for chat:", response.error)
@@ -149,12 +152,11 @@ function ChatPageContent() {
                 preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
             ),
             debateMode: preConfiguredRoom.debateMode,
-            useSupervisor: preConfiguredRoom.useSupervisor,
         }
     }, [preConfiguredRoom])
 
-    const handleSubmit = async (value: string) => {
-        if (!value.trim()) {
+    const handleSubmit = async (value: string, _targetGroup?: string, _quote?: QuoteData | null, attachments?: PendingAttachment[]) => {
+        if (!value.trim() && (!attachments || attachments.length === 0)) {
             banner.error("Please enter a message")
             return
         }
@@ -175,9 +177,10 @@ function ChatPageContent() {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
                     debateMode: preConfiguredRoom.debateMode,
-                    useSupervisor: preConfiguredRoom.useSupervisor,
                 } : {}),
-                targetGroup: gm.selectedGroup
+                useSupervisor: localSupervisorMode,
+                targetGroup: gm.selectedGroup,
+                attachments,
             }
 
             const success = await createAndNavigate(value, options)
@@ -189,6 +192,16 @@ function ChatPageContent() {
             console.error('Error creating room:', error)
             setHasError(true)
             banner.error('Failed to start chat')
+
+            // Revoke orphaned blob URLs — the input component already cleared
+            // its attachment state so these URLs are unreachable by its cleanup.
+            if (attachments) {
+                for (const att of attachments) {
+                    if (att.previewUrl) {
+                        try { URL.revokeObjectURL(att.previewUrl) } catch { /* ignore */ }
+                    }
+                }
+            }
         }
     }
 
@@ -210,13 +223,12 @@ function ChatPageContent() {
     const handleRoomSettingsUpdate = async (
         roomName: string,
         selectedAgents: { [agentId: string]: Agent },
-        options: { debateMode: boolean; useSupervisor: boolean }
+        options: { debateMode: boolean }
     ) => {
         setPreConfiguredRoom({
             roomName,
             selectedAgents: Object.values(selectedAgents),
             debateMode: options.debateMode,
-            useSupervisor: options.useSupervisor,
         })
         setDialogOpen(false)
     }
@@ -426,6 +438,8 @@ function ChatPageContent() {
                             onClearOverride={gm.handleClearOverride}
                             externalValue={quickStartValue}
                             onExternalValueConsumed={handleClearQuickStart}
+                            supervisorMode={localSupervisorMode}
+                            onSupervisorChange={setLocalSupervisorMode}
                         />
                     </div>
 

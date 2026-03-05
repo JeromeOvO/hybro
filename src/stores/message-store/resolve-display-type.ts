@@ -1,6 +1,6 @@
 import type { TaskState } from '@/lib/types/sse'
 import { TASK_STATE } from '@/lib/types/sse'
-import type { DisplayType } from './types'
+import type { ArtifactData, DisplayType } from './types'
 
 /**
  * Resolve the display type for a message — the single source of truth for which
@@ -17,6 +17,7 @@ export function resolveDisplayType(msg: {
   taskStatus?: TaskState
   content?: string
   isEphemeral?: boolean
+  artifacts?: ArtifactData[]
 }): DisplayType {
   // User messages are always user bubbles
   if (msg.messageType === 'user') return 'user-bubble'
@@ -30,8 +31,10 @@ export function resolveDisplayType(msg: {
   // Agent message with no task → regular agent bubble
   if (!msg.taskStatus) return 'agent-bubble'
 
-  // Completed task with content → agent bubble (successful response)
-  if (msg.taskStatus === TASK_STATE.COMPLETED && msg.content?.trim()) {
+  // Completed task with text content or multimodal artifacts → agent bubble
+  const hasContent = !!msg.content?.trim()
+  const hasArtifacts = !!msg.artifacts && msg.artifacts.length > 0
+  if (msg.taskStatus === TASK_STATE.COMPLETED && (hasContent || hasArtifacts)) {
     return 'agent-bubble'
   }
 

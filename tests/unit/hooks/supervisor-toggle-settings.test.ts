@@ -1,9 +1,9 @@
 /**
- * Tests for useRoomWebhook's updateRoomSettings — Supervisor Toggle integration.
+ * Tests for useRoomWebhook's updateRoomSettings — verifies that the settings
+ * form only updates debateMode and never touches use_supervisor in extend_info.
  *
- * Strategy: mock the room API module, render the hook via renderHook with
- * React Query wrapper, wait for room data to load, then invoke updateRoomSettings
- * and verify the correct API calls are made with use_supervisor in extend_info.
+ * Supervisor mode is managed exclusively by the chat input toggle and
+ * handleSendMessage; the settings dialog must not overwrite it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react'
@@ -41,7 +41,7 @@ vi.mock('@/lib/api/room', () => ({
       room_id: 'room-1',
       room_name: 'Test Room',
       room_agent_set: {},
-      extend_info: { debateMode: false },
+      extend_info: { debateMode: false, use_supervisor: true },
     },
   }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),
@@ -79,7 +79,7 @@ function createWrapper() {
   }
 }
 
-describe('useRoomWebhook — updateRoomSettings with Supervisor Toggle', () => {
+describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedOnMessage = undefined
@@ -105,89 +105,65 @@ describe('useRoomWebhook — updateRoomSettings with Supervisor Toggle', () => {
       }),
       { wrapper: createWrapper() }
     )
-    // Wait for React Query to resolve room data
     await waitFor(() => {
       expect(result.result.current.room).not.toBeNull()
     })
     return result
   }
 
-  it('should call updateRoomExtendInfo with use_supervisor: true', async () => {
+  it('should call updateRoomExtendInfo with only debateMode when it changes', async () => {
     const { result } = await mountHook()
 
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: false, useSupervisor: true },
+        { debateMode: true },
       )
     })
 
-    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledWith(
-      'room-1',
-      expect.objectContaining({ use_supervisor: true }),
-    )
+    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledTimes(1)
+    const payload = mockUpdateRoomExtendInfo.mock.calls[0][1]
+    expect(payload.debateMode).toBe(true)
+    // use_supervisor should be preserved from the existing extend_info, not overwritten
+    expect(payload).not.toHaveProperty('use_supervisor', false)
   })
 
-  it('should call updateRoomExtendInfo with use_supervisor: false when debateMode changes', async () => {
+  it('should not call updateRoomExtendInfo when debateMode has not changed', async () => {
     const { result } = await mountHook()
 
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: true, useSupervisor: false },
+        { debateMode: false },
       )
     })
 
-    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledWith(
-      'room-1',
-      expect.objectContaining({
-        debateMode: true,
-        use_supervisor: false,
-      }),
-    )
+    expect(mockUpdateRoomExtendInfo).not.toHaveBeenCalled()
   })
 
-  it('should include both debateMode and use_supervisor in extend_info', async () => {
+  it('should never include use_supervisor in the settings update payload', async () => {
     const { result } = await mountHook()
 
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: true, useSupervisor: true },
+        { debateMode: true },
       )
     })
 
-    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledWith(
-      'room-1',
-      expect.objectContaining({
-        debateMode: true,
-        use_supervisor: true,
-      }),
-    )
+    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledTimes(1)
+    const payload = mockUpdateRoomExtendInfo.mock.calls[0][1]
+    // The spread of existing extend_info may carry use_supervisor through,
+    // but the settings form must not *set* it — it should only flow through
+    // from the existing value.
+    expect(payload.debateMode).toBe(true)
+    expect(payload.use_supervisor).toBe(true) // preserved from room fixture
   })
 
-  it('should call updateRoomExtendInfo when only useSupervisor changes', async () => {
-    const { result } = await mountHook()
-
-    await act(async () => {
-      await result.current.updateRoomSettings(
-        'Test Room',
-        { 'agent-1': mockAgent },
-        { debateMode: false, useSupervisor: true },
-      )
-    })
-
-    expect(mockUpdateRoomExtendInfo).toHaveBeenCalled()
-    expect(mockUpdateRoomExtendInfo).toHaveBeenCalledWith(
-      'room-1',
-      expect.objectContaining({ use_supervisor: true }),
-    )
-  })
-
-  it('should show success banner after updating with supervisor toggle', async () => {
+  it('should show success banner after updating debate mode', async () => {
     const { banner } = await import('@/components/ui/banner')
     const { result } = await mountHook()
 
@@ -196,7 +172,7 @@ describe('useRoomWebhook — updateRoomSettings with Supervisor Toggle', () => {
       success = await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: false, useSupervisor: true },
+        { debateMode: true },
       )
     })
 
@@ -214,7 +190,7 @@ describe('useRoomWebhook — updateRoomSettings with Supervisor Toggle', () => {
       success = await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: true, useSupervisor: true },
+        { debateMode: true },
       )
     })
 
@@ -222,17 +198,21 @@ describe('useRoomWebhook — updateRoomSettings with Supervisor Toggle', () => {
     expect(banner.error).toHaveBeenCalled()
   })
 
-  it('should not call updateRoomExtendInfo when neither debateMode nor useSupervisor changed', async () => {
+  it('should succeed without calling extendInfo when nothing changed', async () => {
+    const { banner } = await import('@/components/ui/banner')
     const { result } = await mountHook()
 
+    let success: boolean | undefined
     await act(async () => {
-      await result.current.updateRoomSettings(
+      success = await result.current.updateRoomSettings(
         'Test Room',
         { 'agent-1': mockAgent },
-        { debateMode: false, useSupervisor: false },
+        { debateMode: false },
       )
     })
 
+    expect(success).toBe(true)
     expect(mockUpdateRoomExtendInfo).not.toHaveBeenCalled()
+    expect(banner.success).toHaveBeenCalledWith('Room settings updated successfully')
   })
 })

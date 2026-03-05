@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'agent_token' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update'
+  type: 'connected' | 'user_message' | 'agent_response' | 'agent_token' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update'
   room_id: string
   timestamp: string
   data?: {
@@ -54,6 +54,16 @@ export interface SSEMessage {
     group_index?: number
     // HITL status update fields
     error_message?: string
+    // Multimodal parts (agent_response / task_update / artifact_update)
+    parts?: Array<Record<string, unknown>>
+    // Artifact update fields
+    artifact?: {
+      artifact_id: string
+      name?: string
+      parts: Array<Record<string, unknown>>
+    }
+    append?: boolean
+    last_chunk?: boolean
   }
 }
 

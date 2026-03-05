@@ -6,7 +6,7 @@
  * useMessageStore (Zustand). React Query is mocked to avoid network calls.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, act, cleanup } from '@testing-library/react'
+import { renderHook, act, cleanup, waitFor } from '@testing-library/react'
 import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
@@ -264,7 +264,7 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    // Then complete it
+    // Then complete it — triggers typewriter which finalizes asynchronously
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
@@ -277,10 +277,39 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const entity = useMessageStore.getState().entities['task-2']
+    // Typewriter callback fires after setInterval ticks; wait for it to land
+    await waitFor(() => {
+      const entity = useMessageStore.getState().entities['task-2']
+      expect(entity.taskStatus).toBe('completed')
+      expect(entity.content).toBe('Done! Here is the result.')
+      expect(entity.isEphemeral).toBe(false)
+    })
+  })
+
+  it('should render completed task with parts but no content as agent-bubble', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'task-parts-only',
+          status: 'completed',
+          content: '',
+          agent_name: 'Agent',
+          parts: [
+            { kind: 'file', file: { uri: 'https://s3/image.png', mime_type: 'image/png', name: 'result.png' } },
+          ],
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-parts-only']
+    expect(entity).toBeTruthy()
     expect(entity.taskStatus).toBe('completed')
-    expect(entity.content).toBe('Done! Here is the result.')
-    expect(entity.isEphemeral).toBe(false)
+    expect(entity.displayType).toBe('agent-bubble')
+    expect(entity.artifacts).toBeDefined()
+    expect(entity.artifacts!.length).toBeGreaterThan(0)
   })
 
   it('should handle error SSE message', async () => {

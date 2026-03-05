@@ -9,6 +9,8 @@ import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import { StreamingCursor } from './streaming-cursor'
 import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
+import type { AttachmentData } from '@/lib/types/attachments'
+import { ArtifactList } from './artifact-list'
 
 /** Lightweight UI type for passing quote data between components. */
 export interface QuoteData {
@@ -38,6 +40,76 @@ function entityToBubble(entity: MessageEntity): BubbleMessage {
     timestamp: entity.timestamp,
     agent_id: entity.agentId,
   }
+}
+
+function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
+  const isImg = attachment.mimeType.startsWith('image/')
+  const isAudio = attachment.mimeType.startsWith('audio/')
+  const isVideo = attachment.mimeType.startsWith('video/')
+  const sizeLabel = attachment.sizeBytes < 1024 * 1024
+    ? `${(attachment.sizeBytes / 1024).toFixed(0)} KB`
+    : `${(attachment.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+
+  if (isImg && attachment.fileUrl) {
+    return (
+      <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer" className="block max-w-[200px]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={attachment.fileUrl}
+          alt={attachment.fileName}
+          className="rounded-md border border-border max-h-40 object-cover"
+          loading="lazy"
+        />
+      </a>
+    )
+  }
+
+  if (isAudio && attachment.fileUrl) {
+    return (
+      <div className="my-1">
+        <audio controls preload="metadata" className="max-w-full">
+          <source src={attachment.fileUrl} type={attachment.mimeType} />
+        </audio>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {attachment.fileName} · {sizeLabel}
+        </span>
+      </div>
+    )
+  }
+
+  if (isVideo && attachment.fileUrl) {
+    return (
+      <div className="my-1">
+        <video controls preload="metadata" className="max-w-full max-h-60 rounded-md border border-border">
+          <source src={attachment.fileUrl} type={attachment.mimeType} />
+        </video>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {attachment.fileName} · {sizeLabel}
+        </span>
+      </div>
+    )
+  }
+
+  if (attachment.fileUrl) {
+    return (
+      <a
+        href={attachment.fileUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted transition-colors"
+      >
+        <span className="truncate max-w-[120px]">{attachment.fileName}</span>
+        <span className="text-muted-foreground">{sizeLabel}</span>
+      </a>
+    )
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground">
+      <span className="truncate max-w-[120px]">{attachment.fileName}</span>
+      <span>{sizeLabel}</span>
+    </span>
+  )
 }
 
 interface EntityBubbleProps {
@@ -456,7 +528,18 @@ function AgentMessageBubbleInner({
  */
 export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
   const bubble = entityToBubble(entity)
-  return <UserMessageBubbleInner message={bubble} />
+  return (
+    <>
+      <UserMessageBubbleInner message={bubble} />
+      {entity.attachments && entity.attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-1.5 justify-end">
+          {entity.attachments.map(att => (
+            <UserAttachmentCard key={att.fileId} attachment={att} />
+          ))}
+        </div>
+      )}
+    </>
+  )
 }
 
 /**
@@ -500,18 +583,23 @@ export function EntityAgentBubble({
   }
 
   return (
-    <AgentMessageBubbleInner
-      message={bubble}
-      compact={compact}
-      defaultExpanded={defaultExpanded}
-      collapseSignal={collapseSignal}
-      autoCollapseVersion={autoCollapseVersion}
-      isLatestAgent={isLatestAgent}
-      isUserExpanded={isUserExpanded}
-      onUserToggle={onUserToggle}
-      onQuote={onQuote}
-      isStreaming={showAsStreaming}
-    />
+    <>
+      <AgentMessageBubbleInner
+        message={bubble}
+        compact={compact}
+        defaultExpanded={defaultExpanded}
+        collapseSignal={collapseSignal}
+        autoCollapseVersion={autoCollapseVersion}
+        isLatestAgent={isLatestAgent}
+        isUserExpanded={isUserExpanded}
+        onUserToggle={onUserToggle}
+        onQuote={onQuote}
+        isStreaming={showAsStreaming}
+      />
+      {entity.artifacts && entity.artifacts.length > 0 && (
+        <ArtifactList artifacts={entity.artifacts} />
+      )}
+    </>
   )
 }
 
