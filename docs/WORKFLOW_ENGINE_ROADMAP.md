@@ -1,9 +1,10 @@
 # Workflow Engine Roadmap: From Adaptive Supervisor to Durable Workflows
 
-**Date**: February 20, 2026
+**Date**: February 20, 2026 (updated March 6, 2026)
 **Status**: Proposal
 **Scope**: Product roadmap for supporting long-running tasks and multi-step workflows
 **Prerequisites**: [SUPERVISOR_V2_DESIGN.md](./SUPERVISOR_V2_DESIGN.md), [LONG_RUNNING_TASKS_DESIGN.md](./LONG_RUNNING_TASKS_DESIGN.md)
+**A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
 
 ---
 
@@ -95,6 +96,14 @@ This workflow has characteristics that neither V2 Supervisor nor the current inf
 
 The two tiers compose: a workflow step can invoke the V2 Supervisor when intelligent routing is needed within a single step.
 
+> **A2A Version Note**: The workflow engine dispatches agent tasks through
+> `AgentMessageProcessor.process_single_message`, which uses `a2a.types`
+> (v0.3) for message construction and response parsing. The workflow executor
+> itself has no direct A2A type dependencies — all protocol-specific concerns
+> are encapsulated in the dispatch layer. When A2A v1.0 is adopted, only
+> `a2a_service.py`, `ResponseProcessor.py`, and `a2a_helpers.py` need updates;
+> the `WorkflowExecutor` requires no changes.
+
 ---
 
 ## 3. Phased Roadmap
@@ -106,9 +115,8 @@ The two tiers compose: a workflow step can invoke the V2 Supervisor when intelli
 **Target use cases**: "Ask my room of agents a question and get a synthesized answer."
 
 **Limitations that motivate future phases**:
-- No crash recovery (in-flight execution lost on server restart)
 - No fan-out (MAX_STEPS=8, no same-agent parallelism)
-- No structured data passing between agents (500-char truncated text)
+- No structured data passing between agents (response text truncated to 500 chars in LLM context — full text is stored, but the supervisor LLM only sees a preview)
 - No repeatable/templated execution
 - Every run requires LLM routing from scratch
 
@@ -120,49 +128,13 @@ The two tiers compose: a workflow step can invoke the V2 Supervisor when intelli
 
 **Timeline**: Immediately after V2 ships.
 
+#### 1a. Per-Step Trajectory Checkpointing — ✅ IMPLEMENTED
+
+Per-step checkpointing is already in production. `SupervisorExecutor._checkpoint_trajectory()` persists the `SupervisorTrajectory` to `user_message.extend_info["supervisor_trajectory"]` after every DELEGATE step — both pre-dispatch (empty results) and post-dispatch (completed results). Implementation is best-effort: failures are logged but don't abort the loop.
+
+Crash recovery is also in production. `StaleTaskChecker._recover_stuck_supervisor_trajectories()` (in `jobs/stale_task_checker.py`) scans for messages with `extend_info.supervisor_trajectory.status == "running"` older than a configurable threshold, claims them atomically, respects cancellation, and re-triggers `process_room_user_message`. The `SupervisorExecutor.run()` method detects in-flight DELEGATE entries with empty results and re-dispatches them.
+
 **What to build**:
-
-#### 1a. Per-Step Trajectory Checkpointing
-
-Persist the `SupervisorTrajectory` to the database after every completed `TrajectoryEntry`, not just on explicit pause events (push notification, clarify).
-
-```python
-# In SupervisorExecutor.run(), after appending each entry to trajectory:
-entry.completed_at = utcnow()
-trajectory.entries.append(entry)
-
-# NEW: checkpoint after every completed step
-user_message.extend_info["supervisor_trajectory"] = trajectory.model_dump(mode="json")
-await self.database_service.update_room_user_message(user_message)
-```
-
-On server startup, a recovery job scans for interrupted executions:
-
-```python
-async def recover_interrupted_supervisor_runs():
-    """Scan for user_messages with in-flight supervisor trajectories and resume them."""
-    messages = await database_service.find_user_messages_with_running_trajectories()
-    for msg in messages:
-        trajectory = SupervisorTrajectory(**msg.extend_info["supervisor_trajectory"])
-        if trajectory.status == "running":
-            logger.info("Recovering interrupted supervisor run for message %s", msg.message_id)
-            # Re-extract inputs from extend_info
-            agent_registry = [AgentProfile(**p) for p in msg.extend_info["agent_registry"]]
-            room_config = RoomConfig(**msg.extend_info["room_config"])
-            # Refresh agent registry from DB (agents may have changed)
-            fresh_agents = await database_service.get_agents_by_room_id(msg.room_id)
-            agent_registry = [
-                AgentProfile.from_agent(a) for a in fresh_agents
-                if a.agent_status == AgentStatus.active
-            ]
-            await supervisor_executor.run(
-                ...,
-                agent_registry=agent_registry,
-                resumed_trajectory=trajectory,
-            )
-```
-
-**Cost**: ~1 MongoDB write per agent dispatch (negligible). Recovery job runs once on startup.
 
 #### 1b. Agent Timeout with Auto-PAUSE
 
@@ -171,7 +143,7 @@ Add a configurable timeout to `_dispatch_targets`. If an agent doesn't respond w
 ```python
 AGENT_DISPATCH_TIMEOUT_SECONDS = int(os.environ.get("AGENT_DISPATCH_TIMEOUT", "120"))
 
-async def dispatch_one(target: DelegateTarget, sub_step: int) -> StepResult:
+async def dispatch_one(target: DelegateTarget, sub_step: int) -> V2StepResult:
     try:
         result = await asyncio.wait_for(
             self.agent_message_processor.process_single_message(...),
@@ -183,7 +155,7 @@ async def dispatch_one(target: DelegateTarget, sub_step: int) -> StepResult:
             "Agent %s timed out after %ds, treating as PAUSED",
             target.agent_name, AGENT_DISPATCH_TIMEOUT_SECONDS,
         )
-        return StepResult(
+        return V2StepResult(
             step_number=step_number,
             agent_id=target.agent_id,
             agent_name=target.agent_name,
@@ -200,25 +172,28 @@ This converts any slow agent into a long-running agent automatically, without re
 
 #### 1c. Progress Reporting via SSE
 
-Add an SSE event for "supervisor is still working" so the user sees activity during long operations:
+The frontend currently shows per-agent progress via `task_submitted` and `task_update` SSE events — these render as status cards with spinners and elapsed timers. A dedicated `supervisor_progress` event could add step-level visibility ("Step 2 of 4: Delegating to Contact Agent..."), but this is a UX enhancement, not a gap.
+
+If implemented, the event would be sent via `sse_manager.broadcast_to_room()`:
 
 ```python
-# In SupervisorExecutor.run(), after each decide_next:
-await self.sse_manager.send_event(
+await self.sse_manager.broadcast_to_room(
     room_id=room_id,
-    event_type="supervisor_progress",
-    data={
-        "step_number": step_number + 1,
-        "action": action.action,
-        "agent_names": [t.agent_name for t in action.targets],
-        "message": f"Delegating to {', '.join(t.agent_name for t in action.targets)}...",
+    message={
+        "type": "supervisor_progress",
+        "data": {
+            "step_number": step_number + 1,
+            "action": action.action,
+            "agent_names": [t.agent_name for t in action.targets],
+            "message": f"Delegating to {', '.join(t.agent_name for t in action.targets)}...",
+        },
     },
 )
 ```
 
-Frontend shows: "Step 2: Delegating to Contact Agent..." with a spinner, instead of silence.
+The frontend would need a new handler case in `handleSSEMessage` (`useRoomWebhook.ts`) and a UI component for step-level progress.
 
-**What Phase 1 unlocks**: Individual agents can reliably take minutes to hours. Crash recovery for the supervisor loop. Users see progress during multi-step execution.
+**What Phase 1 unlocks**: Individual agents can reliably take minutes to hours. Users see progress during multi-step execution.
 
 **What Phase 1 does NOT solve**: Fan-out, batch operations, repeatable templates, multi-hour pipelines with many steps.
 
@@ -229,6 +204,20 @@ Frontend shows: "Step 2: Delegating to Contact Agent..." with a spinner, instead
 **Goal**: Move from "chat with agents" to "automate things with agents." Users define repeatable multi-step pipelines that execute deterministically without LLM routing.
 
 **Timeline**: After Phase 1 is stable.
+
+#### 2.0 Relationship to Existing MetaTask Workflow System
+
+The codebase already has a complete MetaTask-based workflow system:
+
+- **Backend**: `modules/WorkflowCenter.py` (~1195 lines) — task decomposition, agent assignment, sequential execution, result summarization. API at `api/orchestration_center.py` (7 endpoints under `/orchestrationCenter/`).
+- **Frontend**: `src/components/workflow-message.tsx`, `workflow-container.tsx`, `src/hooks/useWorkflow.ts` — multi-stage UI (DECOMPOSED → AGENTS_ASSIGNED → RUNNING → COMPLETED), uses polling-based status checking.
+- **Models**: `models/task.py` — `MetaTask` and `BaseTask` models.
+
+**Migration strategy**: The new `WorkflowExecutor` (Phase 2) supersedes `WorkflowCenter` for user-defined pipelines. `WorkflowCenter` remains for LLM-decomposed workflows until Phase 4 (Supervisor as workflow step) makes it redundant. The existing frontend workflow components will be replaced with SSE-driven components that receive `workflow_progress` events.
+
+The existing `/orchestrationCenter/` API surface coexists with the new `/api/rooms/{room_id}/workflows` endpoints. Deprecation of the old endpoints happens after the new system has real users.
+
+> **NOTE on API conventions**: The existing backend uses flat camelCase paths (`/orchestrationCenter/runWorkflow`). The new workflow API uses RESTful nested resources (`/api/rooms/{room_id}/workflows`). This is a deliberate shift toward REST conventions. Both styles will coexist until a full API migration.
 
 #### 2a. Data Models
 
@@ -272,6 +261,10 @@ Workflow execution state:
 
 ```python
 # models/workflow_execution.py
+
+# NOTE: These are Hybro's internal workflow enums (StrEnum), NOT A2A
+# TaskState enums. They are decoupled from the A2A SDK and will not
+# change when A2A v1.0 migrates TaskState values to SCREAMING_SNAKE_CASE.
 
 class StepExecutionStatus(StrEnum):
     PENDING = "pending"
@@ -332,10 +325,16 @@ class WorkflowExecutor:
         agent_message_processor: AgentMessageProcessor,
         agent_dispatcher: AgentDispatcher,
         database_service: DatabaseService,
+        room_services: RoomServices,
         room_memory_service: RoomMemoryService,
         rate_limit_service: RateLimitService,
+        tsm: TaskStateManager,
         sse_manager: SSEManager,
     ) -> None:
+        # room_services is needed to create RoomAgentMessage records
+        # before calling agent_message_processor.process_single_message().
+        # tsm (TaskStateManager) is needed for task state transitions
+        # during fan-out items (Phase 3).
         ...
 
     async def run(
@@ -385,14 +384,19 @@ class WorkflowExecutor:
                 return execution
 
             if step_exec.status == StepExecutionStatus.FAILED:
-                if step.retry_policy and step_exec.retry_count < step.retry_policy.max_retries:
+                while (
+                    step.retry_policy
+                    and step_exec.retry_count < step.retry_policy.max_retries
+                    and step_exec.status == StepExecutionStatus.FAILED
+                ):
                     step_exec.status = StepExecutionStatus.RETRYING
                     step_exec.retry_count += 1
                     await self._persist_execution(execution)
-                    await asyncio.sleep(
+                    backoff = (
                         step.retry_policy.backoff_seconds
                         * (step.retry_policy.backoff_multiplier ** (step_exec.retry_count - 1))
                     )
+                    await asyncio.sleep(backoff)
                     step_exec = await self._execute_step(
                         step, resolved_input, workflow.room_id, execution,
                     )
@@ -425,6 +429,14 @@ class WorkflowExecutor:
         await self._persist_execution(execution)
         return execution
 ```
+
+> **Cancellation during backoff**: The `await asyncio.sleep(backoff)` call
+> inside the retry loop is not interruptible by `CancellationToken`. If a
+> user cancels during backoff, the cancel takes effect only after the sleep
+> completes and the next `_execute_step` checks the token. To fix this, the
+> implementation should replace `asyncio.sleep` with a cancellation-aware
+> wait: `await asyncio.wait_for(token.wait_cancelled(), timeout=backoff)`,
+> or poll `token.is_cancelled` in a short-interval loop.
 
 #### 2c. Structured Data Passing
 
@@ -459,16 +471,93 @@ Input resolution uses JSONPath-like references:
 - `$.trigger.content_type` → `trigger_input["content_type"]`
 - `$.steps.youtube_search.output.creators` → prior step's structured output
 
-#### 2d. Recovery on Startup
+#### 2c-i. Structured Output Extraction
+
+`AgentMessageProcessor.process_single_message` returns a `ProcessingResult`
+with `response_text: str`. Agents may return JSON in various forms:
+
+- Pure JSON: `{"creators": [...]}`
+- Markdown-wrapped: `` ```json\n{"creators": [...]}\n``` ``
+- Mixed text and JSON: `"Here are the results:\n{"creators": [...]}`
+
+The `WorkflowExecutor` needs a `_parse_structured_output` method to handle
+all cases:
 
 ```python
-async def recover_interrupted_workflows():
-    executions = await database_service.find_workflow_executions_by_status(
+import json
+import re
+
+def _parse_structured_output(self, response_text: str) -> dict:
+    """Extract structured JSON from agent response text.
+
+    Tries multiple strategies in order:
+    1. Direct JSON parse (agent returned pure JSON)
+    2. Extract from markdown code fence (```json ... ```)
+    3. Find first JSON object/array in the text via brace matching
+    4. Fall back to wrapping the entire text as {"text": response_text}
+    """
+    text = response_text.strip()
+
+    # Strategy 1: direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: markdown code fence
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: first JSON object in text
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        idx = text.find(start_char)
+        if idx != -1:
+            depth = 0
+            for i in range(idx, len(text)):
+                if text[i] == start_char:
+                    depth += 1
+                elif text[i] == end_char:
+                    depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[idx:i + 1])
+                    except json.JSONDecodeError:
+                        break
+
+    # Strategy 4: fallback
+    return {"text": text}
+```
+
+Workflow step definitions can optionally declare an `output_schema` (JSON
+Schema) to validate extracted output. If validation fails, the step is
+marked FAILED with a clear error message indicating the agent returned
+non-conforming output.
+
+#### 2d. Recovery on Startup
+
+Workflow recovery follows the same pattern as supervisor trajectory recovery — it is a method on `StaleTaskChecker`, not a standalone function:
+
+```python
+# In jobs/stale_task_checker.py, add to the check cycle:
+
+async def _recover_interrupted_workflows(self):
+    """Recover workflow executions stuck in RUNNING status."""
+    executions = await self.db_service.find_workflow_executions_by_status(
         WorkflowExecutionStatus.RUNNING
     )
     for execution in executions:
-        workflow = await database_service.get_workflow(execution.workflow_id)
-        await workflow_executor.run(workflow, execution)  # Resumes from last completed step
+        workflow = await self.db_service.get_workflow(execution.workflow_id)
+        if not workflow:
+            continue
+        if await self.db_service.is_message_cancelled(execution.execution_id):
+            continue
+        asyncio.create_task(
+            workflow_executor.run(workflow, execution)  # Resumes from last completed step
+        )
 ```
 
 **What Phase 2 unlocks**: Repeatable multi-step pipelines with structured data passing. Crash-recoverable. No LLM routing overhead.
@@ -558,6 +647,15 @@ async def _execute_fan_out(
 #### 3c. Parallel Branches
 
 Two steps with no dependency between them can run concurrently. The `WorkflowExecutor` detects this from the dependency graph:
+
+> **Breaking interface change from Phase 2**: In Phase 2, `_topological_sort`
+> returns `list[WorkflowStep]` (flat sequential list) and `run()` iterates
+> with `for step in ordered_steps`. In Phase 3, the return type changes to
+> `list[list[WorkflowStep]]` (grouped by level) and `run()` iterates with
+> `for level in ...`. This requires refactoring the `run()` method. To ease
+> this transition, Phase 2 should implement `_topological_sort` with the
+> `list[list[WorkflowStep]]` return type from the start, where each level
+> is a single-element list. The `run()` method below is the Phase 3 version.
 
 ```python
 def _topological_sort(self, steps: list[WorkflowStep]) -> list[list[WorkflowStep]]:
@@ -677,7 +775,7 @@ class WorkflowTrigger(BaseModel):
     default_inputs: dict = {}
 ```
 
-Implementation: Use APScheduler (already in the codebase for stale task checking) to register cron jobs per workflow.
+Implementation: The codebase uses hand-rolled `asyncio` background loops (see `StaleTaskChecker`) rather than a third-party scheduler. For scheduled workflows, add a `WorkflowScheduler` background task using the same `asyncio` loop pattern — or introduce APScheduler as a new dependency if cron-expression parsing is needed.
 
 #### 5b. Human Approval Gates
 
@@ -817,15 +915,34 @@ To keep scope manageable, the following are explicitly **out of scope** for this
 
 ## 7. Implementation Effort Estimates
 
-| Phase | New Code (est.) | Shared Code Reused | New Dependencies | Calendar Time |
-|---|---|---|---|---|
-| **1: Robust V2** | ~300 lines | SupervisorExecutor, AgentMessageProcessor | None | 1-2 weeks |
-| **2: Workflow Templates** | ~1200 lines | AgentMessageProcessor, AgentDispatcher, SSE | None | 3-4 weeks |
-| **3: Fan-Out** | ~500 lines | Phase 2 executor, AgentMessageProcessor | None | 2-3 weeks |
-| **4: Supervisor Step** | ~200 lines | SupervisorExecutor, Phase 2 executor | None | 1 week |
-| **5: Scheduling/Approval** | ~600 lines | Phase 2 executor, APScheduler | None | 2-3 weeks |
+| Phase | Backend (est.) | Frontend (est.) | Shared Code Reused | New Dependencies | Calendar Time |
+|---|---|---|---|---|---|
+| **1: Robust V2** | ~100 lines (1a done, 1b remaining) | ~50 lines (SSE handler for supervisor_progress) | SupervisorExecutor, AgentMessageProcessor | None | 1 week |
+| **2: Workflow Templates** | ~1200 lines | ~800 lines (workflow creation UI, SSE handlers, progress component) | AgentMessageProcessor, AgentDispatcher, SSE | None | 4-6 weeks |
+| **3: Fan-Out** | ~500 lines | ~200 lines (fan-out progress display) | Phase 2 executor, AgentMessageProcessor | None | 2-3 weeks |
+| **4: Supervisor Step** | ~200 lines | ~0 (reuses existing supervisor UI) | SupervisorExecutor, Phase 2 executor | None | 1 week |
+| **5: Scheduling/Approval** | ~600 lines | ~400 lines (approval gate UI, schedule config) | Phase 2 executor | APScheduler (new, if cron needed) | 2-3 weeks |
 
-Total: ~2800 lines of Python across all phases. The modest size reflects heavy reuse of existing infrastructure (`AgentMessageProcessor`, `AgentDispatcher`, SSE, MongoDB, push notification resume).
+Total: ~2600 lines backend + ~1450 lines frontend across all phases. Frontend effort is significant for Phase 2 (workflow builder/progress UI) and Phase 5 (approval gates).
+
+### 7.1 Cancellation Support
+
+The `WorkflowExecution` model includes a `CANCELED` status, but the cancellation flow requires explicit design:
+
+- **Single-step cancel**: User cancels → backend marks current step as FAILED → workflow status becomes CANCELED → SSE broadcasts `workflow_completed` with status `canceled`.
+- **Fan-out cancel** (Phase 3): User cancels during fan-out → cancel signal propagated to all in-flight concurrent tasks via `CancellationToken` → partial results preserved → workflow status becomes CANCELED.
+- **Reuse existing infrastructure**: `SSEManager.cancel_message()` + `CancellationToken` (from `common/utils/cancellation.py`) + MongoDB change stream propagation.
+
+### 7.2 Integration with Hub Design and Trust Layer
+
+When implementing, the `WorkflowExecutor` dispatch path must account for:
+
+- **Hub agents** (HYBRO_HUB_DESIGN.md): When a workflow step targets a hub-sourced agent (`agent.source == "hub"`), `AgentMessageProcessor` must route via the relay instead of direct A2A. This routing is transparent to the WorkflowExecutor — it dispatches through `AgentMessageProcessor` which handles transport selection.
+- **Trust policies** (HYBRO_TRUST_LAYER_DESIGN.md): Policy evaluation and token issuance happen in the dispatch middleware (inside `AgentMessageProcessor`), not in the WorkflowExecutor. The executor doesn't need trust-layer awareness — it delegates through the same `process_single_message` interface.
+- **SSE events**: New workflow SSE event types (`workflow_progress`, `workflow_completed`, `workflow_approval_required`) must be registered in the frontend's `handleSSEMessage` switch and the `SSEMessage` type union. When a workflow step targets a hub agent, the frontend will receive *both* workflow-level events and hub relay events — these coexist at different abstraction levels (see HYBRO_HUB_DESIGN.md §15 "SSE Event Composition").
+- **Middleware architecture**: Hub routing and trust-layer logic will be added to `AgentMessageProcessor` via a middleware chain pattern (see HYBRO_HUB_DESIGN.md §15 "Middleware Architecture"). The `WorkflowExecutor` does not need awareness of this — it delegates through the same `process_single_message` interface.
+- **Agent model**: The `WorkflowExecutor` references agents by `agent_id` in step definitions. The canonical combined `Agent` model (with Hub and Trust Layer fields) is defined in HYBRO_HUB_DESIGN.md §15 "Shared Agent Model."
+- **A2A v1.0 migration** `[v1.0-MIGRATION]`: The `WorkflowExecutor` has no direct A2A type imports. All A2A version-sensitive code lives in the dispatch layer (`a2a_service.py`, `ResponseProcessor.py`, `a2a_helpers.py`). When migrating to v1.0, no changes are needed to `WorkflowExecutor`, `WorkflowExecution`, or workflow models. The v1.0 `blocking` parameter on `SendMessage` may simplify the timeout/auto-PAUSE logic in Phase 1b — agents that support blocking mode can signal sync completion directly.
 
 ---
 
@@ -838,3 +955,13 @@ Total: ~2800 lines of Python across all phases. The modest size reflects heavy r
 | **Shared Infrastructure** | Agent dispatch, SSE streaming, room memory, push notification resume | Reused by both tiers | Existing |
 
 The V2 Supervisor and Workflow Engine are complementary, not competing. The supervisor handles the ambiguous decisions; the workflow engine handles the reliable execution. Together, they cover the spectrum from "ask my agents a quick question" to "run this 50-item batch pipeline every Monday."
+
+**Related design documents:**
+- [HYBRO_HUB_DESIGN.md](./HYBRO_HUB_DESIGN.md) — Hub agent routing (transparent to the workflow executor via `AgentMessageProcessor`)
+- [HYBRO_TRUST_LAYER_DESIGN.md](./HYBRO_TRUST_LAYER_DESIGN.md) — Policy and token middleware (transparent to the workflow executor via `AgentMessageProcessor`)
+
+**A2A version note:** All three design documents target A2A v0.3. The shared
+dispatch path (`AgentMessageProcessor`) encapsulates all A2A-specific concerns.
+The v1.0 migration (see HYBRO_HUB_DESIGN.md §9) affects only the dispatch
+layer — workflow definitions, execution models, and trust policies are
+protocol-version-agnostic.

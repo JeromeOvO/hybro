@@ -1,8 +1,9 @@
 # Hybro Hub: Portal-First Hybrid Agent Architecture
 
-**Status:** Draft v3
-**Date:** 2026-03-02
+**Status:** Draft v3.2
+**Date:** 2026-03-06
 **Author:** Architecture Design
+**A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
 
 ---
 
@@ -16,11 +17,13 @@
 6. [Privacy & Data Routing](#6-privacy--data-routing)
 7. [Portal-First Web UI](#7-portal-first-web-ui)
 8. [Protocol & Compatibility](#8-protocol--compatibility)
-9. [User Journey](#9-user-journey)
-10. [Phased Implementation Roadmap](#10-phased-implementation-roadmap)
-11. [Competitive Landscape](#11-competitive-landscape)
-12. [Risks & Mitigations](#12-risks--mitigations)
-13. [Open Questions](#13-open-questions)
+9. [A2A Version Strategy](#9-a2a-version-strategy)
+10. [User Journey](#10-user-journey)
+11. [Phased Implementation Roadmap](#11-phased-implementation-roadmap)
+12. [Competitive Landscape](#12-competitive-landscape)
+13. [Risks & Mitigations](#13-risks--mitigations)
+14. [Open Questions](#14-open-questions)
+15. [Cross-Document Integration Notes](#15-cross-document-integration-notes)
 
 ---
 
@@ -183,7 +186,7 @@ fallback for security hardliners and air-gapped environments.
 | Hub role | Background daemon (not a web server) | Hub receives tasks via relay, dispatches to local agents, publishes results. No local API surface needed. |
 | Hub runtime language | Python | Matches existing backend. Maximizes code sharing for A2A client and privacy router. |
 | Hub distribution | `pip install hybro-hub` + standalone binary | Developers use pip. Non-technical users download a binary. |
-| Local storage | Not needed for primary UX | Rooms, messages, and history live in the cloud (MongoDB). Hub is stateless. |
+| Local storage | Minimal — cryptographic keys, cached policies, cached tokens | Rooms, messages, and history live in the cloud (MongoDB). Hub stores only `~/.hybro/keys/` (identity keys), cached trust policies, and cached tokens. See HYBRO_TRUST_LAYER_DESIGN.md §7.1. |
 | Hub ↔ Cloud connection | Outbound HTTPS only (SSE subscribe + REST post) | No inbound ports, works behind NAT/firewalls. Same pattern as Clarifai Local Runners and Home Assistant. |
 | Agent protocol | A2A (JSON-RPC over HTTP) | Already used by hybro.ai. Agents work identically whether local or remote. |
 | Tool protocol | MCP (for local tools) | Industry standard. Hub can host MCP servers that local agents use. |
@@ -327,6 +330,11 @@ to a `user_id` via the existing `APIKey` model (`models/api_key.py`).
   `APIKey` model already has a `user_id` field.
 - **Agent URL masking:** The hub only sees `agent_id`. The gateway resolves
   the real URL internally, protecting agent providers.
+- **Response URL rewriting:** A2A responses from cloud agents may contain
+  self-referential URLs (e.g., `AgentCard.url` in embedded task data, webhook
+  callback URLs). The gateway must rewrite these to gateway-relative URLs
+  before returning to the hub, preventing the hub from bypassing the gateway
+  on subsequent requests.
 - **Rate limiting:** Per-user limits via existing `RateLimitService`.
 - **Request validation:** Payloads validated against A2A schema before forwarding.
 
@@ -372,15 +380,21 @@ The backend upserts these as `Agent` records in MongoDB with new fields:
 ```python
 class Agent(BaseModel):
     agent_id: str
-    agent_card: AgentCard
+    agent_card: AgentCard      # from a2a.types — external, not extensible
     # ... existing fields ...
 
-    # Hub-sourced agent fields
+    # Hub-sourced agent fields (new)
     source: str = "cloud"          # "cloud" | "hub"
     hub_id: str | None = None
     hub_owner_id: str | None = None
     is_hub_online: bool = False
 ```
+
+> **Note on AgentCard**: The `agent_card` field uses `AgentCard` from the external `a2a` Python package (`a2a.types`). This type cannot be extended with custom fields like `identity`. Hub-specific and trust-layer metadata must live as sibling fields on the `Agent` model, not nested inside `agent_card`.
+
+> **Note on `normalized_url`**: The existing `Agent.normalized_url` field is used for duplicate detection during agent registration. Hub agents have localhost URLs that aren't globally unique. Hub agent deduplication must use `hub_id + local_agent_id` instead of URL normalization.
+
+> **Note on `AgentCard.url`** `[v1.0-MIGRATION]`: For hub agents, `agent_card.url` should be set to the gateway proxy URL (`https://api.hybro.ai/v1/gateway/agents/{agent_id}/message/send`). This ensures that any code path reading `agent_card.url` gets a routable address. The actual routing (relay vs. direct) is determined by `agent.source`, not by the URL. In A2A v1.0, `AgentCard.url` is removed in favor of `supportedInterfaces[0].url`; the `A2AClient` constructor is expected to resolve this internally, so code should use the SDK's higher-level client APIs rather than reading `agent_card.url` directly.
 
 The existing `GET /agent/getAllActiveAgents` endpoint already returns all
 active agents. Hub agents automatically appear once they're in MongoDB —
@@ -397,10 +411,23 @@ Hub (outbound) ──HTTP POST──────→ hybro.ai /api/v1/relay/hub/{
 
 ### 5.3 Message Relay Flow
 
-1. User opens hybro.ai, sends a message targeting a hub agent.
-2. Backend's `sendMessage` detects `agent.source == "hub"`.
-3. Instead of triggering `room_message_center.process_room_user_message`,
-   it pushes a `user_message` event to the hub's relay SSE queue.
+1. User opens hybro.ai, sends a message in a room that includes hub agents.
+2. Backend's `sendMessage` creates the user message and queues
+   `room_message_center.process_room_user_message` as a background task
+   (unchanged from current flow).
+3. The orchestration layer (SupervisorExecutor or QueueExecutor) decides
+   which agents to call. When dispatching to a specific agent via
+   `AgentMessageProcessor.process_single_message`, the processor checks
+   `agent.source`:
+   - **`"cloud"`**: Dispatch via A2A directly (existing behavior).
+   - **`"hub"`**: Push a `user_message` event to the hub's relay SSE queue
+     instead of making a direct A2A call.
+
+   > **Key design point**: Routing is per-agent, not per-message. A single
+   > user message in a room with both cloud and hub agents triggers both
+   > paths. The routing split happens inside `AgentMessageProcessor` (or a
+   > transport adapter it delegates to), not at the `sendMessage` HTTP handler.
+
 4. Hub receives the event, dispatches to the local agent via A2A.
 5. Hub publishes results via `POST /api/v1/relay/hub/{hub_id}/publish`:
    ```json
@@ -448,14 +475,58 @@ The relay bridges two auth systems: frontend uses Clerk JWT, hub uses API key.
 - Frontend calls `sendMessage` with Clerk JWT → backend resolves `user_id`
 - Relay verifies: `api_key.user_id == room.room_owner_id` before forwarding
 
+**Relay SSE Connection Security**: The SSE subscription
+(`GET /api/v1/relay/hub/{hub_id}/events`) is a long-lived connection
+authenticated by API key. Because API keys don't expire per-request like
+JWTs, additional safeguards are needed:
+
+- **Connection-scoped token**: On SSE connect, the relay issues a short-lived
+  session token (JWT, 1h TTL) bound to the `hub_id` and client IP. The hub
+  includes this token in subsequent `POST .../publish` requests. This prevents
+  a leaked API key from being used to publish events from a different host.
+- **Heartbeat-based reauth**: The relay sends periodic heartbeat events. If
+  the hub fails to acknowledge 3 consecutive heartbeats, the connection is
+  closed. On reconnect, the API key is re-validated (catching revoked keys).
+- **IP binding (optional, Phase 3)**: For enterprise hubs, the relay can pin
+  the SSE connection to the originating IP. Connection attempts from a new IP
+  require re-authentication.
+
 ### 5.6 Offline Handling
 
 - If the hub's SSE drops, relay marks all hub agents as `is_hub_online = false`
 - Frontend's next `getAllActiveAgents` fetch shows them grayed out
 - User messages to offline hub agents are queued with `pending_for_hub` flag
-- When hub reconnects, queued messages are delivered
+- When hub reconnects, queued messages are delivered **in send order** (FIFO)
 - UI shows: "Hub offline — messages will be delivered when your hub reconnects"
 - **No fallback to cloud orchestration** — respects user's privacy choice
+
+**Queue parameters:**
+
+| Parameter | Default | Rationale |
+|-----------|---------|-----------|
+| Max queue depth per hub | 100 messages | Prevents unbounded growth if hub is offline for days |
+| Message TTL | 24 hours | Messages older than TTL are discarded with a notification to the user |
+| Overflow behavior | Reject with 503 + user notification | UI shows "Hub offline too long — please restart your hub" |
+| Delivery order | Strict FIFO | Messages delivered in the order the user sent them |
+
+Messages that expire or overflow are marked `expired_pending_hub` in the
+database and the user receives an SSE notification: "N messages to your local
+agents expired while your hub was offline."
+
+> **Concurrency note**: The `Room.processing_message_id` field tracks which
+> user message is being processed (single-slot). In rooms with both cloud and
+> hub agents, a supervisor dispatch may call a fast cloud agent and a slow hub
+> agent concurrently. The relay must not clear `processing_message_id` when
+> one agent completes if another is still in-flight.
+>
+> **Mechanism**: The backend tracks in-flight agent dispatches per user message
+> using an atomic counter or a set of pending `agent_message_id`s on the
+> `RoomUserMessage` document (e.g., `pending_agent_ids: set[str]`). Each
+> agent completion (cloud direct or hub relay) removes its ID from the set.
+> `processing_message_id` is cleared only when the set is empty. This mirrors
+> how `asyncio.gather` completion works in the supervisor, but persisted to
+> handle relay-delayed completions. The existing per-agent `task_update` SSE
+> events provide progress while agents are in-flight.
 
 ### 5.7 Webhook Relay for Push Notifications
 
@@ -525,6 +596,11 @@ frontend changes are small compared to the v2 dual-mode design:
    on `agent.source`. The existing `allAgentsQuery` already fetches all agents;
    hub agents appear automatically once synced to MongoDB.
 
+   > **Frontend type change required**: The `Agent` interface in
+   > `src/lib/types/response.ts` must add `source?: "cloud" | "hub"`,
+   > `hub_id?: string`, `hub_owner_id?: string`, and `is_hub_online?: boolean`.
+   > The `Agent` interface in `src/lib/types/request.ts` needs the same fields.
+
 2. **Hub status indicator**: A status dot in settings or header. Data comes from
    a new field on the user profile or a lightweight `GET /api/v1/relay/hub/status`
    endpoint.
@@ -558,12 +634,12 @@ frontend changes are small compared to the v2 dual-mode design:
 
 ### 8.1 A2A as the Universal Agent Protocol
 
-All agent communication uses A2A. Local-to-local, local-to-cloud, cloud-to-cloud.
+All agent communication uses A2A (v0.3). Local-to-local, local-to-cloud, cloud-to-cloud.
 
 | Capability | Usage |
 |------------|-------|
-| `message/send` | Synchronous dispatch to local and cloud agents |
-| `message/stream` | Streaming dispatch (real-time token output) |
+| `message/send` `[v1.0-MIGRATION: renamed to SendMessage]` | Synchronous dispatch to local and cloud agents |
+| `message/stream` `[v1.0-MIGRATION: merged into SendMessage with streaming param]` | Streaming dispatch (real-time token output) |
 | `tasks/get` | Poll long-running tasks on cloud agents |
 | `tasks/cancel` | Cancel running tasks |
 | Agent Card discovery | Auto-discover local agents via `/.well-known/agent-card.json` |
@@ -584,14 +660,64 @@ Future optimization, not Phase 1.
 
 ---
 
-## 9. User Journey
+## 9. A2A Version Strategy
 
-### 9.1 Discovery
+This design targets **A2A v0.3** (the current `a2a-sdk` release). A2A v1.0 is
+expected within 1-2 months and introduces breaking changes at the wire and SDK
+level. The implementation should stay on v0.3 now and prepare a clean migration
+path.
+
+### 9.1 Approach
+
+- **Pin SDK**: `a2a-sdk >=0.3, <1.0` in dependency files.
+- **Use higher-level SDK APIs**: Stop manually constructing `SendMessageRequest`
+  with hardcoded `method="message/send"` strings. Use
+  `a2a_client.send_message(MessageSendParams(...))` instead so the SDK owns
+  method names and request wrapping.
+- **Don't build speculative abstraction layers** against a v1.0 API that
+  doesn't exist yet. Add `# TODO(a2a-v1.0)` markers at migration-sensitive
+  call sites instead.
+- **Extend existing helpers**: Migration-sensitive logic goes in the existing
+  `services/a2a_constants.py` and `common/utils/a2a_helpers.py`, not a new
+  compat module.
+
+### 9.2 Known Migration Points
+
+| v0.3 → v1.0 Change | Affected Code | Migration Action |
+|---------------------|---------------|------------------|
+| `agent_card.url` removed → `supportedInterfaces[0].url` | `a2a_service.py` (~6 sites) | Refactor to use `A2AClient` factory which resolves the URL internally |
+| `TextPart`/`FilePart`/`DataPart` → unified `Part` | ~30 call sites across 6 files | Wait for SDK; existing `a2a_helpers.py` abstracts part extraction via `getattr(part, "root", part)` |
+| `result.kind` discriminator → member-based | `a2a_service.py`, `ResponseProcessor.py` | Centralize in `a2a_helpers.py` functions |
+| `"message/send"` → `"SendMessage"` method name | `a2a_service.py` (6 hardcoded strings) | Eliminate by using higher-level SDK client API |
+| Enum values `"completed"` → `"TASK_STATE_COMPLETED"` | DB `last_notified_state` field | Likely SDK-managed; verify on v1.0 release |
+| Stream event `kind` → wrapper-based events | `ResponseProcessor.py` | Update match statement in streaming handler |
+| `AgentCard` JWS signatures | Trust Layer Phase 0 | Adopt native verification instead of custom challenge-response |
+| `extensions[]` on `Message`/`Artifact` | Trust Layer per-message tagging | Use for trust metadata instead of custom fields |
+| Native multi-tenancy (`tenant` field) | Enterprise features (Phase 3) | Adopt when Organization model is built |
+
+### 9.3 What v1.0 Gives Us for Free
+
+Several features designed in the Trust Layer (HYBRO_TRUST_LAYER_DESIGN.md)
+become simpler with A2A v1.0:
+
+- **AgentCard JWS signatures** (JCS canonical form) provide native
+  cryptographic identity verification, reducing the need for custom
+  challenge-response in Trust Layer Phase 0.
+- **`extensions[]` on Message and Artifact objects** enables per-message
+  trust tagging (scopes, trace context) without custom fields.
+- **`blocking` parameter on SendMessage** lets the hub explicitly request
+  sync vs. async dispatch, simplifying the relay flow.
+
+---
+
+## 10. User Journey
+
+### 10.1 Discovery
 
 User is an existing hybro.ai user. They see a banner: "Run agents on your own
 machine. Keep your data private." Or they find a "My Hub" tab in settings.
 
-### 9.2 Setup (~5 minutes)
+### 10.2 Setup (~5 minutes)
 
 1. **Install**: `pip install hybro-hub` (or `brew install`, or download binary)
 2. **API key**: Click "Generate API Key" on hybro.ai settings page. Copy it.
@@ -607,7 +733,7 @@ Terminal output:
 Agents synced to hybro.ai. Open hybro.ai to start chatting.
 ```
 
-### 9.3 First Chat
+### 10.3 First Chat
 
 User refreshes hybro.ai. In "Add agents to room" they see:
 
@@ -625,14 +751,14 @@ They add the local agent, type a message. It routes through the relay to the
 hub, which dispatches to the local Ollama agent. Streaming tokens flow back
 through the relay to the browser. The response shows a 🏠 badge.
 
-### 9.4 Daily Use
+### 10.4 Daily Use
 
 - User opens `hybro.ai` on any device. Hub is running in background.
 - Local and cloud agents are mixed in rooms. Routing is transparent.
 - From phone: local agents work if hub is online. Otherwise grayed out.
 - Cloud agents always work regardless of hub status.
 
-### 9.5 Error Scenarios
+### 10.5 Error Scenarios
 
 | Scenario | What User Sees |
 |----------|---------------|
@@ -643,7 +769,7 @@ through the relay to the browser. The response shows a 🏠 badge.
 
 ---
 
-## 10. Phased Implementation Roadmap
+## 11. Phased Implementation Roadmap
 
 ### Phase 1: Gateway API + SDK (4–6 weeks)
 
@@ -706,9 +832,9 @@ local Ollama agent alongside cloud agents.
 
 ---
 
-## 11. Competitive Landscape
+## 12. Competitive Landscape
 
-### 11.1 Market Map
+### 12.1 Market Map
 
 | Product | What They Do | Overlap with Hybro Hub | Key Difference |
 |---------|-------------|----------------------|----------------|
@@ -719,7 +845,7 @@ local Ollama agent alongside cloud agents.
 | **Microsoft Foundry Local** | Hybrid AI: local LLM + Azure agents via MCP. | Same hybrid concept, uses A2A + MCP. | Developer SDK, not a web portal. Azure-locked. Cloud initiates connections to local. |
 | **Dify / n8n / Langflow** | Self-hosted workflow builders supporting Ollama + cloud APIs. | Support local models alongside cloud. | No mixing in one conversation. Self-hosted = all local or all cloud. |
 
-### 11.2 The Gap
+### 12.2 The Gap
 
 No product combines: (1) a cloud web portal where local and cloud agents
 appear side-by-side, (2) conversational real-time chat, (3) privacy-based
@@ -729,9 +855,9 @@ validates the dashboard concept. Hybro Hub assembles all pieces.
 
 ---
 
-## 12. Risks & Mitigations
+## 13. Risks & Mitigations
 
-### 12.1 Technical Risks
+### 13.1 Technical Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -740,7 +866,7 @@ validates the dashboard concept. Hybro Hub assembles all pieces.
 | **Agent sync consistency** | Stale agent list if hub disconnects without cleanup | TTL on hub agents (mark offline after 60s heartbeat miss). Hub re-syncs on reconnect. |
 | **Event format mismatch** between hub publish and backend SSE | Broken chat rendering | Strict event schema validation in relay. Integration tests covering full round-trip. |
 
-### 12.2 Product Risks
+### 13.2 Product Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -748,7 +874,7 @@ validates the dashboard concept. Hybro Hub assembles all pieces.
 | **Privacy theatre** (users assume privacy but data may leak) | Trust damage | Open-source hub. Privacy badges per message. Network traffic dashboard in hub CLI. |
 | **Too complex for non-developers** | Small user base | Phase 1 targets developers. Desktop app (Phase 3) simplifies. One-click setup. |
 
-### 12.3 Business Risks
+### 13.3 Business Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -757,9 +883,9 @@ validates the dashboard concept. Hybro Hub assembles all pieces.
 
 ---
 
-## 13. Open Questions
+## 14. Open Questions
 
-### 13.1 [OPEN] Hybrid Orchestration
+### 14.1 [OPEN] Hybrid Orchestration
 
 When a user's message could benefit from both local and cloud agents (e.g.,
 "research X and apply to my private data"), who orchestrates? Options:
@@ -770,7 +896,7 @@ When a user's message could benefit from both local and cloud agents (e.g.,
 
 Phase 2 starts with explicit agent selection. Hybrid orchestration is Phase 3.
 
-### 13.2 [OPEN] Room-Level vs Message-Level Agent Targeting
+### 14.2 [OPEN] Room-Level vs Message-Level Agent Targeting
 
 Current hybro.ai assigns agents to rooms (`room_agent_set`). With hub agents,
 should the user:
@@ -782,14 +908,14 @@ Phase 2: add local agents to `room_agent_set` same as cloud agents. The
 frontend's "Add agents" flow works unchanged — hub agents just appear in
 the available agents list.
 
-### 13.3 [OPEN] Streaming Shortcut
+### 14.3 [OPEN] Streaming Shortcut
 
 The relay adds latency: local agent → hub → relay POST → backend SSE →
 browser. For real-time token streaming, consider: hub sends tokens directly
 to a WebSocket/SSE endpoint instead of batching via REST POST. This is an
 optimization for Phase 3.
 
-### 13.4 [OPEN] Air-Gapped Mode Scope
+### 14.4 [OPEN] Air-Gapped Mode Scope
 
 The air-gapped mode (§2.2 Mode 3) is listed as an escape hatch. How much
 should we invest in it? Options:
@@ -799,9 +925,185 @@ should we invest in it? Options:
 
 Recommendation: minimal for Phase 2. Revisit based on demand.
 
-### 13.5 [OPEN] Multi-Hub Coordination
+### 14.5 [OPEN] Multi-Hub Coordination
 
 A user with multiple hubs (laptop + desktop). Both are online. A room has
 agents from both hubs. When the user sends a message, which hub processes it?
 The `agent_id` encodes which hub owns it, so routing is per-agent, not per-hub.
 But cancellation, status, and ordering need careful design.
+
+---
+
+## 15. Cross-Document Integration Notes
+
+This design must compose with two sibling documents:
+
+- **[WORKFLOW_ENGINE_ROADMAP.md](./WORKFLOW_ENGINE_ROADMAP.md)**: The workflow engine dispatches agent tasks through `AgentMessageProcessor.process_single_message`. Hub routing is transparent to the workflow executor — the transport selection (relay vs. direct A2A) happens inside `AgentMessageProcessor` based on `agent.source`. No workflow-level changes are needed for hub support.
+
+- **[HYBRO_TRUST_LAYER_DESIGN.md](./HYBRO_TRUST_LAYER_DESIGN.md)**: The trust layer adds pre-dispatch middleware (policy evaluation, token issuance) to `AgentMessageProcessor`. For hub agents, the token is issued by the cloud Token Service and forwarded through the relay to the hub. The hub caches policies locally for offline evaluation. Identity keys are stored in `~/.hybro/keys/`, making the hub not fully stateless (see §2.3 correction above).
+
+### Unified Dispatch Path
+
+When all three systems are active, the per-agent dispatch path is:
+
+```
+RoomMessageCenter.process_room_user_message
+  → Is supervisor_v2? → SupervisorExecutor (decides which agents)
+  → Is workflow trigger? → WorkflowExecutor (follows defined steps)
+  → Each step dispatches via AgentMessageProcessor.process_single_message:
+      1. Policy check (Cedar) — Trust Layer
+      2. Token issuance (HCT) — Trust Layer
+      3. Transport selection:
+         - agent.source == "cloud" → direct A2A call
+         - agent.source == "hub" → relay push — Hub Design
+      4. Trace context injection — Trust Layer
+      5. SSE progress events — all three designs
+```
+
+### Middleware Architecture for `AgentMessageProcessor`
+
+The current `process_single_message` method is a monolithic 160-line function
+with no extension points. All three designs add logic to this method:
+
+| Design | Pre-dispatch | Post-dispatch |
+|--------|-------------|--------------|
+| Hub | Transport selection (`agent.source`) | Relay event publishing |
+| Trust Layer | Policy evaluation, token issuance, identity verification, trace context injection | Structured event logging, audit record |
+| Workflow Engine | — | Structured output extraction |
+
+To prevent this from becoming a 500-line god-method, the implementation
+should adopt a **middleware chain** pattern:
+
+```python
+# Proposed refactoring of AgentMessageProcessor
+
+class DispatchMiddleware(Protocol):
+    async def pre_dispatch(self, ctx: DispatchContext) -> DispatchContext: ...
+    async def post_dispatch(self, ctx: DispatchContext, result: ProcessingResult) -> ProcessingResult: ...
+
+class AgentMessageProcessor:
+    def __init__(self, ..., middleware: list[DispatchMiddleware] = []):
+        self._middleware = middleware
+
+    async def process_single_message(self, ...) -> ProcessingResult:
+        ctx = DispatchContext(message=current_message, agent=agent, room_id=room_id, ...)
+
+        # Pre-dispatch: policy → token → identity → trace → transport
+        for mw in self._middleware:
+            ctx = await mw.pre_dispatch(ctx)
+            if ctx.denied:
+                return ProcessingResult(ProcessingStatus.DENIED, ctx.deny_reason)
+
+        # Core dispatch (existing logic)
+        result = await self._dispatch(ctx)
+
+        # Post-dispatch: logging → audit → output extraction
+        for mw in reversed(self._middleware):
+            result = await mw.post_dispatch(ctx, result)
+
+        return result
+```
+
+Middleware implementations:
+- `HubTransportMiddleware` — sets `ctx.transport` to relay or direct A2A
+- `TrustPolicyMiddleware` — Cedar evaluation, token issuance
+- `TraceContextMiddleware` — injects `traceparent`/`tracestate` headers
+- `TransparencyMiddleware` — emits structured events and audit records
+
+This pattern keeps each concern isolated and testable, avoids coupling between
+Hub/Trust/Workflow logic, and allows the middleware chain to be configured
+per-deployment (e.g., skip trust middleware in development).
+
+### SSE Event Composition
+
+When a workflow step dispatches to a hub agent, the frontend may receive
+*both* workflow-level events and hub relay events for the same operation:
+
+- **Workflow events**: `workflow_progress` (step-level status)
+- **Hub relay events**: `task_submitted`, `agent_token`, `agent_response`
+
+These events operate at different abstraction levels and should **coexist,
+not suppress each other**:
+
+| Event Source | Audience | Example |
+|-------------|----------|---------|
+| Workflow engine | Workflow progress UI | "Step 2 of 3: Finding emails (running)" |
+| Hub relay | Chat message stream | Token-by-token streaming, final response bubble |
+
+The frontend should render workflow progress in a dedicated workflow status
+component (step tracker) while hub relay events render in the normal chat
+message stream. A `workflow_execution_id` field in the relay events allows
+the frontend to correlate them — e.g., to show "this agent response belongs
+to workflow step 2."
+
+### Shared Agent Model (Canonical Reference)
+
+> **This is the single authoritative definition of all planned additions
+> to the `Agent` model.** The current model is in `models/agent.py`. The
+> fields below will be added incrementally across Hub Phase 2 and Trust
+> Layer Phase 0. Both sibling documents
+> ([HYBRO_TRUST_LAYER_DESIGN.md §3.4](./HYBRO_TRUST_LAYER_DESIGN.md),
+> [WORKFLOW_ENGINE_ROADMAP.md §7.2](./WORKFLOW_ENGINE_ROADMAP.md)) reference
+> this section as the canonical source.
+
+```python
+# models/agent.py — proposed additions
+class Agent(BaseModel):
+    # === Existing fields (unchanged) ===
+    agent_id: str
+    provider_id: str | None = None
+    agent_card: AgentCard              # from a2a.types — external, read-only
+    normalized_url: str | None = None
+    public_url: str | None = None
+    agent_status: AgentStatus = AgentStatus.active
+    call_count: int = 0
+    call_success_count: int = 0
+    like_count: int = 0
+    dislike_count: int = 0
+    rate_limit_per_user_per_hour: int | None = None
+    rate_limit_system_per_hour: int | None = None
+    is_public: bool = True
+
+    # === From Hub Design §5.1 (added in Hub Phase 2) ===
+    source: str = "cloud"              # "cloud" | "hub"
+    hub_id: str | None = None
+    hub_owner_id: str | None = None
+    is_hub_online: bool = False
+
+    # === From Trust Layer §3.4 (added in Trust Phase 0) ===
+    identity: AgentIdentity | None = None
+```
+
+The `Workflow` model (WORKFLOW_ENGINE_ROADMAP.md §2a) does not extend `Agent`
+— it references agents by `agent_id` in workflow step definitions.
+
+### Implementation Sequencing Across Documents
+
+The three designs have independent timelines. Below is the recommended
+sequencing based on data model dependencies and shared infrastructure:
+
+```
+Quarter 1                          Quarter 2                     Quarter 3+
+──────────────────────────────── ─────────────────────────────  ────────────
+Workflow Phase 1 (Robust V2)     Workflow Phase 2 (Templates)   Workflow Phase 3-5
+  └─ no model changes             └─ new Workflow/Execution     (fan-out, approval)
+                                     models (independent)
+
+Hub Phase 1 (Gateway API + SDK)  Hub Phase 2 (Hub + Relay)      Hub Phase 3
+  └─ no Agent model changes        └─ adds source/hub_id to     (desktop app, etc.)
+                                     Agent model
+                                   └─ depends on Gateway from
+                                     Hub Phase 1
+
+Trust Phase 0 (Identity + HCT)  Trust Phase 1 (Policy + OTel)  Trust Phase 2-3
+  └─ adds identity to Agent        └─ adds Cedar middleware to   (DPoP, enterprise)
+  └─ can start in parallel          AgentMessageProcessor
+     with Hub Phase 1             └─ depends on middleware
+                                     architecture (§15 above)
+```
+
+**Key dependency**: Hub Phase 2 and Trust Phase 0 both extend the `Agent`
+model. They can proceed in parallel (different fields, no conflict) but
+should coordinate on a single migration. The middleware architecture
+(proposed above) should be implemented before Trust Phase 1 adds Cedar
+evaluation to `AgentMessageProcessor`.

@@ -1,9 +1,10 @@
 # Hybro Trust Layer: Identity, Authorization, and Governance for A2A Agents
 
-**Status:** Draft v1
-**Date:** 2026-03-02
+**Status:** Draft v1.2
+**Date:** 2026-03-06
 **Author:** Architecture Design
 **Depends on:** [HYBRO_HUB_DESIGN.md](./HYBRO_HUB_DESIGN.md) (Portal-First Hub Architecture)
+**A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
 
 ---
 
@@ -51,7 +52,7 @@ standards, layered on top of A2A without breaking compatibility.
 
 ## 2. A2A Security Gap Analysis
 
-### 2.1 What A2A Provides
+### 2.1 What A2A v0.3 Provides
 
 | Feature | A2A Support | How |
 |---------|:---:|-----|
@@ -59,9 +60,25 @@ standards, layered on top of A2A without breaking compatibility.
 | Capability declaration | Yes | `skills` array in AgentCard |
 | Transport security | Yes | HTTPS |
 | Auth scheme declaration | Yes | `securitySchemes` in AgentCard (Bearer, OAuth2, API key) |
-| Task lifecycle | Yes | `tasks/send`, `tasks/get`, `tasks/cancel` with state machine |
+| Task lifecycle | Yes | `message/send`, `message/stream` (JSON-RPC methods) with task state machine |
 | Streaming | Yes | SSE for real-time updates |
 | Push notifications | Yes | Webhook callbacks with token verification |
+
+### 2.1.1 What A2A v1.0 Will Add
+
+A2A v1.0 introduces native features that reduce the scope of what Hybro must
+build. Key additions relevant to this trust layer:
+
+| v1.0 Feature | Impact on Trust Layer |
+|---|---|
+| **AgentCard JWS signatures** (JCS canonical form) | Provides native cryptographic identity verification (§3). Simplifies Phase 0 — custom challenge-response becomes optional. |
+| **`extensions[]` on Message and Artifact** | Enables per-message trust tagging (scopes, trace context) via standard A2A fields instead of custom metadata. |
+| **`supportedInterfaces[]` with separate URLs** | Replaces `AgentCard.url`. Identity verification flow (§3.6) must resolve endpoint from interfaces, not `url`. |
+| **Native multi-tenancy (`tenant` field)** | Aligns with Organization model prerequisite (§6.2). Defer adoption to Phase 3 enterprise features. |
+| **SCREAMING_SNAKE_CASE enum values** | SDK manages Python enum members; DB-stored state strings may need migration (see §9.2 note). |
+
+The trust layer design is forward-compatible: v1.0 features simplify
+implementation but don't invalidate the architecture.
 
 ### 2.2 What A2A Does Not Provide
 
@@ -78,6 +95,17 @@ Hybro's trust layer is **additive, not forking**. It adds fields to A2A
 structures (AgentCard extensions, JWT claims, HTTP headers) without changing
 the A2A wire protocol. An agent that doesn't support the trust layer can
 still interact via standard A2A — it just won't receive trust-gated tasks.
+
+> **Clarification: "opt-in" vs "deny-by-default"**: The trust layer is
+> opt-in at the *agent level* — agents without identity can still participate
+> in unrestricted rooms and non-trust-gated interactions. Cedar's
+> deny-by-default semantics (§6) apply only *within trust-gated contexts*
+> (rooms marked as confidential, cross-org interactions, policy-protected
+> resources). In practice this means: (1) a room with no trust policies
+> attached works exactly as today — all agents can participate regardless of
+> identity, (2) when an admin attaches a trust policy to a room or resource,
+> Cedar evaluates it and unverified agents are denied access to *that
+> specific context*. See also §9.1 risk "Backward compatibility."
 
 ---
 
@@ -127,9 +155,42 @@ certificate pinning, LDAP).
 | `x509_cert` | X.509 certificate (PEM) | Agent model, served at `/.well-known/agent-cert.pem` |
 | `cert_chain` | CA chain for certificate validation | Hybro CA or enterprise CA |
 
-### 3.4 AgentCard Extension
+### 3.4 AgentCard Extension (Proposed)
 
-The trust layer extends A2A's AgentCard with an optional `identity` block:
+The `Agent` model in the Hybro backend uses `AgentCard` from the external
+`a2a` Python package (`a2a.types`). This type cannot be extended with custom
+fields. Therefore, the `identity` block will live as a **sibling field on the
+`Agent` model**, not nested inside `agent_card`:
+
+> **Note**: The code below shows the *proposed* additions to the existing
+> `Agent` model (`models/agent.py`). These fields do not exist in the
+> current codebase — they will be added in Trust Layer Phase 0.
+
+```python
+# Proposed addition to models/agent.py (Phase 0)
+class Agent(BaseModel):
+    agent_id: str
+    agent_card: AgentCard           # from a2a.types — external, read-only
+    # ... existing fields (provider_id, normalized_url, etc.) ...
+
+    # Trust layer identity (NEW — added in Phase 0)
+    identity: AgentIdentity | None = None
+
+# See HYBRO_HUB_DESIGN.md §15 "Shared Agent Model" for the canonical
+# combined Agent model with all planned fields from all three designs.
+
+
+class AgentIdentity(BaseModel):
+    did: str                                         # "did:hybro:agent:abc123"
+    public_key_type: str = "Ed25519VerificationKey2020"
+    public_key_multibase: str                        # "z6Mkf5rGMoatrSj1f..."
+    x509_certificate_url: str | None = None          # "https://.../.well-known/agent-cert.pem"
+    verification_level: str = "unverified"           # unverified | self_signed | platform_verified | organization_verified
+```
+
+When serving the agent's public profile (e.g., in discovery responses or
+agent card endpoints), the backend merges the `identity` block into the
+response JSON alongside the standard AgentCard fields:
 
 ```json
 {
@@ -165,6 +226,12 @@ tasks they receive.
 | **Organization-verified** | The agent's organization is independently verified | Enterprise CA or third-party verification (e.g., Vouched Agent Checkpoint) | Highest — suitable for cross-org |
 
 ### 3.6 Verification Flow
+
+`[v1.0-MIGRATION]`: A2A v1.0 introduces native AgentCard JWS signatures
+(using JCS canonical form). When v1.0 is adopted, the challenge-response
+flow below becomes optional — callers can verify the AgentCard signature
+directly using the public key from the JWS header. The DID-based identity
+model remains valid; JWS verification becomes an additional (simpler) path.
 
 When Agent A (caller) wants to verify Agent B (callee):
 
@@ -385,7 +452,7 @@ Authorization: Bearer <caller's auth token>
 → 200 OK
 {
   "token": "eyJhbGciOiJFZERTQ...",
-  "expires_at": "2026-03-01T11:00:00Z"
+  "expires_at": "2026-03-06T11:00:00Z"
 }
 ```
 
@@ -395,6 +462,27 @@ The Token Service:
 - Applies declarative trust policies (§6) for the target agent.
 - Signs the HCT with Hybro's signing key (ED25519).
 - Logs the issuance (§5 — Execution Transparency).
+
+**Availability and Failover:**
+
+The Token Service is in the critical path of every trust-gated dispatch. If
+it is unavailable, no HCTs can be issued and trust-gated agent communication
+stops. Mitigations:
+
+- **Fail-closed by default**: If the Token Service is unreachable, dispatch
+  is denied. This prevents privilege escalation via service outage.
+- **Token caching**: Issued HCTs are cached by the caller (keyed by
+  `target_agent_did + task_id + scopes`). If the same dispatch is retried
+  within the token's TTL, the cached token is reused without a round-trip.
+  The hub daemon caches tokens locally for active tasks (§4.9).
+- **Signing key distribution** (Phase 2+): For HA deployments, the signing
+  key is stored in a shared secret store (Vault, AWS KMS) so multiple
+  backend instances can issue tokens independently. No single-instance
+  bottleneck.
+- **Grace period for hub agents**: If the hub is offline and cannot reach
+  the Token Service, it may use cached tokens for up to 5 minutes past
+  expiry (configurable `token_grace_seconds`). The grace flag is recorded
+  in the audit log when the hub reconnects.
 
 ### 4.8 Scope Taxonomy
 
@@ -418,7 +506,7 @@ the HCT, the callee does not have that permission.
 | Component | Technology | Effort |
 |-----------|-----------|--------|
 | Token Service | FastAPI endpoint (`/api/v1/tokens/issue`), ED25519 signing via `PyJWT` + `cryptography` | Medium |
-| Token validation middleware | FastAPI dependency that validates HCT on incoming A2A requests | Medium |
+| Token validation middleware | FastAPI dependency that validates HCT on incoming A2A requests (add to `api/webhooks.py` for push notification callbacks and to `AgentMessageProcessor` for response validation — NOT to `a2a_service.py` which is the outbound A2A client) | Medium |
 | Scope registry | MongoDB collection mapping agent DIDs to allowed scopes | Low |
 | DPoP verification | Validate DPoP proof JWTs per RFC 9449 | Medium |
 | Delegation chain tracking | Append caller DID to chain, enforce max depth | Low |
@@ -471,12 +559,19 @@ Every A2A request carries W3C Trace Context headers (already a W3C
 Recommendation since 2020):
 
 ```http
-POST /tasks/send HTTP/1.1
+POST / HTTP/1.1
 Host: agent-b.example.com
+Content-Type: application/json
 Authorization: Bearer <HCT>
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 tracestate: hybro=room_id:room-abc;task_id:task-789
+
+{"jsonrpc": "2.0", "method": "message/send", "id": "...", "params": {...}}
 ```
+
+> `[v1.0-MIGRATION]`: The `method` field changes to `"SendMessage"` in A2A
+> v1.0. This is handled by the SDK's request classes and should not be
+> hardcoded in application code.
 
 | Header | Purpose |
 |--------|---------|
@@ -505,7 +600,7 @@ Beyond trace spans (which capture timing and hierarchy), Hybro logs
 ```json
 {
   "event_id": "evt-001",
-  "timestamp": "2026-03-01T10:00:05Z",
+  "timestamp": "2026-03-06T10:00:05Z",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7",
 
@@ -553,7 +648,7 @@ sharing, policy denials) are written to a **hash-chained append-only log**:
 Record N:
   payload: { event_type: "agent.data.shared", ... }
   hash: SHA-256(payload + Record[N-1].hash)
-  timestamp: 2026-03-01T10:00:05Z
+  timestamp: 2026-03-06T10:00:05Z
   signature: <signed by Hybro's audit key>
 ```
 
@@ -645,6 +740,18 @@ Organizations need to declare rules like:
 - "Maximum delegation depth for any external agent is 2."
 
 ### 6.2 Solution: Cedar-Based Policy Engine
+
+> **Prerequisite: Organization model.** The policy engine relies heavily on
+> an "organization" concept (org membership, org admins, org-level policies,
+> cross-org federation). The current codebase has **no organization model** —
+> users are identified by Clerk `user_id`, and agents have a `provider_id`
+> pointing to the user who registered them. The `AgentCard.provider` field
+> has an `organization` string, but this is a display label, not a data model.
+>
+> **Phase 0-1 workaround**: Implement policies scoped to `user_id` (personal
+> policies) and `provider_id` (agent owner). Defer org-level policies to
+> Phase 2+ when an `Organization` model is built as part of the enterprise
+> features (see HYBRO_HUB_DESIGN.md Phase 3).
 
 Hybro uses **Cedar** (developed by AWS, open-source, formally verified) as
 its policy language. Cedar was chosen over alternatives for specific reasons:
@@ -863,7 +970,7 @@ Local agents registered via the Hub have special policy considerations:
 
 | Component | Technology | Effort |
 |-----------|-----------|--------|
-| Cedar engine integration | `cedarpy` (Python bindings for Cedar) | Medium |
+| Cedar engine integration | `cedarpy` (community Python bindings for Cedar's Rust core). Note: `cedarpy` is a community project, not an official AWS SDK. If stability is a concern, consider calling Cedar via a Rust sidecar or using Cedar's Wasm bindings from Python. | Medium |
 | Policy store | MongoDB collection with Cedar policy text + metadata | Low |
 | Policy evaluation middleware | FastAPI middleware called before A2A dispatch, invokes Cedar engine | Medium |
 | Policy management API | CRUD endpoints for policies with org-level access control | Medium |
@@ -972,6 +1079,10 @@ A complete request through the trust layer:
    - Authorization: Bearer <HCT>
    - traceparent: <W3C trace context>
    - tracestate: hybro=room_id:room-abc;task_id:task-789
+   `[v1.0-MIGRATION]`: v1.0 adds `extensions[]` on Message and
+   Artifact objects. Trust metadata (scopes, trace context, data
+   classification) can be embedded as message-level extensions
+   instead of relying solely on HTTP headers.
         │
 7. ┌─ TRANSPARENCY (§5) ────────────────────────────────────┐
    │ Events emitted:                                        │
@@ -995,12 +1106,18 @@ rewrite:
 
 | Existing Component | Change Required |
 |-------------------|----------------|
-| `Agent` model | Add optional `identity` field (DID, public key, verification level) |
-| `a2a_service.py` | Add HCT validation middleware. Add trace context propagation. |
-| `room_center.py` `send_message` | Add policy evaluation before dispatching to agent |
-| `ResponseProcessor` | Emit structured events on task completion |
-| Cloud Relay | Forward trace context headers to/from hub |
-| Frontend `useRoomWebhook.ts` | Display verification badges and data flow indicators |
+| `Agent` model | Add optional `identity: AgentIdentity` field (DID, public key, verification level) as a sibling to `agent_card`, not nested inside it. |
+| `AgentMessageProcessor.process_single_message` | Add pre-dispatch middleware: policy evaluation (§6), token issuance (§4), trace context injection (§5). This is the correct insertion point because routing decisions are per-agent and happen here, not at the HTTP handler level. |
+| `ResponseProcessor` | Emit structured transparency events (§5) on task completion, failure, and data-sharing boundaries. This requires a new dependency (event logging service) and instrumentation at ~5 points in both the streaming and sync paths. Effort: Medium. |
+| Cloud Relay | Forward trace context fields inside relay event payloads (not as HTTP headers — the relay uses JSON POST bodies, so `trace_id` and `span_id` must be fields in each event object). |
+| Frontend `useRoomWebhook.ts` | Display verification badges and data flow indicators. Requires new fields on the `Agent` TypeScript interface and new badge components on `message-bubble.tsx`. |
+
+> **Note on `room_center.py`**: The `send_message` HTTP handler does NOT
+> need trust-layer changes. It creates the user message and queues
+> orchestration as a background task. Policy evaluation must happen later in
+> the pipeline, inside `AgentMessageProcessor`, where the specific target
+> agent is known. Putting policy evaluation in the HTTP handler would block
+> the response and wouldn't know which agents the supervisor will select.
 
 No existing endpoints change their signatures. No existing data models
 lose fields. The trust layer adds new optional fields and new middleware.
@@ -1023,6 +1140,12 @@ lose fields. The trust layer adds new optional fields and new middleware.
 | Token validation middleware | FastAPI dependency for A2A request handlers |
 
 **Not in Phase 0:** DPoP, delegation chains, Cedar policies, audit log.
+
+> `[v1.0-MIGRATION]`: When A2A v1.0 is adopted, Phase 0's "Basic HCT" and
+> "Token validation middleware" remain unchanged. The key simplification is in
+> identity verification: AgentCard JWS signatures (v1.0 native) can replace
+> the custom challenge-response flow, reducing the "Verification middleware"
+> effort from Medium to Low.
 
 **Exit Criteria:** An agent can issue a scoped, time-bound token to another
 agent, and the receiving agent can validate it.
@@ -1095,6 +1218,9 @@ and all cross-org interactions are fully auditable with exportable reports.
 | **Backward compatibility** | Existing agents (no trust layer) may be excluded from interactions. | Medium | Trust layer is opt-in. Unverified agents can still participate in unrestricted rooms. Progressive rollout. |
 | **Audit log storage growth** | High-volume deployments may generate millions of audit records per day. | Medium | Time-series compression. TTL-based archival. Tiered storage (hot/warm/cold). |
 | **DID method centralization** | `did:hybro` is a centralized DID method (Hybro resolves it). This is a philosophical concern for decentralization purists. | Low | Support `did:web` and `did:key` as alternative methods. `did:hybro` is a convenience, not a requirement. |
+| **A2A v1.0 SDK transition** | Breaking changes in the A2A SDK (Part types, enum values, method names) affect trust layer code that constructs or inspects A2A messages. | Medium | Pin `a2a-sdk <1.0`. Use higher-level SDK APIs. Centralize v0.3-specific patterns in `a2a_helpers.py`. Migration is ~1-2 days when v1.0 ships. |
+| **`cedarpy` dependency stability** | `cedarpy` is a community-maintained Python binding, not an official AWS SDK. If unmaintained, the policy engine is blocked. Fallbacks (Rust sidecar, Wasm bindings) add significant infrastructure complexity. | Medium | Monitor `cedarpy` release cadence and maintainer activity before Phase 1 integration. If stale, evaluate Cedar's official Rust library via a lightweight HTTP sidecar or the Wasm build via `wasmtime-py`. Pin and vendor the package as a fallback. |
+| **Token Service availability** | The Token Service is in the critical path of every trust-gated dispatch. Outage blocks all trust-gated agent communication. | Medium | Fail-closed by default. Token caching reduces round-trips (see §4.7). Signing key in shared secret store for multi-instance HA (Phase 2+). |
 
 ### 9.2 Open Questions
 
@@ -1142,6 +1268,55 @@ goals** but built on mature standards:
 
 If AAP matures to RFC status, Hybro can adopt it as a native token format
 alongside HCT, with a compatibility layer mapping between the two.
+
+---
+
+## Appendix C: Cross-Document Integration Notes
+
+This design must compose with two sibling documents:
+
+- **[HYBRO_HUB_DESIGN.md](./HYBRO_HUB_DESIGN.md)**: Hub agents require the same trust primitives as cloud agents. Key integration points: (1) identity keys stored in `~/.hybro/keys/` on the hub, (2) HCTs issued by the cloud Token Service and forwarded through the relay, (3) policies cached by the hub for offline evaluation, (4) trace spans collected by the hub's OTel sidecar and exported via the relay.
+
+- **[WORKFLOW_ENGINE_ROADMAP.md](./WORKFLOW_ENGINE_ROADMAP.md)**: Workflow steps dispatch through `AgentMessageProcessor`, where the trust layer middleware runs. The workflow executor does not need trust-layer awareness — policy evaluation and token issuance are transparent middleware in the dispatch path.
+
+### Insertion Point: `AgentMessageProcessor.process_single_message`
+
+All four trust primitives attach as pre/post-dispatch middleware in the
+shared dispatch function, not in HTTP handlers or orchestrators:
+
+```
+AgentMessageProcessor.process_single_message(message, room_id, agent, ...)
+  │
+  ├── [PRE-DISPATCH] Policy evaluation (§6)
+  ├── [PRE-DISPATCH] Token issuance (§4)
+  ├── [PRE-DISPATCH] Identity verification of target agent (§3)
+  ├── [PRE-DISPATCH] Trace context injection (§5)
+  │
+  ├── Dispatch (A2A direct or relay, based on agent.source)
+  │
+  ├── [POST-DISPATCH] Structured event logging (§5)
+  └── [POST-DISPATCH] Audit record creation (§5)
+```
+
+This ensures that all callers (SupervisorExecutor, WorkflowExecutor,
+QueueExecutor) get trust enforcement without any changes to their code.
+
+> **Middleware architecture**: The pre/post-dispatch hooks described above
+> will be implemented using a middleware chain pattern on
+> `AgentMessageProcessor`. See HYBRO_HUB_DESIGN.md §15 "Middleware
+> Architecture for AgentMessageProcessor" for the proposed `DispatchMiddleware`
+> protocol and middleware registration pattern. The trust layer implements:
+> `TrustPolicyMiddleware` (pre-dispatch: Cedar evaluation),
+> `TokenIssuanceMiddleware` (pre-dispatch: HCT), and
+> `TransparencyMiddleware` (post-dispatch: event logging + audit).
+
+> **Canonical Agent model**: The combined `Agent` model with all Trust Layer
+> and Hub fields is defined in HYBRO_HUB_DESIGN.md §15 "Shared Agent Model."
+
+> **Implementation sequencing**: Trust Phase 0 and Hub Phase 2 both extend
+> the `Agent` model (different fields, no conflict). Trust Phase 1 depends
+> on the middleware architecture being in place. See HYBRO_HUB_DESIGN.md §15
+> "Implementation Sequencing" for the cross-document timeline.
 
 ---
 
