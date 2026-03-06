@@ -1,8 +1,8 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
-import { Search, RefreshCw, ChevronDown } from "lucide-react"
-import { AgentCard, StatsCards } from "@/components/agent-card"
+import { Search, RefreshCw, ChevronDown, Check, Bot } from "lucide-react"
+import { AgentCard } from "@/components/agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -116,79 +116,56 @@ export default function ConsumerAgentsPage() {
 
   return (
     <div className="page-container">
-      <div className="page-content space-y-6">
+      <div className="page-content space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Explore Agents</h1>
-            <p className="text-muted-foreground mt-1">Discover and chat with AI agents on the HYBRO network</p>
+            <h1 className="text-2xl font-bold">Explore Agents</h1>
+            <p className="text-sm text-muted-foreground">Discover AI agents on the HYBRO network</p>
           </div>
         </div>
 
-        {/* Stats */}
-        <StatsCards agents={allAgents} />
-
-        {/* Search and Filter */}
-        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-          <div className="flex flex-1 gap-4">
-            <div className="relative flex-1">
-              <div className="relative" ref={dropdownRef}>
-                <Input
-                  placeholder="Search agents..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-32 pr-10"
-                />
-                <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="absolute left-2 top-1/2 transform -translate-y-1/2 w-[110px] h-7 px-2 justify-start border-0 bg-transparent shadow-none focus:ring-0 hover:bg-transparent flex items-center text-sm text-muted-foreground z-20"
-                >
-                  <span>{getStatusLabel(statusFilter)}</span>
-                  <ChevronDown className={`h-3 w-3 ml-auto transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
-                </button>
-                <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
-                {isDropdownOpen && (
-                  <div className="absolute top-full left-2 z-50 w-[120px] bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden">
-                    {STATUS_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        onClick={() => {
-                          setStatusFilter(option.value)
-                          setIsDropdownOpen(false)
-                        }}
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-accent hover:text-accent-foreground"
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+        {/* Search, Filter & Results Count */}
+        <div className="flex flex-col sm:flex-row gap-3 items-center">
+          <div className="relative flex-1">
+            <div className="relative" ref={dropdownRef}>
+              <Input
+                placeholder="Search agents..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="h-[72px] pl-36 pr-12 text-base"
+              />
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-[120px] h-14 px-3 border-r border-border/50 rounded-l-md bg-transparent hover:bg-muted/50 flex items-center text-sm text-muted-foreground transition-colors z-20"
+              >
+                <span>{getStatusLabel(statusFilter)}</span>
+                <ChevronDown className={`h-4 w-4 ml-auto transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              <Search className="absolute right-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground z-10" />
+              {isDropdownOpen && (
+                <div className="absolute top-full left-1.5 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
+                  {STATUS_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => {
+                        setStatusFilter(option.value)
+                        setIsDropdownOpen(false)
+                      }}
+                      className="w-full px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+                    >
+                      <Check className={`h-3 w-3 shrink-0 transition-opacity ${statusFilter === option.value ? 'opacity-100' : 'opacity-0'}`} />
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Results Count */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            Showing {filteredAgents.length} of {allAgents.length} agents
-          </span>
-          {(searchTerm || statusFilter !== "all") && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearchTerm("")
-                setStatusFilter("all")
-              }}
-            >
-              Clear filters
-            </Button>
-          )}
-        </div>
-
         {/* Agent Cards Grid */}
-        <div className="grid grid-auto-fill-cards gap-5">
+        <div className="grid grid-auto-fill-cards gap-3">
           {filteredAgents.map((agent) => (
             <AgentCard key={agent.agent_id} agent={agent} />
           ))}
@@ -196,16 +173,18 @@ export default function ConsumerAgentsPage() {
 
         {/* Empty State */}
         {filteredAgents.length === 0 && !loadingAll && (
-          <div className="text-center py-12">
-            <div className="text-muted-foreground mb-4">
+          <div className="flex flex-col items-center justify-center py-8 gap-3">
+            <Bot className="h-10 w-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">
               {allAgents.length === 0
                 ? "No agents found on the network yet."
                 : "No agents found matching your criteria."
               }
-            </div>
+            </p>
             {allAgents.length > 0 && (
               <Button
                 variant="outline"
+                size="sm"
                 onClick={() => {
                   setSearchTerm("")
                   setStatusFilter("all")
