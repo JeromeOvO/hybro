@@ -80,3 +80,298 @@ class TestGetAllVisibleAgents:
         query = db_svc.mongo.get_agents_with_conditions.call_args[0][0]
         conditions = query["$or"]
         assert all("provider_id" not in c for c in conditions)
+
+
+# =============================================================================
+# Room Queries Tests
+# =============================================================================
+
+
+class TestRoomQueries:
+    """Tests for room query delegation to mongo."""
+
+    @pytest.mark.asyncio
+    async def test_get_rooms_by_room_owner_id_delegates_to_mongo(self, db_svc):
+        sentinel = [MagicMock(), MagicMock()]
+        db_svc.mongo.get_rooms_by_room_owner_id = AsyncMock(return_value=sentinel)
+
+        result = await db_svc.get_rooms_by_room_owner_id("owner-1")
+
+        db_svc.mongo.get_rooms_by_room_owner_id.assert_awaited_once_with("owner-1")
+        assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_get_rooms_by_room_owner_id_empty(self, db_svc):
+        db_svc.mongo.get_rooms_by_room_owner_id = AsyncMock(return_value=[])
+
+        result = await db_svc.get_rooms_by_room_owner_id("owner-2")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_room_by_room_id_returns_none_when_missing(self, db_svc):
+        db_svc.mongo.get_room_by_room_id = AsyncMock(return_value=None)
+
+        result = await db_svc.get_room_by_room_id("nonexistent")
+
+        db_svc.mongo.get_room_by_room_id.assert_awaited_once_with("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_room_by_room_id_returns_none_on_error(self, db_svc):
+        db_svc.mongo.get_room_by_room_id = AsyncMock(
+            side_effect=RuntimeError("connection lost")
+        )
+
+        result = await db_svc.get_room_by_room_id("room-x")
+
+        assert result is None
+
+
+# =============================================================================
+# Idempotency & CAS Tests
+# =============================================================================
+
+
+class TestIdempotencyAndCAS:
+    """Tests for idempotent state updates and compare-and-swap operations."""
+
+    @pytest.mark.asyncio
+    async def test_update_last_notified_state_returns_true_on_new_state(self, db_svc):
+        db_svc.mongo.update_last_notified_state = AsyncMock(return_value=True)
+
+        result = await db_svc.update_last_notified_state("msg-1", "working")
+
+        db_svc.mongo.update_last_notified_state.assert_awaited_once_with(
+            "msg-1", "working"
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_update_last_notified_state_returns_false_on_duplicate(self, db_svc):
+        db_svc.mongo.update_last_notified_state = AsyncMock(return_value=False)
+
+        result = await db_svc.update_last_notified_state("msg-1", "working")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_reset_last_notified_state(self, db_svc):
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.db.room_agent_messages.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        result = await db_svc.reset_last_notified_state("msg-2")
+
+        db_svc.mongo.db.room_agent_messages.update_one.assert_awaited_once()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_cas_update_hitl_request_succeeds_on_matching_version(self, db_svc):
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.db.hitl_requests.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        result = await db_svc.cas_update_hitl_request(
+            "req-1", "pending", status="processing"
+        )
+
+        db_svc.mongo.db.hitl_requests.update_one.assert_awaited_once_with(
+            {"request_id": "req-1", "status": "pending"},
+            {"$set": {"status": "processing"}},
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_cas_update_hitl_request_fails_on_version_mismatch(self, db_svc):
+        mock_result = MagicMock(modified_count=0)
+        db_svc.mongo.db.hitl_requests.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        result = await db_svc.cas_update_hitl_request(
+            "req-1", "pending", status="processing"
+        )
+
+        assert result is False
+
+
+# =============================================================================
+# Agent CRUD Tests
+# =============================================================================
+
+
+class TestAgentCRUD:
+    """Tests for agent create / read / update / delete delegation."""
+
+    @pytest.mark.asyncio
+    async def test_add_agent_success(self, db_svc):
+        agent = MagicMock()
+        agent.agent_id = "agent-1"
+        agent.agent_card.description = "A helpful agent"
+
+        db_svc.mongo.get_agent_by_agent_id = AsyncMock(return_value=None)
+        db_svc.mongo.add_agent = AsyncMock(return_value="inserted-id")
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1, 0.2])
+        db_svc.pinecone = MagicMock()
+
+        result = await db_svc.add_agent(agent)
+
+        assert result is True
+        db_svc.mongo.add_agent.assert_awaited_once_with(agent)
+        db_svc.pinecone.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_agent_by_agent_id(self, db_svc):
+        db_svc.mongo.delete_agent_by_agent_id = AsyncMock(return_value=True)
+        db_svc.pinecone = MagicMock()
+
+        result = await db_svc.delete_agent_by_agent_id("agent-1")
+
+        assert result is True
+        db_svc.mongo.delete_agent_by_agent_id.assert_awaited_once_with("agent-1")
+        db_svc.pinecone.delete.assert_called_once_with(["agent-1"])
+
+    @pytest.mark.asyncio
+    async def test_update_agent_by_agent_id(self, db_svc):
+        agent = MagicMock()
+        agent.agent_card.description = "updated description"
+
+        db_svc.mongo.get_agent_by_agent_id = AsyncMock(return_value=MagicMock())
+        db_svc.mongo.update_agent_by_agent_id = AsyncMock(return_value=True)
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.3, 0.4])
+        db_svc.pinecone = MagicMock()
+
+        result = await db_svc.update_agent_by_agent_id("agent-1", agent)
+
+        assert result is True
+        db_svc.mongo.update_agent_by_agent_id.assert_awaited_once_with("agent-1", agent)
+        db_svc.pinecone.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_agent_by_agent_id_returns_none_when_missing(self, db_svc):
+        db_svc.mongo.get_agent_by_agent_id = AsyncMock(return_value=None)
+
+        result = await db_svc.get_agent_by_agent_id("nonexistent")
+
+        db_svc.mongo.get_agent_by_agent_id.assert_awaited_once_with("nonexistent")
+        assert result is None
+
+
+# =============================================================================
+# Atomic Memory Ops Tests
+# =============================================================================
+
+
+class TestAtomicMemoryOps:
+    """Tests for atomic room-memory mutation delegation."""
+
+    @pytest.mark.asyncio
+    async def test_push_conversation_turn_success(self, db_svc):
+        sentinel = (True, True)
+        db_svc.mongo.push_conversation_turn = AsyncMock(return_value=sentinel)
+
+        result = await db_svc.push_conversation_turn("room-1", {"role": "user"})
+
+        db_svc.mongo.push_conversation_turn.assert_awaited_once_with(
+            "room-1", {"role": "user"}
+        )
+        assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_push_conversation_turn_error_path(self, db_svc):
+        db_svc.mongo.push_conversation_turn = AsyncMock(
+            side_effect=RuntimeError("write conflict")
+        )
+
+        result = await db_svc.push_conversation_turn("room-1", {"role": "user"})
+
+        assert result == (False, False)
+
+    @pytest.mark.asyncio
+    async def test_push_and_trim_conversation_turn(self, db_svc):
+        sentinel = (True, True)
+        db_svc.mongo.push_and_trim_conversation_turn = AsyncMock(
+            return_value=sentinel
+        )
+
+        result = await db_svc.push_and_trim_conversation_turn(
+            "room-1", {"role": "assistant"}, 50, "summary stub", 4000
+        )
+
+        db_svc.mongo.push_and_trim_conversation_turn.assert_awaited_once_with(
+            "room-1", {"role": "assistant"}, 50, "summary stub", 4000
+        )
+        assert result is sentinel
+
+    @pytest.mark.asyncio
+    async def test_update_room_summary_atomic(self, db_svc):
+        db_svc.mongo.update_room_summary_atomic = AsyncMock(return_value=True)
+        summary = {"text": "conversation so far"}
+
+        result = await db_svc.update_room_summary_atomic(
+            "room-1", summary, None, 50
+        )
+
+        db_svc.mongo.update_room_summary_atomic.assert_awaited_once_with(
+            "room-1", summary, None, 50
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_compact_turns_bulk(self, db_svc):
+        db_svc.mongo.compact_turns_bulk = AsyncMock(return_value=True)
+        compacted = [{"turn_id": "t1", "compact": True}]
+
+        result = await db_svc.compact_turns_bulk("room-1", compacted)
+
+        db_svc.mongo.compact_turns_bulk.assert_awaited_once_with("room-1", compacted)
+        assert result is True
+
+
+# =============================================================================
+# Continuation Tests
+# =============================================================================
+
+
+class TestContinuation:
+    """Tests for continuation save / get-and-clear / has delegation."""
+
+    @pytest.mark.asyncio
+    async def test_save_continuation_on_message(self, db_svc):
+        db_svc.mongo.save_continuation_on_message = AsyncMock(return_value=True)
+        data = {"queue": "items", "index": 3}
+
+        result = await db_svc.save_continuation_on_message("msg-1", data)
+
+        db_svc.mongo.save_continuation_on_message.assert_awaited_once_with(
+            "msg-1", data
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_and_clear_continuation_on_message(self, db_svc):
+        stored = {"queue": "items", "index": 3}
+        db_svc.mongo.get_and_clear_continuation_on_message = AsyncMock(
+            return_value=stored
+        )
+
+        result = await db_svc.get_and_clear_continuation_on_message("msg-1")
+
+        db_svc.mongo.get_and_clear_continuation_on_message.assert_awaited_once_with(
+            "msg-1"
+        )
+        assert result is stored
+
+    @pytest.mark.asyncio
+    async def test_has_continuation_on_message(self, db_svc):
+        db_svc.mongo.has_continuation_on_message = AsyncMock(return_value=True)
+
+        result = await db_svc.has_continuation_on_message("msg-1")
+
+        db_svc.mongo.has_continuation_on_message.assert_awaited_once_with("msg-1")
+        assert result is True
