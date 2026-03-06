@@ -1,111 +1,130 @@
 import Image from "next/image"
-import { Bot, CircleCheck, CircleMinus, XCircle } from "lucide-react"
+import {
+  Bot,
+  Type,
+  Image as ImageIcon,
+  Video,
+  Music,
+  Braces,
+  FileText,
+  SquareCode,
+} from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import {
   Card,
-  CardContent,
   CardDescription,
-  CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useRouter } from "next/navigation"
-import type { Agent, AgentCard } from '@/lib/types'
+import type { Agent } from '@/lib/types'
+
+const MIME_ICON_MAP: [RegExp, LucideIcon][] = [
+  [/^text\//, Type],
+  [/^image\//, ImageIcon],
+  [/^video\//, Video],
+  [/^audio\//, Music],
+  [/^application\/json$/, Braces],
+  [/^application\/pdf$/, FileText],
+]
+
+export function getModeIcon(mime: string): LucideIcon {
+  for (const [pattern, icon] of MIME_ICON_MAP) {
+    if (pattern.test(mime)) return icon
+  }
+  return SquareCode
+}
+
+export function deduplicateIcons(modes: string[]): LucideIcon[] {
+  const seen = new Set<LucideIcon>()
+  const result: LucideIcon[] = []
+  for (const mode of modes) {
+    const icon = getModeIcon(mode)
+    if (!seen.has(icon)) {
+      seen.add(icon)
+      result.push(icon)
+    }
+  }
+  return result
+}
 
 interface AgentCardProps {
   agent: Agent
 }
 
-export function AgentCard({
-  agent,
-}: AgentCardProps) {
+export function AgentCard({ agent }: AgentCardProps) {
   const router = useRouter()
 
-  const getStatusIcon = (status: Agent["agent_status"]) => {
-    const base = "inline-flex w-5 h-5 items-center justify-center";
-
-    switch (status) {
-      case "active":
-        return {
-          icon: CircleCheck,
-          className: [
-            base,
-            "text-icon-success"
-          ].join(" "),
-        };
-
-      case "inactive":
-        return {
-          icon: CircleMinus,
-          className: [
-            base,
-            "text-icon-error"
-          ].join(" "),
-        };
-
-      default:
-        return {
-          icon: XCircle,
-          className: [
-            base,
-            "text-icon-error"
-          ].join(" "),
-        };
-    }
-  };
-
-
-  const statusConfig = getStatusIcon(agent.agent_status)
-  const StatusIcon = statusConfig.icon
-
-  // Handle card click
   const handleCardClick = () => {
     router.push(`/c/agents/${agent.agent_id}`)
   }
 
+  const isActive = agent.agent_status === "active"
+  const allModes = [
+    ...(agent.agent_card.defaultInputModes ?? []),
+    ...(agent.agent_card.defaultOutputModes ?? [])
+  ]
+  const modeIcons = deduplicateIcons(allModes)
+
   return (
     <Card
       className="group relative overflow-hidden cursor-pointer
-                 h-[240px] w-full
+                 w-full
                  backdrop-blur-sm
                  transition-all duration-300 ease-out
                  border border-primary/20 dark:border-primary/15 ring-0
                  hover:border-primary/80 dark:hover:border-primary/70
-                 hover:bg-secondary/50 dark:hover:bg-muted/40 hover:scale-[1.02] hover:-translate-y-1
+                 hover:bg-secondary/50 dark:hover:bg-muted/40 hover:scale-[1.01] hover:-translate-y-0.5
                  before:absolute before:inset-0 before:bg-linear-to-br 
                  before:from-primary/5 before:via-transparent before:to-accent/5
                  before:opacity-0 before:transition-opacity before:duration-300
                  hover:before:opacity-100
-                 bg-secondary/40 dark:bg-muted/30 shadow-xl hover:shadow-black/10 hover:dark:shadow-black/50"
+                 bg-secondary/40 dark:bg-muted/30 shadow-sm hover:shadow-md hover:dark:shadow-black/30"
       onClick={handleCardClick}
     >
-      <CardHeader className="pb-3 pt-4 text-center relative z-10">
-        <div className="flex flex-col items-center gap-3">
+      <div className="grid grid-cols-4 gap-1 p-[2px] relative z-10">
+        <div className="col-span-1 flex items-center justify-center">
           <div className="relative">
-            <Avatar className="h-12 w-12 shadow-lg shadow-primary/20 dark:shadow-white/25
-                             transition-all duration-300 ease-out
-                             group-hover:shadow-xl group-hover:shadow-primary/35 
-                             dark:group-hover:shadow-primary/35 group-hover:scale-110">
-              <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
-              <AvatarFallback className="group-hover:bg-primary/20 transition-colors duration-300">
+            <Avatar className="h-12 w-12 rounded-md shadow-md shadow-primary/10 dark:shadow-white/10
+                               transition-all duration-300 ease-out
+                               group-hover:shadow-lg group-hover:shadow-primary/20
+                               dark:group-hover:shadow-primary/20">
+              <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
+              <AvatarFallback className="rounded-md group-hover:bg-primary/20 transition-colors duration-300">
                 <Bot className="h-6 w-6 group-hover:text-primary transition-colors duration-300" />
               </AvatarFallback>
             </Avatar>
-            <div className="absolute -top-1 -right-1 transition-transform duration-300 group-hover:scale-110">
-              <StatusIcon className={`${statusConfig.className} group-hover:shadow-lg`} />
-            </div>
+            <span
+              className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background
+                          ${isActive ? "bg-green-500" : "bg-muted-foreground/30"}`}
+            />
           </div>
         </div>
-      </CardHeader>
 
-      <CardContent className="px-6 pb-6 relative z-10">
-        <div className="space-y-1">
-          <CardTitle className="text-xl font-semibold text-center
-                                transition-all duration-300 ease-out
-                                group-hover:text-primary group-hover:scale-105">
+        <div className="col-span-2 flex flex-col justify-center gap-0 min-w-0">
+          <CardTitle className="text-sm font-semibold
+                                transition-colors duration-300 ease-out
+                                group-hover:text-primary leading-tight truncate">
             {agent.agent_card.name}
           </CardTitle>
+
+          {agent.agent_card.description && (
+            <p className="text-xs text-muted-foreground line-clamp-1 leading-snug">
+              {agent.agent_card.description}
+            </p>
+          )}
+
+          {modeIcons.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              {modeIcons.map((Icon, i) => (
+                <Icon key={i} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ))}
+            </div>
+          )}
         </div>
-      </CardContent>
+
+        <div className="col-span-1" />
+      </div>
     </Card>
   )
 }

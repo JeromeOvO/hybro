@@ -262,6 +262,17 @@
   }
 }
 
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Cursor-style "thinking" shimmer sweep over text */
 @keyframes shimmer-sweep {
   0% {
@@ -488,7 +499,7 @@ a.room-mention {
 
 .page-content {
   width: 100%;
-  max-width: 56rem;
+  max-width: 72rem;
   margin-left: auto;
   margin-right: auto;
 }
@@ -499,7 +510,7 @@ a.room-mention {
 }
 @media (min-width: 640px) {
   .grid-auto-fill-cards {
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   }
 }
 
