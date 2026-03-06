@@ -109,6 +109,7 @@ function HitlQuestionForm({
             placeholder="Type your reply..."
             disabled={isSubmitting}
             aria-label={`Reply to ${agentName}`}
+            data-testid="hitl-reply-input"
             className="flex-1 h-9 text-sm"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {

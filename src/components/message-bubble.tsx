@@ -413,7 +413,7 @@ function AgentMessageBubbleInner({
       {/* Message Content */}
       <div
         className={cn(
-          "flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border message-bubble",
+          "flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border message-bubble agent-message",
           colors.border,
           colors.bg
         )}

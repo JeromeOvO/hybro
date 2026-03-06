@@ -73,6 +73,8 @@ function handleSubdomainRewrite(request: NextRequest): NextResponse | null {
   return NextResponse.rewrite(rewritten)
 }
 
+export { isDeveloperHost, isSharedPath, isStaticFile, handleSubdomainRewrite }
+
 export default clerkMiddleware(
   async (_auth, request) => {
     const rewrite = handleSubdomainRewrite(request)

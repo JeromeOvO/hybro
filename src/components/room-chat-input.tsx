@@ -861,6 +861,7 @@ export function RoomChatInput({
                 isEditorExpanded ? "min-h-[200px] max-h-[60vh]" : "min-h-[28px] max-h-[200px]",
                 disabled && "opacity-40 cursor-not-allowed"
               )}
+              data-testid="chat-input"
               data-placeholder="Type a message... Use @ to mention agents"
               suppressContentEditableWarning
               style={{
@@ -952,6 +953,7 @@ export function RoomChatInput({
                   "hover:scale-105 active:scale-95 transition-all duration-200",
                 )}
                 title="Stop processing"
+                data-testid="stop-processing"
               >
                 <Square className="h-3.5 w-3.5 fill-current" />
               </Button>
