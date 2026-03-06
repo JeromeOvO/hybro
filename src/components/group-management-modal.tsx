@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Pencil, Trash2, Users, Loader2, AlertTriangle } from 'lucide-react'
+import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Bot, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   Dialog,
   DialogContent,
@@ -14,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AgentSelector } from '@/components/agent-selector'
+import { deduplicateIcons } from '@/components/agent-card'
 import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup } from '@/lib/types/agent-group'
@@ -66,6 +67,7 @@ export function GroupManagementModal({
   const [saving, setSaving] = useState(false)
   const [groupToDelete, setGroupToDelete] = useState<AgentGroup | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [agentSearch, setAgentSearch] = useState('')
   const didRequestAgents = useRef(false)
   const lastActionKeyRef = useRef<string | null>(null)
 
@@ -76,6 +78,7 @@ export function GroupManagementModal({
     setGroupName('')
     setGroupDescription('')
     setSelectedAgents({})
+    setAgentSearch('')
   }, [])
 
   const handleCreate = useCallback(() => {
@@ -353,23 +356,101 @@ export function GroupManagementModal({
         )
 
       case 'create':
-      case 'edit':
+      case 'edit': {
+        const selectedAgentsList = Object.values(selectedAgents)
+        const uniqueAgents = Array.from(
+          new Map(availableAgents.map(a => [a.agent_id, a])).values()
+        )
+        const unselectedAgents = uniqueAgents.filter(a => !selectedAgents[a.agent_id])
+        const searchLower = agentSearch.toLowerCase().trim()
+        const filteredUnselected = searchLower
+          ? unselectedAgents.filter(a =>
+              a.agent_card.name.toLowerCase().includes(searchLower) ||
+              (a.agent_card.description?.toLowerCase().includes(searchLower))
+            )
+          : unselectedAgents
+
+        const renderAgentRow = (agent: Agent, action: 'add' | 'remove') => {
+          const isActive = agent.agent_status === 'active'
+          const allModes = [
+            ...(agent.agent_card.defaultInputModes ?? []),
+            ...(agent.agent_card.defaultOutputModes ?? []),
+          ]
+          const modeIcons = deduplicateIcons(allModes)
+
+          return (
+            <div
+              key={agent.agent_id}
+              className="group flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer
+                         transition-all duration-200 ease-out
+                         border border-primary/15 dark:border-primary/10
+                         hover:border-primary/60 dark:hover:border-primary/50
+                         hover:bg-secondary/50 dark:hover:bg-muted/40
+                         bg-secondary/30 dark:bg-muted/20"
+              onClick={() => action === 'add' ? handleAgentAdd(agent) : handleAgentRemove(agent.agent_id)}
+            >
+              <div className="relative flex-shrink-0">
+                <Avatar className="h-8 w-8 rounded-md shadow-sm shadow-primary/10 dark:shadow-white/5">
+                  <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
+                  <AvatarFallback className="rounded-md text-xs">
+                    <Bot className="h-4 w-4" />
+                  </AvatarFallback>
+                </Avatar>
+                <span
+                  className={`absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full border border-background
+                              ${isActive ? 'bg-green-500' : 'bg-muted-foreground/30'}`}
+                />
+              </div>
+
+              <div className="flex flex-col justify-center gap-0 min-w-0 flex-1">
+                <span className="text-[13px] font-medium leading-tight truncate
+                                 group-hover:text-primary transition-colors duration-200">
+                  {agent.agent_card.name}
+                </span>
+                {agent.agent_card.description && (
+                  <p className="text-[11px] text-muted-foreground line-clamp-1 leading-snug">
+                    {agent.agent_card.description}
+                  </p>
+                )}
+                {modeIcons.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {modeIcons.map((Icon, i) => (
+                      <Icon key={i} className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className={`flex-shrink-0 p-1 rounded transition-colors duration-150 ${
+                  action === 'remove'
+                    ? 'text-destructive hover:bg-destructive/10'
+                    : 'text-primary hover:bg-primary/10'
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  action === 'add' ? handleAgentAdd(agent) : handleAgentRemove(agent.agent_id)
+                }}
+              >
+                {action === 'remove'
+                  ? <Minus className="h-3.5 w-3.5" />
+                  : <Plus className="h-3.5 w-3.5" />
+                }
+              </button>
+            </div>
+          )
+        }
+
         return (
           <>
             <DialogHeader>
               <DialogTitle>
                 {mode === 'create' ? 'Create New Group' : 'Edit Group'}
               </DialogTitle>
-              <DialogDescription>
-                {mode === 'create' 
-                  ? 'Create a custom group of agents for quick access.'
-                  : 'Update your group settings and agents.'
-                }
-              </DialogDescription>
             </DialogHeader>
 
             <div className="py-4 space-y-4">
-              {/* Group name */}
               <div className="space-y-2">
                 <Label htmlFor="group-name">Group Name</Label>
                 <Input
@@ -380,7 +461,6 @@ export function GroupManagementModal({
                 />
               </div>
 
-              {/* Group description */}
               <div className="space-y-2">
                 <Label htmlFor="group-description">Description (optional)</Label>
                 <Textarea
@@ -392,18 +472,62 @@ export function GroupManagementModal({
                 />
               </div>
 
-              {/* Agent selector */}
-              <div className="space-y-2">
-                <Label>Agents</Label>
-                <AgentSelector
-                  selectedAgents={selectedAgents}
-                  onAgentAdd={handleAgentAdd}
-                  onAgentRemove={handleAgentRemove}
-                  availableAgents={availableAgents}
-                  loading={loadingAgents}
-                  error={agentsError || undefined}
-                  onRetry={loadAgents}
-                />
+              <div className="space-y-3">
+                {selectedAgentsList.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-muted-foreground">
+                      Selected Agents ({selectedAgentsList.length})
+                    </Label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {selectedAgentsList.map(agent => renderAgentRow(agent, 'remove'))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label className="text-muted-foreground">Available Agents</Label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                    <Input
+                      value={agentSearch}
+                      onChange={(e) => setAgentSearch(e.target.value)}
+                      placeholder="Search agents..."
+                      className="pl-8 h-8 text-sm"
+                    />
+                  </div>
+                  {loadingAgents ? (
+                    <div className="text-center py-6 text-muted-foreground flex items-center justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Loading agents...
+                    </div>
+                  ) : agentsError ? (
+                    <div className="p-3 rounded-lg border border-destructive/20 bg-destructive/10 text-destructive text-sm">
+                      {agentsError}
+                      {loadAgents && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={loadAgents}
+                          className="ml-2 h-auto p-1 text-destructive hover:text-destructive"
+                        >
+                          Retry
+                        </Button>
+                      )}
+                    </div>
+                  ) : filteredUnselected.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground text-sm">
+                      {uniqueAgents.length === 0
+                        ? 'No agents available'
+                        : searchLower
+                          ? 'No agents match your search'
+                          : 'All agents selected'}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto pr-0.5">
+                      {filteredUnselected.map(agent => renderAgentRow(agent, 'add'))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -431,6 +555,7 @@ export function GroupManagementModal({
             </DialogFooter>
           </>
         )
+      }
 
       case 'delete-confirm':
         return (
@@ -490,7 +615,7 @@ export function GroupManagementModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
+      <DialogContent className="sm:max-w-[720px] max-h-[85vh] overflow-y-auto bg-background backdrop-blur-md border border-border/50 shadow-lg">
         {renderContent()}
       </DialogContent>
     </Dialog>

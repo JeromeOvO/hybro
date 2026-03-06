@@ -798,7 +798,7 @@ export function RoomChatInput({
         "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
       )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-3xl bg-background/80 backdrop-blur-sm border border-transparent overflow-hidden">
+        <div className="relative flex flex-col rounded-3xl bg-muted/40 dark:bg-muted/25 backdrop-blur-sm border border-border/30 overflow-hidden">
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 

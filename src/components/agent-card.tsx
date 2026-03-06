@@ -28,14 +28,14 @@ const MIME_ICON_MAP: [RegExp, LucideIcon][] = [
   [/^application\/pdf$/, FileText],
 ]
 
-function getModeIcon(mime: string): LucideIcon {
+export function getModeIcon(mime: string): LucideIcon {
   for (const [pattern, icon] of MIME_ICON_MAP) {
     if (pattern.test(mime)) return icon
   }
   return SquareCode
 }
 
-function deduplicateIcons(modes: string[]): LucideIcon[] {
+export function deduplicateIcons(modes: string[]): LucideIcon[] {
   const seen = new Set<LucideIcon>()
   const result: LucideIcon[] = []
   for (const mode of modes) {
