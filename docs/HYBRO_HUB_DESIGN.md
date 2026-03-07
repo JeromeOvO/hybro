@@ -1,6 +1,6 @@
 # Hybro Hub: Portal-First Hybrid Agent Architecture
 
-**Status:** Draft v3.3
+**Status:** Draft v3.4
 **Date:** 2026-03-07
 **Author:** Architecture Design
 **A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
@@ -204,15 +204,28 @@ store rooms or messages. It is an orchestration daemon.
 ```
 hybro-hub/
 ├── hub/
-│   ├── main.py              # Startup, relay connection, event loop
-│   ├── config.py            # YAML config loader + env vars
-│   ├── relay_client.py      # Outbound SSE subscription + HTTP publish to hybro.ai
-│   ├── agent_registry.py    # Discover and health-check local A2A agents
-│   ├── dispatcher.py        # A2A client — dispatch tasks to local agents
-│   ├── privacy_router.py    # Sensitivity classification + routing decisions
-│   └── gateway_client.py    # Call cloud agents via hybro.ai gateway API
-├── config.yaml              # User configuration file
-└── pyproject.toml
+│   ├── __init__.py             # Package init
+│   ├── __main__.py             # `python -m hub` entry point
+│   ├── main.py                 # HubDaemon: startup, relay connection, event loop
+│   ├── config.py               # YAML config loader + env vars + hub_id persistence
+│   ├── relay_client.py         # SSE subscription + HTTP publish to hybro.ai relay
+│   ├── agent_registry.py       # Discover and health-check local A2A agents
+│   ├── dispatcher.py           # A2A client — dispatch tasks to local agents
+│   ├── privacy_router.py       # Sensitivity classification (keyword + regex)
+│   ├── cli.py                  # Click CLI: start, status, agents, agent start
+│   └── gateway_client.py       # (Phase 3) Call cloud agents via gateway API
+├── config.yaml.example         # Annotated example configuration
+├── pyproject.toml              # Package metadata, dependencies, entry points
+└── tests/
+    ├── test_relay_client.py
+    ├── test_agent_registry.py
+    ├── test_dispatcher.py
+    └── test_privacy_router.py
+
+a2a-adapter/                    # Separate repo — framework-to-A2A adapters
+└── a2a_adapter/
+    └── integrations/
+        └── ollama.py           # OllamaAdapter: wraps Ollama HTTP API as A2A agent
 ```
 
 ### 3.2 Configuration
@@ -286,8 +299,12 @@ User Message (from relay SSE)
 
 The hub finds local agents via:
 1. **Manual config**: agents listed in `config.yaml`
-2. **Auto-discovery**: scan localhost ports 8000-8100 for
-   `/.well-known/agent-card.json` (A2A standard discovery)
+2. **Auto-discovery**: uses `psutil` to enumerate all TCP ports listening on
+   localhost, then probes each for A2A agent cards at both
+   `/.well-known/agent-card.json` (current) and `/.well-known/agent.json`
+   (deprecated), using the canonical paths from the `a2a-python` SDK.
+   Well-known non-agent ports (SSH, databases, etc.) are excluded via
+   `auto_discover_exclude_ports`. Probes are concurrency-limited (30 at a time).
 3. **Health checks**: periodic ping to verify agents are still running
 
 On startup and whenever the agent list changes, the hub syncs its agent
@@ -976,16 +993,151 @@ through the relay to the browser. The response shows a 🏠 badge.
   self-referential URL loops (the agent's `agent_card.url` points back to
   the gateway itself).
 
-#### Phase 2b: Hub Daemon (not yet started)
+#### Phase 2b: Hub Daemon + Ollama Adapter  ✅ IMPLEMENTED
 
-**Goal:** Ship the `hybro-hub` PyPI package that connects to the relay.
+**Status:** Complete. All deliverables implemented and tested.
+
+**Goal:** Ship the `hybro-hub` PyPI package that connects to the relay,
+and an Ollama A2A adapter in the `a2a-adapter` library.
 
 **Deliverables:**
-1. Relay client (SSE subscribe + HTTP publish)
-2. Agent registry (manual config + auto-discovery)
-3. Simple dispatcher (A2A client for local agents)
-4. Privacy router v1 (keyword + regex)
-5. Bundled Ollama A2A wrapper (`hybro-hub agent start ollama`)
+
+1. **Relay Client** (`hub/relay_client.py`):
+   - SSE subscription to `GET /api/v1/relay/hub/{hub_id}/events` with auto-reconnect
+     and exponential backoff (max 60s)
+   - Separate `httpx.AsyncClient` instances with distinct timeout configs:
+     - HTTP client: `connect=10, read=30, write=10` for register/sync/publish/status
+     - SSE client: `connect=10, read=None, write=10` for long-lived event stream
+       (prevents heartbeat-interval read timeouts from killing the connection)
+   - `publish()` with retry queue: on 403 (expired token) or missing token, events
+     are queued in a bounded `deque(maxlen=50)` and flushed automatically when the
+     SSE stream reconnects and delivers a fresh `connection_token`
+   - `_do_publish()` raw HTTP call (no queue logic) used by both `publish()` and
+     `_flush_retry_queue()` to prevent circular append bugs
+   - `_flush_retry_queue()` drains queue into a local list before iterating,
+     stops immediately if token is lost mid-flush, re-queues remaining items
+   - Internal handling of `connection_token` and `heartbeat` SSE events
+   - Network errors during publish are caught and queued for retry
+
+2. **Hub Daemon** (`hub/main.py`):
+   - `HubDaemon` orchestrator: config loading → relay registration → agent
+     discovery → agent sync → SSE event loop
+   - Per-event error isolation: unhandled exceptions in `_handle_event()` are
+     caught and logged without crashing the daemon
+   - Background tasks: periodic health checks (60s) and agent re-sync (120s)
+   - Signal handling (SIGINT, SIGTERM) for graceful shutdown
+   - Privacy classification on inbound messages (log-only in Phase 2b)
+
+3. **Agent Registry** (`hub/agent_registry.py`):
+   - Manual discovery from `config.yaml` agent list
+   - Auto-discovery: enumerates all TCP ports listening on localhost via
+     `psutil.net_connections()`, then probes each for A2A agent cards.
+     This finds agents on any port (not just a fixed range). Well-known
+     non-agent ports (22, 53, 80, 443, 3306, 5432, 6379, 27017) are
+     excluded by default via `auto_discover_exclude_ports` config.
+     Probes are concurrency-limited (30 at a time via `asyncio.Semaphore`).
+   - Tries both `AGENT_CARD_WELL_KNOWN_PATH` (`/.well-known/agent-card.json`)
+     and `PREV_AGENT_CARD_WELL_KNOWN_PATH` (`/.well-known/agent.json`) from
+     `a2a.utils.constants` — supports both current and deprecated paths
+   - URL-based dedup: re-discovery updates existing agent entries
+   - `to_sync_payload()` for `HubAgentSyncRequest` format
+   - Capability extraction from agent cards (streaming, push, skill tags)
+
+4. **Dispatcher** (`hub/dispatcher.py`):
+   - Sync dispatch via `message/send` (JSON-RPC 2.0 over HTTP POST)
+   - Streaming dispatch via `message/stream` (JSON-RPC 2.0, SSE response)
+   - JSON-RPC envelope unwrap in both sync (`_extract_text_from_response`) and
+     streaming (`_extract_chunk_text`) response extraction
+   - Translates A2A responses into `HubPublishEvent` format:
+     `task_submitted` → `agent_token` (per chunk) → `agent_response` → `processing_status`
+   - Graceful error handling: dispatch failures produce an error `agent_response`
+     instead of crashing
+
+5. **Privacy Router** (`hub/privacy_router.py`):
+   - Keyword matching (user-configured, case-insensitive)
+   - User-defined regex patterns
+   - Built-in PII patterns: email, US phone, SSN, credit card, API key
+   - `SensitivityLevel` enum: HIGH / MEDIUM / LOW
+   - Phase 2b: `check_and_log()` classifies and logs but does NOT block dispatch
+
+6. **Configuration** (`hub/config.py`):
+   - `HubConfig` Pydantic model with all settings
+   - Loads from `~/.hybro/config.yaml` with env var overrides (`HYBRO_API_KEY`,
+     `HYBRO_GATEWAY_URL`) and CLI arg overrides
+   - Hub ID persistence in `~/.hybro/hub_id` (generated once, reused)
+   - `save_api_key()` for persisting API key to config file
+
+7. **CLI** (`hub/cli.py` + `hub/__main__.py`):
+   - `hybro-hub start [--api-key]` — starts the daemon (foreground)
+   - `hybro-hub status` — queries relay for hub status
+   - `hybro-hub agents` — discovers and lists local agents
+   - `hybro-hub agent start ollama [--model] [--port] [--system-prompt]` — launches
+     an Ollama A2A adapter via `a2a-adapter` library
+   - Entry points: `hybro-hub` console script + `python -m hub`
+
+8. **Ollama A2A Adapter** (`a2a-adapter` repo, `a2a_adapter/integrations/ollama.py`):
+   - `OllamaAdapter` extending `BaseA2AAdapter` (v0.2 pattern)
+   - Wraps Ollama `/api/chat` endpoint for both sync (`invoke`) and streaming
+     (`stream`) — NDJSON streaming protocol
+   - Configurable: model name, base_url, system_prompt, temperature, timeout,
+     keep_alive
+   - `get_metadata()` returns `AdapterMetadata` with `streaming=True`
+   - Registered in loader (`_BUILTIN_MAP`), `__init__.py` lazy imports,
+     `integrations/__init__.py`, and `pyproject.toml` optional deps
+   - Example: `examples/ollama_agent.py` (3-line quickstart)
+
+9. **Package Configuration** (`pyproject.toml`):
+   - Dependencies: `httpx`, `httpx-sse`, `pydantic`, `pyyaml`, `click`, `a2a-sdk`, `psutil`
+   - Optional: `ollama = ["a2a-adapter"]`
+   - Console script: `hybro-hub = "hub.cli:main"`
+   - Build includes both `hybro_sdk` and `hub` packages
+   - `requires-python = ">=3.11"`
+
+10. **Tests** (62 tests, all passing):
+    - `test_relay_client.py` — 10 tests: register, sync, publish success/403/network-error,
+      `_do_publish`, flush queue (success, 403-mid-flush, infinite-loop regression, no-token skip),
+      timeout config, dead code cleanup verification
+    - `test_agent_registry.py` — 9 tests: manual/auto discovery, fallback path,
+      sync payload, health check, capability extraction
+    - `test_dispatcher.py` — 12 tests: sync dispatch (success/error), JSON-RPC build,
+      response extraction (status/artifacts/parts/root-wrapper), chunk extraction
+      (raw/JSON-RPC-wrapped/root-wrapper/empty)
+    - `test_privacy_router.py` — 11 tests: keyword/regex/PII detection, false positive check
+    - `a2a-adapter/tests/unit/test_ollama_adapter.py` — comprehensive unit tests
+
+**Key implementation decisions:**
+- **Separate HTTP/SSE clients**: The relay client uses two `httpx.AsyncClient`
+  instances with different timeout configs. The SSE client has `read=None` to
+  prevent the backend's ~30s heartbeat interval from racing against a finite
+  read timeout, which was causing constant reconnections.
+- **Retry queue with circular-append prevention**: `publish()` queues events on
+  failure (403, missing token, or network error). `_flush_retry_queue()` drains
+  the queue into a local list and uses `_do_publish()` (which never touches the
+  queue) to prevent infinite loops. If the token is lost mid-flush, remaining
+  items are re-queued and the method returns immediately.
+- **JSON-RPC envelope unwrap**: Both sync and streaming response extractors
+  unwrap via `data.get("result", data)`, handling both JSON-RPC-wrapped and
+  raw event payloads gracefully. This ensures streaming dispatch correctly
+  extracts text from A2A SDK responses.
+- **Per-event error isolation**: The daemon's event loop wraps `_handle_event()`
+  in a try/except so a single failed event (publish error, dispatch error, etc.)
+  is logged without crashing the daemon.
+- **Ollama adapter in a2a-adapter repo**: The Ollama adapter follows the existing
+  v0.2 `BaseA2AAdapter` pattern in the `a2a-adapter` library (not bundled in
+  `hybro-hub`). The hub's CLI imports it at runtime via the `ollama` optional
+  dependency. This keeps the adapter reusable outside the hub context.
+- **Dual agent card path support**: Agent discovery and health checks try both
+  `/.well-known/agent-card.json` (current) and `/.well-known/agent.json`
+  (deprecated), importing the canonical paths from `a2a.utils.constants`.
+  This ensures compatibility with agents using either the current or
+  previous A2A SDK versions.
+- **psutil-based port discovery**: Instead of scanning a fixed port range
+  (which misses agents on non-standard ports and wastes requests on closed
+  ports), auto-discovery uses `psutil.net_connections()` to enumerate all
+  TCP ports actually listening on localhost, then probes only those. This
+  is both faster and finds agents on any port. A configurable exclude list
+  skips well-known non-agent ports (SSH, databases, etc.). Concurrency is
+  bounded by `asyncio.Semaphore(30)` to avoid overwhelming the system.
 
 #### Phase 2c: Frontend Updates (not yet started)
 
@@ -999,7 +1151,7 @@ through the relay to the browser. The response shows a 🏠 badge.
 5. Privacy badge on messages
 
 **Validation:** User runs `hybro-hub start`, opens hybro.ai, chats with a
-local Ollama agent alongside cloud agents. Requires Phase 2b + 2c completion.
+local Ollama agent alongside cloud agents. Requires Phase 2c (frontend) completion.
 
 ### Phase 3: Advanced Features (12+ weeks, parallel)
 
@@ -1266,13 +1418,13 @@ Workflow Phase 1 (Robust V2)     Workflow Phase 2 (Templates)   Workflow Phase 3
 
 Hub Phase 1 (Gateway API + SDK)  Hub Phase 2b (Hub Daemon)      Hub Phase 3
   └─ no Agent model changes ✅     └─ relay client, agent        (desktop app, etc.)
-  └─ COMPLETE                       registry, dispatcher
-                                  Hub Phase 2c (Frontend)
-Hub Phase 2a (Relay + Middleware)   └─ source badges, hub
-  └─ adds source/hub_id/           status, offline styling
-     local_agent_id to Agent ✅
-  └─ DispatchMiddleware arch ✅
-  └─ COMPLETE
+  └─ COMPLETE                       registry, dispatcher,
+                                    privacy router, CLI,
+Hub Phase 2a (Relay + Middleware)   Ollama adapter ✅
+  └─ adds source/hub_id/         └─ COMPLETE
+     local_agent_id to Agent ✅  Hub Phase 2c (Frontend)
+  └─ DispatchMiddleware arch ✅    └─ source badges, hub
+  └─ COMPLETE                       status, offline styling
 
 Trust Phase 0 (Identity + HCT)  Trust Phase 1 (Policy + OTel)  Trust Phase 2-3
   └─ adds identity to Agent        └─ adds Cedar middleware to   (DPoP, enterprise)
