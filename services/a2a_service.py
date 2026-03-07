@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 from uuid import uuid4
 
@@ -171,17 +172,15 @@ class A2AService:
             logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
             raise A2AServiceError() from e
 
+    @asynccontextmanager
     async def create_a2a_client(
         self, agent_card: AgentCard, timeout: float = DEFAULT_REQUEST_TIMEOUT
-    ) -> A2AClient:
+    ):
+        httpx_client = httpx.AsyncClient(timeout=timeout)
         try:
-            httpx_client = httpx.AsyncClient(timeout=timeout)
-            a2a_client = A2AClient(httpx_client, agent_card=agent_card)
-            return a2a_client
-
-        except Exception as e:
-            logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
-            raise A2AServiceError() from e
+            yield A2AClient(httpx_client, agent_card=agent_card)
+        finally:
+            await httpx_client.aclose()
 
     def has_streaming_capability(self, agent_card: AgentCard) -> bool:
         """
@@ -403,8 +402,8 @@ class A2AService:
                 self.PUSH_NOTIFICATION_TIMEOUT if push_config
                 else self.DEFAULT_REQUEST_TIMEOUT
             )
-            a2a_client = await self.create_a2a_client(agent_card, timeout=dispatch_timeout)
-            response = await a2a_client.send_message(send_message_request)
+            async with self.create_a2a_client(agent_card, timeout=dispatch_timeout) as a2a_client:
+                response = await a2a_client.send_message(send_message_request)
         except Exception as e:
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
             failed_task = Task(
@@ -592,32 +591,30 @@ class A2AService:
         """
 
         try:
-            # Use provided client or create new one
-            a2a_client = await self.create_a2a_client(agent_card)
+            async with self.create_a2a_client(agent_card) as a2a_client:
+                payload = MessageSendParams(
+                    message=message,
+                    configuration=MessageSendConfiguration(
+                        accepted_output_modes=self._resolve_accepted_modes(agent_card)
+                    ),
+                )
 
-            payload = MessageSendParams(
-                message=message,
-                configuration=MessageSendConfiguration(
-                    accepted_output_modes=self._resolve_accepted_modes(agent_card)
-                ),
-            )
+                send_message_request = SendMessageRequest(
+                    id=str(uuid4()),
+                    method="message/send",
+                    jsonrpc="2.0",
+                    params=payload,
+                )
 
-            send_message_request = SendMessageRequest(
-                id=str(uuid4()),
-                method="message/send",
-                jsonrpc="2.0",
-                params=payload,
-            )
+                logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
+                response = await a2a_client.send_message(send_message_request)
 
-            logger.debug(f"a2a_service: Sending sync message to agent: {agent_card}")
-            response = await a2a_client.send_message(send_message_request)
-
-            # Handle error
-            if isinstance(response.root, JSONRPCErrorResponse):
-                error_msg = str(response.root.error.message)
-                logger.error(f"a2a_service: Agent error: {error_msg}")
-                raise A2AServiceError(error_msg)
-            return response
+                # Handle error
+                if isinstance(response.root, JSONRPCErrorResponse):
+                    error_msg = str(response.root.error.message)
+                    logger.error(f"a2a_service: Agent error: {error_msg}")
+                    raise A2AServiceError(error_msg)
+                return response
 
         except A2AServiceError:
             raise
@@ -647,27 +644,25 @@ class A2AService:
         Yields:
             Dict events in our internal format (TokenStreamingEvent, TaskUpdateStreamingEvent, etc.)
         """
-        a2a_client = await self.create_a2a_client(agent_card)
+        async with self.create_a2a_client(agent_card) as a2a_client:
+            payload = MessageSendParams(
+                message=message,
+                configuration=MessageSendConfiguration(
+                    accepted_output_modes=self._resolve_accepted_modes(agent_card)
+                ),
+            )
 
-        payload = MessageSendParams(
-            message=message,
-            configuration=MessageSendConfiguration(
-                accepted_output_modes=self._resolve_accepted_modes(agent_card)
-            ),
-        )
+            stream_request = SendStreamingMessageRequest(
+                id=str(uuid4()),
+                method="message/stream",
+                jsonrpc="2.0",
+                params=payload,
+            )
 
-        stream_request = SendStreamingMessageRequest(
-            id=str(uuid4()),
-            method="message/stream",
-            jsonrpc="2.0",
-            params=payload,
-        )
-
-        logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
-        response_stream = a2a_client.send_message_streaming(stream_request)
-        # Yield each event IMMEDIATELY as it arrives
-        async for response in response_stream:
-            yield response
+            logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
+            response_stream = a2a_client.send_message_streaming(stream_request)
+            async for response in response_stream:
+                yield response
 
     async def send_message(
         self, agent_card: AgentCard, message: Message
@@ -888,27 +883,27 @@ class A2AService:
         Returns True if the cancel request was acknowledged, False otherwise.
         """
         try:
-            a2a_client = await self.create_a2a_client(agent_card)
-            cancel_request = CancelTaskRequest(
-                id=str(uuid4()),
-                params=TaskIdParams(id=task_id),
-            )
-            response = await asyncio.wait_for(
-                a2a_client.cancel_task(cancel_request),
-                timeout=timeout,
-            )
-            if isinstance(response.root, JSONRPCErrorResponse):
-                logger.debug(
-                    "a2a_service: Remote cancel rejected for task %s: %s",
-                    task_id,
-                    response.root.error.message,
+            async with self.create_a2a_client(agent_card) as a2a_client:
+                cancel_request = CancelTaskRequest(
+                    id=str(uuid4()),
+                    params=TaskIdParams(id=task_id),
                 )
-                return False
-            logger.info(
-                "a2a_service: Remote cancel acknowledged for task %s",
-                task_id,
-            )
-            return True
+                response = await asyncio.wait_for(
+                    a2a_client.cancel_task(cancel_request),
+                    timeout=timeout,
+                )
+                if isinstance(response.root, JSONRPCErrorResponse):
+                    logger.debug(
+                        "a2a_service: Remote cancel rejected for task %s: %s",
+                        task_id,
+                        response.root.error.message,
+                    )
+                    return False
+                logger.info(
+                    "a2a_service: Remote cancel acknowledged for task %s",
+                    task_id,
+                )
+                return True
         except TimeoutError:
             logger.debug(
                 "a2a_service: Remote cancel timed out for task %s after %.1fs",

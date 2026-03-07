@@ -271,13 +271,13 @@ class StaleTaskChecker:
         from a2a.types import GetTaskRequest, JSONRPCErrorResponse, TaskQueryParams
 
         try:
-            a2a_client = await a2a_service.create_a2a_client(agent_card)
-            response = await a2a_client.get_task(
-                GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
-            )
-            if not response or isinstance(response.root, JSONRPCErrorResponse):
-                return None
-            return response.root.result
+            async with a2a_service.create_a2a_client(agent_card) as a2a_client:
+                response = await a2a_client.get_task(
+                    GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
+                )
+                if not response or isinstance(response.root, JSONRPCErrorResponse):
+                    return None
+                return response.root.result
         except Exception as e:
             logger.error(f"Failed to get task from agent: {e}")
             return None
