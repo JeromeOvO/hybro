@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { deduplicateIcons } from '@/components/agent-card'
+import { deduplicateIcons } from '@/lib/agent-icon-utils'
 import {
   Dialog,
   DialogContent,

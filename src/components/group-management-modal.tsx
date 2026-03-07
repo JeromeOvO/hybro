@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { deduplicateIcons } from '@/components/agent-card'
+import { deduplicateIcons } from '@/lib/agent-icon-utils'
 import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup, StaleAgentRef } from '@/lib/types/agent-group'

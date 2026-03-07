@@ -1,8 +1,8 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
-import { Search, RefreshCw, ChevronDown, Check, Bot } from "lucide-react"
-import { AgentCard } from "@/components/agent-card"
+import { Search, ChevronDown, Check, Bot } from "lucide-react"
+import { ConsumerAgentCard, ConsumerAgentCardSkeleton } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -49,6 +49,8 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
     const existingIds = new Set<string>()
 
     return agents.filter(agent => {
+      if (agent.agent_status === "deleted") return false
+
       if (existingIds.has(agent.agent_id)) {
         return false
       }
@@ -103,12 +105,17 @@ export default function ConsumerAgentsPage() {
 
   if (loadingAll && allAgents.length === 0) {
     return (
-      <div className="page-loading">
-        <div className="flex flex-col items-center justify-center gap-4">
-          <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-          <span className="text-base font-medium text-muted-foreground">
-            Loading Network...
-          </span>
+      <div className="page-container">
+        <div className="page-content space-y-4">
+          <div>
+            <h1 className="text-2xl font-bold">Explore Agents</h1>
+            <p className="text-sm text-muted-foreground">Discover AI agents on the HYBRO network</p>
+          </div>
+          <div className="grid grid-auto-fill-cards gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <ConsumerAgentCardSkeleton key={i} />
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -125,49 +132,56 @@ export default function ConsumerAgentsPage() {
           </div>
         </div>
 
-        {/* Search, Filter & Results Count */}
-        <div className="flex flex-col sm:flex-row gap-3 items-center">
+        {/* Search & Filter */}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="relative" ref={dropdownRef}>
+            <Button
+              variant="outline"
+              className="h-10 w-[130px] justify-between"
+              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            >
+              <span>{getStatusLabel(statusFilter)}</span>
+              <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+            </Button>
+            {isDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
+                {STATUS_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => {
+                      setStatusFilter(option.value)
+                      setIsDropdownOpen(false)
+                    }}
+                    className="w-full px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+                  >
+                    <Check className={`h-3 w-3 shrink-0 transition-opacity ${statusFilter === option.value ? 'opacity-100' : 'opacity-0'}`} />
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="relative flex-1">
-            <div className="relative" ref={dropdownRef}>
-              <Input
-                placeholder="Search agents..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="h-[72px] pl-36 pr-12 text-base"
-              />
-              <button
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="absolute left-2 top-1/2 -translate-y-1/2 w-[120px] h-14 px-3 border-r border-border/50 rounded-l-md bg-transparent hover:bg-muted/50 flex items-center text-sm text-muted-foreground transition-colors z-20"
-              >
-                <span>{getStatusLabel(statusFilter)}</span>
-                <ChevronDown className={`h-4 w-4 ml-auto transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              <Search className="absolute right-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground z-10" />
-              {isDropdownOpen && (
-                <div className="absolute top-full left-1.5 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
-                  {STATUS_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      onClick={() => {
-                        setStatusFilter(option.value)
-                        setIsDropdownOpen(false)
-                      }}
-                      className="w-full px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
-                    >
-                      <Check className={`h-3 w-3 shrink-0 transition-opacity ${statusFilter === option.value ? 'opacity-100' : 'opacity-0'}`} />
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search agents..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-10 pl-9 text-sm"
+            />
           </div>
         </div>
 
+        {/* Results summary */}
+        <p className="text-sm text-muted-foreground">
+          Showing {filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""}
+          {(searchTerm || statusFilter !== "all") ? " (filtered)" : ""}
+        </p>
+
         {/* Agent Cards Grid */}
-        <div className="grid grid-auto-fill-cards gap-3">
+        <div className="grid grid-auto-fill-cards gap-4">
           {filteredAgents.map((agent) => (
-            <AgentCard key={agent.agent_id} agent={agent} />
+            <ConsumerAgentCard key={agent.agent_id} agent={agent} />
           ))}
         </div>
 
