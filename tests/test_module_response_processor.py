@@ -8,6 +8,7 @@ Tests cover:
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager
 
 from a2a.types import (
     JSONRPCError,
@@ -323,7 +324,12 @@ class TestPollTaskUntilCompleteReachesTerminal:
         a2a_client.get_task = AsyncMock(
             side_effect=[working_resp, working_resp, completed_resp]
         )
-        proc.a2a_service.create_a2a_client = AsyncMock(return_value=a2a_client)
+
+        @asynccontextmanager
+        async def _fake_create_a2a_client(*args, **kwargs):
+            yield a2a_client
+
+        proc.a2a_service.create_a2a_client = _fake_create_a2a_client
 
         result = await proc._poll_task_until_complete(
             agent_card=agent_card,
