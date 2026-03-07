@@ -165,6 +165,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     return `Agent ${agentId.slice(0, 6)}`
   }, [allAgentsQuery.data])
 
+  const getAgentSource = useCallback((agentId: string | undefined): 'cloud' | 'hub' | undefined => {
+    if (!agentId) return undefined
+    const agents = allAgentsQuery.data
+    if (agents) {
+      const found = agents.find(a => a.agent_id === agentId)
+      if (found?.source) return found.source as 'cloud' | 'hub'
+    }
+    return undefined
+  }, [allAgentsQuery.data])
+
   // Refresh agent name cache when agent catalog loads
   useEffect(() => {
     if (allAgentsQuery.data) {
@@ -263,7 +273,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
       const incomingMessages = await Promise.all(
         response.message_list.map(msg =>
-          convertApiMessageToIncoming(msg, { userId, userName, getAgentName })
+          convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
         )
       )
       const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
@@ -305,6 +315,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               senderName: resolvedName || 'Agent',
               timestamp: normalizeTimestampOrNow(req.created_at),
               agentId: req.agent_id,
+              agentSource: getAgentSource(req.agent_id),
               taskStatus: 'input-required' as TaskState,
               hitlRequestId: req.request_id,
               hitlPrompt: req.prompt,
@@ -350,7 +361,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       const s = useMessageStore.getState()
       if (s.roomId === targetRoomId) s.markDbSynced()
     }
-  }, [getToken, userId, userName, getAgentName])
+  }, [getToken, userId, userName, getAgentName, getAgentSource])
 
   // ── Reconciliation: silent DB sync for gap-filling (Gap 14) ──
 
@@ -361,7 +372,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
       const incomingMessages = await Promise.all(
         response.message_list.map(msg =>
-          convertApiMessageToIncoming(msg, { userId, userName, getAgentName })
+          convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
         )
       )
       const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
@@ -375,7 +386,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } catch (error) {
       console.error('[NormalizedStore] Reconciliation failed:', error)
     }
-  }, [getToken, userId, userName, getAgentName])
+  }, [getToken, userId, userName, getAgentName, getAgentSource])
 
   const queryLoading = roomQuery.isFetching || roomQuery.isLoading
 
@@ -569,6 +580,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               content,
               senderName: agentName,
               agentId: sseMessage.data.agent_id,
+              agentSource: getAgentSource(sseMessage.data.agent_id),
               timestamp: msgTimestamp,
               taskStatus: null,
               isEphemeral: false,
@@ -607,6 +619,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             senderName: agentName,
             timestamp: existingEntity?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             agentId: agent_id,
+            agentSource: getAgentSource(agent_id),
             isEphemeral: true,
           }, 'sse')
         }
@@ -736,6 +749,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             content: '',
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
+            agentSource: getAgentSource(sseMessage.data.agent_id),
             taskStatus: (sseMessage.data.status as TaskState) || TASK_STATE.WORKING,
             taskContent: sseMessage.data.task_content,
             stepNumber: sseMessage.data.step_number,
@@ -780,6 +794,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             messageType: 'agent' as const,
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
+            agentSource: getAgentSource(sseMessage.data.agent_id),
             timestamp: new Date().toISOString(),
           }
 
@@ -925,6 +940,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               senderName: resolvedAgentName || 'Agent',
               timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
               agentId: agent_id,
+              agentSource: getAgentSource(agent_id),
               taskStatus: 'input-required' as TaskState,
               hitlRequestId: request_id,
               hitlPrompt: prompt,
@@ -1005,7 +1021,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, getProcessingPlaceholderId, getSupervisorMode, roomId, setProcessing, clearProcessing, setCancelling, reconcileWithDb])
+  }, [getAgentName, getAgentSource, getProcessingPlaceholderId, getSupervisorMode, roomId, setProcessing, clearProcessing, setCancelling, reconcileWithDb])
 
   // Initialize SSE connection
   const {
@@ -1054,6 +1070,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             content: partial,
             senderName: existing?.senderName || 'Agent',
             agentId: existing?.agentId,
+            agentSource: existing?.agentSource,
             timestamp: existing?.timestamp || new Date().toISOString(),
             isEphemeral: false,
             taskStatus: null,
@@ -1083,6 +1100,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 senderName: resolvedName || 'Agent',
                 timestamp: normalizeTimestampOrNow(req.created_at),
                 agentId: req.agent_id,
+                agentSource: getAgentSource(req.agent_id),
                 taskStatus: 'input-required' as TaskState,
                 hitlRequestId: req.request_id,
                 hitlPrompt: req.prompt,
@@ -1132,7 +1150,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     return () => {
       if (safetyTimer) clearTimeout(safetyTimer)
     }
-  }, [sseConnected, processing, roomId, getToken, getAgentName, roomQuery, clearProcessing, reconcileWithDb])
+  }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, roomQuery, clearProcessing, reconcileWithDb])
 
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (

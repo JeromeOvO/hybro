@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Shield, Cloud } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
@@ -30,6 +30,7 @@ interface BubbleMessage {
   sender_name: string
   timestamp: string
   agent_id?: string
+  agentSource?: 'cloud' | 'hub'
 }
 
 /** Adapt a MessageEntity to the BubbleMessage shape used by bubble components. */
@@ -40,6 +41,7 @@ function entityToBubble(entity: MessageEntity): BubbleMessage {
     sender_name: entity.senderName,
     timestamp: entity.timestamp,
     agent_id: entity.agentId,
+    agentSource: entity.agentSource,
   }
 }
 
@@ -474,9 +476,19 @@ function AgentMessageBubbleInner({
           <span className="text-xs text-slate-500 dark:text-slate-400">
             {formatTimestamp(message.timestamp)}
           </span>
+          {message.agentSource === 'hub' && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+              <Shield className="h-2.5 w-2.5" />
+              Local
+            </span>
+          )}
+          {message.agentSource === 'cloud' && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
+              <Cloud className="h-2.5 w-2.5" />
+              Cloud
+            </span>
+          )}
         </div>
-
-        {/* Content - Collapsible for long messages */}
         <div
           ref={contentRef}
           className={cn(
@@ -610,6 +622,7 @@ export function EntityAgentBubble({
     sender_name: entity.senderName,
     timestamp: entity.timestamp,
     agent_id: entity.agentId,
+    agentSource: entity.agentSource,
   }
 
   return (

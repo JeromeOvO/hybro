@@ -14,6 +14,7 @@ import { ProfileSection } from "@/components/settings/profile-section"
 import { PasswordSection } from "@/components/settings/password-section"
 import { SessionsSection } from "@/components/settings/sessions-section"
 import { DangerZoneSection } from "@/components/settings/danger-zone-section"
+import { HubSection } from "@/components/settings/hub-section"
 import { Separator } from "@/components/ui/separator"
 
 interface SettingsDialogProps {
@@ -46,6 +47,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <div className="space-y-6">
               <Separator />
               <ProfileSection user={user} />
+              <HubSection />
               <PasswordSection user={user} />
               <SessionsSection user={user} />
               <DangerZoneSection user={user} />
