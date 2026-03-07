@@ -26,6 +26,7 @@ from common.utils.context_utils import (
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from dataclasses import dataclass
+from models.agent import AgentStatus
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.memory import MemoryContent
 from models.request import (
@@ -38,13 +39,17 @@ from models.request import (
     TaskCenterRequest,
 )
 from models.response import (
+    RoomAgentRef,
     RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
+    ScopeResolutionError,
 )
 from models.room import (
     CoordinatorAgentId,
+    MembershipOrigin,
+    MembershipOriginStatus,
     MessageContent,
     Room,
     RoomAgentMessage,
@@ -166,6 +171,109 @@ class RoomServices:
 
         return normalized
 
+    async def _resolve_membership_input(
+        self,
+        request: RoomCenterRoomSettingRequest,
+        existing_room: Room | None = None,
+    ) -> tuple[dict[str, str], MembershipOrigin, MembershipOriginStatus, str | None, str | None] | RoomCenterRoomSettingResponse:
+        """Resolve canonical or legacy membership input into a concrete agent set + provenance.
+
+        Returns either a 5-tuple (agent_set, origin, origin_status, source_group_id, source_group_name)
+        or a RoomCenterRoomSettingResponse error to return early.
+
+        Precedence: canonical fields win over legacy fields.
+        """
+        has_canonical = request.membership_seed_input is not None
+        has_legacy = request.room_agent_set is not None
+        requesting_user = request.requesting_user_id
+
+        # Canonical path
+        if has_canonical:
+            seed = request.membership_seed_input
+
+            if seed == "manual":
+                agent_ids = request.room_agent_ids or []
+                agent_set: dict[str, str] = {}
+                unknown_ids: list[str] = []
+                for aid in agent_ids:
+                    agent = await self.database_service.get_agent_by_agent_id(aid)
+                    if not agent:
+                        unknown_ids.append(aid)
+                        continue
+                    agent_set[aid] = agent.agent_card.name
+                if unknown_ids:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=None, room=None, success=False,
+                        error=f"Unknown or deleted agent IDs: {', '.join(unknown_ids)}",
+                        status_code=400,
+                    )
+                return (agent_set, MembershipOrigin.MANUAL, MembershipOriginStatus.MANUAL, None, None)
+
+            if seed == "saved_group":
+                if not request.seed_group_id:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=None, room=None, success=False,
+                        error="seed_group_id is required for saved_group seed input",
+                        status_code=400,
+                    )
+                group = await self.database_service.get_agent_group_by_id(request.seed_group_id)
+                if not group:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=None, room=None, success=False,
+                        error=f"Saved group {request.seed_group_id} not found",
+                        status_code=404,
+                    )
+                if group.type != "builtin" and group.owner_id != requesting_user:
+                    return RoomCenterRoomSettingResponse(
+                        room_id=None, room=None, success=False,
+                        error="You do not have permission to use this saved group",
+                        status_code=403,
+                    )
+                agent_set = {}
+                for aid in group.agents:
+                    agent = await self.database_service.get_agent_by_agent_id(aid)
+                    if agent and agent.agent_status == AgentStatus.active:
+                        agent_set[aid] = agent.agent_card.name
+                return (agent_set, MembershipOrigin.SAVED_GROUP, MembershipOriginStatus.SEEDED_NEVER_EDITED, group.group_id, group.name)
+
+            if seed == "all_current_agents":
+                all_agents = await self.database_service.get_all_active_agents(
+                    user_id=requesting_user,
+                )
+                agent_set = {
+                    a.agent_id: a.agent_card.name
+                    for a in (all_agents or [])
+                }
+                return (agent_set, MembershipOrigin.ALL_CURRENT_AGENTS, MembershipOriginStatus.SEEDED_NEVER_EDITED, None, None)
+
+            return RoomCenterRoomSettingResponse(
+                room_id=None, room=None, success=False,
+                error=f"Invalid membership_seed_input: {seed}",
+                status_code=400,
+            )
+
+        # Legacy path
+        if has_legacy:
+            normalized = self._normalize_room_agent_set(request.room_agent_set)
+            if request.applied_from_group:
+                group = await self.database_service.get_agent_group_by_id(request.applied_from_group)
+                group_name = group.name if group else None
+                return (normalized, MembershipOrigin.SAVED_GROUP, MembershipOriginStatus.SEEDED_NEVER_EDITED, request.applied_from_group, group_name)
+            return (normalized, MembershipOrigin.MANUAL, MembershipOriginStatus.MANUAL, None, None)
+
+        # No membership input at all
+        if existing_room is not None:
+            return (
+                existing_room.room_agent_set or {},
+                existing_room.membership_origin or MembershipOrigin.MANUAL,
+                existing_room.membership_origin_status or MembershipOriginStatus.MANUAL,
+                existing_room.source_group_id,
+                existing_room.source_group_name,
+            )
+
+        # New room with no membership input: empty snapshot
+        return ({}, MembershipOrigin.MANUAL, MembershipOriginStatus.MANUAL, None, None)
+
     async def _validate_agents_access(
         self, agent_ids: list[str], user_id: str
     ) -> list[str]:
@@ -212,26 +320,24 @@ class RoomServices:
                 status_code=400,
             )
 
-        # Validate that user has access to all agents being added
-        if room_create_request.room_agent_set:
-            normalized_agent_set = self._normalize_room_agent_set(
-                room_create_request.room_agent_set
+        # Resolve membership input (canonical or legacy)
+        result = await self._resolve_membership_input(room_create_request)
+        if isinstance(result, RoomCenterRoomSettingResponse):
+            return result
+        agent_set, origin, origin_status, source_group_id, source_group_name = result
+
+        # Validate access to agents
+        requesting_user = room_create_request.requesting_user_id or room_create_request.room_owner_id
+        if agent_set and requesting_user:
+            inaccessible = await self._validate_agents_access(
+                list(agent_set.keys()), requesting_user
             )
-            requesting_user = room_create_request.requesting_user_id or room_create_request.room_owner_id
-            if requesting_user:
-                inaccessible = await self._validate_agents_access(
-                    list(normalized_agent_set.keys()), requesting_user
+            if inaccessible:
+                return RoomCenterRoomSettingResponse(
+                    room_id=None, room=None, success=False,
+                    error=f"Access denied to private agents: {', '.join(inaccessible)}",
+                    status_code=403,
                 )
-                if inaccessible:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=None,
-                        room=None,
-                        success=False,
-                        error=f"Access denied to private agents: {', '.join(inaccessible)}",
-                        status_code=403,
-                    )
-        else:
-            normalized_agent_set = {}
 
         if room_create_request.room is not None:
             room = room_create_request.room
@@ -241,17 +347,26 @@ class RoomServices:
                 room_name=room_create_request.room_name,
                 room_owner_id=room_create_request.room_owner_id,
                 room_owner_name=room_create_request.room_owner_name,
-                room_agent_set=normalized_agent_set,
+                room_agent_set=agent_set,
                 room_created_at=utcnow(),
                 applied_from_group=room_create_request.applied_from_group,
+                membership_origin=origin,
+                membership_origin_status=origin_status,
+                source_group_id=source_group_id,
+                source_group_name=source_group_name,
                 extend_info=room_create_request.extend_info or None,
             )
 
         success = await self.database_service.add_room(room)
         if success:
+            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
+                room.room_agent_set, viewer_user_id=requesting_user
+            )
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
                 room=room,
+                resolved_agents=resolved_agents,
+                room_default_status=room_default_status,
                 success=True,
                 error=None,
                 status_code=200,
@@ -290,14 +405,36 @@ class RoomServices:
         else:
             # Ensure room_agent_set is always returned in canonical {agent_id: agent_name} form
             normalized_agent_set = self._normalize_room_agent_set(room.room_agent_set)
-            if normalized_agent_set != (room.room_agent_set or {}):
+            needs_write = normalized_agent_set != (room.room_agent_set or {})
+            if needs_write:
                 room.room_agent_set = normalized_agent_set
-                # Best-effort persistence; ignore failures here
+
+            # Backfill canonical provenance for legacy rooms
+            if room.membership_origin is None:
+                if room.applied_from_group:
+                    room.membership_origin = MembershipOrigin.SAVED_GROUP
+                    room.membership_origin_status = MembershipOriginStatus.SEEDED_NEVER_EDITED
+                    room.source_group_id = room.applied_from_group
+                elif room.room_agent_set:
+                    room.membership_origin = MembershipOrigin.MANUAL
+                    room.membership_origin_status = MembershipOriginStatus.MANUAL
+                else:
+                    room.membership_origin = MembershipOrigin.MANUAL
+                    room.membership_origin_status = MembershipOriginStatus.MANUAL
+                needs_write = True
+
+            if needs_write:
                 await self.database_service.update_room_by_room_id(room_id, room)
+
+            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
+                room.room_agent_set, viewer_user_id=request.requesting_user_id
+            )
 
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
                 room=room,
+                resolved_agents=resolved_agents,
+                room_default_status=room_default_status,
                 success=True,
                 error=None,
                 status_code=200,
@@ -343,42 +480,62 @@ class RoomServices:
                 status_code=404,
             )
 
-        if request.room_agent_set is None:
+        has_membership_input = (
+            request.membership_seed_input is not None
+            or request.room_agent_set is not None
+        )
+        if not has_membership_input:
             return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room agent set is required",
+                room_id=None, room=None, success=False,
+                error="Room agent set or canonical membership input is required",
                 status_code=400,
             )
 
-        # Normalize incoming mapping to {agent_id: agent_name}
-        normalized_agent_set = self._normalize_room_agent_set(request.room_agent_set)
+        result = await self._resolve_membership_input(request, existing_room=room)
+        if isinstance(result, RoomCenterRoomSettingResponse):
+            return result
+        new_agent_set, origin, origin_status, source_group_id, source_group_name = result
 
-        # Validate that user has access to any NEW agents being added
+        # Validate access to NEW agents
         if request.requesting_user_id:
-            # Find which agents are new (not already in room)
-            existing_agent_ids = set(room.room_agent_set.keys()) if room.room_agent_set else set()
-            new_agent_ids = set(normalized_agent_set.keys()) - existing_agent_ids
-            
-            if new_agent_ids:
+            existing_ids = set(room.room_agent_set.keys()) if room.room_agent_set else set()
+            new_ids = set(new_agent_set.keys()) - existing_ids
+            if new_ids:
                 inaccessible = await self._validate_agents_access(
-                    list(new_agent_ids), request.requesting_user_id
+                    list(new_ids), request.requesting_user_id
                 )
                 if inaccessible:
                     return RoomCenterRoomSettingResponse(
-                        room_id=room_id,
-                        room=None,
-                        success=False,
+                        room_id=room_id, room=None, success=False,
                         error=f"Access denied to private agents: {', '.join(inaccessible)}",
                         status_code=403,
                     )
 
-        room.room_agent_set = normalized_agent_set
+        room.room_agent_set = new_agent_set
+
+        # Update provenance from the resolved result.
+        if request.membership_seed_input is not None or request.applied_from_group:
+            room.membership_origin = origin
+            room.membership_origin_status = origin_status
+            room.source_group_id = source_group_id
+            room.source_group_name = source_group_name
+        else:
+            # Legacy manual edit without applied_from_group
+            if room.membership_origin in (MembershipOrigin.SAVED_GROUP, MembershipOrigin.ALL_CURRENT_AGENTS):
+                room.membership_origin_status = MembershipOriginStatus.SEEDED_EDITED
+            else:
+                room.membership_origin = MembershipOrigin.MANUAL
+                room.membership_origin_status = MembershipOriginStatus.MANUAL
         success = await self.database_service.update_room_by_room_id(room_id, room)
         if success:
+            resolved_agents, room_default_status = await self._resolve_room_agent_refs(
+                room.room_agent_set, viewer_user_id=request.requesting_user_id
+            )
             return RoomCenterRoomSettingResponse(
-                room_id=room_id, room=room, success=True, error=None, status_code=200
+                room_id=room_id, room=room,
+                resolved_agents=resolved_agents,
+                room_default_status=room_default_status,
+                success=True, error=None, status_code=200,
             )
         else:
             return RoomCenterRoomSettingResponse(
@@ -719,15 +876,8 @@ class RoomServices:
                     }
                 )
             else:
-                # Agent not found in room, but still parse it
-                mentions.append(
-                    {
-                        "agent_id": agent_id,
-                        "agent_name": agent_name,  # Use the name from the mention
-                        "mention_text": match.group(0),
-                        "position": position,
-                        "warning": "Agent not in current room",
-                    }
+                logger.warning(
+                    "Inline mention %s not in room agent set — ignored", agent_id
                 )
 
         # Sort by position to maintain order
@@ -768,10 +918,18 @@ class RoomServices:
         relevant_parts = []
 
         for mention in agent_mentions:
-            mention_pos = mention["position"]
-            mention_text = mention["mention_text"]
+            mention_pos = mention.get("position")
+            mention_text = mention.get("mention_text", "")
 
-            # Find the sentence or context around this mention
+            if mention_pos is None:
+                context_clean = message_text
+                for m in all_mentions:
+                    context_clean = context_clean.replace(m.get("mention_text", ""), "")
+                context_clean = re.sub(r"\s+", " ", context_clean).strip()
+                if context_clean and context_clean not in relevant_parts:
+                    relevant_parts.append(context_clean)
+                continue
+
             start_pos = mention_pos
             end_pos = mention_pos + len(mention_text)
 
@@ -825,27 +983,25 @@ class RoomServices:
         context_groups = {}
 
         for mention in mentions:
-            mention_pos = mention["position"]
-            mention_text = mention["mention_text"]
+            mention_pos = mention.get("position")
+            mention_text = mention.get("mention_text", "")
 
-            # Find sentence boundaries around this mention
-            start_pos = mention_pos
-            end_pos = mention_pos + len(mention_text)
+            if mention_pos is None:
+                context = message_text.strip()
+            else:
+                start_pos = mention_pos
+                end_pos = mention_pos + len(mention_text)
 
-            # Extend backwards to find sentence start
-            while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
-                start_pos -= 1
+                while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
+                    start_pos -= 1
 
-            # Extend forwards to find sentence end
-            while end_pos < len(message_text) and message_text[end_pos] not in ".!?\n":
-                end_pos += 1
+                while end_pos < len(message_text) and message_text[end_pos] not in ".!?\n":
+                    end_pos += 1
 
-            # Include the sentence ending punctuation
-            if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
-                end_pos += 1
+                if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
+                    end_pos += 1
 
-            # Extract the sentence context
-            context = message_text[start_pos:end_pos].strip()
+                context = message_text[start_pos:end_pos].strip()
 
             # Group mentions by context
             if context not in context_groups:
@@ -856,7 +1012,12 @@ class RoomServices:
         for context, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
             if len(mentions_in_context) > 1:
-                # Check if mentions are consecutive (close together with minimal text between)
+                all_have_position = all(
+                    "position" in m for m in mentions_in_context
+                )
+                if not all_have_position:
+                    continue
+
                 mentions_in_context.sort(key=lambda x: x["position"])
 
                 is_consecutive = True
@@ -1611,7 +1772,10 @@ class RoomServices:
         return ParseResult(success=True) if agent_messages else ParseResult(success=False)
 
     async def send_message_to_room(
-        self, request: RoomCenterUserMessageRequest, target_group: str = "room_team"
+        self,
+        request: RoomCenterUserMessageRequest,
+        target_group: str = "room_team",
+        mentioned_agent_ids: list[str] | None = None,
     ) -> RoomCenterUserMessageResponse:
         """Add and parse user message to room and send processing status to client."""
 
@@ -1647,6 +1811,49 @@ class RoomServices:
         if att_err is not None:
             return att_err
 
+        # ── Pre-persist scope validation ──────────────────────────────────
+        # Fetch room early: needed for scope resolution and downstream flags.
+        room = await self.database_service.get_room_by_room_id(request.room_id)
+        if not room:
+            return RoomCenterUserMessageResponse(
+                message_id=None, message=None, success=False,
+                error="Room not found", status_code=404,
+            )
+
+        is_debate_mode = (
+            room.extend_info.get("debateMode", False) if room.extend_info else False
+        )
+        use_supervisor = (
+            room.extend_info.get("use_supervisor", False) if room.extend_info else False
+        )
+        message_text = user_message.message_content.message_text
+
+        # Validate deterministic scope BEFORE persistence so rejected messages
+        # never get a real message_id in the database.
+        # - canonical mentioned_agent_ids: validated via shared helper
+        # - room_team / saved_group: validated via shared helper
+        # - all_agents: LLM-driven, cannot pre-validate (persists first)
+        # - legacy inline mentions: best-effort, not covered (persists first)
+        pre_resolved_mentions: list[dict] | None = None
+        pre_resolved_scope: tuple[dict, bool, list] | None = None
+
+        if mentioned_agent_ids:
+            mention_result = await self._validate_canonical_mentions(
+                mentioned_agent_ids, sender_user_id=request.user_id,
+            )
+            if isinstance(mention_result, RoomCenterUserMessageResponse):
+                return mention_result
+            pre_resolved_mentions = mention_result
+        elif target_group != "all_agents":
+            scope_result = await self._resolve_explicit_target_scope(
+                room, message_text, target_group, is_debate_mode,
+                sender_user_id=request.user_id,
+            )
+            if isinstance(scope_result, RoomCenterUserMessageResponse):
+                return scope_result
+            pre_resolved_scope = scope_result
+
+        # ── Persist ───────────────────────────────────────────────────────
         if not await self._persist_user_message(user_message):
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -1672,29 +1879,22 @@ class RoomServices:
             )
             return memory_response
 
-        room = await self.database_service.get_room_by_room_id(request.room_id)
-        if not room:
-            await self.sse_manager.send_processing_status(
-                request.room_id, SSEProcessingStatus.COMPLETED, user_message.message_id
+        # ── Dispatch using pre-resolved scope ─────────────────────────────
+        # Canonical mention dispatch: reuse pre-validated mention list.
+        if pre_resolved_mentions:
+            if (
+                use_supervisor
+                and isinstance(room.extend_info, dict)
+                and room.extend_info.get("pending_clarification_message_id")
+            ):
+                await self._clear_pending_clarification(room)
+            return await self._handle_mentions_flow(
+                request, user_message, pre_resolved_mentions
             )
-            return RoomCenterUserMessageResponse(
-                message_id=user_message.message_id,
-                message=user_message,
-                success=True,
-                error="Room not found, but message saved",
-                status_code=200,
-            )
 
-        is_debate_mode = (
-            room.extend_info.get("debateMode", False) if room.extend_info else False
-        )
-
-        # Check if Supervisor pattern is enabled for this room
-        use_supervisor = (
-            room.extend_info.get("use_supervisor", False) if room.extend_info else False
-        )
-
-        message_text = user_message.message_content.message_text
+        # Legacy fallback: parse inline <@id|name> mentions from message text.
+        # This runs AFTER persistence — legacy inline mentions are best-effort
+        # and do not get reject-before-persist protection.
         mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
 
         if mentions:
@@ -1706,9 +1906,23 @@ class RoomServices:
                 await self._clear_pending_clarification(room)
             return await self._handle_mentions_flow(request, user_message, mentions)
 
-        selected_agent_set, auto_assign, agents = await self._resolve_agent_selection(
-            room, message_text, target_group, is_debate_mode
-        )
+        # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
+        if target_group == "all_agents":
+            selection_result = await self._resolve_explicit_target_scope(
+                room, message_text, target_group, is_debate_mode,
+                sender_user_id=request.user_id,
+            )
+            if isinstance(selection_result, RoomCenterUserMessageResponse):
+                # all_agents runs after persist — attach the real message_id
+                # so the frontend knows the user message exists in the DB
+                # and doesn't rollback optimistic state.
+                selection_result.message_id = user_message.message_id
+                return selection_result
+            selected_agent_set, auto_assign, agents = selection_result
+        elif pre_resolved_scope is not None:
+            selected_agent_set, auto_assign, agents = pre_resolved_scope
+        else:
+            selected_agent_set, auto_assign, agents = {}, True, []
 
         if not selected_agent_set:
             return await self._handle_no_agents_fallback(
@@ -1806,6 +2020,7 @@ class RoomServices:
 
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
+            dispatch_root_message_id=user_message.message_id,
             message=user_message,
             success=True,
             error=None,
@@ -1894,24 +2109,71 @@ class RoomServices:
         )
         return mention_response
 
-    async def _resolve_agent_selection(
+    async def _validate_canonical_mentions(
+        self,
+        mentioned_agent_ids: list[str],
+        sender_user_id: str | None,
+    ) -> list[dict] | RoomCenterUserMessageResponse:
+        """Validate and resolve mentioned_agent_ids into canonical mention dicts.
+
+        Returns the mention list on success, or an error response on failure.
+        Called once before persistence; the result is reused downstream.
+        """
+        canonical_mentions: list[dict] = []
+        invalid_ids: list[str] = []
+        for aid in mentioned_agent_ids:
+            agent = await self.database_service.get_agent_by_agent_id(aid)
+            if not agent or agent.agent_status != AgentStatus.active:
+                invalid_ids.append(aid)
+                continue
+            if not agent.is_public and getattr(agent, "provider_id", None) != sender_user_id:
+                invalid_ids.append(aid)
+                continue
+            canonical_mentions.append({
+                "agent_id": aid,
+                "agent_name": agent.agent_card.name,
+                "mention_text": f"<@{aid}|{agent.agent_card.name}>",
+            })
+
+        if invalid_ids:
+            error_msg = f"Invalid or unauthorized mention targets: {', '.join(invalid_ids)}"
+            logger.warning(
+                "Canonical mention targets rejected (invalid/unauthorized): %s",
+                invalid_ids,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None, message=None, success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="unauthorized_mention", message=error_msg,
+                ),
+                status_code=400,
+            )
+        return canonical_mentions
+
+    async def _resolve_explicit_target_scope(
         self,
         room: Room,
         message_text: str,
         target_group: str,
         is_debate_mode: bool,
-    ) -> tuple[dict, bool, list]:
+        sender_user_id: str | None = None,
+    ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
         """Resolve selected agents and auto-assign flag based on target_group.
 
         Returns:
-            tuple: (selected_agent_set: dict, auto_assign: bool, agents: list[Agent])
+            A 3-tuple (selected_agent_set, auto_assign, agents) on success,
+            or a RoomCenterUserMessageResponse on scope-resolution failure.
+
+        Deterministic failures (room_team empty, saved_group missing/unauthorized/empty)
+        always return structured error responses — never empty tuples.
         """
 
-        async def select_agents_all_agents_mode() -> tuple[dict, bool, list]:
+        async def select_agents_all_agents_mode() -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
             try:
                 selection_result = (
                     await agent_selection_service.select_agents_for_message(
-                        message_text
+                        message_text, user_id=sender_user_id,
                     )
                 )
 
@@ -1920,7 +2182,6 @@ class RoomServices:
                         agent.agent_id: agent.agent_name
                         for agent in selection_result.agents
                     }
-                    # Fetch full Agent objects for LLM context
                     full_agents = []
                     for agent_info in selection_result.agents:
                         full_agent = await self.database_service.get_agent_by_agent_id(
@@ -1941,17 +2202,22 @@ class RoomServices:
                     return selected, True, full_agents
 
                 logger.warning(
-                    "All Agents mode: No agents found, falling back to room agents"
+                    "All Agents mode: No agents found — returning empty scope"
                 )
-                # Fetch full agents for room_agent_set fallback
-                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
-                return room.room_agent_set, True, room_agents
+                return {}, True, []
             except Exception as e:
+                error_msg = "Agent selection failed. Please try again."
                 logger.error(
-                    "All Agents mode selection failed: %s, using room agents", e
+                    "All Agents mode selection failed: %s — returning scope error", e
                 )
-                room_agents = await self._fetch_agents_from_set(room.room_agent_set)
-                return room.room_agent_set, True, room_agents
+                return RoomCenterUserMessageResponse(
+                    message_id=None, message=None, success=False,
+                    error=error_msg,
+                    scope_resolution_error=ScopeResolutionError(
+                        code="empty_scope", message=error_msg,
+                    ),
+                    status_code=500,
+                )
 
         if target_group == "all_agents":
             return await select_agents_all_agents_mode()
@@ -1959,20 +2225,54 @@ class RoomServices:
         if target_group == "room_team":
             if room.room_agent_set:
                 logger.info(
-                    "Room Team mode: Using %s room agents", len(room.room_agent_set)
+                    "Room Default mode: Using %s room agents as candidate scope",
+                    len(room.room_agent_set),
                 )
-                # Fetch full Agent objects for the room agents
                 room_agents = await self._fetch_agents_from_set(room.room_agent_set)
                 return room.room_agent_set, True, room_agents
 
+            error_msg = "This room has no agents. Add agents before sending a message."
             logger.warning(
-                "Room Team mode: room has no agents, falling back to all_agents selection"
+                "Room Default mode: room has no agents — returning scope-resolution error"
             )
-            return await select_agents_all_agents_mode()
+            return RoomCenterUserMessageResponse(
+                message_id=None, message=None, success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="empty_scope", message=error_msg,
+                ),
+                status_code=400,
+            )
 
-        # Custom group
+        # Custom group (saved-group override at send time)
         group = await self.database_service.get_agent_group_by_id(target_group)
-        if group and group.agents:
+        if not group:
+            error_msg = "The selected agent group no longer exists. Please choose a different group."
+            logger.warning(
+                "Custom group %s not found — returning scope-resolution error",
+                target_group,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None, message=None, success=False,
+                error=error_msg,
+                scope_resolution_error=ScopeResolutionError(
+                    code="group_not_usable", message=error_msg,
+                ),
+                status_code=404,
+            )
+
+        if group.type != "builtin" and group.owner_id != sender_user_id:
+            logger.warning(
+                "Sender %s not authorized to use saved group %s (owner: %s)",
+                sender_user_id, target_group, group.owner_id,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=None, message=None, success=False,
+                error="You do not have permission to use this saved group",
+                status_code=403,
+            )
+
+        if group.agents:
             agents = []
             for agent_id in group.agents:
                 agent = await self.database_service.get_agent_by_agent_id(agent_id)
@@ -1989,11 +2289,19 @@ class RoomServices:
             )
             return selected_agent_set, True, agents
 
+        error_msg = f"The selected agent group '{group.name}' has no members."
         logger.warning(
-            "Custom group %s not found, falling back to room agents", target_group
+            "Custom group '%s' has no agents — returning scope-resolution error",
+            group.name,
         )
-        room_agents = await self._fetch_agents_from_set(room.room_agent_set)
-        return room.room_agent_set, True, room_agents
+        return RoomCenterUserMessageResponse(
+            message_id=None, message=None, success=False,
+            error=error_msg,
+            scope_resolution_error=ScopeResolutionError(
+                code="empty_scope", message=error_msg,
+            ),
+            status_code=400,
+        )
 
     async def _fetch_agents_from_set(self, agent_set: dict | None) -> list:
         """Fetch full Agent objects from an agent_set dict {agent_id: agent_name}."""
@@ -2006,6 +2314,43 @@ class RoomServices:
             if agent:
                 agents.append(agent)
         return agents
+
+    async def _resolve_room_agent_refs(
+        self, agent_set: dict | None, viewer_user_id: str | None = None
+    ) -> tuple[list[RoomAgentRef], str]:
+        """Resolve agent IDs into RoomAgentRef objects and compute room_default_status.
+
+        Args:
+            agent_set: {agent_id: agent_name} dict from the room snapshot.
+            viewer_user_id: The current user requesting the read. When provided,
+                private agents not owned by this user are marked ``inaccessible``.
+
+        Returns (resolved_agents, room_default_status).
+        """
+        if not agent_set:
+            return [], "empty"
+
+        refs: list[RoomAgentRef] = []
+        for agent_id, agent_name in agent_set.items():
+            agent = await self.database_service.get_agent_by_agent_id(agent_id)
+            if not agent:
+                refs.append(RoomAgentRef(id=agent_id, name=agent_name, availability="deleted"))
+            elif agent.agent_status != AgentStatus.active:
+                refs.append(RoomAgentRef(id=agent_id, name=agent.agent_card.name, availability="inactive"))
+            elif not agent.is_public and viewer_user_id and getattr(agent, "provider_id", None) != viewer_user_id:
+                refs.append(RoomAgentRef(id=agent_id, name=agent.agent_card.name, availability="inaccessible"))
+            else:
+                refs.append(RoomAgentRef(id=agent_id, name=agent.agent_card.name, availability="available"))
+
+        available_count = sum(1 for r in refs if r.availability == "available")
+        if available_count == len(refs):
+            status = "ok"
+        elif available_count > 0:
+            status = "degraded"
+        else:
+            status = "all_unavailable"
+
+        return refs, status
 
     async def _handle_no_agents_fallback(
         self,
@@ -2239,6 +2584,7 @@ class RoomServices:
 
         return RoomCenterUserMessageResponse(
             message_id=message.message_id,
+            dispatch_root_message_id=message.message_id,
             message=message,
             success=True,
             error=None,

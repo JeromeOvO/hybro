@@ -121,14 +121,13 @@ class TestParseAgentMentions:
         assert result[0]["agent_id"] == "a1"
         assert result[1]["agent_id"] == "a2"
 
-    def test_warns_for_unknown_agent(self, room_center):
-        """Agent not in room should still be parsed but with warning."""
+    def test_ignores_unknown_agent(self, room_center):
+        """Agent not in room should be silently ignored."""
         text = "<@unknown|Ghost> do something"
         agent_set = {}
         result = room_center.parse_agent_mentions(text, agent_set)
 
-        assert len(result) == 1
-        assert result[0]["warning"] == "Agent not in current room"
+        assert len(result) == 0
 
     def test_returns_empty_for_no_mentions(self, room_center):
         text = "Just a normal message with no mentions"

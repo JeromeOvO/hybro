@@ -228,14 +228,20 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_name: str | None = None
     room_owner_id: str | None = None
     room_owner_name: str | None = None
-    room_agent_set: dict[str, str] | None = None
     room_created_at: datetime | None = None
-    applied_from_group: str | None = None  # Group ID if agents applied from a group
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
-    requesting_user_id: str | None = (
-        None  # User making the request, for visibility validation
-    )
+    requesting_user_id: str | None = None
+
+    # Legacy fields — accepted during rollout; canonical fields take precedence.
+    room_agent_set: dict[str, str] | None = None
+    applied_from_group: str | None = None
+
+    # Canonical membership write input (mutually exclusive)
+    membership_seed_input: str | None = None  # "manual" | "saved_group" | "all_current_agents"
+    room_agent_ids: list[str] | None = None
+    seed_group_id: str | None = None
+    seed_all_current_agents: bool | None = None
 
 
 class UserAttachmentRequest(BaseModel):

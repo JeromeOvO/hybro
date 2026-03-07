@@ -278,6 +278,49 @@ class SupervisorExecutor:
                 },
             )
 
+            # --- Guard: DONE/SYNTHESIZE before any delegation ---
+            # The supervisor should not skip all delegations.  If it chose
+            # DONE or SYNTHESIZE before any agent has been dispatched, override
+            # to DELEGATE so the user sees at least one agent response.
+            if action.action in (ActionType.DONE, ActionType.SYNTHESIZE):
+                has_any_delegation = any(
+                    e.action.action == ActionType.DELEGATE
+                    for e in trajectory.entries
+                )
+                if not has_any_delegation:
+                    healthy_agents = [a for a in agent_registry if a.is_healthy]
+                    if healthy_agents:
+                        logger.warning(
+                            "supervisor_premature_%s_override",
+                            action.action.value,
+                            extra={
+                                "room_id": room_id,
+                                "trajectory_id": trajectory.trajectory_id,
+                                "step_number": step_number,
+                                "original_reasoning": (
+                                    action.reasoning[:120]
+                                    if action.reasoning
+                                    else ""
+                                ),
+                            },
+                        )
+                        action = SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=(
+                                f"Auto-override: supervisor chose "
+                                f"{action.action.value} before any agent "
+                                f"responded — delegating to available agents"
+                            ),
+                            targets=[
+                                DelegateTarget(
+                                    agent_id=a.agent_id,
+                                    agent_name=a.agent_name,
+                                    task=message_text,
+                                )
+                                for a in healthy_agents
+                            ],
+                        )
+
             # --- Guard: DELEGATE with empty targets is a no-op ---
             if action.action == ActionType.DELEGATE and not action.targets:
                 logger.warning(
