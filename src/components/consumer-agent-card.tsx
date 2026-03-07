@@ -43,7 +43,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
     >
       <Card
         className={cn(
-          "group relative min-h-[260px] flex flex-col items-center p-5 gap-0",
+          "group relative h-full flex flex-col items-center p-5 gap-0",
           "border shadow-sm transition-all duration-300",
           "hover:-translate-y-0.5",
           "hover:shadow-[0_8px_40px_-12px_rgba(var(--color-primary)/0.25)]",
@@ -96,11 +96,11 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
         </p>
 
         {agent.agent_card.description ? (
-          <p className="mt-2 text-sm text-muted-foreground text-center line-clamp-2 w-full">
+          <p className="mt-2 text-sm text-muted-foreground text-center line-clamp-2 w-full min-h-[2.5rem]">
             {agent.agent_card.description}
           </p>
         ) : (
-          <div className="mt-2" />
+          <div className="mt-2 min-h-[2.5rem]" />
         )}
 
         {visibleSkills.length > 0 && (
@@ -144,7 +144,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
 
 export function ConsumerAgentCardSkeleton() {
   return (
-    <Card className="min-h-[260px] p-5 flex flex-col items-center gap-3">
+    <Card className="h-full p-5 flex flex-col items-center gap-3">
       <Skeleton className="h-[62px] w-[62px] rounded-lg" />
       <Skeleton className="h-5 w-2/3" />
       <Skeleton className="h-3 w-1/3" />
