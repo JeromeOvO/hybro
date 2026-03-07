@@ -184,7 +184,7 @@ export function AgentSelector({
       {/* Header */}
       <div className="flex items-center gap-2">
         <Users className="w-5 h-5" />
-        <Label className="text-base font-semibold">Agent Invitation</Label>
+        <Label className="text-base font-semibold">Room Agents</Label>
       </div>
 
       {/* Error State */}

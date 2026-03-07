@@ -14,6 +14,8 @@ import { banner } from "@/components/ui/banner"
 import { useQuery } from '@tanstack/react-query'
 import type { QuoteData } from '@/components/message-bubble'
 import type { Agent } from '@/lib/types/agent'
+import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { RoomAgentRefWire } from '@/lib/types/response'
 import { useRoomSSE } from './useRoomSSE'
 import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
@@ -119,7 +121,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     queryFn: async ({ signal }): Promise<Agent[]> => {
       console.log('🤖 Loading global active agents catalog')
       try {
-        const res = await getAllActiveAgents(signal, 15000) // 15s safety timeout
+        const res = await getAllActiveAgents(signal, 15000, getToken) // 15s safety timeout
         if (!res.success || !res.agents) {
           throw new Error(res.error || 'Failed to load agents')
         }
@@ -177,6 +179,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // React Query: room
   type RoomSettingResult = Awaited<ReturnType<typeof inquiryRoomSetting>>
 
+  const resolvedAgentsRef = useRef<RoomAgentRefWire[] | null>(null)
+
   const roomQuery = useQuery({
     queryKey: ['room', roomId],
     enabled: !!roomId && activeRoomLoad.current !== roomId,
@@ -191,6 +195,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (!response.success || !response.room) {
           throw new Error(response.error || 'Failed to load room')
         }
+        resolvedAgentsRef.current = response.resolved_agents ?? null
         // Pre-populate agent name cache
         if (response.room.room_agent_set) {
           Object.entries(response.room.room_agent_set).forEach(([agentId, agentName]) => {
@@ -1121,7 +1126,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Update room settings - now includes debate mode
   const updateRoomSettings = useCallback(async (
     roomName: string,
-    selectedAgents: { [agentId: string]: Agent },
+    membershipAgentIds: string[],
     options: { debateMode: boolean }
   ) => {
     if (!room) {
@@ -1134,15 +1139,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     try {
       setUpdatingRoom(true)
 
-      // Create agent set mapping: agent id -> agent name (canonical shape)
-      const roomAgentSet = Object.fromEntries(
-        Object.entries(selectedAgents).map(([id, agent]) => [
-          id,                     // key: agent id
-          agent.agent_card.name,  // value: agent name
-        ])
-      )
-      console.log('🔄 Updating room settings:', { roomName, roomAgentSet, debateMode })
-
       // Update room name if changed
       if (roomName !== room.room_name) {
         const nameResponse = await updateRoomName(roomId, roomName)
@@ -1151,10 +1147,27 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         }
       }
 
-      // Update agent set
-      const agentResponse = await updateRoomAgentSet(roomId, roomAgentSet)
-      if (!agentResponse.success) {
-        throw new Error(`Failed to update room agents: ${agentResponse.error}`)
+      // Only update membership when the set actually changed.
+      // This avoids backend rejection of deleted stale members when the user
+      // only changed the room name or toggled debateMode.
+      const currentAgentIds = new Set(Object.keys(room.room_agent_set || {}))
+      const newAgentIds = new Set(membershipAgentIds)
+      const membershipChanged = currentAgentIds.size !== newAgentIds.size
+        || [...currentAgentIds].some(id => !newAgentIds.has(id))
+
+      if (membershipChanged) {
+        const agentResponse = await updateRoomAgentSet(
+          roomId, {}, getToken,
+          { membership_seed_input: "manual", room_agent_ids: membershipAgentIds },
+        )
+        if (!agentResponse.success) {
+          const errMsg = agentResponse.error || 'Unknown error'
+          if (errMsg.includes('Unknown or deleted agent')) {
+            banner.error('Some agents have been deleted. Remove them before saving membership changes.')
+            return false
+          }
+          throw new Error(`Failed to update room agents: ${errMsg}`)
+        }
       }
 
       // Only update debateMode in extend_info; supervisor mode is managed
@@ -1175,7 +1188,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
           throw new Error(`Failed to update room settings: ${extendInfoResponse.error}`)
         }
 
-        console.log('✅ Room extend_info updated:', {
+        console.log('Room extend_info updated:', {
           debateMode: debateMode ? 'ENABLED' : 'DISABLED',
         })
       }
@@ -1193,10 +1206,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom])
+  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom, getToken])
 
   // Complete user message sending workflow - using unified SendMessage API
-  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData, pendingAttachments?: PendingAttachment[]) => {
+  const sendUserMessage = useCallback(async (userInput: string, targetGroup: string = "all_agents", quoteData?: QuoteData, pendingAttachments?: PendingAttachment[], dispatch?: MessageDispatchInput) => {
     if (!userId || !userName || !room || sending || isProcessingRef.current) {
       return false
     }
@@ -1268,6 +1281,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         quoteData?.messageId ?? null,
         quoteData?.content ?? null,
         uploadedAttachments,
+        dispatch,
       )
 
       if (!createResponse.success) {
@@ -1561,6 +1575,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       roomOwnerId: room.room_owner_id || '',
       roomOwnerName: room.room_owner_name || '',
       debateMode: getDebateMode(),
+      resolvedAgents: resolvedAgentsRef.current,
     }
   }, [room, getDebateMode])
 

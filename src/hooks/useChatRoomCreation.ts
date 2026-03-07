@@ -6,6 +6,8 @@ import { banner } from "@/components/ui/banner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
+import { isBuiltinGroup } from '@/lib/types/agent-group'
+import type { RoomMembershipWriteInput } from '@/lib/types/agent-group'
 
 interface UseChatRoomCreationProps {
   userId?: string
@@ -15,12 +17,14 @@ interface UseChatRoomCreationProps {
 
 interface CreateRoomOptions {
   selectedAgents?: Agent[]
+  /** @deprecated Use membership instead. */
   appliedFromGroup?: string
   debateMode?: boolean
   useSupervisor?: boolean
   roomName?: string
   targetGroup?: string
   attachments?: PendingAttachment[]
+  membership?: RoomMembershipWriteInput
 }
 
 export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
@@ -34,7 +38,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
   const loadDefaultAgents = useCallback(async () => {
     try {
       setLoadingAgents(true)
-      const response = await getAllActiveAgents()
+      const response = await getAllActiveAgents(undefined, undefined, getToken)
       
       if (response.success && response.agents && response.agents.length > 0) {
         setDefaultAgents(response.agents)
@@ -49,7 +53,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     } finally {
       setLoadingAgents(false)
     }
-  }, [])
+  }, [getToken])
 
   // Get agent suggestions (preview for All Agents mode)
   const getAgentSuggestions = useCallback(async (messageText: string): Promise<SuggestAgentsResponse | null> => {
@@ -76,7 +80,8 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       debateMode = false,
       useSupervisor = false,
       roomName: customRoomName,
-      targetGroup
+      targetGroup,
+      membership: explicitMembership,
     } = options
 
     if (!userId || !userName) {
@@ -103,7 +108,13 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
           ])
         )
       }
-      // If no agents selected, room starts empty (messages use target_group)
+
+      // Derive membership: Room Settings config (selectedAgents) takes priority,
+      // then saved group selection, then empty snapshot.
+      let membership: RoomMembershipWriteInput | undefined = explicitMembership
+      if (!membership && selectedAgents.length === 0 && targetGroup && !isBuiltinGroup(targetGroup)) {
+        membership = { membership_seed_input: "saved_group", seed_group_id: targetGroup }
+      }
 
       // Use custom room name if provided, otherwise auto-generate from message
       // Strip mentions from room name (e.g., <@id|name> -> "")
@@ -125,7 +136,8 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         getToken,
         roomAgentSet,
         extendInfo,
-        appliedFromGroup
+        appliedFromGroup,
+        membership,
       )
 
       if (response.success && response.room) {
@@ -135,10 +147,17 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
         }
         console.log('Room created successfully:', roomId)
         
-        // Store initial message and target group in Zustand for the room page to pick up
+        // Store initial message and target group in Zustand for the room page to pick up.
+        // Clear the override when the room was seeded with an explicit snapshot:
+        //  - saved group seeded → room has snapshot → default to Room Default (Locked Decision #4)
+        //  - manual selectedAgents → room has snapshot → default to Room Default
+        const handoffTargetGroup =
+          membership?.membership_seed_input === "saved_group" || selectedAgents.length > 0
+            ? undefined
+            : targetGroup
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
-          targetGroup,
+          targetGroup: handoffTargetGroup,
           attachments: options.attachments,
         })
         

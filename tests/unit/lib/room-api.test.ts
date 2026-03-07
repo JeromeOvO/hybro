@@ -174,6 +174,65 @@ describe('Room API', () => {
       expect(message.related_message_id).toBe('related-msg-1')
       expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
     })
+
+    it('should omit target_group when MentionDispatchInput is provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Hello @agent', undefined, 'user-1', 'Test User',
+        'all_agents', null, null, undefined,
+        { mentioned_agent_ids: ['agent-a', 'agent-b'] },
+      )
+
+      expect(capturedBody).toHaveProperty('mentioned_agent_ids', ['agent-a', 'agent-b'])
+      expect(capturedBody).not.toHaveProperty('target_group')
+    })
+
+    it('should keep target_group when TargetModeDispatchInput is provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Hello', undefined, 'user-1', 'Test User',
+        'room_team', null, null, undefined,
+        { message_target_mode: 'room_default' },
+      )
+
+      expect(capturedBody).toHaveProperty('target_group', 'room_team')
+      expect(capturedBody).toHaveProperty('message_target_mode', 'room_default')
+      expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
+    })
+
+    it('should include target_group_id for saved_group dispatch', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Hello', undefined, 'user-1', 'Test User',
+        'grp-123', null, null, undefined,
+        { message_target_mode: 'saved_group', target_group_id: 'grp-123' },
+      )
+
+      expect(capturedBody).toHaveProperty('message_target_mode', 'saved_group')
+      expect(capturedBody).toHaveProperty('target_group_id', 'grp-123')
+      expect(capturedBody).toHaveProperty('target_group', 'grp-123')
+    })
   })
 
   describe('inquiryRoomMessagesByRoomId', () => {

@@ -3,9 +3,13 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { listAgentGroups } from "@/lib/api/agent-group"
 import { getAllActiveAgents } from "@/lib/api/agent"
-import type { AgentGroup } from "@/lib/types/agent-group"
+import type { AgentGroup, TargetModeDispatchInput } from "@/lib/types/agent-group"
 import type { Agent } from "@/lib/types/agent"
-import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from "@/lib/types/agent-group"
+import {
+  BUILTIN_GROUP_ALL_AGENTS,
+  BUILTIN_GROUP_ROOM_TEAM,
+  normalizeLegacyTargetGroup,
+} from "@/lib/types/agent-group"
 
 interface UseGroupManagementOptions {
   userId?: string
@@ -25,6 +29,7 @@ interface GroupManagementState {
   loadingGroups: boolean
   selectedGroup: string
   isOverride: boolean
+  resolvedTargetMode: TargetModeDispatchInput
   // Modal state
   groupManagementOpen: boolean
   groupAction: { type: 'create' | 'edit' | 'delete'; group?: AgentGroup } | null
@@ -109,7 +114,7 @@ export function useGroupManagement(
     setLoadingAgents(true)
     setAgentsError(null)
     try {
-      const response = await getAllActiveAgents()
+      const response = await getAllActiveAgents(undefined, undefined, getToken)
       if (response.success && response.agents) {
         setAvailableAgents(response.agents)
       } else {
@@ -121,7 +126,7 @@ export function useGroupManagement(
     } finally {
       setLoadingAgents(false)
     }
-  }, [availableAgents.length])
+  }, [availableAgents.length, getToken])
 
   // Load agents on mount for mention suggestions
   useEffect(() => {
@@ -197,12 +202,18 @@ export function useGroupManagement(
     }
   }, [roomId])
 
+  const resolvedTargetMode: TargetModeDispatchInput = useMemo(
+    () => normalizeLegacyTargetGroup(selectedGroup),
+    [selectedGroup],
+  )
+
   return {
     // State
     groups,
     loadingGroups,
     selectedGroup,
     isOverride,
+    resolvedTargetMode,
     groupManagementOpen,
     groupAction,
     availableAgents,

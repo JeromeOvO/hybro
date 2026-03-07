@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef } from 'react'
-import { Plus, Paperclip, ShipWheel } from 'lucide-react'
+import { Plus, Paperclip, ShipWheel, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -10,6 +10,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 const ACCEPTED_MIME_SET = new Set([
@@ -33,6 +39,8 @@ interface FileAttachmentButtonProps {
   className?: string
   supervisorMode?: boolean
   onSupervisorChange?: (enabled: boolean) => void
+  debateMode?: boolean
+  onDebateModeChange?: (enabled: boolean) => void
 }
 
 export function FileAttachmentButton({
@@ -41,6 +49,8 @@ export function FileAttachmentButton({
   className,
   supervisorMode,
   onSupervisorChange,
+  debateMode,
+  onDebateModeChange,
 }: FileAttachmentButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -77,18 +87,51 @@ export function FileAttachmentButton({
           </DropdownMenuItem>
 
           {onSupervisorChange !== undefined && (
-            <DropdownMenuItem
-              onSelect={(e) => e.preventDefault()}
-              className="gap-2 cursor-pointer"
-            >
-              <ShipWheel className="h-4 w-4" />
-              <span className="flex-1">Supervisor Mode</span>
-              <Switch
-                checked={supervisorMode ?? false}
-                onCheckedChange={onSupervisorChange}
-                className="ml-2"
-              />
-            </DropdownMenuItem>
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuItem
+                    onSelect={(e) => e.preventDefault()}
+                    className="gap-2 cursor-pointer"
+                  >
+                    <ShipWheel className="h-4 w-4" />
+                    <span className="flex-1">Supervisor Mode</span>
+                    <Switch
+                      checked={supervisorMode ?? false}
+                      onCheckedChange={onSupervisorChange}
+                      className="ml-2"
+                    />
+                  </DropdownMenuItem>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="text-xs">
+                  Supervisor understands your request better
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {onDebateModeChange !== undefined && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuItem
+                    onSelect={(e) => e.preventDefault()}
+                    className="gap-2 cursor-pointer"
+                  >
+                    <Swords className="h-4 w-4" />
+                    <span className="flex-1">Debate Mode</span>
+                    <Switch
+                      checked={debateMode ?? false}
+                      onCheckedChange={onDebateModeChange}
+                      className="ml-2"
+                    />
+                  </DropdownMenuItem>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="text-xs">
+                  Agents will debate with each other
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </DropdownMenuContent>
       </DropdownMenu>

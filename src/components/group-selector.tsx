@@ -34,6 +34,7 @@ interface GroupSelectorProps {
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
+  onEditRoomAgents?: () => void
   agentNameMap?: Record<string, string>
   className?: string
   disabled?: boolean
@@ -52,6 +53,7 @@ export function GroupSelector({
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,
+  onEditRoomAgents,
   agentNameMap = {},
   className,
   disabled = false,
@@ -65,14 +67,14 @@ export function GroupSelector({
     if (roomAgentCount > 0) {
       return {
         icon: <Users className="h-3.5 w-3.5" />,
-        label: `Room Team (${roomAgentCount})`,
-        description: 'Room agents',
+        label: 'Room Default',
+        description: `${roomAgentCount} agent${roomAgentCount !== 1 ? 's' : ''}`,
       }
     }
     return {
       icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
       label: 'All Agents',
-      description: 'Find best agents',
+      description: 'All currently available agents',
     }
   }
 
@@ -199,16 +201,55 @@ export function GroupSelector({
                   alignOffset={0}
                   className="max-w-xs w-fit whitespace-normal wrap-break-word"
                 >
-                  <div className="text-xs text-muted-foreground">Auto select the best agents</div>
+                  <div className="text-xs text-muted-foreground">All currently available agents as candidate scope</div>
                 </TooltipContent>
               </Tooltip>
+
+              {/* Room Default Agents — only visible when room has a snapshot */}
+              {roomAgentCount > 0 && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (onClearOverride) {
+                      onClearOverride()
+                    }
+                  }}
+                  className={cn(
+                    "flex items-start gap-3 py-2.5",
+                    !isOverride && "bg-accent"
+                  )}
+                >
+                  <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium">Room Default Agents</div>
+                    <div className="text-xs text-muted-foreground">
+                      {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  {onEditRoomAgents && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Edit room default agents"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        onEditRoomAgents()
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  )}
+                </DropdownMenuItem>
+              )}
 
               {/* User groups */}
               {userGroups.length > 0 && (
                 <>
                   <DropdownMenuSeparator />
                   <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                    My Groups
+                    Saved Groups
                   </div>
                   {userGroups.map(group => (
                     <Tooltip key={group.group_id} delayDuration={150}>

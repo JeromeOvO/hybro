@@ -307,7 +307,7 @@ describe('RoomSettingForm', () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalledWith(
           '',
-          expect.objectContaining({ 'agent-1': mockAgents[0] }),
+          expect.arrayContaining(['agent-1']),
           { debateMode: false }
         )
       })

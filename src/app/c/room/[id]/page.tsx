@@ -4,42 +4,36 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useClerk, useAuth } from '@clerk/nextjs'
 import { toast } from 'sonner'
-import { Settings, Users } from 'lucide-react'
+import { Users, Pencil, Check, X as XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { RoomSettingForm } from '@/components/room-setting-form'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
 import { HitlPanel } from '@/components/hitl-inline-reply-form'
 import { GroupManagementModal } from '@/components/group-management-modal'
+import { RoomDefaultAgentsEditor } from '@/components/room-default-agents-editor'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useActiveHitlRequests } from '@/hooks/useRoomMessages'
-import type { Agent } from '@/lib/types/agent'
 import type { QuoteData } from '@/components/message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
-import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
+import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { isWaitlistEnabled } from "@/lib/utils"
-import { updateRoomExtendInfo, inquiryRoomSetting } from '@/lib/api/room'
+import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
 
 export default function RoomChatPage() {
   const params = useParams()
   const roomId = params.id as string
   const { user, isLoaded } = useUser()
   const { getToken } = useAuth()
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
   const { openWaitlist } = useClerk()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
@@ -51,18 +45,26 @@ export default function RoomChatPage() {
 
   // Local supervisor mode toggle (synced from room, user can override before sending)
   const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
+
+  // Inline room name editing
+  const [editingName, setEditingName] = useState(false)
+  const [editNameValue, setEditNameValue] = useState('')
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  // Local debate mode toggle (synced from room, lazy-persist-on-send like supervisor)
+  const [localDebateMode, setLocalDebateMode] = useState(false)
+  const confirmedDebateModeRef = useRef(false)
   const {
     room,
     loading,
     sending,
     processing,
     cancelling,
-    updatingRoom,
     sendUserMessage,
     cancelProcessing,
     respondToHitlRequest,
-    updateRoomSettings,
     getRoomFormData,
+    refreshRoomSetting,
     // SSE state
     sseConnected,
     sseConnecting,
@@ -90,8 +92,10 @@ export default function RoomChatPage() {
       lastSyncedRoomRef.current = roomId
       setLocalSupervisorMode(roomSupervisorMode)
       confirmedSupervisorRef.current = roomSupervisorMode
+      setLocalDebateMode(debateMode)
+      confirmedDebateModeRef.current = debateMode
     }
-  }, [room, roomId, roomSupervisorMode])
+  }, [room, roomId, roomSupervisorMode, debateMode])
 
   // Active HITL requests (for the panel above chat input)
   const activeHitlRequests = useActiveHitlRequests()
@@ -101,7 +105,7 @@ export default function RoomChatPage() {
     userId: user?.id,
     getToken,
     isLoaded,
-    defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS,
+    defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
     roomId,
     roomAgentCount,
   })
@@ -153,7 +157,6 @@ export default function RoomChatPage() {
 
     sendUserMessage(pendingData.initialMessage, targetGroup, undefined, pendingData.attachments).then((success) => {
       if (!success) {
-        // Re-store on failure so it can be retried
         useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
         initialMessageSentRef.current = false
       }
@@ -162,9 +165,10 @@ export default function RoomChatPage() {
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
-    if (room && localSupervisorMode !== confirmedSupervisorRef.current) {
-      // Fetch fresh extend_info from backend to avoid overwriting a
-      // concurrent debateMode change with stale React Query cache data.
+    // Lazy-persist supervisor mode and/or debate mode changes
+    const supervisorChanged = room && localSupervisorMode !== confirmedSupervisorRef.current
+    const debateModeChanged = room && localDebateMode !== confirmedDebateModeRef.current
+    if (supervisorChanged || debateModeChanged) {
       let freshExtendInfo: object = {}
       try {
         const freshRoom = await inquiryRoomSetting(roomId, getToken)
@@ -172,47 +176,125 @@ export default function RoomChatPage() {
           freshExtendInfo = freshRoom.room.extend_info as object
         }
       } catch {
-        freshExtendInfo = (room.extend_info as object) || {}
+        freshExtendInfo = (room?.extend_info as object) || {}
       }
-      const updatedExtendInfo = {
-        ...freshExtendInfo,
-        use_supervisor: localSupervisorMode,
-      }
+      const updatedExtendInfo: Record<string, unknown> = { ...freshExtendInfo }
+      if (supervisorChanged) updatedExtendInfo.use_supervisor = localSupervisorMode
+      if (debateModeChanged) updatedExtendInfo.debateMode = localDebateMode
       try {
         const result = await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
         if (result.success) {
-          confirmedSupervisorRef.current = localSupervisorMode
+          if (supervisorChanged) confirmedSupervisorRef.current = localSupervisorMode
+          if (debateModeChanged) confirmedDebateModeRef.current = localDebateMode
         } else {
-          setLocalSupervisorMode(confirmedSupervisorRef.current)
-          toast.warning('Failed to update supervisor mode — message sent with previous setting')
+          if (supervisorChanged) setLocalSupervisorMode(confirmedSupervisorRef.current)
+          if (debateModeChanged) setLocalDebateMode(confirmedDebateModeRef.current)
+          toast.warning('Failed to update mode settings — message sent with previous setting')
         }
       } catch {
-        setLocalSupervisorMode(confirmedSupervisorRef.current)
-        toast.warning('Failed to update supervisor mode — message sent with previous setting')
+        if (supervisorChanged) setLocalSupervisorMode(confirmedSupervisorRef.current)
+        if (debateModeChanged) setLocalDebateMode(confirmedDebateModeRef.current)
+        toast.warning('Failed to update mode settings — message sent with previous setting')
       }
     }
-    await sendUserMessage(userInput, targetGroup || gm.selectedGroup, quoteData ?? undefined, attachments)
-  }
 
-  // Handle room settings update
-  const handleRoomSettingsUpdate = async (
-    roomName: string,
-    selectedAgents: { [agentId: string]: Agent },
-    options: { debateMode: boolean }
-  ) => {
-    const success = await updateRoomSettings(roomName, selectedAgents, options)
-    if (success) {
-      setDialogOpen(false)
+    // Empty room + saved group override: pre-write room_agent_set before sending (Matrix B5)
+    const effectiveTarget = targetGroup || gm.selectedGroup || "all_agents"
+    if (roomAgentCount === 0 && !isBuiltinGroup(effectiveTarget)) {
+      try {
+        const preWriteResult = await updateRoomAgentSet(
+          roomId, {}, getToken,
+          { membership_seed_input: "saved_group", seed_group_id: effectiveTarget },
+        )
+        if (!preWriteResult.success) {
+          toast.error(preWriteResult.error || 'Failed to set room agents from group')
+          return
+        }
+        // Refetch room so roomAgentCount updates and selector transitions to Room Default
+        await refreshRoomSetting()
+        gm.handleClearOverride()
+        await sendUserMessage(userInput, BUILTIN_GROUP_ROOM_TEAM, quoteData ?? undefined, attachments, { message_target_mode: "room_default" })
+        return
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to set room agents')
+        return
+      }
     }
+
+    // When targetGroup is undefined the composer detected inline mentions —
+    // build a MentionDispatchInput so the backend uses canonical mention routing.
+    let dispatch: MessageDispatchInput | null = gm.resolvedTargetMode
+    if (!targetGroup) {
+      const mentionPattern = /<@([^|]+)\|[^>]+>/g
+      const ids: string[] = []
+      let m: RegExpExecArray | null
+      while ((m = mentionPattern.exec(userInput)) !== null) {
+        ids.push(m[1])
+      }
+      if (ids.length > 0) {
+        dispatch = { mentioned_agent_ids: ids }
+      }
+    }
+    await sendUserMessage(userInput, targetGroup || gm.selectedGroup || "all_agents", quoteData ?? undefined, attachments, dispatch ?? undefined)
   }
 
-  // Open room settings dialog (prefetch agents)
-  const handleOpenRoomSettings = async () => {
+  // Open room default agents editor (prefetch agents)
+  const handleEditRoomAgents = useCallback(async () => {
     if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
       await gm.loadAvailableAgents()
     }
-    setDialogOpen(true)
-  }
+    setEditorOpen(true)
+  }, [gm])
+
+  // Save handler for the room default agents editor
+  const handleEditorSave = useCallback(async (membershipAgentIds: string[]) => {
+    const result = await updateRoomAgentSet(
+      roomId, {}, getToken,
+      { membership_seed_input: "manual", room_agent_ids: membershipAgentIds },
+    )
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to update room agents')
+    }
+    setEditorOpen(false)
+  }, [roomId, getToken])
+
+  // Inline room name editing
+  const startEditingName = useCallback(() => {
+    if (!room) return
+    setEditNameValue(room.room_name || '')
+    setEditingName(true)
+    setTimeout(() => nameInputRef.current?.focus(), 0)
+  }, [room])
+
+  const saveRoomName = useCallback(async () => {
+    if (!room || !editNameValue.trim()) {
+      setEditingName(false)
+      return
+    }
+    if (editNameValue.trim() === room.room_name) {
+      setEditingName(false)
+      return
+    }
+    try {
+      const result = await updateRoomName(roomId, editNameValue.trim(), getToken)
+      if (!result.success) {
+        toast.error(result.error || 'Failed to update room name')
+      }
+    } catch {
+      toast.error('Failed to update room name')
+    }
+    setEditingName(false)
+  }, [room, roomId, editNameValue, getToken])
+
+  const cancelEditingName = useCallback(() => {
+    setEditingName(false)
+  }, [])
+
+  // Current room agent IDs for the editor
+  const currentRoomAgentIds = useMemo(
+    () => room ? Object.keys(room.room_agent_set || {}) : [],
+    [room]
+  )
 
   // Agent list for @mentions
   const agentList = useMemo(() => {
@@ -260,7 +342,38 @@ export default function RoomChatPage() {
           <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 px-4 sm:px-6 max-w-4xl mx-auto w-full">
             <div className="flex items-center gap-3">
               <div className="space-y-1">
-                <h1 className="text-xl font-semibold">{room.room_name}</h1>
+                {/* Inline-editable room name */}
+                {editingName ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      ref={nameInputRef}
+                      type="text"
+                      value={editNameValue}
+                      onChange={(e) => setEditNameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveRoomName()
+                        if (e.key === 'Escape') cancelEditingName()
+                      }}
+                      onBlur={saveRoomName}
+                      className="text-xl font-semibold bg-transparent border-b-2 border-primary outline-none px-0 py-0 min-w-[120px]"
+                    />
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={saveRoomName}>
+                      <Check className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onMouseDown={(e) => { e.preventDefault(); cancelEditingName() }}>
+                      <XIcon className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={startEditingName}
+                    className="flex items-center gap-1.5 group text-left"
+                    title="Click to edit room name"
+                  >
+                    <h1 className="text-xl font-semibold">{room.room_name}</h1>
+                    <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                )}
 
                 <div className="flex items-center gap-2 flex-wrap">
                   {roomAgentCount > 0 && (
@@ -269,12 +382,12 @@ export default function RoomChatPage() {
                         <TooltipTrigger asChild>
                           <div className="flex items-center gap-1 text-xs text-muted-foreground">
                             <Users className="h-3 w-3" />
-                            <span>Team: {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}</span>
+                            <span>Room: {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}</span>
                           </div>
                         </TooltipTrigger>
                         <TooltipContent>
                           <div className="space-y-1">
-                            <p className="font-medium">Room team:</p>
+                            <p className="font-medium">Room agents:</p>
                             {Object.values(room.room_agent_set || {}).map((name, i) => (
                               <p key={i} className="text-xs">{name}</p>
                             ))}
@@ -319,51 +432,6 @@ export default function RoomChatPage() {
                   Enable Live Updates
                 </Button>
               )}
-
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <div className="flex items-center gap-2">
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={handleOpenRoomSettings}
-                          className="text-primary hover:text-primary hover:bg-primary/10"
-                          aria-label="Room settings"
-                          onMouseEnter={() => {
-                            if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
-                              gm.loadAvailableAgents()
-                            }
-                          }}
-                        >
-                          <Settings className="h-5 w-5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Configure room settings</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
-                  <DialogHeader>
-                    <DialogTitle>Room Settings</DialogTitle>
-                  </DialogHeader>
-                  <div className="mt-4">
-                    <RoomSettingForm
-                      onSubmit={handleRoomSettingsUpdate}
-                      availableAgents={gm.availableAgents}
-                      loadingAgents={gm.loadingAgents}
-                      agentsError={gm.agentsError}
-                      isSubmitting={updatingRoom}
-                      isEditing={true}
-                      onRetryLoadAgents={gm.loadAvailableAgents}
-                      initialData={roomFormData}
-                    />
-                  </div>
-                </DialogContent>
-              </Dialog>
             </div>
           </header>
 
@@ -394,12 +462,15 @@ export default function RoomChatPage() {
             onCreateGroup={gm.handleCreateGroup}
             onEditGroup={gm.handleEditGroup}
             onDeleteGroup={gm.handleDeleteGroup}
+            onEditRoomAgents={handleEditRoomAgents}
             isOverride={gm.isOverride}
             onClearOverride={gm.handleClearOverride}
             quote={quote}
             onClearQuote={clearQuote}
             supervisorMode={localSupervisorMode}
             onSupervisorChange={setLocalSupervisorMode}
+            debateMode={localDebateMode}
+            onDebateModeChange={setLocalDebateMode}
             topSlot={activeHitlRequests.length > 0
               ? (
                 <HitlPanel
@@ -412,6 +483,17 @@ export default function RoomChatPage() {
           />
         </div>
       </div>
+
+      <RoomDefaultAgentsEditor
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
+        currentRoomAgentIds={currentRoomAgentIds}
+        availableAgents={gm.availableAgents}
+        loadingAgents={gm.loadingAgents}
+        savedGroups={gm.groups}
+        resolvedAgents={roomFormData?.resolvedAgents ?? undefined}
+        onSave={handleEditorSave}
+      />
 
       <GroupManagementModal
         open={gm.groupManagementOpen}
