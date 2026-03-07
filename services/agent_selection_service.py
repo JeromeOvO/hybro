@@ -57,7 +57,8 @@ class AgentSelectionService:
     async def select_agents_for_message(
         self,
         message_text: str,
-        top_k: int = 3
+        top_k: int = 3,
+        user_id: str | None = None,
     ) -> AgentSelectionResult:
         """
         Select agents for a message using vector search + LLM routing.
@@ -67,6 +68,8 @@ class AgentSelectionService:
         Args:
             message_text: The user's message to route
             top_k: Maximum number of candidate agents to consider
+            user_id: Optional sender ID — when provided, includes the sender's
+                     private agents in the candidate pool (shared eligibility predicate)
             
         Returns:
             AgentSelectionResult with strategy, selected agents, and reasoning
@@ -78,7 +81,7 @@ class AgentSelectionService:
 
         # Step 1: Vector search for candidate agents (active only)
         candidates = await self.database_service.query_similar_agents(
-            message_text, count=top_k, active_only=True
+            message_text, count=top_k, active_only=True, user_id=user_id,
         )
 
         if not candidates:

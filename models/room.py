@@ -24,6 +24,18 @@ class CoordinatorAgentId(StrEnum):
     SYSTEM = "system"
 
 
+class MembershipOrigin(StrEnum):
+    MANUAL = "manual"
+    SAVED_GROUP = "saved_group"
+    ALL_CURRENT_AGENTS = "all_current_agents"
+
+
+class MembershipOriginStatus(StrEnum):
+    SEEDED_NEVER_EDITED = "seeded_never_edited"
+    SEEDED_EDITED = "seeded_edited"
+    MANUAL = "manual"
+
+
 class Room(BaseModel):
     room_id: str = Field(default_factory=lambda: uuid4().hex)
     room_name: str
@@ -33,12 +45,18 @@ class Room(BaseModel):
         default_factory=dict
     )  # key: agent_id, value: agent_name
     room_created_at: datetime = Field(default_factory=utcnow)
-    applied_from_group: str | None = (
-        None  # Group ID if agents were applied from a group
-    )
+
+    # Legacy provenance field — kept for backward compatibility during rollout.
+    # Canonical fields below take precedence when present.
+    applied_from_group: str | None = None
+
+    # Canonical provenance fields
+    membership_origin: MembershipOrigin | None = None
+    membership_origin_status: MembershipOriginStatus | None = None
+    source_group_id: str | None = None
+    source_group_name: str | None = None
+
     extend_info: Any | None = None
-    # Track which user message is currently being processed (null = idle)
-    # Used to restore "Processing your request..." placeholder on page refresh
     processing_message_id: str | None = None
 
 
