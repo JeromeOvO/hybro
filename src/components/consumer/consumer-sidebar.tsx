@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/sidebar"
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { Room } from "@/lib/types/room"
-import { UpgradeButton } from "@/components/upgrade-button"
 
 export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
@@ -150,7 +149,6 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
           </SidebarMenuItem>
         </SidebarMenu>
 
-        <UpgradeButton />
         <DiscordButton />
         <NavUser />
       </SidebarFooter>

@@ -131,7 +131,8 @@ function ChatPageContent() {
     const agentListForMentions = useMemo(() => {
         return gm.availableAgents.map(agent => ({
             id: agent.agent_id,
-            name: agent.agent_card.name
+            name: agent.agent_card.name,
+            iconUrl: agent.agent_card.iconUrl,
         }))
     }, [gm.availableAgents])
 
