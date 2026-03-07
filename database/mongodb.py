@@ -207,6 +207,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.discovery_api_requests
+    
+    @property
+    def gateway_api_requests_collection(self):
+        """Get gateway API requests collection for rate limiting"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.gateway_api_requests
       
     @property
     def a2a_tasks_collection(self):
@@ -320,6 +329,17 @@ class MongoDB:
         cursor = self.agents_collection.find()
         results = await cursor.to_list(length=None)
         return [Agent(**agent) for agent in results]
+
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool = True
+    ) -> None:
+        """Atomically increment call_count (and call_success_count if success) for an agent."""
+        inc_fields: dict = {"call_count": 1}
+        if success:
+            inc_fields["call_success_count"] = 1
+        await self.agents_collection.update_one(
+            {"agent_id": agent_id}, {"$inc": inc_fields}
+        )
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
         """

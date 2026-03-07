@@ -14,9 +14,10 @@ from api import (
     a2a_tasks,
     agent,
     agent_group,
-    discovery_api_keys,
     discovery,
+    discovery_api_keys,
     files,
+    gateway,
     hitl,
     inspection_center,
     memory_center,
@@ -31,9 +32,9 @@ from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from jobs.compaction_sweep import compaction_sweep
 from jobs.stale_task_checker import stale_task_checker
-from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -148,8 +149,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
-# Add Discovery API CORS middleware
-# This applies permissive CORS only to /api/v1/discovery/* paths
+# Add Discovery & Gateway API CORS middleware
+# This applies permissive CORS to /api/v1/discovery/* and /api/v1/gateway/* paths
 # Note: Middleware runs in reverse order, so adding first means it runs last
 app.add_middleware(DiscoveryCORSMiddleware)
 
@@ -260,6 +261,15 @@ app.include_router(
     prefix=api_prefix,
     tags=["a2a_tasks"],
     # Auth handled per-route in a2a_tasks.py
+)
+
+# Gateway API - External public API with API key auth
+# Uses open CORS to allow external SDK/hub access from any origin
+app.include_router(
+    gateway.router,
+    prefix=api_prefix,
+    tags=["gateway"],
+    # Auth handled per-route via X-API-Key header in gateway.py
 )
 # Webhook endpoint - no auth prefix, no authentication (uses token validation)
 app.include_router(

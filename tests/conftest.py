@@ -72,6 +72,9 @@ PATCH = {
     "file_upload_service": "services.file_upload_service.file_upload_service",
     "room_services.mongodb": "services.room_services.mongodb",
     "room_services.s3_service": "services.room_services.s3_service",
+    # Gateway endpoints
+    "gateway.gateway_service": "api.gateway.gateway_service",
+    "gateway.gateway_rate_limit_service": "api.gateway.gateway_rate_limit_service",
 }
 
 

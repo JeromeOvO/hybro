@@ -319,15 +319,18 @@ to a `user_id` via the existing `APIKey` model (`models/api_key.py`).
 
 | Endpoint | Implementation |
 |----------|---------------|
-| `POST /api/v1/gateway/agents/discover` | Wraps `DiscoveryService.discover_agents()` |
+| `POST /api/v1/gateway/agents/discover` | Wraps `DiscoveryService.discover_agents()`, resolves `agent_id`s, masks URLs |
 | `POST /api/v1/gateway/agents/{id}/message/send` | Wraps `A2AService.send_message_sync()` |
-| `POST /api/v1/gateway/agents/{id}/message/stream` | Wraps `A2AService.send_message_streaming()` |
-| `GET /api/v1/gateway/agents/{id}/card` | Returns cached `AgentCard` from MongoDB |
+| `POST /api/v1/gateway/agents/{id}/message/stream` | Wraps `A2AService.send_message()` (auto-detects streaming capability) |
+| `GET /api/v1/gateway/agents/{id}/card` | Returns `AgentCard` from MongoDB with gateway-masked URL |
 
 ### 4.2 Security
 
 - **Authentication:** API key validated via `common/api_key_auth.py`. The
   `APIKey` model already has a `user_id` field.
+- **Access control:** Gateway enforces `agent_status == active` and
+  `(is_public == True OR api_key.user_id == agent.provider_id)` before
+  allowing any agent interaction.
 - **Agent URL masking:** The hub only sees `agent_id`. The gateway resolves
   the real URL internally, protecting agent providers.
 - **Response URL rewriting:** A2A responses from cloud agents may contain
@@ -335,8 +338,16 @@ to a `user_id` via the existing `APIKey` model (`models/api_key.py`).
   callback URLs). The gateway must rewrite these to gateway-relative URLs
   before returning to the hub, preventing the hub from bypassing the gateway
   on subsequent requests.
-- **Rate limiting:** Per-user limits via existing `RateLimitService`.
-- **Request validation:** Payloads validated against A2A schema before forwarding.
+- **Rate limiting:** Two layers:
+  - *Gateway-level:* Per-key and global rate limits via `GatewayRateLimitService`
+    (backed by `gateway_api_requests` MongoDB collection with TTL index).
+  - *Agent-level:* Per-user and system-wide per-agent limits via the existing
+    `RateLimitService`.
+- **CORS:** The `DiscoveryCORSMiddleware` applies permissive CORS headers to
+  both `/discovery` and `/gateway` paths for external SDK access.
+- **Streaming auth:** Authentication and access control are validated *before*
+  the SSE stream starts. If checks fail, the client receives a proper HTTP
+  error status (401/403/404/429), not an SSE error event.
 
 ### 4.3 Relationship to Existing Backend
 
@@ -344,6 +355,19 @@ The gateway adds **new API routes** to `multi-agents-backend`. It reuses
 `A2AService`, `DiscoveryService`, `AgentService`, `RateLimitService`, and
 `api_key_auth`. No changes to the orchestration layer are needed — the
 gateway is a proxy, not an orchestrator.
+
+**Files added/modified:**
+
+| File | Role |
+|------|------|
+| `api/gateway.py` | Router — 4 endpoints (discover, send, stream, card) |
+| `services/gateway_service.py` | Business logic — agent lookup, access control, URL masking, usage tracking |
+| `services/gateway_rate_limit_service.py` | Per-key and global rate limiting for gateway requests |
+| `database/migration/add_gateway_api_requests_indexes.py` | TTL + query indexes for rate limit collection |
+| `config/settings.py` | Added `gateway_base_url`, `gateway_rate_limit_per_key`, `gateway_rate_limit_global` |
+| `database/mongodb.py` | Added `gateway_api_requests_collection` property and `increment_agent_call_count()` |
+| `common/middleware/discovery_cors_middleware.py` | Extended to cover `/gateway` paths |
+| `main.py` | Mounted gateway router |
 
 ---
 
@@ -771,22 +795,45 @@ through the relay to the browser. The response shows a 🏠 badge.
 
 ## 11. Phased Implementation Roadmap
 
-### Phase 1: Gateway API + SDK (4–6 weeks)
+### Phase 1: Gateway API + SDK (4–6 weeks)  ✅ IMPLEMENTED
 
 **Goal:** Enable local agents to discover and call cloud agents via hybro.ai.
 
+**Status:** Complete. All deliverables implemented and tested.
+
 **Deliverables:**
 1. Gateway API endpoints in `multi-agents-backend` (discover, send, stream, card)
-2. API key auth with `user_id` mapping
-3. Python SDK (`hybro-sdk` PyPI package):
+   - Router: `api/gateway.py` — 4 endpoints with X-API-Key auth
+   - Service: `services/gateway_service.py` — agent lookup, access control, URL masking, usage tracking
+   - Rate limiting: `services/gateway_rate_limit_service.py` — per-key and global limits
+   - DB migration: `database/migration/add_gateway_api_requests_indexes.py` — TTL index
+   - Config: `gateway_base_url`, `gateway_rate_limit_per_key`, `gateway_rate_limit_global` in `config/settings.py`
+   - CORS: Extended `DiscoveryCORSMiddleware` to cover `/gateway` paths
+2. API key auth with `user_id` mapping (reuses existing `common/api_key_auth.py`)
+3. Python SDK (`hybro-sdk` in `hybro-hub` repo):
    ```python
-   from hybro import HybroGateway
-   gw = HybroGateway(api_key="hba_...")
-   agents = await gw.discover("legal contract review")
-   async for event in gw.stream(agents[0].agent_id, "Review..."):
-       print(event)
+   from hybro_sdk import HybroGateway
+   async with HybroGateway(api_key="hba_...") as gw:
+       agents = await gw.discover("legal contract review")
+       async for event in gw.stream(agents[0].agent_id, "Review..."):
+           print(event.data)
    ```
-4. Documentation: "Connect your local agent to hybro.ai's agent ecosystem"
+   - Client: `hybro_sdk/client.py` — `discover()`, `send()`, `stream()`, `get_card()`
+   - SSE parser: `hybro_sdk/_sse.py` — typed error mapping for streaming
+   - Error hierarchy: `hybro_sdk/errors.py` — `AuthError`, `AccessDeniedError`, `AgentNotFoundError`, `RateLimitError`, `AgentCommunicationError`
+   - Shared `raise_for_status()` mapper used by both sync and streaming paths
+4. Documentation:
+   - API guide: `docs/GATEWAY_API.md`
+   - SDK README: `hybro-hub/README.md`
+5. Tests:
+   - Backend: `tests/test_api_gateway.py` (15 tests — endpoints, access control, URL masking, streaming)
+   - SDK: `hybro-hub/tests/test_client.py` + `test_sse.py` (13 tests)
+
+**Key implementation decisions:**
+- **Stream endpoint auth** is validated eagerly via `prepare_stream()` (regular async method) before starting the SSE response. This ensures 401/403/404/429 errors return proper HTTP status codes, not SSE error events.
+- **Discovery agent_id resolution** uses batch `$in` queries (2 queries max) instead of per-result lookups, avoiding N+1 performance issues.
+- **Usage tracking** records both success and failure for all call types (sync and streaming) via `mongodb.increment_agent_call_count()`.
+- **Response URL rewriting** is limited to discovery results and the card endpoint for Phase 1. Deep inspection of A2A response bodies (§4.2) is deferred to Phase 2.
 
 **Validation:** 10+ developers use the SDK to call cloud agents from local code.
 
@@ -1090,10 +1137,10 @@ Workflow Phase 1 (Robust V2)     Workflow Phase 2 (Templates)   Workflow Phase 3
                                      models (independent)
 
 Hub Phase 1 (Gateway API + SDK)  Hub Phase 2 (Hub + Relay)      Hub Phase 3
-  └─ no Agent model changes        └─ adds source/hub_id to     (desktop app, etc.)
-                                     Agent model
+  └─ no Agent model changes ✅     └─ adds source/hub_id to     (desktop app, etc.)
+  └─ COMPLETE                       Agent model
                                    └─ depends on Gateway from
-                                     Hub Phase 1
+                                     Hub Phase 1 ✅
 
 Trust Phase 0 (Identity + HCT)  Trust Phase 1 (Policy + OTel)  Trust Phase 2-3
   └─ adds identity to Agent        └─ adds Cedar middleware to   (DPoP, enterprise)
