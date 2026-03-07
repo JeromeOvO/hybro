@@ -418,10 +418,10 @@ class ResponseProcessor:
             poll_count += 1
 
             try:
-                a2a_client = await self.a2a_service.create_a2a_client(agent_card)
-                response = await a2a_client.get_task(
-                    GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
-                )
+                async with self.a2a_service.create_a2a_client(agent_card) as a2a_client:
+                    response = await a2a_client.get_task(
+                        GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
+                    )
 
                 if not response or isinstance(response.root, JSONRPCErrorResponse):
                     logger.warning(
