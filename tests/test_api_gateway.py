@@ -125,18 +125,35 @@ class TestGatewayDiscover:
         mock_rl.record_request.assert_called_once_with(sample_api_key)
 
     @pytest.mark.asyncio
-    async def test_returns_404_when_no_agents_found(self, sample_api_key):
-        mock_svc = MagicMock(spec=GatewayService)
-        mock_svc.discover_agents = AsyncMock(
-            side_effect=ValueError("No agents found")
+    async def test_returns_empty_list_when_no_agents_found(self, sample_api_key):
+        expected = GatewayDiscoveryResponse(
+            query="obscure topic", agents=[], count=0
         )
+        mock_svc = MagicMock(spec=GatewayService)
+        mock_svc.discover_agents = AsyncMock(return_value=expected)
         mock_rl = _mock_rate_limit()
         body = GatewayDiscoverRequest(query="obscure topic")
 
         with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
+            result = await gateway_discover(body, sample_api_key, mock_svc)
+
+        assert result.query == "obscure topic"
+        assert result.agents == []
+        assert result.count == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_502_on_infra_error(self, sample_api_key):
+        mock_svc = MagicMock(spec=GatewayService)
+        mock_svc.discover_agents = AsyncMock(
+            side_effect=RuntimeError("Pinecone connection failed")
+        )
+        mock_rl = _mock_rate_limit()
+        body = GatewayDiscoverRequest(query="test")
+
+        with patch(PATCH["gateway.gateway_rate_limit_service"], mock_rl):
             with pytest.raises(HTTPException) as exc:
                 await gateway_discover(body, sample_api_key, mock_svc)
-        assert exc.value.status_code == 404
+        assert exc.value.status_code == 502
 
 
 class TestGatewaySend:

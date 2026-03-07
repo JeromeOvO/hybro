@@ -76,10 +76,13 @@ async def gateway_discover(
             limit=body.limit,
             user_id=api_key.user_id,
         )
-    except ValueError as e:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gateway discover failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "no_results", "message": str(e)},
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"error": "discovery_error", "message": "Agent discovery service unavailable"},
         ) from e
     await gateway_rate_limit_service.record_request(api_key)
     return result
