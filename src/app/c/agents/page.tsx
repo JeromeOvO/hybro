@@ -144,7 +144,7 @@ export default function ConsumerAgentsPage() {
               <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
             </Button>
             {isDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
+              <div className="absolute top-full left-0 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-muted-foreground/30 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
                 {STATUS_OPTIONS.map((option) => (
                   <button
                     key={option.value}
@@ -180,7 +180,7 @@ export default function ConsumerAgentsPage() {
             <div className="space-y-8">
               {cloudAgents.length > 0 && (
                 <section>
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-muted-foreground/30">
                     <Cloud className="h-4 w-4 text-sky-500" />
                     <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                       Cloud Agents
@@ -197,7 +197,7 @@ export default function ConsumerAgentsPage() {
 
               {localAgents.length > 0 && (
                 <section>
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-muted-foreground/30">
                     <Home className="h-4 w-4 text-emerald-500" />
                     <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                       Local Agents

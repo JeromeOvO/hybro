@@ -34,6 +34,7 @@ import type { Agent, AgentCenterResponse, AgentCapabilities } from "@/lib/types"
 import { developerUrl } from "@/lib/urls"
 import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
 import { getModeIcon } from "@/lib/agent-icon-utils"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
 
 function visibleCapabilities(caps: AgentCapabilities): string[] {
   const all: [string, unknown][] = [
@@ -266,6 +267,11 @@ export default function ConsumerAgentProfilePage() {
                 <div className="flex flex-wrap items-center gap-3">
                   <h1 className="text-2xl font-bold tracking-tight">{card.name}</h1>
                   {getStatusBadge(agent.agent_status)}
+                  <AgentSourceBadge
+                    source={agent.source}
+                    isHubOnline={agent.is_hub_online}
+                    className="h-5 w-5"
+                  />
                 </div>
                 <p className="text-sm text-muted-foreground font-medium">
                   v{card.version}

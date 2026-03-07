@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { deduplicateIcons } from "@/lib/agent-icon-utils"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
 import type { Agent } from "@/lib/types"
 
 function getSkillLabel(skill: { name: string; tags: string[] }): string | null {
@@ -54,6 +55,11 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
             : "border-muted bg-muted/20",
         )}
       >
+        <AgentSourceBadge
+          source={agent.source}
+          isHubOnline={agent.is_hub_online}
+          className="absolute top-3 left-3 h-4 w-4"
+        />
         <Badge
           variant={isActive ? "success" : "inactive"}
           className="absolute top-3 right-3"

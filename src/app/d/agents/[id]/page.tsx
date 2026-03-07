@@ -32,6 +32,7 @@ import { banner } from "@/components/ui/banner"
 import { getAgent, deleteAgent, updateAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse } from "@/lib/types"
 import { consumerUrl } from "@/lib/urls"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
 import { AgentSettingsCard, validateAgentSettings, settingsToUpdatePayload } from "@/components/developer/agent-settings-card"
 import type { AgentSettingsValues } from "@/components/developer/agent-settings-card"
 import { useMyAgents } from "@/hooks/useMyAgents"
@@ -277,6 +278,11 @@ export default function DeveloperAgentManagePage() {
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-2xl">{agent.agent_card.name}</CardTitle>
                   {getStatusBadge(agent.agent_status)}
+                  <AgentSourceBadge
+                    source={agent.source}
+                    isHubOnline={agent.is_hub_online}
+                    className="h-5 w-5"
+                  />
                 </div>
                 <div className="text-sm text-muted-foreground">
                   v{agent.agent_card.version} · {agent.agent_card.provider?.organization || "Unknown Provider"}
