@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
-import { Search, ChevronDown, Check, Bot } from "lucide-react"
+import { Search, ChevronDown, Check, Bot, Cloud, Home } from "lucide-react"
 import { ConsumerAgentCard, ConsumerAgentCardSkeleton } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -172,18 +172,48 @@ export default function ConsumerAgentsPage() {
           </div>
         </div>
 
-        {/* Results summary */}
-        <p className="text-sm text-muted-foreground">
-          Showing {filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""}
-          {(searchTerm || statusFilter !== "all") ? " (filtered)" : ""}
-        </p>
+        {/* Agent Cards — split by source */}
+        {(() => {
+          const cloudAgents = filteredAgents.filter(a => a.source !== 'hub')
+          const localAgents = filteredAgents.filter(a => a.source === 'hub')
+          return (
+            <div className="space-y-8">
+              {cloudAgents.length > 0 && (
+                <section>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Cloud className="h-4 w-4 text-sky-500" />
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Cloud Agents
+                    </h2>
+                    <span className="text-xs text-muted-foreground/60">{cloudAgents.length}</span>
+                  </div>
+                  <div className="grid grid-auto-fill-cards gap-4">
+                    {cloudAgents.map((agent) => (
+                      <ConsumerAgentCard key={agent.agent_id} agent={agent} />
+                    ))}
+                  </div>
+                </section>
+              )}
 
-        {/* Agent Cards Grid */}
-        <div className="grid grid-auto-fill-cards gap-4">
-          {filteredAgents.map((agent) => (
-            <ConsumerAgentCard key={agent.agent_id} agent={agent} />
-          ))}
-        </div>
+              {localAgents.length > 0 && (
+                <section>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Home className="h-4 w-4 text-emerald-500" />
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Local Agents
+                    </h2>
+                    <span className="text-xs text-muted-foreground/60">{localAgents.length}</span>
+                  </div>
+                  <div className="grid grid-auto-fill-cards gap-4">
+                    {localAgents.map((agent) => (
+                      <ConsumerAgentCard key={agent.agent_id} agent={agent} />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Empty State */}
         {filteredAgents.length === 0 && !loadingAll && (
