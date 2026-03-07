@@ -16,16 +16,9 @@ import {
     BarChart3,
     Sparkles,
     Users,
-    Settings,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
 import {
     Tooltip,
     TooltipContent,
@@ -38,7 +31,6 @@ import type { QuoteData } from "@/components/message-bubble"
 import type { PendingAttachment } from "@/lib/types/attachments"
 import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
-import { RoomSettingForm } from "@/components/room-setting-form"
 import type { Agent } from "@/lib/types/agent"
 
 const quickStartTemplates = [
@@ -68,10 +60,10 @@ function ChatPageContent() {
     const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
-    const [dialogOpen, setDialogOpen] = useState(false)
 
-    // Local supervisor mode toggle for the + menu
+    // Local mode toggles for the + menu
     const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
+    const [localDebateMode, setLocalDebateMode] = useState(false)
 
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
         roomName: string
@@ -143,18 +135,6 @@ function ChatPageContent() {
         }))
     }, [gm.availableAgents])
 
-    // Memoize initialData for RoomSettingForm to avoid unstable references
-    const roomSettingsInitialData = useMemo(() => {
-        if (!preConfiguredRoom) return null
-        return {
-            roomName: preConfiguredRoom.roomName,
-            selectedAgents: Object.fromEntries(
-                preConfiguredRoom.selectedAgents.map(a => [a.agent_id, a.agent_card.name])
-            ),
-            debateMode: preConfiguredRoom.debateMode,
-        }
-    }, [preConfiguredRoom])
-
     const handleSubmit = async (value: string, _targetGroup?: string, _quote?: QuoteData | null, attachments?: PendingAttachment[]) => {
         if (!value.trim() && (!attachments || attachments.length === 0)) {
             banner.error("Please enter a message")
@@ -176,8 +156,8 @@ function ChatPageContent() {
                 ...(preConfiguredRoom ? {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
-                    debateMode: preConfiguredRoom.debateMode,
                 } : {}),
+                debateMode: localDebateMode,
                 useSupervisor: localSupervisorMode,
                 targetGroup: gm.selectedGroup,
                 attachments,
@@ -211,26 +191,6 @@ function ChatPageContent() {
 
     const handleClearQuickStart = () => {
         setQuickStartValue("")
-    }
-
-    const handleOpenRoomSettings = async () => {
-        if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
-            await gm.loadAvailableAgents()
-        }
-        setDialogOpen(true)
-    }
-
-    const handleRoomSettingsUpdate = async (
-        roomName: string,
-        selectedAgents: { [agentId: string]: Agent },
-        options: { debateMode: boolean }
-    ) => {
-        setPreConfiguredRoom({
-            roomName,
-            selectedAgents: Object.values(selectedAgents),
-            debateMode: options.debateMode,
-        })
-        setDialogOpen(false)
     }
 
     if (!isLoaded) {
@@ -287,7 +247,7 @@ function ChatPageContent() {
 
     return (
         <div className="flex flex-col h-full bg-background">
-            {/* Fixed Header - Same position as room page */}
+            {/* Fixed Header */}
             <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 px-4 sm:px-6 max-w-4xl mx-auto w-full">
                     <div className="flex items-center gap-3">
                         <div className="space-y-1">
@@ -295,88 +255,29 @@ function ChatPageContent() {
                                 <h1 className="text-xl font-semibold">{preConfiguredRoom.roomName}</h1>
                             )}
 
-                            {preConfiguredRoom && (preConfiguredRoom.selectedAgents.length > 0 || preConfiguredRoom.debateMode) && (
+                            {preConfiguredRoom && preConfiguredRoom.selectedAgents.length > 0 && (
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    {preConfiguredRoom.selectedAgents.length > 0 && (
-                                        <TooltipProvider>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                                        <Users className="h-3 w-3" />
-                                                        <span>Team: {preConfiguredRoom.selectedAgents.length} agent{preConfiguredRoom.selectedAgents.length !== 1 ? 's' : ''}</span>
-                                                    </div>
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                    <div className="space-y-1">
-                                                        <p className="font-medium">Room team:</p>
-                                                        {preConfiguredRoom.selectedAgents.map((agent, i) => (
-                                                            <p key={i} className="text-xs">{agent.agent_card.name}</p>
-                                                        ))}
-                                                    </div>
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </TooltipProvider>
-                                    )}
-
-                                    {preConfiguredRoom.debateMode && (
-                                        <div className="flex items-center gap-1">
-                                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
-                                            <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
-                                                Debate Mode
-                                            </span>
-                                        </div>
-                                    )}
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                    <Users className="h-3 w-3" />
+                                                    <span>Team: {preConfiguredRoom.selectedAgents.length} agent{preConfiguredRoom.selectedAgents.length !== 1 ? 's' : ''}</span>
+                                                </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                <div className="space-y-1">
+                                                    <p className="font-medium">Room team:</p>
+                                                    {preConfiguredRoom.selectedAgents.map((agent, i) => (
+                                                        <p key={i} className="text-xs">{agent.agent_card.name}</p>
+                                                    ))}
+                                                </div>
+                                            </TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
                                 </div>
                             )}
                         </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 self-start">
-                        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                            <div className="flex items-center gap-2">
-                                <TooltipProvider>
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={handleOpenRoomSettings}
-                                                className="text-primary hover:text-primary hover:bg-primary/10"
-                                                aria-label="Room settings"
-                                                onMouseEnter={() => {
-                                                    if (gm.availableAgents.length === 0 && !gm.loadingAgents) {
-                                                        gm.loadAvailableAgents()
-                                                    }
-                                                }}
-                                            >
-                                                <Settings className="h-5 w-5" />
-                                            </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>
-                                            <p>Configure room settings</p>
-                                        </TooltipContent>
-                                    </Tooltip>
-                                </TooltipProvider>
-                            </div>
-                            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-background/80 backdrop-blur-md border shadow-lg">
-                                <DialogHeader>
-                                    <DialogTitle>Room Settings</DialogTitle>
-                                </DialogHeader>
-                                <div className="mt-4">
-                                    <RoomSettingForm
-                                        onSubmit={handleRoomSettingsUpdate}
-                                        availableAgents={gm.availableAgents}
-                                        loadingAgents={gm.loadingAgents}
-                                        agentsError={gm.agentsError}
-                                        isSubmitting={false}
-                                        isEditing={false}
-                                        requireRoomName={false}
-                                        onRetryLoadAgents={gm.loadAvailableAgents}
-                                        initialData={roomSettingsInitialData}
-                                    />
-                                </div>
-                            </DialogContent>
-                        </Dialog>
                     </div>
             </header>
             <div className="flex-1 flex items-center justify-center p-4">
@@ -440,6 +341,8 @@ function ChatPageContent() {
                             onExternalValueConsumed={handleClearQuickStart}
                             supervisorMode={localSupervisorMode}
                             onSupervisorChange={setLocalSupervisorMode}
+                            debateMode={localDebateMode}
+                            onDebateModeChange={setLocalDebateMode}
                         />
                     </div>
 

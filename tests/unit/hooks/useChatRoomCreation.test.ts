@@ -182,6 +182,7 @@ describe('useChatRoomCreation', () => {
         defaultProps.getToken,
         { 'agent-1': 'Test Agent' },
         { debateMode: true, use_supervisor: false, initialMessage: 'Hello world' },
+        undefined,
         undefined
       )
     })
@@ -231,7 +232,8 @@ describe('useChatRoomCreation', () => {
       })
 
       const pending = useRoomUiStore.getState().pendingRoomData['room-store']
-      expect(pending).toEqual({ initialMessage: 'Hello', targetGroup: 'g-1' })
+      // Saved group seeded the room, so override is NOT carried over (Locked Decision #4)
+      expect(pending).toEqual({ initialMessage: 'Hello', targetGroup: undefined, attachments: undefined })
     })
 
     it('should show error on API failure', async () => {
@@ -246,6 +248,78 @@ describe('useChatRoomCreation', () => {
 
       expect(roomId!).toBeNull()
       expect(banner.error).toHaveBeenCalledWith('Server down')
+    })
+
+    it('should derive membership_seed_input: saved_group when targetGroup is a saved group', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-seeded' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello', { targetGroup: 'group-abc' })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toEqual({
+        membership_seed_input: 'saved_group',
+        seed_group_id: 'group-abc',
+      })
+    })
+
+    it('should NOT derive membership from builtin groups (all_agents)', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-all' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello', { targetGroup: 'all_agents' })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toBeUndefined()
+    })
+
+    it('should carry targetGroup in handoff for builtin groups', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-carry' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello', { targetGroup: 'all_agents' })
+      })
+
+      const pending = useRoomUiStore.getState().pendingRoomData['room-carry']
+      expect(pending?.targetGroup).toBe('all_agents')
+    })
+
+    it('should prefer selectedAgents over saved group seed', async () => {
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-manual' },
+      })
+
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createRoomWithMessage('Hello', {
+          selectedAgents: [mockAgent],
+          targetGroup: 'group-abc',
+        })
+      })
+
+      const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+      expect(membershipArg).toBeUndefined()
+      const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
+      expect(Object.keys(roomAgentSet)).toContain('agent-1')
     })
 
     it('should return null when API returns success=false (line 142)', async () => {

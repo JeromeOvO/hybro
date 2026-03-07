@@ -117,7 +117,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: true },
       )
     })
@@ -135,7 +135,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: false },
       )
     })
@@ -149,7 +149,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: true },
       )
     })
@@ -171,7 +171,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       success = await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: true },
       )
     })
@@ -189,7 +189,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       success = await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: true },
       )
     })
@@ -206,7 +206,7 @@ describe('useRoomWebhook — updateRoomSettings does not touch supervisor', () =
     await act(async () => {
       success = await result.current.updateRoomSettings(
         'Test Room',
-        { 'agent-1': mockAgent },
+        ['agent-1'],
         { debateMode: false },
       )
     })

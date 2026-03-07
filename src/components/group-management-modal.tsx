@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Bot, Search } from 'lucide-react'
+import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Bot, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,7 +18,7 @@ import {
 import { deduplicateIcons } from '@/components/agent-card'
 import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
-import type { AgentGroup } from '@/lib/types/agent-group'
+import type { AgentGroup, StaleAgentRef } from '@/lib/types/agent-group'
 import {
   createAgentGroup,
   updateAgentGroup,
@@ -64,6 +64,7 @@ export function GroupManagementModal({
   const [groupName, setGroupName] = useState('')
   const [groupDescription, setGroupDescription] = useState('')
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
+  const [staleAgentRefs, setStaleAgentRefs] = useState<StaleAgentRef[]>([])
   const [saving, setSaving] = useState(false)
   const [groupToDelete, setGroupToDelete] = useState<AgentGroup | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -78,6 +79,7 @@ export function GroupManagementModal({
     setGroupName('')
     setGroupDescription('')
     setSelectedAgents({})
+    setStaleAgentRefs([])
     setAgentSearch('')
   }, [])
 
@@ -92,15 +94,22 @@ export function GroupManagementModal({
     setGroupName(group.name)
     setGroupDescription(group.description || '')
     
-    // Build selected agents from group's agent IDs
     const agentsMap: { [agentId: string]: Agent } = {}
+    const staleRefs: StaleAgentRef[] = []
     for (const agentId of group.agents) {
       const agent = availableAgents.find(a => a.agent_id === agentId)
       if (agent) {
         agentsMap[agentId] = agent
+      } else {
+        staleRefs.push({
+          id: agentId,
+          name: `Agent ...${agentId.slice(-6)}`,
+          availability: "inaccessible",
+        })
       }
     }
     setSelectedAgents(agentsMap)
+    setStaleAgentRefs(staleRefs)
   }, [availableAgents])
 
   const handleDeleteClick = useCallback((group: AgentGroup) => {
@@ -182,13 +191,21 @@ export function GroupManagementModal({
   useEffect(() => {
     if (mode === 'edit' && editingGroup && availableAgents.length > 0) {
       const agentsMap: { [agentId: string]: Agent } = {}
+      const staleRefs: StaleAgentRef[] = []
       for (const agentId of editingGroup.agents) {
         const agent = availableAgents.find((a) => a.agent_id === agentId)
         if (agent) {
           agentsMap[agentId] = agent
+        } else {
+          staleRefs.push({
+            id: agentId,
+            name: `Agent ...${agentId.slice(-6)}`,
+            availability: "inaccessible",
+          })
         }
       }
       setSelectedAgents(agentsMap)
+      setStaleAgentRefs(staleRefs)
     }
   }, [mode, editingGroup, availableAgents])
 
@@ -211,20 +228,28 @@ export function GroupManagementModal({
     })
   }
 
+  const handleRemoveStaleRef = (agentId: string) => {
+    setStaleAgentRefs(prev => prev.filter(r => r.id !== agentId))
+  }
+
   const handleSave = async () => {
     if (!groupName.trim()) {
       banner.error('Group name is required')
       return
     }
 
-    if (Object.keys(selectedAgents).length === 0) {
+    const activeCount = Object.keys(selectedAgents).length
+    if (activeCount === 0 && staleAgentRefs.length === 0) {
       banner.error('Please select at least one agent')
       return
     }
 
     setSaving(true)
     try {
-      const agentIds = Object.keys(selectedAgents)
+      const agentIds = [
+        ...Object.keys(selectedAgents),
+        ...staleAgentRefs.map(r => r.id),
+      ]
 
       if (mode === 'create') {
         const response = await createAgentGroup({
@@ -297,9 +322,9 @@ export function GroupManagementModal({
         return (
           <>
             <DialogHeader>
-              <DialogTitle>Manage Agent Groups</DialogTitle>
+              <DialogTitle>Manage Saved Groups</DialogTitle>
               <DialogDescription>
-                Create and manage your custom agent groups for quick access.
+                Create and manage reusable agent groups. Seed a room from a saved group or use it as a send-time override.
               </DialogDescription>
             </DialogHeader>
 
@@ -314,8 +339,8 @@ export function GroupManagementModal({
               {userGroups.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Users className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>No custom groups yet</p>
-                  <p className="text-sm">Create a group to quickly access your favorite agents</p>
+                  <p>No saved groups yet</p>
+                  <p className="text-sm">Create a saved group to seed rooms or use as a send-time override</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -430,7 +455,11 @@ export function GroupManagementModal({
                 }`}
                 onClick={(e) => {
                   e.stopPropagation()
-                  action === 'add' ? handleAgentAdd(agent) : handleAgentRemove(agent.agent_id)
+                  if (action === 'add') {
+                    handleAgentAdd(agent)
+                  } else {
+                    handleAgentRemove(agent.agent_id)
+                  }
                 }}
               >
                 {action === 'remove'
@@ -480,6 +509,47 @@ export function GroupManagementModal({
                     </Label>
                     <div className="grid grid-cols-2 gap-1.5">
                       {selectedAgentsList.map(agent => renderAgentRow(agent, 'remove'))}
+                    </div>
+                  </div>
+                )}
+
+                {staleAgentRefs.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-muted-foreground text-xs">
+                      Unavailable members (preserved on save)
+                    </Label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {staleAgentRefs.map(ref => (
+                        <div
+                          key={ref.id}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg
+                                     border border-dashed border-muted-foreground/30
+                                     bg-muted/30 opacity-60"
+                        >
+                          <Avatar className="h-8 w-8 rounded-md">
+                            <AvatarFallback className="rounded-md text-xs">
+                              <Bot className="h-4 w-4" />
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="text-[13px] text-muted-foreground truncate">
+                              {ref.name}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground/70">
+                              {ref.availability === "deleted" ? "Deleted" :
+                               ref.availability === "inactive" ? "Inactive" : "Unavailable"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveStaleRef(ref.id)}
+                            className="rounded-full p-0.5 text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                            aria-label={`Remove ${ref.name}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -541,7 +611,7 @@ export function GroupManagementModal({
               </Button>
               <Button
                 onClick={handleSave}
-                disabled={saving || !groupName.trim() || Object.keys(selectedAgents).length === 0}
+                disabled={saving || !groupName.trim() || (Object.keys(selectedAgents).length === 0 && staleAgentRefs.length === 0)}
               >
                 {saving ? (
                   <>
@@ -573,8 +643,8 @@ export function GroupManagementModal({
             <div className="py-4">
               <div className="p-4 rounded-lg border border-destructive/20 bg-destructive/5">
                 <p className="text-sm text-muted-foreground">
-                  This will permanently delete the group and remove it from your saved groups. 
-                  Any rooms using this group will not be affected.
+                  This will permanently delete the saved group. 
+                  Rooms that were seeded from this group keep their snapshot and are not affected.
                 </p>
               </div>
             </div>

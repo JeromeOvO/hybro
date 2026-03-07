@@ -1,12 +1,18 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel } from 'lucide-react'
+import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
 import type { QuoteData } from './message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -55,6 +61,7 @@ interface RoomChatInputProps {
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
+  onEditRoomAgents?: () => void
   showGroupSelector?: boolean
   isOverride?: boolean
   onClearOverride?: () => void
@@ -80,6 +87,10 @@ interface RoomChatInputProps {
   supervisorMode?: boolean
   /** Callback when the user toggles supervisor mode from the + menu. */
   onSupervisorChange?: (enabled: boolean) => void
+  /** Current debate mode state. */
+  debateMode?: boolean
+  /** Callback when the user toggles debate mode from the + menu. */
+  onDebateModeChange?: (enabled: boolean) => void
 }
 
 export function RoomChatInput({
@@ -93,12 +104,13 @@ export function RoomChatInput({
   agents,
   groups = [],
   loadingGroups = false,
-  selectedGroup = BUILTIN_GROUP_ROOM_TEAM,
+  selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
   onGroupChange,
   roomAgentCount = 0,
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,
+  onEditRoomAgents,
   showGroupSelector = true,
   isOverride = false,
   onClearOverride,
@@ -109,6 +121,8 @@ export function RoomChatInput({
   topSlot,
   supervisorMode,
   onSupervisorChange,
+  debateMode,
+  onDebateModeChange,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -679,7 +693,7 @@ export function RoomChatInput({
     }
 
     if (trimmedMessage || attachments.length > 0) {
-      const targetGroup = mentionedAgents.length > 0 ? undefined : selectedGroup
+      const targetGroup = mentionedAgents.length > 0 ? undefined : (selectedGroup ?? undefined)
       const submittedAttachments = attachments.length > 0 ? attachments : undefined
 
       console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup, 'attachments:', attachments.length)
@@ -881,6 +895,8 @@ export function RoomChatInput({
                 disabled={disabled || sending || processing}
                 supervisorMode={supervisorMode}
                 onSupervisorChange={onSupervisorChange}
+                debateMode={debateMode}
+                onDebateModeChange={onDebateModeChange}
               />
               {showGroupSelector && (
                 <GroupSelector
@@ -893,6 +909,7 @@ export function RoomChatInput({
                   onCreateGroup={onCreateGroup}
                   onEditGroup={onEditGroup}
                   onDeleteGroup={onDeleteGroup}
+                  onEditRoomAgents={onEditRoomAgents}
                   agentNameMap={agentNameMap}
                   disabled={disabled}
                   isOverride={isOverride}
@@ -902,14 +919,45 @@ export function RoomChatInput({
               {supervisorMode && onSupervisorChange && (
                 <>
                   <div className="h-4 w-px bg-border mx-0.5" />
-                  <button
-                    type="button"
-                    onClick={() => onSupervisorChange(false)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-400/10 transition-colors"
-                  >
-                    <ShipWheel className="h-4.5 w-4.5" />
-                    <span>Supervisor</span>
-                  </button>
+                  <TooltipProvider delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onSupervisorChange(false)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-400/10 transition-colors"
+                        >
+                          <ShipWheel className="h-4.5 w-4.5" />
+                          <span>Supervisor</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Supervisor understands your request better
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </>
+              )}
+              {debateMode && onDebateModeChange && (
+                <>
+                  <div className="h-4 w-px bg-border mx-0.5" />
+                  <TooltipProvider delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onDebateModeChange(false)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-purple-400 hover:text-purple-300 hover:bg-purple-400/10 transition-colors"
+                        >
+                          <Swords className="h-4.5 w-4.5" />
+                          <span>Debate</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Agents will debate with each other
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </>
               )}
             </div>

@@ -266,10 +266,16 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
+  /** @deprecated Use source_group_id from canonical provenance fields. */
+  applied_from_group?: string | null;
   extend_info?: unknown;
-  // Track which user message is currently being processed (null = idle)
-  // Used to restore "Processing your request..." placeholder on page refresh
   processing_message_id?: string | null;
+
+  // ── Canonical provenance fields ────────────────────────────────────────
+  membership_origin?: "manual" | "saved_group" | "all_current_agents";
+  membership_origin_status?: "seeded_never_edited" | "seeded_edited" | "manual";
+  source_group_id?: string | null;
+  source_group_name?: string | null;
 }
 export interface RoomCenterAgentMessageResponse {
   room_id?: string | null;
@@ -332,19 +338,32 @@ export interface RoomMessage {
 export interface RoomCenterRoomSettingResponse {
   room_id?: string | null;
   room_agent_set?: string[] | null;
+  resolved_agents?: RoomAgentRefWire[] | null;
+  room_default_status?: "ok" | "degraded" | "empty" | "all_unavailable" | null;
   room?: Room | null;
   room_list?: Room[] | null;
   success: boolean;
   error?: string | null;
   status_code?: number;
 }
+export interface RoomAgentRefWire {
+  id: string;
+  name?: string | null;
+  availability: "available" | "inaccessible" | "inactive" | "deleted";
+}
+export interface ScopeResolutionErrorWire {
+  code: "invalid_target" | "group_not_usable" | "unauthorized_mention" | "empty_scope";
+  message: string;
+}
 export interface RoomCenterUserMessageResponse {
   room_id?: string | null;
   message_id?: string | null;
+  dispatch_root_message_id?: string | null;
   user_id?: string | null;
   user_name?: string | null;
   message?: RoomUserMessage | null;
   message_list?: RoomUserMessage[] | null;
+  scope_resolution_error?: ScopeResolutionErrorWire | null;
   success: boolean;
   error?: string | null;
   status_code?: number;

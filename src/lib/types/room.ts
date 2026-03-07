@@ -18,6 +18,11 @@ import type {
   TaskState,
 } from '@a2a-js/sdk'
 
+import type {
+  MembershipOrigin,
+  MembershipOriginStatus,
+} from './agent-group'
+
 // Re-export SDK types so existing consumers of this module still work
 export type {
   Task,
@@ -64,8 +69,15 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
+  /** @deprecated Use source_group_id from the canonical read model instead. */
   applied_from_group?: string | null;
   extend_info?: unknown;
+
+  // ── Canonical provenance fields (populated by backend read model) ──────
+  membership_origin?: MembershipOrigin;
+  membership_origin_status?: MembershipOriginStatus;
+  source_group_id?: string | null;
+  source_group_name?: string | null;
 }
 export interface RoomAgentMessage {
   room_id: string;

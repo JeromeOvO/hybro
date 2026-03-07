@@ -83,11 +83,6 @@ export default function DeveloperApiKeysPage() {
   const [createdKeyName, setCreatedKeyName] = useState<string>("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
 
-  const activeCount = useMemo(
-    () => keys.filter((key) => key.is_active).length,
-    [keys]
-  )
-
   const filteredKeys = useMemo(() => {
     const visible = keys.filter((k) => !hiddenKeyIds.has(k.key_id))
     if (statusFilter === "active") return visible.filter((k) => k.is_active)

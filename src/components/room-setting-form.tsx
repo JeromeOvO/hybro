@@ -19,8 +19,10 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
-import { MessageCircleMore } from "lucide-react"
+import { MessageCircleMore, X } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
+import type { StaleAgentRef, AgentAvailability } from "@/lib/types/agent-group"
+import type { RoomAgentRefWire } from "@/lib/types/response"
 
 // Schema with required room name (for editing existing rooms)
 const formSchemaRequired = z.object({
@@ -44,6 +46,7 @@ interface RoomFormData {
   roomName: string
   selectedAgents: { [agentId: string]: string }
   debateMode?: boolean
+  resolvedAgents?: RoomAgentRefWire[] | null
 }
 
 export interface RoomModeOptions {
@@ -51,7 +54,7 @@ export interface RoomModeOptions {
 }
 
 interface RoomSettingFormProps {
-  onSubmit: (roomName: string, selectedAgents: { [agentId: string]: Agent }, options: RoomModeOptions) => void
+  onSubmit: (roomName: string, membershipAgentIds: string[], options: RoomModeOptions) => void
   isSubmitting?: boolean
   availableAgents?: Agent[]
   loadingAgents?: boolean
@@ -80,6 +83,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   submitButtonText,
 }, ref) => {
   const [selectedAgents, setSelectedAgents] = useState<{ [agentId: string]: Agent }>({})
+  const [staleAgentRefs, setStaleAgentRefs] = useState<StaleAgentRef[]>([])
 
   // Guard to ensure form is only initialized once per mount (dialog open).
   // Prevents re-renders (e.g. from setUpdatingRoom) from overwriting user edits
@@ -98,38 +102,50 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     },
   })
 
-  // Initialize form with room data (runs once per mount / dialog open)
+  // Initialize form with room data (runs once per mount / dialog open).
+  // Runs even when availableAgents is empty so all-stale rooms still seed
+  // roomName and stale placeholders. Re-runs when availableAgents arrives
+  // to promote stale refs to active agents.
+  const catalogReady = !loadingAgents
   useEffect(() => {
-    if (initialData && availableAgents.length > 0 && !initializedRef.current) {
-      initializedRef.current = true
+    if (!initialData || !catalogReady) return
 
-      // Set room name
+    const isFirstInit = !initializedRef.current
+    if (!isFirstInit && availableAgents.length === 0) return
+    initializedRef.current = true
+
+    if (isFirstInit) {
       form.setValue('roomName', initialData.roomName)
-      
-      // Set debate mode from initialData (supervisor is managed in chat input)
       form.setValue('debateMode', initialData.debateMode || false)
-      
-      // Convert agent mapping back to selected agents
-      const agentMapping: { [agentId: string]: Agent } = {}
-      
-      // initialData.selectedAgents is { [agentId]: agentName }
-      // We need to find the corresponding Agent objects by agentId
-      Object.entries(initialData.selectedAgents).forEach(([agentId]) => {
-        const agent = availableAgents.find(a => a.agent_id === agentId)
-        if (agent) {
-          agentMapping[agentId] = agent
-        }
-      })
-      
-      setSelectedAgents(agentMapping)
-      console.log('Form initialized with data:', {
-        roomName: initialData.roomName,
-        debateMode: initialData.debateMode || false,
-        selectedAgents: agentMapping,
-        originalAgentSet: initialData.selectedAgents
-      })
     }
-  }, [initialData, availableAgents, form])
+
+    const agentMapping: { [agentId: string]: Agent } = {}
+    const staleRefs: StaleAgentRef[] = []
+
+    const resolvedMap = new Map<string, { availability: AgentAvailability; name?: string | null }>()
+    if (initialData.resolvedAgents) {
+      for (const ref of initialData.resolvedAgents) {
+        resolvedMap.set(ref.id, { availability: ref.availability, name: ref.name })
+      }
+    }
+
+    Object.entries(initialData.selectedAgents).forEach(([agentId, agentName]) => {
+      const agent = availableAgents.find(a => a.agent_id === agentId)
+      if (agent) {
+        agentMapping[agentId] = agent
+      } else {
+        const resolved = resolvedMap.get(agentId)
+        staleRefs.push({
+          id: agentId,
+          name: resolved?.name || agentName || agentId,
+          availability: resolved?.availability ?? "inaccessible",
+        })
+      }
+    })
+
+    setSelectedAgents(agentMapping)
+    setStaleAgentRefs(staleRefs)
+  }, [initialData, availableAgents, catalogReady, form])
 
   const handleAddAgent = (agent: Agent) => {
     setSelectedAgents(prev => ({
@@ -146,9 +162,17 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     })
   }
 
+  const handleRemoveStaleRef = (agentId: string) => {
+    setStaleAgentRefs(prev => prev.filter(r => r.id !== agentId))
+  }
+
   function handleSubmit(values: z.infer<typeof formSchemaOptional>) {
     const roomName = values.roomName ?? ""
-    onSubmit(roomName, selectedAgents, {
+    const membershipAgentIds = [
+      ...Object.keys(selectedAgents),
+      ...staleAgentRefs.map(r => r.id),
+    ]
+    onSubmit(roomName, membershipAgentIds, {
       debateMode: values.debateMode ?? false,
     })
   }
@@ -157,6 +181,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
   const resetForm = useCallback(() => {
     form.reset()
     setSelectedAgents({})
+    setStaleAgentRefs([])
     initializedRef.current = false
   }, [form])
 
@@ -229,6 +254,39 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
             error={agentsError}
             onRetry={onRetryLoadAgents}
           />
+
+          {/* Stale / unavailable members */}
+          {staleAgentRefs.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">
+                Unavailable members (preserved on save)
+              </p>
+              {staleAgentRefs.map(ref => (
+                <div
+                  key={ref.id}
+                  className="flex items-center justify-between rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-3 py-2 opacity-60"
+                >
+                  <span className="text-sm text-muted-foreground truncate">
+                    {ref.name}
+                  </span>
+                  <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                      {ref.availability === "deleted" ? "Deleted" :
+                       ref.availability === "inactive" ? "Inactive" : "Unavailable"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveStaleRef(ref.id)}
+                      className="rounded-full p-0.5 text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      aria-label={`Remove ${ref.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <Separator />

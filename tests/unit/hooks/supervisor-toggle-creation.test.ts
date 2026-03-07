@@ -83,6 +83,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
         use_supervisor: true,
         initialMessage: 'Hello',
       }),
+      undefined,
       undefined
     )
   })

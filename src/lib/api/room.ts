@@ -9,13 +9,26 @@ import type {
   RoomCenterUserMessageRequest,
   RoomCenterRoomMessageRequest,
 } from '@/lib/types/request'
+import type { RoomMembershipWriteInput, MessageDispatchInput } from '@/lib/types/agent-group'
 
 import { getApiUrl } from '../utils'
 import { apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('roomCenter')
 
-// Create new room
+export interface CreateRoomParams {
+  room_name: string
+  room_owner_id: string
+  room_owner_name: string
+  getToken?: () => Promise<string | null>
+  extend_info?: { [k: string]: unknown } | null
+  membership?: RoomMembershipWriteInput
+  /** @deprecated Use membership instead. */
+  room_agent_set?: { [k: string]: string }
+  /** @deprecated Use membership.seed_group_id instead. */
+  applied_from_group?: string
+}
+
 export async function createNewRoom(
   room_name: string,
   room_owner_id: string,
@@ -23,15 +36,31 @@ export async function createNewRoom(
   getToken?: () => Promise<string | null>,
   room_agent_set?: { [k: string]: string },
   extend_info?: { [k: string]: unknown } | null,
-  applied_from_group?: string  // Group ID if agents applied from a group
+  applied_from_group?: string,
+  membership?: RoomMembershipWriteInput,
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_name,
     room_owner_id,
     room_owner_name,
+    extend_info,
+    // Legacy fields (still sent during rollout)
     room_agent_set,
     applied_from_group,
-    extend_info
+  }
+
+  // Overlay canonical membership fields when provided
+  if (membership) {
+    requestData.membership_seed_input = membership.membership_seed_input
+    if ('room_agent_ids' in membership) {
+      requestData.room_agent_ids = membership.room_agent_ids
+    }
+    if ('seed_group_id' in membership) {
+      requestData.seed_group_id = membership.seed_group_id
+    }
+    if ('seed_all_current_agents' in membership) {
+      requestData.seed_all_current_agents = membership.seed_all_current_agents
+    }
   }
 
   return apiPost<RoomCenterRoomSettingResponse>(
@@ -75,15 +104,28 @@ export async function inquiryRoomsByRoomOwnerId(
   )
 }
 
-// Update room agent set
 export async function updateRoomAgentSet(
   room_id: string,
   room_agent_set: { [k: string]: string },
-  getToken?: () => Promise<string | null>
+  getToken?: () => Promise<string | null>,
+  membership?: RoomMembershipWriteInput,
 ): Promise<RoomCenterRoomSettingResponse> {
   const requestData: RoomCenterRoomSettingRequest = {
     room_id,
-    room_agent_set
+    room_agent_set,
+  }
+
+  if (membership) {
+    requestData.membership_seed_input = membership.membership_seed_input
+    if ('room_agent_ids' in membership) {
+      requestData.room_agent_ids = membership.room_agent_ids
+    }
+    if ('seed_group_id' in membership) {
+      requestData.seed_group_id = membership.seed_group_id
+    }
+    if ('seed_all_current_agents' in membership) {
+      requestData.seed_all_current_agents = membership.seed_all_current_agents
+    }
   }
 
   return apiPost<RoomCenterRoomSettingResponse>(
@@ -200,6 +242,7 @@ export async function SendMessage(
   related_message_id?: string | null,
   quoted_text?: string | null,
   attachments?: Array<{ file_id: string }>,
+  dispatch?: MessageDispatchInput,
 ): Promise<RoomCenterUserMessageResponse> {
   const requestData: Record<string, unknown> = {
     room_id,
@@ -220,11 +263,24 @@ export async function SendMessage(
     },
   }
 
+  // Overlay canonical dispatch fields when provided.
+  // mentioned_agent_ids and target_group are mutually exclusive on the wire —
+  // when a canonical MentionDispatchInput is present, drop legacy target_group.
+  if (dispatch) {
+    if ('mentioned_agent_ids' in dispatch) {
+      requestData.mentioned_agent_ids = dispatch.mentioned_agent_ids
+      delete requestData.target_group
+    } else {
+      requestData.message_target_mode = dispatch.message_target_mode
+      if ('target_group_id' in dispatch) {
+        requestData.target_group_id = dispatch.target_group_id
+      }
+    }
+  }
+
   if (attachments && attachments.length > 0) {
     requestData.attachments = attachments
   }
-
-  console.log('🚀 Sending SendMessage request:', JSON.stringify(requestData, null, 2))
 
   try {
     const result = await apiPost<RoomCenterUserMessageResponse>(
@@ -232,10 +288,9 @@ export async function SendMessage(
       requestData,
       getToken
     )
-    console.log('✅ API Response:', result)
     return result
   } catch (error) {
-    console.error('❌ API Error:', error)
+    console.error('SendMessage API Error:', error)
     throw error
   }
 }
