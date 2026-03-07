@@ -1,6 +1,6 @@
 # Hybro Hub: Portal-First Hybrid Agent Architecture
 
-**Status:** Draft v3.4
+**Status:** Draft v3.6
 **Date:** 2026-03-07
 **Author:** Architecture Design
 **A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
@@ -441,7 +441,37 @@ class Agent(BaseModel):
 
 > **Note on AgentCard**: The `agent_card` field uses `AgentCard` from the external `a2a` Python package (`a2a.types`). This type cannot be extended with custom fields like `identity`. Hub-specific and trust-layer metadata must live as sibling fields on the `Agent` model, not nested inside `agent_card`.
 
-> **Note on `normalized_url`**: The existing `Agent.normalized_url` field is used for duplicate detection during agent registration. Hub agents have localhost URLs that aren't globally unique. Hub agent deduplication must use `hub_id + local_agent_id` instead of URL normalization.
+> **Note on `normalized_url` and the "one document" strategy**: When the hub
+> syncs an agent, the relay service computes `normalized_url` from the
+> agent card's URL using the same `normalize_agent_url()` function used by
+> web UI registration. It then looks up an existing agent by
+> `(normalized_url, provider_id)`. If an agent with that URL already exists
+> for the same user (e.g. registered earlier via the web UI), the sync
+> **enriches** the existing document with hub metadata (`hub_id`,
+> `hub_owner_id`, `local_agent_id`, `is_hub_online`) but **preserves the
+> original `source` field**. This means:
+>
+> - A cloud-registered agent that is also discovered by the hub remains
+>   `source: "cloud"` and continues to be directly callable via the gateway.
+>   It simply gains additional hub metadata so the platform knows the hub
+>   can also reach it.
+> - A truly hub-only agent (no prior web UI registration) is created with
+>   `source: "hub"` and its proper `normalized_url`.
+> - The `provider_id` filter on the lookup prevents cross-user enrichment
+>   (User B's hub cannot enrich User A's agent document).
+>
+> This "one document per agent URL per user" approach avoids the
+> `DuplicateKeyError` that occurred when the sync tried to insert a second
+> document with `normalized_url: null`, and ensures consistent routing
+> regardless of whether the agent was registered via web UI, hub, or both.
+
+> **Note on `normalized_url` unique index**: The `unique_normalized_url`
+> MongoDB index uses a **partial filter expression**
+> (`{normalized_url: {$type: "string"}}`) instead of `sparse: true`. This
+> ensures uniqueness only among documents that have a non-null string
+> `normalized_url`, allowing multiple documents with `normalized_url: null`
+> (e.g. legacy agents without URLs). The index is automatically ensured at
+> server startup via `mongodb.ensure_agent_indexes()`.
 
 > **Note on `AgentCard.url`** `[v1.0-MIGRATION]`: For hub agents, `agent_card.url` should be set to the gateway proxy URL (`https://api.hybro.ai/v1/gateway/agents/{agent_id}/message/send`). This ensures that any code path reading `agent_card.url` gets a routable address. The actual routing (relay vs. direct) is determined by `agent.source`, not by the URL. In A2A v1.0, `AgentCard.url` is removed in favor of `supportedInterfaces[0].url`; the `A2AClient` constructor is expected to resolve this internally, so code should use the SDK's higher-level client APIs rather than reading `agent_card.url` directly.
 
@@ -558,7 +588,11 @@ JWTs, additional safeguards are needed:
 ### 5.6 Offline Handling
 
 - If the hub's SSE drops, relay marks all hub agents as `is_hub_online = false`
-- Frontend's next `getAllActiveAgents` fetch shows them grayed out
+- This includes both hub-only agents (`source: "hub"`) and enriched cloud
+  agents that have `hub_id` set. Enriched cloud agents remain callable via
+  the gateway (their `source` is still `"cloud"`); only the `is_hub_online`
+  flag changes.
+- Frontend's next `getAllActiveAgents` fetch shows hub-only agents grayed out
 - User messages to offline hub agents are queued with `pending_for_hub` flag
 - When hub reconnects, queued messages are delivered **in send order** (FIFO)
 - UI shows: "Hub offline — messages will be delivered when your hub reconnects"
@@ -654,32 +688,48 @@ Badges next to each agent response in the chat:
 The user always uses `hybro.ai`. No mode switching, no `localhost` URL, no
 separate local UI. Hub agents appear alongside cloud agents in the same portal.
 
-### 7.2 Frontend Changes (Minimal)
+### 7.2 Frontend Changes (Minimal)  ✅ IMPLEMENTED
 
 Since the portal-first approach keeps the user on hybro.ai at all times, the
 frontend changes are small compared to the v2 dual-mode design:
 
-1. **Agent source badge**: In agent list and chat bubbles, show 🏠 or ☁️ based
-   on `agent.source`. The existing `allAgentsQuery` already fetches all agents;
-   hub agents appear automatically once synced to MongoDB.
+1. **Agent source badge**: In agent cards and selector chips, a Lucide icon
+   (`House` for hub, `Cloud` for cloud) with a tooltip indicating source and
+   online status. Implemented as `AgentSourceBadge` — a standalone component
+   rendering just the icon wrapped in a `Tooltip`, accepting a `className`
+   for flexible sizing across contexts.
 
-   > **Frontend type change required**: The `Agent` interface in
-   > `src/lib/types/response.ts` must add `source?: "cloud" | "hub"`,
-   > `hub_id?: string`, `hub_owner_id?: string`, and `is_hub_online?: boolean`.
-   > The `Agent` interface in `src/lib/types/request.ts` needs the same fields.
+   > **Frontend type change**: The `Agent` interface in both
+   > `src/lib/types/response.ts` and `src/lib/types/agent.ts` now includes
+   > `source?: "cloud" | "hub"`, `hub_id?: string`, `hub_owner_id?: string`,
+   > `is_hub_online?: boolean`, and `local_agent_id?: string`.
 
-2. **Hub status indicator**: A status dot in settings or header. Data comes from
-   a new field on the user profile or a lightweight `GET /api/v1/relay/hub/status`
-   endpoint.
+2. **Hub status indicator**: The "My Hub" settings section displays hub
+   connection status (online/offline/no hub) with last-connected timestamp.
+   Data comes from a new Clerk-authenticated `GET /api/v1/hub/my-status`
+   endpoint (see Phase 2c deliverable 8 and Phase 2a relay API deliverable 3).
 
-3. **Hub setup page**: A new settings tab ("My Hub") with install instructions,
-   API key generation, and connected hub status. Shows the hub's synced agents.
+3. **Hub setup page**: A new `HubSection` component in the settings dialog
+   with three states: (a) No hub — setup instructions with link to API keys,
+   (b) Hub online — green status, connected agents list, (c) Hub offline —
+   amber status, dimmed agent list. Uses TanStack React Query with 30s
+   `staleTime` for the hub status endpoint.
 
-4. **Offline agent styling**: When `agent.is_hub_online == false`, gray out the
-   agent with tooltip: "Your hub is offline. Start your hub to use this agent."
+4. **Offline agent styling**: When `agent.is_hub_online === false` and
+   `agent.source === "hub"`, agent cards and selector chips are dimmed
+   (`opacity-50`). The status dot changes to a gray pulse. Tooltip reads:
+   "Hub offline — start your hub to use this agent."
 
-5. **Privacy badge on messages**: A small badge component on `message-bubble.tsx`
-   showing "Local" or "Cloud" based on SSE event metadata.
+5. **Privacy badge on messages**: A small inline pill in the
+   `AgentMessageBubbleInner` header showing `Shield` + "Local" (green) for
+   hub agent messages or `Cloud` + "Cloud" (blue) for cloud agent messages.
+   The `agentSource` field is carried through the Zustand message store
+   (`MessageEntity.agentSource`) and populated from the agent's `source`
+   field during SSE event processing and DB message loading.
+
+6. **Agent ordering**: In the agent selector, hub agents are sorted after
+   cloud agents in the unselected list, relying on the source badge icon
+   for visual distinction rather than section headers.
 
 ### 7.3 What's NOT Needed (vs v2 Dual-Mode Design)
 
@@ -880,9 +930,11 @@ through the relay to the browser. The response shows a 🏠 badge.
 
 **Validation:** 10+ developers use the SDK to call cloud agents from local code.
 
-### Phase 2: Hub + Relay MVP (6–8 weeks)
+### Phase 2: Hub + Relay MVP (6–8 weeks)  ✅ IMPLEMENTED
 
 **Goal:** Users install a hub, their local agents appear on hybro.ai.
+
+**Status:** Complete. All sub-phases (2a, 2b, 2c) implemented and tested.
 
 #### Phase 2a: Cloud Relay Service + Dispatch Middleware (backend)  ✅ IMPLEMENTED
 
@@ -905,7 +957,16 @@ through the relay to the browser. The response shows a 🏠 badge.
    - `GET /api/v1/relay/hub/{hub_id}/events` — SSE event stream to hub
    - `POST /api/v1/relay/hub/{hub_id}/publish` — events from hub to cloud
    - `POST /api/v1/relay/hub/{hub_id}/agents/sync` — agent synchronization
-   - `GET /api/v1/relay/hub/status` — hub status for authenticated user
+   - `GET /api/v1/relay/hub/status` — hub status for API-key-authenticated hub
+
+3. **Hub Status API** (`api/hub.py`) — 1 endpoint (added in Phase 2c):
+   - `GET /api/v1/hub/my-status` — Clerk-authenticated endpoint for the
+     frontend to fetch hub connection status. Returns `HubStatusResponse`
+     with a list of hubs, each including `hub_id`, `is_online`,
+     `last_connected_at`, and `agent_count`. This is separate from the
+     relay's `GET /api/v1/relay/hub/status` (which uses API key auth for
+     hub daemons) because the frontend authenticates via Clerk JWT, not
+     API keys.
 
 3. **Data Models** (`models/hub.py`):
    - `Hub`, `HubStatus`, `HubStatusResponse` (registration & status)
@@ -947,8 +1008,16 @@ through the relay to the browser. The response shows a 🏠 badge.
     - `hubs_collection` property
     - `upsert_hub()`, `get_hub()`, `get_hubs_by_user()`, `update_hub_status()`
     - `upsert_hub_agent()` — uses `$setOnInsert` for `agent_id` stability
-    - `set_hub_agents_online_status()`, `count_hub_agents()`
+    - `set_hub_agents_online_status()` — filters by `hub_id` (not `source`)
+      so enriched cloud agents also get their `is_hub_online` toggled
+    - `count_hub_agents()` — filters by `hub_id` (not `source`) so enriched
+      agents are included in hub agent counts
+    - `ensure_agent_indexes()` — called at startup, ensures
+      `unique_normalized_url` uses a partial filter expression instead of
+      sparse (allowing multiple `null` values)
     - Migration: `database/migration/add_hub_indexes.py`
+    - Migration: `database/migration/deduplicate_agents.py` — deduplicates
+      agents by normalized URL and creates the partial unique index
 
 11. **Supporting Changes**:
     - `common/utils/connection_token.py` — JWT create/verify with secret guard
@@ -966,6 +1035,14 @@ through the relay to the browser. The response shows a 🏠 badge.
     - `tests/test_dispatch_middleware.py` — 10 tests (chain ordering, hub transport, AMP relay dispatch)
 
 **Key implementation decisions:**
+- **"One document" agent sync strategy**: When the hub syncs an agent whose
+  URL already exists in the DB for the same user, the relay service enriches
+  the existing document with hub metadata instead of creating a second
+  document. The `source` field is preserved (a cloud-registered agent stays
+  `source: "cloud"`), ensuring gateway routing continues to work. Only truly
+  new hub-only agents get `source: "hub"`. This avoids `DuplicateKeyError`
+  on the `unique_normalized_url` index and ensures a single canonical document
+  per agent URL per user.
 - **`$setOnInsert` for `agent_id`**: The `upsert_hub_agent()` method uses
   `$setOnInsert` for `agent_id` so re-syncs never overwrite an existing agent's
   identity. The gateway proxy URL is written in a separate `update_one` call
@@ -989,9 +1066,11 @@ through the relay to the browser. The response shows a 🏠 badge.
   `RoomAgentMessage` is updated with error text and its task status set to
   `TaskState.failed` (not just a no-op SSE notification).
 - **Gateway hub agent guard**: `GatewayService.send_message()` and
-  `prepare_stream()` reject hub-sourced agents with HTTP 502 to prevent
-  self-referential URL loops (the agent's `agent_card.url` points back to
-  the gateway itself).
+  `prepare_stream()` reject hub-sourced agents with HTTP 502 (prevents
+  self-referential URL loops). Combined with `HubTransportMiddleware`
+  routing hub agents to the relay in the platform path, the self-referential
+  `agent_card.url` is never followed for hub agents in any active code path.
+  ✅ Verified in Phase 2c review.
 
 #### Phase 2b: Hub Daemon + Ollama Adapter  ✅ IMPLEMENTED
 
@@ -1139,19 +1218,105 @@ and an Ollama A2A adapter in the `a2a-adapter` library.
   skips well-known non-agent ports (SSH, databases, etc.). Concurrency is
   bounded by `asyncio.Semaphore(30)` to avoid overwhelming the system.
 
-#### Phase 2c: Frontend Updates (not yet started)
+#### Phase 2c: Frontend Updates  ✅ IMPLEMENTED
+
+**Status:** Complete. All deliverables implemented and tested.
 
 **Goal:** Show hub agents and status in the hybro.ai web portal.
 
-**Deliverables** (~300 lines):
-1. Agent source badge (🏠 / ☁️)
-2. Hub status indicator
-3. Hub setup page in settings
-4. Offline agent styling
-5. Privacy badge on messages
+**Deliverables:**
 
-**Validation:** User runs `hybro-hub start`, opens hybro.ai, chats with a
-local Ollama agent alongside cloud agents. Requires Phase 2c (frontend) completion.
+1. **Agent Type Extensions** (`hybro-frontend`):
+   - `src/lib/types/response.ts` — added `source`, `hub_id`, `hub_owner_id`,
+     `is_hub_online`, `local_agent_id` to the full `Agent` interface
+   - `src/lib/types/agent.ts` — same fields on the simplified `Agent` interface
+
+2. **Agent Source Badge** (`src/components/agent-source-badge.tsx`):
+   - Reusable component rendering Lucide `House` (hub) or `Cloud` (cloud) icon
+   - Wrapped in `Tooltip` with context-aware label (online/offline for hub)
+   - Accepts `className` for flexible sizing in different contexts
+   - Green icon for online hub, muted for offline hub, sky-blue for cloud
+
+3. **Agent Card Integration** (`src/components/agent-card.tsx`):
+   - `AgentSourceBadge` placed in top-right slot
+   - Offline hub agents: `opacity-50` on card, gray pulsing status dot
+
+4. **Agent Selector Integration** (`src/components/agent-selector.tsx`):
+   - `AgentSourceBadge` next to agent name in both selected and unselected chips
+   - Offline hub agents: `opacity-50`, "(offline)" suffix
+   - Hub agents sorted after cloud agents in unselected list
+
+5. **Privacy Badge on Messages** (`src/components/message-bubble.tsx`):
+   - Inline pill in `AgentMessageBubbleInner` header after timestamp
+   - Green `Shield` + "Local" for hub agents, blue `Cloud` + "Cloud" for cloud
+   - Data flow: `agentSource` field added to `MessageEntity` and `IncomingMessage`
+     in the Zustand message store (`src/stores/message-store/types.ts`,
+     `src/stores/message-store/upsert.ts`)
+   - Populated from agent's `source` field during SSE event processing
+     (`src/hooks/useRoomWebhook.ts` — `getAgentSource` helper)
+   - Also populated for DB-loaded messages via `convert-api-message.ts`
+
+6. **Hub Settings Section** (`src/components/settings/hub-section.tsx`):
+   - Three states: No Hub (setup instructions + link to API keys),
+     Hub Online (green dot, last connected, agent list),
+     Hub Offline (amber dot, last seen, dimmed agent list)
+   - Uses `useQuery(['hub', 'status'], ...)` with 30s `staleTime`
+   - Refresh button triggers cache invalidation
+   - Integrated into `SettingsDialog` after the profile section
+
+7. **Hub API Client** (`src/lib/api/hub.ts`):
+   - `getMyHubStatus()` — calls `GET /api/v1/hub/my-status` with Clerk auth
+   - TypeScript types: `HubStatus`, `HubStatusResponse`
+
+8. **Backend: Hub Status Endpoint** (`multi-agents-backend/api/hub.py`):
+   - `GET /api/v1/hub/my-status` — Clerk JWT authenticated
+   - Returns `HubStatusResponse` via `relay_service.get_hub_status(user_id)`
+   - Registered in `main.py` with `Depends(get_current_user)`
+   - Separate from relay's `GET /api/v1/relay/hub/status` (API key auth)
+
+**Files added/modified:**
+
+| Repository | File | Role |
+|------------|------|------|
+| `hybro-frontend` | `src/lib/types/response.ts` | Hub fields on full Agent interface |
+| `hybro-frontend` | `src/lib/types/agent.ts` | Hub fields on simplified Agent interface |
+| `hybro-frontend` | `src/components/agent-source-badge.tsx` | **New** — House/Cloud icon badge component |
+| `hybro-frontend` | `src/components/agent-card.tsx` | Source badge + offline styling |
+| `hybro-frontend` | `src/components/agent-selector.tsx` | Source badge + offline styling + sort |
+| `hybro-frontend` | `src/stores/message-store/types.ts` | `agentSource` on MessageEntity/IncomingMessage |
+| `hybro-frontend` | `src/stores/message-store/upsert.ts` | Carry `agentSource` through upsert |
+| `hybro-frontend` | `src/hooks/useRoomWebhook.ts` | `getAgentSource` helper, populate on SSE events |
+| `hybro-frontend` | `src/stores/message-store/convert-api-message.ts` | Populate `agentSource` for DB-loaded messages |
+| `hybro-frontend` | `src/components/message-bubble.tsx` | Privacy badge in message header |
+| `hybro-frontend` | `src/components/settings/hub-section.tsx` | **New** — Hub settings section |
+| `hybro-frontend` | `src/components/settings/settings-dialog.tsx` | Integrated HubSection |
+| `hybro-frontend` | `src/lib/api/hub.ts` | **New** — Hub status API client |
+| `multi-agents-backend` | `api/hub.py` | **New** — Clerk-auth hub status endpoint |
+| `multi-agents-backend` | `main.py` | Mounted hub router |
+
+**Key implementation decisions:**
+- **Clerk-auth hub status endpoint**: The frontend uses Clerk JWT for auth,
+  but the existing relay hub status endpoint uses API key auth (for hub
+  daemons). A separate `GET /api/v1/hub/my-status` endpoint was added with
+  `Depends(get_current_user)` to bridge this gap cleanly.
+- **`agentSource` in message store (not React Query cache)**: The privacy
+  badge needs agent source per message. Rather than reading from the React
+  Query agent cache synchronously (a pattern not used elsewhere in the
+  codebase), the `agentSource` is stamped onto each `IncomingMessage` when
+  created — following the existing `senderName` pattern.
+- **Icon-only badge (not shadcn Badge)**: The `AgentSourceBadge` renders just
+  a Lucide icon wrapped in a Tooltip, not a full `Badge` component. This keeps
+  it compact for tight UI spaces like agent chips and card slots.
+- **Sort instead of section headers**: Hub agents are sorted after cloud agents
+  in the agent selector rather than using "Cloud Agents" / "Local Agents"
+  section headers, avoiding unnecessary layout changes.
+- **Cloud badge visible for all agents**: Pre-hub cloud agents (without a
+  `source` field) show a Cloud badge by design. This is intentional — the
+  badge serves as a privacy indicator, and cloud is the correct default.
+
+**Validation:** User runs `hybro-hub start`, opens hybro.ai, sees local agents
+with 🏠 badges alongside cloud agents with ☁️ badges. Hub status visible in
+settings. Messages show "Local" or "Cloud" privacy badges.
 
 ### Phase 3: Advanced Features (12+ weeks, parallel)
 
@@ -1422,9 +1587,12 @@ Hub Phase 1 (Gateway API + SDK)  Hub Phase 2b (Hub Daemon)      Hub Phase 3
                                     privacy router, CLI,
 Hub Phase 2a (Relay + Middleware)   Ollama adapter ✅
   └─ adds source/hub_id/         └─ COMPLETE
-     local_agent_id to Agent ✅  Hub Phase 2c (Frontend)
+     local_agent_id to Agent ✅  Hub Phase 2c (Frontend) ✅
   └─ DispatchMiddleware arch ✅    └─ source badges, hub
-  └─ COMPLETE                       status, offline styling
+  └─ COMPLETE                       status, offline styling,
+                                    privacy badges, hub
+                                    settings section
+                                  └─ COMPLETE
 
 Trust Phase 0 (Identity + HCT)  Trust Phase 1 (Policy + OTel)  Trust Phase 2-3
   └─ adds identity to Agent        └─ adds Cedar middleware to   (DPoP, enterprise)

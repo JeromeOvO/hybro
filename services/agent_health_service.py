@@ -221,7 +221,13 @@ class AgentHealthService:
         """Run a single health check cycle for all agents."""
         try:
             agents = await mongodb.get_agents_with_conditions(
-                query={"agent_status": {"$ne": AgentStatus.deleted.value}}
+                query={
+                    "agent_status": {"$ne": AgentStatus.deleted.value},
+                    "$or": [
+                        {"hub_id": None},
+                        {"hub_id": {"$exists": False}},
+                    ],
+                }
             )
 
             logger.info(f"Running health check for {len(agents)} agents")

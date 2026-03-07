@@ -70,6 +70,39 @@ class MongoDB:
         if self.client:
             self.client.close()
 
+    async def ensure_agent_indexes(self) -> None:
+        """Ensure the agents collection has the correct indexes.
+
+        Replaces the old sparse ``unique_normalized_url`` index with a partial
+        unique index that only constrains non-null string values, allowing
+        multiple agents to have ``normalized_url: null``.
+        """
+        col = self.agents_collection
+        existing = await col.index_information()
+        idx = existing.get("unique_normalized_url")
+        needs_recreate = False
+        if idx is not None:
+            pfe = idx.get("partialFilterExpression")
+            if pfe != {"normalized_url": {"$type": "string"}}:
+                needs_recreate = True
+        else:
+            needs_recreate = True
+
+        if needs_recreate:
+            try:
+                await col.drop_index("unique_normalized_url")
+            except Exception:
+                pass
+            await col.create_index(
+                "normalized_url",
+                unique=True,
+                name="unique_normalized_url",
+                partialFilterExpression={
+                    "normalized_url": {"$type": "string"},
+                },
+            )
+            print("Ensured unique_normalized_url partial index on agents")
+
     @property
     def db(self):
         """Get database instance"""
@@ -403,13 +436,13 @@ class MongoDB:
     ) -> None:
         """Bulk-update is_hub_online for every agent belonging to *hub_id*."""
         await self.agents_collection.update_many(
-            {"hub_id": hub_id, "source": "hub"},
+            {"hub_id": hub_id},
             {"$set": {"is_hub_online": is_online}},
         )
 
     async def count_hub_agents(self, hub_id: str) -> int:
         return await self.agents_collection.count_documents(
-            {"hub_id": hub_id, "source": "hub"}
+            {"hub_id": hub_id}
         )
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:

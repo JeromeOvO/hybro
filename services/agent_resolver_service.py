@@ -329,8 +329,15 @@ class AgentResolverService:
     async def _probe_agent(agent: Agent) -> bool:
         """Lightweight HTTP probe to check if an agent is reachable.
 
+        Hub-associated agents are not probed over HTTP (their local URLs
+        are unreachable from the cloud server).  Liveness is determined
+        by the relay heartbeat via ``is_hub_online``.
+
         Uses a short timeout (3 s) to keep the critical path fast.
         """
+        if agent.hub_id:
+            return agent.is_hub_online
+
         agent_url = agent.agent_card.url
         try:
             async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT) as client:

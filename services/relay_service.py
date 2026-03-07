@@ -32,6 +32,7 @@ from models.hub import (
     HubStatus,
     RelayToHubEvent,
 )
+from services.agent_service import normalize_agent_url
 
 if TYPE_CHECKING:
     from database.mongodb import MongoDB
@@ -187,36 +188,58 @@ class RelayService:
 
         synced: list[dict] = []
         for ag in agents:
-            agent_id = str(uuid4().hex)
-            agent_data = {
-                "agent_id": agent_id,
-                "source": "hub",
-                "hub_id": hub_id,
-                "hub_owner_id": user_id,
-                "local_agent_id": ag.local_agent_id,
-                "is_hub_online": hub_id in self._hub_queues,
-                "provider_id": user_id,
-                "agent_card": ag.agent_card,
-                "normalized_url": None,
-                "agent_status": "active",
-                "is_public": True,
-            }
+            agent_url = ag.agent_card.get("url", "")
+            normalized = normalize_agent_url(agent_url) if agent_url else None
 
-            stored_id = await self._mongo.upsert_hub_agent(
-                hub_id, ag.local_agent_id, agent_data
-            )
+            # Check if an agent with this URL already exists (e.g. registered
+            # via the web UI).  If so, enrich it with hub metadata but keep its
+            # original source so that direct-call routing continues to work.
+            existing = None
+            if normalized:
+                existing = await self._mongo.agents_collection.find_one(
+                    {"normalized_url": normalized, "provider_id": user_id}
+                )
 
-            # Rewrite agent_card.url to gateway proxy using the stable stored_id
+            if existing:
+                await self._mongo.agents_collection.update_one(
+                    {"agent_id": existing["agent_id"]},
+                    {"$set": {
+                        "hub_id": hub_id,
+                        "hub_owner_id": user_id,
+                        "local_agent_id": ag.local_agent_id,
+                        "is_hub_online": hub_id in self._hub_queues,
+                    }},
+                )
+                stored_id = existing["agent_id"]
+            else:
+                agent_data = {
+                    "agent_id": str(uuid4().hex),
+                    "source": "hub",
+                    "hub_id": hub_id,
+                    "hub_owner_id": user_id,
+                    "local_agent_id": ag.local_agent_id,
+                    "is_hub_online": hub_id in self._hub_queues,
+                    "provider_id": user_id,
+                    "agent_card": ag.agent_card,
+                    "normalized_url": normalized,
+                    "agent_status": "active",
+                    "is_public": True,
+                }
+                stored_id = await self._mongo.upsert_hub_agent(
+                    hub_id, ag.local_agent_id, agent_data
+                )
+
+            # Set public_url to the gateway proxy so external consumers can
+            # discover agents via the gateway API.  Never overwrite
+            # agent_card.url — it must remain the real agent endpoint for
+            # internal health checks, probes, and direct-call fallback.
             if gateway_base:
                 proxy_url = (
                     f"{gateway_base}/gateway/agents/{stored_id}/message/send"
                 )
                 await self._mongo.agents_collection.update_one(
                     {"agent_id": stored_id},
-                    {"$set": {
-                        "agent_card.url": proxy_url,
-                        "public_url": proxy_url,
-                    }},
+                    {"$set": {"public_url": proxy_url}},
                 )
 
             synced.append({

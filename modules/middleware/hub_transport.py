@@ -1,8 +1,10 @@
-"""HubTransportMiddleware — selects relay transport for hub-sourced agents.
+"""HubTransportMiddleware — selects relay transport for hub-associated agents.
 
-During pre-dispatch, checks ``agent.source``. If the agent is a hub agent
-the transport is switched to ``"relay"``.  If the hub is offline the
-``queued_for_offline`` flag is set so the relay service can queue the event.
+During pre-dispatch, checks ``agent.hub_id``. If the agent is associated
+with a hub (whether originally hub-sourced or enriched from a cloud
+registration) the transport is switched to ``"relay"``.  If the hub is
+offline the ``queued_for_offline`` flag is set so the relay service can
+queue the event.
 """
 
 from __future__ import annotations
@@ -21,11 +23,7 @@ class HubTransportMiddleware:
         self._relay = relay_service
 
     async def pre_dispatch(self, ctx: DispatchContext) -> DispatchContext:
-        if ctx.agent.source == "hub":
-            if not ctx.agent.hub_id:
-                ctx.denied = True
-                ctx.deny_reason = "Hub agent is missing hub_id"
-                return ctx
+        if ctx.agent.hub_id:
             ctx.transport = "relay"
             if not ctx.agent.is_hub_online:
                 ctx.metadata["queued_for_offline"] = True

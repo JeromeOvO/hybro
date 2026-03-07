@@ -19,6 +19,7 @@ from api import (
     files,
     gateway,
     hitl,
+    hub,
     inspection_center,
     memory_center,
     orchestration_center,
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI):
     pinecone_db.connect()
 
     await mongodb.create_context_memory_indexes()
+    await mongodb.ensure_agent_indexes()
 
     # Start the agent health check service
     await agent_health_service.start()
@@ -228,6 +230,12 @@ app.include_router(
     hitl.router,
     prefix=api_prefix,
     tags=["hitl"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    hub.router,
+    prefix=api_prefix,
+    tags=["hub"],
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(
