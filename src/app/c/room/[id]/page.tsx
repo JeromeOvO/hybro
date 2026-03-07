@@ -300,7 +300,8 @@ export default function RoomChatPage() {
   const agentList = useMemo(() => {
     return gm.availableAgents.map(agent => ({
       id: agent.agent_id,
-      name: agent.agent_card.name
+      name: agent.agent_card.name,
+      iconUrl: agent.agent_card.iconUrl,
     }))
   }, [gm.availableAgents])
 
@@ -453,6 +454,7 @@ export default function RoomChatPage() {
             cancelling={cancelling}
             onCancel={cancelProcessing}
             agents={agentList}
+            roomAgentIds={currentRoomAgentIds}
             showGroupSelector={true}
             groups={gm.groups}
             loadingGroups={gm.loadingGroups}

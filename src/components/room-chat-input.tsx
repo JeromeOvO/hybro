@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords } from 'lucide-react'
+import Image from 'next/image'
+import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords, Bot, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
@@ -12,7 +13,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
+import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
 import type { QuoteData } from './message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -22,6 +23,7 @@ import { AttachmentPreview } from './attachment-preview'
 interface Agent {
   id: string
   name: string
+  iconUrl?: string | null
 }
 
 interface RoomChatInputProps {
@@ -52,6 +54,8 @@ interface RoomChatInputProps {
    */
   onCancel?: () => void
   agents: Agent[]
+  /** Agent IDs belonging to the current room (for filtering mentions when room_team is selected). */
+  roomAgentIds?: string[]
   // Group selector props
   groups?: AgentGroup[]
   loadingGroups?: boolean
@@ -102,6 +106,7 @@ export function RoomChatInput({
   cancelling = false,
   onCancel,
   agents,
+  roomAgentIds = [],
   groups = [],
   loadingGroups = false,
   selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
@@ -136,7 +141,20 @@ export function RoomChatInput({
   const suggestionsRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const filteredAgents = agents.filter(agent =>
+  const scopedAgents = useMemo(() => {
+    if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) return agents
+    if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
+      if (roomAgentIds.length === 0) return agents
+      const idSet = new Set(roomAgentIds)
+      return agents.filter(a => idSet.has(a.id))
+    }
+    const group = groups.find(g => g.group_id === selectedGroup)
+    if (!group) return agents
+    const idSet = new Set(group.agents)
+    return agents.filter(a => idSet.has(a.id))
+  }, [agents, selectedGroup, groups, roomAgentIds])
+
+  const filteredAgents = scopedAgents.filter(agent =>
     agent.name.toLowerCase().includes(mentionQuery.toLowerCase())
   )
 
@@ -738,8 +756,9 @@ export function RoomChatInput({
             <div className="flex items-center gap-2">
               <AtSign className="h-3.5 w-3.5 text-primary" />
               <span className="text-sm font-medium text-foreground">Mention an agent</span>
-              <span className="ml-auto text-[11px] text-muted-foreground">
-                {filteredAgents.length} available
+              <span className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
+                <ChevronsUpDown className="h-3 w-3" />
+                Scroll to view agents
               </span>
             </div>
           </div>
@@ -760,13 +779,21 @@ export function RoomChatInput({
                 style={{ width: 'calc(100% - 8px)' }}
               >
                 {/* Agent avatar */}
-                <div className={cn(
-                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 transition-all",
-                  index === selectedAgentIndex
-                    ? 'bg-primary/20 text-primary'
-                    : 'bg-primary/10 text-primary'
-                )}>
-                  {agent.name.charAt(0).toUpperCase()}
+                <div className="w-8 h-8 rounded-full shrink-0 overflow-hidden bg-muted flex items-center justify-center">
+                  {agent.iconUrl ? (
+                    <Image
+                      src={agent.iconUrl}
+                      alt={agent.name}
+                      width={32}
+                      height={32}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none'
+                        e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                      }}
+                    />
+                  ) : null}
+                  <Bot className={cn("h-4 w-4 text-muted-foreground", agent.iconUrl && "hidden")} />
                 </div>
 
                 <span className="font-medium truncate text-sm flex-1">
@@ -775,9 +802,9 @@ export function RoomChatInput({
 
                 {/* Keyboard hint for selected item */}
                 {index === selectedAgentIndex && (
-                  <kbd className="text-[10px] px-2 py-1 bg-muted rounded font-mono font-semibold text-muted-foreground">
-                    ↵
-                  </kbd>
+                  <span className="text-[10px] px-2 py-1 bg-muted rounded font-medium text-muted-foreground whitespace-nowrap">
+                    Press Enter To Select
+                  </span>
                 )}
               </button>
             ))}
@@ -796,10 +823,10 @@ export function RoomChatInput({
         className={cn(
         "group/input relative flex flex-col rounded-3xl transition-all duration-500",
         "bg-gradient-to-b from-background via-background to-background/95",
-        "shadow-lg hover:shadow-xl",
+        "shadow-xl hover:shadow-2xl",
         // Outer glow effects
         "before:absolute before:-inset-[1px] before:rounded-3xl before:p-[1px]",
-        "before:bg-gradient-to-b before:from-border/60 before:via-border/40 before:to-border/60",
+        "before:bg-gradient-to-b before:from-border/80 before:via-border/50 before:to-border/80",
         "before:transition-all before:duration-500 before:-z-10",
         // Focus/hover gradient border
         "focus-within:before:from-primary/60 focus-within:before:via-primary/40 focus-within:before:to-primary/60",
@@ -812,7 +839,7 @@ export function RoomChatInput({
         "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
       )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-3xl bg-muted/40 dark:bg-muted/25 backdrop-blur-sm border border-border/30 overflow-hidden">
+        <div className="relative flex flex-col rounded-3xl bg-muted/70 dark:bg-muted/50 backdrop-blur-sm border border-border/50 overflow-hidden">
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 
@@ -886,9 +913,9 @@ export function RoomChatInput({
             />
           </div>
 
-          {/* Controls: Attach + GroupSelector left, Send/Stop right */}
+          {/* Controls: Attach + @ + GroupSelector left, Send/Stop right */}
           <div className="flex items-center justify-between px-3 pb-3 pt-2">
-            {/* Attach + Group selector + Supervisor indicator (left) */}
+            {/* Attach + @ + Group selector + Supervisor indicator (left) */}
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               <FileAttachmentButton
                 onFiles={addFiles}
@@ -898,6 +925,22 @@ export function RoomChatInput({
                 debateMode={debateMode}
                 onDebateModeChange={onDebateModeChange}
               />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={disabled || sending || processing}
+                className="h-8 w-8 rounded-full text-primary hover:text-primary/80"
+                title="Mention an agent (@)"
+                onClick={() => {
+                  if (!editorRef.current) return
+                  editorRef.current.focus()
+                  document.execCommand('insertText', false, '@')
+                  handleInput()
+                }}
+              >
+                <AtSign className="h-4 w-4" />
+              </Button>
               {showGroupSelector && (
                 <GroupSelector
                   selectedGroup={selectedGroup}
