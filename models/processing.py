@@ -17,6 +17,7 @@ class ProcessingStatus(Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     PAUSED = "paused"  # Queue paused waiting for push notification task
+    RELAY_DISPATCHED = "relay_dispatched"  # Dispatched to hub via relay (async)
     AWAITING_INPUT = "awaiting_input"  # Agent returned input_required
 
 

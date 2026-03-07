@@ -22,7 +22,8 @@ from common.utils.logger import get_logger
 from config.settings import settings
 from database.mongodb import mongodb
 from models.agent import Agent, AgentStatus
-from services.a2a_service import A2AService, a2a_service as _default_a2a_service
+from services.a2a_service import A2AService
+from services.a2a_service import a2a_service as _default_a2a_service
 from services.discovery_service import DiscoveryService, discovery_service
 from services.rate_limit_service import RateLimitService, rate_limit_service
 
@@ -163,6 +164,15 @@ class GatewayService:
         self, agent_id: str, message: Message, user_id: str
     ) -> SendMessageResponse:
         agent = await self.get_agent_for_gateway(agent_id, user_id)
+        if agent.source == "hub":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": "hub_agent_not_directly_callable",
+                    "message": "Hub-sourced agents cannot be called directly via the gateway. "
+                    "Use the platform UI or relay API instead.",
+                },
+            )
         await self._check_agent_rate_limit(agent, user_id)
 
         try:
@@ -186,6 +196,15 @@ class GatewayService:
         so the caller can return a proper HTTP error status.
         """
         agent = await self.get_agent_for_gateway(agent_id, user_id)
+        if agent.source == "hub":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": "hub_agent_not_directly_callable",
+                    "message": "Hub-sourced agents cannot be called directly via the gateway. "
+                    "Use the platform UI or relay API instead.",
+                },
+            )
         await self._check_agent_rate_limit(agent, user_id)
         return self._stream_events(agent, message, agent_id)
 

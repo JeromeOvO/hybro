@@ -263,7 +263,10 @@ class QueueExecutor:
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
                     break
 
-                elif result.status == ProcessingStatus.PAUSED:
+                elif result.status in (
+                    ProcessingStatus.PAUSED,
+                    ProcessingStatus.RELAY_DISPATCHED,
+                ):
                     if not is_direct_chat:
                         await self._queue_next_messages(
                             current_message, message_queue, room_id

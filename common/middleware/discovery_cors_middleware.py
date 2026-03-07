@@ -14,18 +14,21 @@ from config.settings import settings
 
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that adds permissive CORS headers for Discovery and Gateway API endpoints.
+    Middleware that adds permissive CORS headers for Discovery, Gateway, and Relay API endpoints.
     
-    Applies to paths starting with {api_prefix}/discovery or {api_prefix}/gateway.
+    Applies to paths starting with {api_prefix}/discovery, {api_prefix}/gateway,
+    or {api_prefix}/relay.
     Allows all origins, methods, and headers for external API access.
     """
 
     async def dispatch(self, request: Request, call_next):
         discovery_path_prefix = f"{settings.api_prefix}/discovery"
         gateway_path_prefix = f"{settings.api_prefix}/gateway"
+        relay_path_prefix = f"{settings.api_prefix}/relay"
         is_external_api = (
             request.url.path.startswith(discovery_path_prefix)
             or request.url.path.startswith(gateway_path_prefix)
+            or request.url.path.startswith(relay_path_prefix)
         )
         
         if is_external_api and request.method == "OPTIONS":

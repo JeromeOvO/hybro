@@ -216,6 +216,15 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.gateway_api_requests
+    
+    @property
+    def hubs_collection(self):
+        """Get hubs collection for hub registrations"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.hubs
       
     @property
     def a2a_tasks_collection(self):
@@ -339,6 +348,68 @@ class MongoDB:
             inc_fields["call_success_count"] = 1
         await self.agents_collection.update_one(
             {"agent_id": agent_id}, {"$inc": inc_fields}
+        )
+
+    # -------------------------------------------------------------------
+    # Hub CRUD (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub(self, hub: dict) -> None:
+        """Insert or update a hub registration keyed by hub_id."""
+        await self.hubs_collection.update_one(
+            {"hub_id": hub["hub_id"]},
+            {"$set": hub},
+            upsert=True,
+        )
+
+    async def get_hub(self, hub_id: str) -> dict | None:
+        return await self.hubs_collection.find_one({"hub_id": hub_id})
+
+    async def get_hubs_by_user(self, user_id: str) -> list[dict]:
+        cursor = self.hubs_collection.find({"user_id": user_id})
+        return await cursor.to_list(length=None)
+
+    async def update_hub_status(
+        self, hub_id: str, *, is_online: bool, **extra_fields
+    ) -> None:
+        update: dict = {"$set": {"is_online": is_online, **extra_fields}}
+        await self.hubs_collection.update_one({"hub_id": hub_id}, update)
+
+    # -------------------------------------------------------------------
+    # Hub-agent helpers (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub_agent(self, hub_id: str, local_agent_id: str, agent_data: dict) -> str:
+        """Upsert an agent using (hub_id, local_agent_id) as the dedup key.
+
+        Returns the agent_id (existing or newly assigned).
+        ``agent_id`` is only written on first insert via ``$setOnInsert``
+        so that re-syncs never change an existing agent's identity.
+        """
+        new_agent_id = agent_data.pop("agent_id", None)
+        update: dict = {"$set": agent_data}
+        if new_agent_id:
+            update["$setOnInsert"] = {"agent_id": new_agent_id}
+        result = await self.agents_collection.find_one_and_update(
+            {"hub_id": hub_id, "local_agent_id": local_agent_id},
+            update,
+            upsert=True,
+            return_document=True,
+        )
+        return result["agent_id"]
+
+    async def set_hub_agents_online_status(
+        self, hub_id: str, is_online: bool
+    ) -> None:
+        """Bulk-update is_hub_online for every agent belonging to *hub_id*."""
+        await self.agents_collection.update_many(
+            {"hub_id": hub_id, "source": "hub"},
+            {"$set": {"is_hub_online": is_online}},
+        )
+
+    async def count_hub_agents(self, hub_id: str) -> int:
+        return await self.agents_collection.count_documents(
+            {"hub_id": hub_id, "source": "hub"}
         )
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:

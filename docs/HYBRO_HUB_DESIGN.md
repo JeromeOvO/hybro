@@ -1,7 +1,7 @@
 # Hybro Hub: Portal-First Hybrid Agent Architecture
 
-**Status:** Draft v3.2
-**Date:** 2026-03-06
+**Status:** Draft v3.3
+**Date:** 2026-03-07
 **Author:** Architecture Design
 **A2A Protocol Version:** v0.3 (current SDK: `a2a-sdk >=0.3, <1.0`)
 
@@ -412,7 +412,15 @@ class Agent(BaseModel):
     hub_id: str | None = None
     hub_owner_id: str | None = None
     is_hub_online: bool = False
+    local_agent_id: str | None = None  # hub-assigned id for dedup
 ```
+
+> **Note on `local_agent_id`**: Each hub assigns a `local_agent_id` to its
+> local agents. The cloud backend uses `(hub_id, local_agent_id)` as a
+> composite dedup key for upserts — ensuring re-syncs update the same
+> `Agent` document rather than creating duplicates. The cloud-minted
+> `agent_id` is the sole stable identifier; it is set via `$setOnInsert`
+> on first sync and never overwritten by subsequent syncs.
 
 > **Note on AgentCard**: The `agent_card` field uses `AgentCard` from the external `a2a` Python package (`a2a.types`). This type cannot be extended with custom fields like `identity`. Hub-specific and trust-layer metadata must live as sibling fields on the `Agent` model, not nested inside `agent_card`.
 
@@ -441,16 +449,28 @@ Hub (outbound) ──HTTP POST──────→ hybro.ai /api/v1/relay/hub/{
    (unchanged from current flow).
 3. The orchestration layer (SupervisorExecutor or QueueExecutor) decides
    which agents to call. When dispatching to a specific agent via
-   `AgentMessageProcessor.process_single_message`, the processor checks
-   `agent.source`:
-   - **`"cloud"`**: Dispatch via A2A directly (existing behavior).
-   - **`"hub"`**: Push a `user_message` event to the hub's relay SSE queue
-     instead of making a direct A2A call.
+   `AgentMessageProcessor.process_single_message`, a `DispatchChain`
+   of middleware runs before the actual dispatch:
+   - `HubTransportMiddleware` inspects `agent.source`:
+     - **`"cloud"`**: Transport stays `"direct"` (existing A2A behavior).
+     - **`"hub"`**: Transport is set to `"relay"`. If the hub is offline,
+       `ctx.metadata["queued_for_offline"]` is also set.
+   - If transport is `"relay"`, the processor pushes a `RelayToHubEvent`
+     to the hub's SSE queue (or offline queue) and returns
+     `ProcessingStatus.RELAY_DISPATCHED`. Both `SupervisorExecutor` and
+     `QueueExecutor` treat `RELAY_DISPATCHED` like `PAUSED` — they persist
+     continuation state and wait for the hub to publish a response.
 
    > **Key design point**: Routing is per-agent, not per-message. A single
    > user message in a room with both cloud and hub agents triggers both
-   > paths. The routing split happens inside `AgentMessageProcessor` (or a
-   > transport adapter it delegates to), not at the `sendMessage` HTTP handler.
+   > paths. The routing split happens inside `AgentMessageProcessor` via
+   > the `DispatchChain`, not at the `sendMessage` HTTP handler.
+
+   > **Lazy initialization**: `AgentMessageProcessor` lazily resolves the
+   > `relay_service` singleton on first use (via `_ensure_relay_initialized`).
+   > This is necessary because the `RoomMessageCenter` module-level singleton
+   > is instantiated at import time, before `init_relay_service()` runs
+   > during the FastAPI lifespan.
 
 4. Hub receives the event, dispatches to the local agent via A2A.
 5. Hub publishes results via `POST /api/v1/relay/hub/{hub_id}/publish`:
@@ -508,6 +528,9 @@ JWTs, additional safeguards are needed:
   session token (JWT, 1h TTL) bound to the `hub_id` and client IP. The hub
   includes this token in subsequent `POST .../publish` requests. This prevents
   a leaked API key from being used to publish events from a different host.
+  The signing secret (`relay_connection_token_secret`) must be configured in
+  production — the relay service logs a warning on startup if it is empty,
+  and `create_connection_token` raises `ValueError` if called without a secret.
 - **Heartbeat-based reauth**: The relay sends periodic heartbeat events. If
   the hub fails to acknowledge 3 consecutive heartbeats, the connection is
   closed. On reconnect, the API key is re-validated (catching revoked keys).
@@ -533,9 +556,12 @@ JWTs, additional safeguards are needed:
 | Overflow behavior | Reject with 503 + user notification | UI shows "Hub offline too long — please restart your hub" |
 | Delivery order | Strict FIFO | Messages delivered in the order the user sent them |
 
-Messages that expire or overflow are marked `expired_pending_hub` in the
-database and the user receives an SSE notification: "N messages to your local
-agents expired while your hub was offline."
+Messages that expire or overflow are marked as failed in the database
+(the `RoomAgentMessage.message_content.message_task.status` is set to
+`TaskState.failed`) and the user receives an SSE notification: "N messages
+to your local agents expired while your hub was offline." The heartbeat loop
+periodically sweeps expired entries from in-memory offline queues to prevent
+memory leaks.
 
 > **Concurrency note**: The `Room.processing_message_id` field tracks which
 > user message is being processed (single-slot). In rooms with both cloud and
@@ -841,34 +867,139 @@ through the relay to the browser. The response shows a 🏠 badge.
 
 **Goal:** Users install a hub, their local agents appear on hybro.ai.
 
+#### Phase 2a: Cloud Relay Service + Dispatch Middleware (backend)  ✅ IMPLEMENTED
+
+**Status:** Complete. All deliverables implemented and tested.
+
 **Deliverables:**
-1. **Hub daemon** (`hybro-hub` PyPI package)
-   - Relay client (SSE subscribe + HTTP publish)
-   - Agent registry (manual config + auto-discovery)
-   - Simple dispatcher (A2A client for local agents)
-   - Privacy router v1 (keyword + regex)
-   - Bundled Ollama A2A wrapper (`hybro-hub agent start ollama`)
+1. **Relay Service** (`services/relay_service.py`)
+   - Hub registration and ownership validation
+   - SSE connection pool (in-memory `asyncio.Queue` per `hub_id`)
+   - Event routing: push `RelayToHubEvent` events to hub queues
+   - Publish processing: receive hub events, verify connection token + room ownership,
+     update `RoomAgentMessage` documents, broadcast via `SSEManager`, resume
+     `SupervisorExecutor` / `QueueExecutor` orchestration
+   - Heartbeat loop with configurable miss limit
+   - Offline queue per hub (max depth, TTL, periodic sweep of expired entries)
+   - Connection-scoped JWT tokens for `/publish` authentication
 
-2. **Relay service** (backend)
-   - `POST /api/v1/relay/hub/register`
-   - `GET /api/v1/relay/hub/{hub_id}/events` (SSE to hub)
-   - `POST /api/v1/relay/hub/{hub_id}/publish` (events from hub)
-   - `POST /api/v1/relay/hub/{hub_id}/agents/sync`
-   - Agent model: `source`, `hub_id`, `hub_owner_id`, `is_hub_online` fields
+2. **Relay API** (`api/relay.py`) — 5 endpoints:
+   - `POST /api/v1/relay/hub/register` — hub registration
+   - `GET /api/v1/relay/hub/{hub_id}/events` — SSE event stream to hub
+   - `POST /api/v1/relay/hub/{hub_id}/publish` — events from hub to cloud
+   - `POST /api/v1/relay/hub/{hub_id}/agents/sync` — agent synchronization
+   - `GET /api/v1/relay/hub/status` — hub status for authenticated user
 
-3. **sendMessage path split** (backend)
-   - When target agent has `source == "hub"`, route via relay instead of
-     cloud orchestrator
+3. **Data Models** (`models/hub.py`):
+   - `Hub`, `HubStatus`, `HubStatusResponse` (registration & status)
+   - `RelayToHubEvent` (cloud → hub events)
+   - `HubPublishEvent`, `HubPublishRequest` (hub → cloud events)
+   - `HubAgentSync`, `HubAgentSyncRequest`, `HubAgentSyncResponse` (agent sync)
 
-4. **Frontend updates** (~300 lines)
-   - Agent source badge (🏠 / ☁️)
-   - Hub status indicator
-   - Hub setup page in settings
-   - Offline agent styling
-   - Privacy badge on messages
+4. **Agent Model Extensions** (`models/agent.py`):
+   - `source: str = "cloud"` — `"cloud"` or `"hub"`
+   - `hub_id: str | None` — owning hub
+   - `hub_owner_id: str | None` — user who registered the hub
+   - `is_hub_online: bool = False` — live hub connection status
+   - `local_agent_id: str | None` — hub-assigned ID for dedup
+
+5. **Processing Status Extension** (`models/processing.py`):
+   - `RELAY_DISPATCHED = "relay_dispatched"` — new status for relay-routed messages
+
+6. **Dispatch Middleware Architecture** (`modules/dispatch_middleware.py`):
+   - `DispatchContext` dataclass — carries dispatch state through middleware chain
+   - `DispatchMiddleware` protocol — `pre_dispatch` / `post_dispatch` hooks
+   - `DispatchChain` — executes middleware in order (pre) / reverse order (post)
+
+7. **Hub Transport Middleware** (`modules/middleware/hub_transport.py`):
+   - `HubTransportMiddleware` — inspects `agent.source`, sets `ctx.transport = "relay"`,
+     flags `queued_for_offline` if hub is offline, guards against missing `hub_id`
+
+8. **AgentMessageProcessor Integration** (`modules/AgentMessageProcessor.py`):
+   - Lazy relay service resolution via `_ensure_relay_initialized()`
+   - Pre-dispatch middleware chain execution
+   - `_dispatch_via_relay()` — pushes `RelayToHubEvent` to relay service
+   - `RELAY_DISPATCHED` result handling
+
+9. **Orchestrator Integration**:
+   - `SupervisorExecutor.py` — maps `RELAY_DISPATCHED` → `StepStatus.PAUSED`
+   - `QueueExecutor.py` — maps `RELAY_DISPATCHED` → saves continuation state
+   - `RoomMessageCenter.py` — removed eager relay wiring (lazy via AMP)
+
+10. **Database Extensions** (`database/mongodb.py`):
+    - `hubs_collection` property
+    - `upsert_hub()`, `get_hub()`, `get_hubs_by_user()`, `update_hub_status()`
+    - `upsert_hub_agent()` — uses `$setOnInsert` for `agent_id` stability
+    - `set_hub_agents_online_status()`, `count_hub_agents()`
+    - Migration: `database/migration/add_hub_indexes.py`
+
+11. **Supporting Changes**:
+    - `common/utils/connection_token.py` — JWT create/verify with secret guard
+    - `config/settings.py` — `relay_heartbeat_interval`, `relay_offline_queue_max`,
+      `relay_offline_queue_ttl`, `relay_connection_token_secret`,
+      `relay_hub_agent_heartbeat_miss_limit`
+    - `common/middleware/discovery_cors_middleware.py` — extended to `/relay` paths
+    - `jobs/stale_task_checker.py` — skips `source == "hub"` agents in orphan recovery
+    - `services/gateway_service.py` — rejects hub agents with 502 (prevents
+      self-referential URL loops)
+    - `main.py` — relay router, lifespan init/shutdown
+
+12. **Tests**:
+    - `tests/test_api_relay.py` — 11 tests (registration, sync, SSE, publish with auth, offline queue)
+    - `tests/test_dispatch_middleware.py` — 10 tests (chain ordering, hub transport, AMP relay dispatch)
+
+**Key implementation decisions:**
+- **`$setOnInsert` for `agent_id`**: The `upsert_hub_agent()` method uses
+  `$setOnInsert` for `agent_id` so re-syncs never overwrite an existing agent's
+  identity. The gateway proxy URL is written in a separate `update_one` call
+  using the stable `stored_id`.
+- **Lazy relay service resolution**: `AgentMessageProcessor` resolves the relay
+  service singleton on first call, not at construction time. This sidesteps the
+  DI timing issue where `RoomMessageCenter` is instantiated at module import
+  before `init_relay_service()` runs.
+- **`RELAY_DISPATCHED` reuses PAUSED semantics**: Both `SupervisorExecutor` and
+  `QueueExecutor` treat `RELAY_DISPATCHED` identically to `PAUSED`, persisting
+  continuation state for later resume when the hub publishes a response.
+- **Connection token secret guard**: `create_connection_token` raises
+  `ValueError` if the secret is empty. `verify_connection_token` returns
+  `False`. The relay service logs a startup warning if unconfigured.
+- **Heartbeat miss counter**: The miss counter is reset both when a real event
+  is delivered AND when a heartbeat is sent (proving the SSE connection is alive),
+  preventing false disconnections of idle-but-healthy hubs.
+- **Offline queue sweep**: The heartbeat loop invokes `sweep_offline_queues()`
+  periodically to evict expired entries and prevent memory leaks.
+- **Failed message marking**: When offline messages expire or overflow, the
+  `RoomAgentMessage` is updated with error text and its task status set to
+  `TaskState.failed` (not just a no-op SSE notification).
+- **Gateway hub agent guard**: `GatewayService.send_message()` and
+  `prepare_stream()` reject hub-sourced agents with HTTP 502 to prevent
+  self-referential URL loops (the agent's `agent_card.url` points back to
+  the gateway itself).
+
+#### Phase 2b: Hub Daemon (not yet started)
+
+**Goal:** Ship the `hybro-hub` PyPI package that connects to the relay.
+
+**Deliverables:**
+1. Relay client (SSE subscribe + HTTP publish)
+2. Agent registry (manual config + auto-discovery)
+3. Simple dispatcher (A2A client for local agents)
+4. Privacy router v1 (keyword + regex)
+5. Bundled Ollama A2A wrapper (`hybro-hub agent start ollama`)
+
+#### Phase 2c: Frontend Updates (not yet started)
+
+**Goal:** Show hub agents and status in the hybro.ai web portal.
+
+**Deliverables** (~300 lines):
+1. Agent source badge (🏠 / ☁️)
+2. Hub status indicator
+3. Hub setup page in settings
+4. Offline agent styling
+5. Privacy badge on messages
 
 **Validation:** User runs `hybro-hub start`, opens hybro.ai, chats with a
-local Ollama agent alongside cloud agents.
+local Ollama agent alongside cloud agents. Requires Phase 2b + 2c completion.
 
 ### Phase 3: Advanced Features (12+ weeks, parallel)
 
@@ -1007,59 +1138,55 @@ RoomMessageCenter.process_room_user_message
       5. SSE progress events — all three designs
 ```
 
-### Middleware Architecture for `AgentMessageProcessor`
+### Middleware Architecture for `AgentMessageProcessor`  ✅ IMPLEMENTED
 
-The current `process_single_message` method is a monolithic 160-line function
-with no extension points. All three designs add logic to this method:
+The `DispatchMiddleware` pattern has been implemented in Phase 2a. The
+`AgentMessageProcessor` now accepts a `DispatchChain` and runs pre/post
+middleware hooks around the core dispatch logic.
 
-| Design | Pre-dispatch | Post-dispatch |
-|--------|-------------|--------------|
-| Hub | Transport selection (`agent.source`) | Relay event publishing |
-| Trust Layer | Policy evaluation, token issuance, identity verification, trace context injection | Structured event logging, audit record |
-| Workflow Engine | — | Structured output extraction |
-
-To prevent this from becoming a 500-line god-method, the implementation
-should adopt a **middleware chain** pattern:
+**Implemented files:**
+- `modules/dispatch_middleware.py` — `DispatchContext`, `DispatchMiddleware` protocol, `DispatchChain`
+- `modules/middleware/hub_transport.py` — `HubTransportMiddleware`
 
 ```python
-# Proposed refactoring of AgentMessageProcessor
+# modules/dispatch_middleware.py (implemented)
 
 class DispatchMiddleware(Protocol):
     async def pre_dispatch(self, ctx: DispatchContext) -> DispatchContext: ...
     async def post_dispatch(self, ctx: DispatchContext, result: ProcessingResult) -> ProcessingResult: ...
 
 class AgentMessageProcessor:
-    def __init__(self, ..., middleware: list[DispatchMiddleware] = []):
-        self._middleware = middleware
+    def __init__(self, ..., dispatch_chain: DispatchChain | None = None):
+        self.dispatch_chain = dispatch_chain or DispatchChain()
 
     async def process_single_message(self, ...) -> ProcessingResult:
-        ctx = DispatchContext(message=current_message, agent=agent, room_id=room_id, ...)
+        self._ensure_relay_initialized()  # lazy DI resolution
+        ctx = DispatchContext(agent=agent, room_id=room_id, ...)
 
-        # Pre-dispatch: policy → token → identity → trace → transport
-        for mw in self._middleware:
-            ctx = await mw.pre_dispatch(ctx)
-            if ctx.denied:
-                return ProcessingResult(ProcessingStatus.DENIED, ctx.deny_reason)
+        # Pre-dispatch: transport selection, policy, etc.
+        ctx = await self.dispatch_chain.run_pre_dispatch(ctx)
+        if ctx.denied:
+            return ProcessingResult(ProcessingStatus.FAILED, ctx.deny_reason)
 
-        # Core dispatch (existing logic)
-        result = await self._dispatch(ctx)
+        # Transport branch: relay or direct A2A
+        if ctx.transport == "relay":
+            return await self._dispatch_via_relay(ctx, current_message)
 
-        # Post-dispatch: logging → audit → output extraction
-        for mw in reversed(self._middleware):
-            result = await mw.post_dispatch(ctx, result)
+        # Core dispatch (existing direct A2A logic)
+        result = await self._dispatch_direct(ctx)
 
-        return result
+        # Post-dispatch: logging, audit, etc.
+        return await self.dispatch_chain.run_post_dispatch(ctx, result)
 ```
 
-Middleware implementations:
-- `HubTransportMiddleware` — sets `ctx.transport` to relay or direct A2A
-- `TrustPolicyMiddleware` — Cedar evaluation, token issuance
+Current middleware:
+- `HubTransportMiddleware` — sets `ctx.transport` to `"relay"` for hub agents,
+  guards against missing `hub_id` (denies dispatch)
+
+Future middleware (not yet implemented):
+- `TrustPolicyMiddleware` — Cedar evaluation, token issuance (Trust Phase 1)
 - `TraceContextMiddleware` — injects `traceparent`/`tracestate` headers
 - `TransparencyMiddleware` — emits structured events and audit records
-
-This pattern keeps each concern isolated and testable, avoids coupling between
-Hub/Trust/Workflow logic, and allows the middleware chain to be configured
-per-deployment (e.g., skip trust middleware in development).
 
 ### SSE Event Composition
 
@@ -1111,11 +1238,12 @@ class Agent(BaseModel):
     rate_limit_system_per_hour: int | None = None
     is_public: bool = True
 
-    # === From Hub Design §5.1 (added in Hub Phase 2) ===
+    # === From Hub Design §5.1 (added in Hub Phase 2a) ✅ ===
     source: str = "cloud"              # "cloud" | "hub"
     hub_id: str | None = None
     hub_owner_id: str | None = None
     is_hub_online: bool = False
+    local_agent_id: str | None = None  # hub-assigned id, dedup key with hub_id
 
     # === From Trust Layer §3.4 (added in Trust Phase 0) ===
     identity: AgentIdentity | None = None
@@ -1136,21 +1264,25 @@ Workflow Phase 1 (Robust V2)     Workflow Phase 2 (Templates)   Workflow Phase 3
   └─ no model changes             └─ new Workflow/Execution     (fan-out, approval)
                                      models (independent)
 
-Hub Phase 1 (Gateway API + SDK)  Hub Phase 2 (Hub + Relay)      Hub Phase 3
-  └─ no Agent model changes ✅     └─ adds source/hub_id to     (desktop app, etc.)
-  └─ COMPLETE                       Agent model
-                                   └─ depends on Gateway from
-                                     Hub Phase 1 ✅
+Hub Phase 1 (Gateway API + SDK)  Hub Phase 2b (Hub Daemon)      Hub Phase 3
+  └─ no Agent model changes ✅     └─ relay client, agent        (desktop app, etc.)
+  └─ COMPLETE                       registry, dispatcher
+                                  Hub Phase 2c (Frontend)
+Hub Phase 2a (Relay + Middleware)   └─ source badges, hub
+  └─ adds source/hub_id/           status, offline styling
+     local_agent_id to Agent ✅
+  └─ DispatchMiddleware arch ✅
+  └─ COMPLETE
 
 Trust Phase 0 (Identity + HCT)  Trust Phase 1 (Policy + OTel)  Trust Phase 2-3
   └─ adds identity to Agent        └─ adds Cedar middleware to   (DPoP, enterprise)
   └─ can start in parallel          AgentMessageProcessor
-     with Hub Phase 1             └─ depends on middleware
-                                     architecture (§15 above)
+     with Hub Phase 1             └─ uses middleware
+                                     architecture from 2a ✅
 ```
 
-**Key dependency**: Hub Phase 2 and Trust Phase 0 both extend the `Agent`
+**Key dependency**: Hub Phase 2a and Trust Phase 0 both extend the `Agent`
 model. They can proceed in parallel (different fields, no conflict) but
 should coordinate on a single migration. The middleware architecture
-(proposed above) should be implemented before Trust Phase 1 adds Cedar
+(implemented in Phase 2a) is ready for Trust Phase 1 to add Cedar
 evaluation to `AgentMessageProcessor`.

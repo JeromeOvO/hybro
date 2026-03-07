@@ -62,6 +62,12 @@ class RoomMessageCenter:
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
         )
+
+        # Relay service + dispatch middleware (Phase 2a)
+        # NOTE: relay_service is None at import time (initialized in main.py
+        # lifespan).  AgentMessageProcessor resolves it lazily on first use.
+        self._relay_service = None
+
         self.agent_message_processor = AgentMessageProcessor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,

@@ -548,6 +548,12 @@ class StaleTaskChecker:
         user_messages_to_process: dict[str, str] = {}  # user_message_id -> room_id
 
         for msg in orphaned_messages:
+            # Skip hub-sourced agents — their timeouts are managed by the
+            # relay offline queue TTL, not the orphan recovery job.
+            agent = await db_service.get_agent_by_agent_id(msg.agent_id) if msg.agent_id else None
+            if agent and getattr(agent, "source", "cloud") == "hub":
+                continue
+
             user_message_id = msg.related_message_id
             if user_message_id and user_message_id not in user_messages_to_process:
                 user_messages_to_process[user_message_id] = msg.room_id

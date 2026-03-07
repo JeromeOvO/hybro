@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     gateway_base_url: str = ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime
     gateway_rate_limit_per_key: int | None = 200  # Requests per API key per hour (None = unlimited)
     gateway_rate_limit_global: int | None = 20000  # Total requests per hour across all keys (None = unlimited)
+
+    # Relay (Hub Phase 2) Settings
+    relay_heartbeat_interval: int = 30  # seconds
+    relay_offline_queue_max: int = 100  # per hub
+    relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
+    relay_connection_token_secret: str = ""  # JWT signing secret for /publish auth
+    relay_hub_agent_heartbeat_miss_limit: int = 3
     
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (

@@ -22,6 +22,7 @@ from api import (
     inspection_center,
     memory_center,
     orchestration_center,
+    relay,
     room_center,
     sse,
     task,
@@ -125,9 +126,23 @@ async def lifespan(app: FastAPI):
     # Start orphaned upload cleaner
     await orphaned_upload_cleaner.start()
 
+    # Initialize relay service (Phase 2a)
+    from services.database_service import db_service as _db_svc
+    from services.relay_service import init_relay_service
+    _relay_svc = init_relay_service(
+        mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager
+    )
+    await _relay_svc.start()
+    logger.info("Relay service initialized and heartbeat checker started")
+
     try:
         yield
     finally:
+        # Stop the relay service heartbeat checker
+        from services.relay_service import relay_service as _relay_svc_shutdown
+        if _relay_svc_shutdown:
+            await _relay_svc_shutdown.stop()
+
         # Stop the stale task checker
         await stale_task_checker.stop()
 
@@ -149,8 +164,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
-# Add Discovery & Gateway API CORS middleware
-# This applies permissive CORS to /api/v1/discovery/* and /api/v1/gateway/* paths
+# Add Discovery, Gateway & Relay API CORS middleware
+# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
 # Note: Middleware runs in reverse order, so adding first means it runs last
 app.add_middleware(DiscoveryCORSMiddleware)
 
@@ -270,6 +285,14 @@ app.include_router(
     prefix=api_prefix,
     tags=["gateway"],
     # Auth handled per-route via X-API-Key header in gateway.py
+)
+# Relay API - Hub communication endpoints with API key / JWT auth
+# Uses open CORS to allow hub daemon access from any origin
+app.include_router(
+    relay.router,
+    prefix=api_prefix,
+    tags=["relay"],
+    # Auth handled per-route via X-API-Key or Bearer token in relay.py
 )
 # Webhook endpoint - no auth prefix, no authentication (uses token validation)
 app.include_router(
