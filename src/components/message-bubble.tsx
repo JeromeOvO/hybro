@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
@@ -42,7 +42,53 @@ function entityToBubble(entity: MessageEntity): BubbleMessage {
   }
 }
 
+function AttachmentExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <AlertCircle className="h-3 w-3 shrink-0" />
+      <span>Resource expired</span>
+    </div>
+  )
+}
+
+function isPresignedUrlExpired(url: string): boolean {
+  try {
+    const params = new URL(url).searchParams
+    const date = params.get('X-Amz-Date')
+    const expires = params.get('X-Amz-Expires')
+    if (!date || !expires) return false
+    const issued = Date.UTC(
+      +date.slice(0, 4), +date.slice(4, 6) - 1, +date.slice(6, 8),
+      +date.slice(9, 11), +date.slice(11, 13), +date.slice(13, 15),
+    )
+    if (Number.isNaN(issued)) return false
+    return Date.now() > issued + (+expires * 1000)
+  } catch {
+    return false
+  }
+}
+
+function GenericAttachmentLink({ url, fileName, sizeLabel }: { url: string; fileName: string; sizeLabel: string }) {
+  if (isPresignedUrlExpired(url)) {
+    return <AttachmentExpiredBanner icon={AlertCircle} />
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted transition-colors"
+    >
+      <span className="truncate max-w-[120px]">{fileName}</span>
+      <span className="text-muted-foreground">{sizeLabel}</span>
+    </a>
+  )
+}
+
 function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
+  const [loadError, setLoadError] = useState(false)
   const isImg = attachment.mimeType.startsWith('image/')
   const isAudio = attachment.mimeType.startsWith('audio/')
   const isVideo = attachment.mimeType.startsWith('video/')
@@ -51,6 +97,7 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
     : `${(attachment.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
 
   if (isImg && attachment.fileUrl) {
+    if (loadError) return <AttachmentExpiredBanner icon={ImageIcon} />
     return (
       <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer" className="block max-w-[200px]">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -59,15 +106,17 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
           alt={attachment.fileName}
           className="rounded-md border border-border max-h-40 object-cover"
           loading="lazy"
+          onError={() => setLoadError(true)}
         />
       </a>
     )
   }
 
   if (isAudio && attachment.fileUrl) {
+    if (loadError) return <AttachmentExpiredBanner icon={Volume2} />
     return (
       <div className="my-1">
-        <audio controls preload="metadata" className="max-w-full">
+        <audio controls preload="metadata" className="max-w-full" onError={() => setLoadError(true)}>
           <source src={attachment.fileUrl} type={attachment.mimeType} />
         </audio>
         <span className="mt-1 block text-xs text-muted-foreground">
@@ -78,9 +127,10 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
   }
 
   if (isVideo && attachment.fileUrl) {
+    if (loadError) return <AttachmentExpiredBanner icon={Film} />
     return (
       <div className="my-1">
-        <video controls preload="metadata" className="max-w-full max-h-60 rounded-md border border-border">
+        <video controls preload="metadata" className="max-w-full max-h-60 rounded-md border border-border" onError={() => setLoadError(true)}>
           <source src={attachment.fileUrl} type={attachment.mimeType} />
         </video>
         <span className="mt-1 block text-xs text-muted-foreground">
@@ -92,15 +142,11 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
 
   if (attachment.fileUrl) {
     return (
-      <a
-        href={attachment.fileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted transition-colors"
-      >
-        <span className="truncate max-w-[120px]">{attachment.fileName}</span>
-        <span className="text-muted-foreground">{sizeLabel}</span>
-      </a>
+      <GenericAttachmentLink
+        url={attachment.fileUrl}
+        fileName={attachment.fileName}
+        sizeLabel={sizeLabel}
+      />
     )
   }
 

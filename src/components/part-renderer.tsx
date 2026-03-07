@@ -1,82 +1,147 @@
 'use client'
 
-import { FileIcon, Code2, ImageIcon, Volume2, Film } from 'lucide-react'
+import { useState } from 'react'
+import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
 import type { ArtifactPart } from '@/stores/message-store/types'
+
+const INTERNAL_NAME_RE = /^(inline|notify|ext)-\d+\.\w+$/
+const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+const UUID_HEX_RE = /^[0-9a-f]{32}(\.\w+)?$/i
+
+function isDisplayableName(name: string | undefined): name is string {
+  if (!name) return false
+  if (INTERNAL_NAME_RE.test(name)) return false
+  if (UUID_DASHED_RE.test(name)) return false
+  if (UUID_HEX_RE.test(name)) return false
+  return true
+}
+
+function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
+  return (
+    <div className="my-1 flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+      <Icon className="h-4 w-4 shrink-0" />
+      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+      <span>This resource is no longer available</span>
+    </div>
+  )
+}
+
+/**
+ * Parse AWS SigV4 presigned URL params to check if the URL has expired.
+ * Returns true if the URL is detectably expired, false otherwise
+ * (including for non-presigned URLs where we can't determine expiry).
+ */
+function isPresignedUrlExpired(url: string): boolean {
+  try {
+    const params = new URL(url).searchParams
+    const date = params.get('X-Amz-Date')
+    const expires = params.get('X-Amz-Expires')
+    if (!date || !expires) return false
+    const issued = Date.UTC(
+      +date.slice(0, 4), +date.slice(4, 6) - 1, +date.slice(6, 8),
+      +date.slice(9, 11), +date.slice(11, 13), +date.slice(13, 15),
+    )
+    if (Number.isNaN(issued)) return false
+    return Date.now() > issued + (+expires * 1000)
+  } catch {
+    return false
+  }
+}
 
 function TextPartView({ text }: { text: string }) {
   return <p className="whitespace-pre-wrap text-sm">{text}</p>
 }
 
 function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
+  const [loadError, setLoadError] = useState(false)
   const mime = file.mime_type || ''
   const isImage = mime.startsWith('image/')
   const isAudio = mime.startsWith('audio/')
   const isVideo = mime.startsWith('video/')
   const src = file.uri || (file.bytes ? `data:${mime || 'application/octet-stream'};base64,${file.bytes}` : null)
+  const displayName = isDisplayableName(file.name) ? file.name : undefined
 
   if (isImage && src) {
+    if (loadError) {
+      return <ResourceExpiredBanner icon={ImageIcon} />
+    }
     return (
       <div className="my-1">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
-          alt={file.name || 'image'}
+          alt={displayName || 'image'}
           className="max-w-full max-h-80 rounded-md border border-border"
           loading="lazy"
+          onError={() => setLoadError(true)}
         />
-        {file.name && (
-          <span className="mt-1 block text-xs text-muted-foreground">{file.name}</span>
+        {displayName && (
+          <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
         )}
       </div>
     )
   }
 
   if (isAudio && src) {
+    if (loadError) {
+      return <ResourceExpiredBanner icon={Volume2} />
+    }
     return (
       <div className="my-1">
-        <audio controls preload="metadata" className="max-w-full">
+        <audio controls preload="metadata" className="max-w-full" onError={() => setLoadError(true)}>
           <source src={src} type={mime} />
         </audio>
-        {file.name && (
-          <span className="mt-1 block text-xs text-muted-foreground">{file.name}</span>
+        {displayName && (
+          <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
         )}
       </div>
     )
   }
 
   if (isVideo && src) {
+    if (loadError) {
+      return <ResourceExpiredBanner icon={Film} />
+    }
     return (
       <div className="my-1">
-        <video controls preload="metadata" className="max-w-full max-h-80 rounded-md border border-border">
+        <video controls preload="metadata" className="max-w-full max-h-80 rounded-md border border-border" onError={() => setLoadError(true)}>
           <source src={src} type={mime} />
         </video>
-        {file.name && (
-          <span className="mt-1 block text-xs text-muted-foreground">{file.name}</span>
+        {displayName && (
+          <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
         )}
       </div>
     )
   }
 
   if (src) {
-    return (
-      <a
-        href={src}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors"
-      >
-        <FileIcon className="h-4 w-4 text-muted-foreground" />
-        <span>{file.name || 'Download file'}</span>
-      </a>
-    )
+    return <GenericFileLink src={src} displayName={displayName} />
   }
 
   const FallbackIcon = isAudio ? Volume2 : isVideo ? Film : ImageIcon
   return (
     <div className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
       <FallbackIcon className="h-4 w-4" />
-      <span>{file.name || 'File (no source)'}</span>
+      <span>{displayName || 'File (no source)'}</span>
     </div>
+  )
+}
+
+function GenericFileLink({ src, displayName }: { src: string; displayName: string | undefined }) {
+  if (isPresignedUrlExpired(src)) {
+    return <ResourceExpiredBanner icon={FileIcon} />
+  }
+
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors"
+    >
+      <FileIcon className="h-4 w-4 text-muted-foreground" />
+      <span>{displayName || 'Download file'}</span>
+    </a>
   )
 }
 
