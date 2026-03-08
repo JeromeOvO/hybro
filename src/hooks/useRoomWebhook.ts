@@ -626,6 +626,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               currentProcessingMessageId.current = sseMessage.data.message_id
             }
             if (!placeholderDismissedRef.current) {
+              const isSupervisor = getSupervisorMode()
               store.upsertMessage({
                 id: getProcessingPlaceholderId(),
                 roomId,
@@ -633,7 +634,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
                 content: '',
                 senderName: 'HYBRO AI',
                 taskStatus: TASK_STATE.WORKING,
-                taskContent: 'Supervisor is analyzing your request…',
+                taskContent: isSupervisor
+                  ? 'Supervisor is analyzing your request…'
+                  : 'Processing your request…',
                 timestamp: new Date().toISOString(),
                 isEphemeral: true,
               }, 'optimistic')
@@ -737,6 +740,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             taskContent: sseMessage.data.task_content,
             stepNumber: sseMessage.data.step_number,
             totalSteps: sseMessage.data.total_steps,
+            relatedMessageId: sseMessage.data.related_message_id,
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }, 'sse')
@@ -765,6 +769,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             taskContent: sseMessage.data.task_content,
             stepNumber: sseMessage.data.step_number,
             totalSteps: sseMessage.data.total_steps,
+            relatedMessageId: sseMessage.data.related_message_id,
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }
@@ -789,6 +794,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
             const hadRealStreaming = streamingBuffer.isStreaming(messageId)
             streamingBuffer.finalize(messageId)
             typewriterManager.finish(messageId)
+
+            // Remove processing placeholder if still present and mark dismissed
+            // so the sendUserMessage HTTP response doesn't re-add it.
+            store.removeMessage(getProcessingPlaceholderId())
+            placeholderDismissedRef.current = true
 
             if (!hadRealStreaming && content && status === TASK_STATE.COMPLETED) {
               // Non-streaming agent: use typewriter for progressive reveal.
@@ -898,7 +908,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         if (sseMessage.data) {
           const { request_id, message_id, prompt, prompt_type, choices,
                   agent_name, agent_id, step_number, total_steps, expires_at,
-                  group_id, group_total, group_index } = sseMessage.data
+                  group_id, group_total, group_index, related_message_id } = sseMessage.data
           if (request_id && message_id) {
             store.removeMessage(getProcessingPlaceholderId())
             placeholderDismissedRef.current = true
@@ -927,6 +937,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
               hitlGroupIndex: group_index ?? undefined,
               stepNumber: step_number,
               totalSteps: total_steps,
+              relatedMessageId: related_message_id,
             }, 'sse')
             hitlRequestIndex.current.set(request_id, message_id)
           }
@@ -994,7 +1005,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
-  }, [getAgentName, getProcessingPlaceholderId, roomId, setProcessing, clearProcessing, setCancelling, reconcileWithDb])
+  }, [getAgentName, getProcessingPlaceholderId, getSupervisorMode, roomId, setProcessing, clearProcessing, setCancelling, reconcileWithDb])
 
   // Initialize SSE connection
   const {
@@ -1218,6 +1229,11 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const currentTime = new Date().toISOString()
 
+    // Reset placeholder dismissed flag so SSE processing_status events
+    // can manage the placeholder lifecycle. The flag will be set to true
+    // when SSE dismisses the placeholder (task_submitted or terminal status).
+    placeholderDismissedRef.current = false
+
     // Step 0: Immediately add user message + placeholder to normalized store
     const processingPlaceholderId = getProcessingPlaceholderId()
     const msgStoreSend = useMessageStore.getState()
@@ -1355,8 +1371,15 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
       currentProcessingMessageId.current = messageId
 
       // Step 3: Processing is auto-triggered by backend when sendMessage completes.
+      // Only set processing state if SSE hasn't already dismissed the placeholder
+      // (race condition: fast agents can complete before the HTTP response returns).
       setSending(false)
-      setProcessing(true)
+      if (!placeholderDismissedRef.current) {
+        setProcessing(true)
+      } else {
+        // SSE already handled the full lifecycle — just make sure ref is clean
+        isProcessingRef.current = false
+      }
       setCancelling(false)
       cancelTimedOutRef.current = false
       sseHadDisconnectionRef.current = false
@@ -1365,7 +1388,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
         cancelTimeoutRef.current = null
       }
 
-      console.log('📡 Message queued for processing, waiting for agent responses via SSE...')
+      console.log('📡 Message queued for processing, waiting for agent responses via SSE...',
+        placeholderDismissedRef.current ? '(SSE already completed during HTTP round-trip)' : '')
 
       if (!sseConnected) {
         console.log('⚠️ SSE not connected, processing will complete but updates may be delayed')
