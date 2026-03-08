@@ -156,6 +156,8 @@ class SupervisorExecutor:
                     debate_mode=True,
                 )
 
+        clarify_fallback_count = 0
+
         while step_number < self.MAX_STEPS:
 
             # --- Cancellation check ---
@@ -374,41 +376,56 @@ class SupervisorExecutor:
                     if e.action.action == ActionType.CLARIFY
                 )
                 if prior_clarifies >= 1:
+                    clarify_fallback_count += 1
                     logger.warning(
                         "supervisor_clarify_cap_reached",
                         extra={
                             "room_id": room_id,
                             "trajectory_id": trajectory.trajectory_id,
                             "prior_clarifies": prior_clarifies,
+                            "clarify_fallback_count": clarify_fallback_count,
                         },
                     )
-                    healthy_agents = [
-                        a for a in agent_registry if a.is_healthy
-                    ]
-                    if healthy_agents:
-                        target_agent = healthy_agents[0]
-                        action = SupervisorAction(
-                            action=ActionType.DELEGATE,
-                            reasoning=(
-                                "Clarification cap reached. Proceeding "
-                                "with the information already gathered."
-                            ),
-                            targets=[
-                                DelegateTarget(
-                                    agent_id=target_agent.agent_id,
-                                    agent_name=target_agent.agent_name,
-                                    task=message_text,
-                                )
-                            ],
-                        )
-                    else:
+                    if clarify_fallback_count > 1:
                         action = SupervisorAction(
                             action=ActionType.DONE,
                             reasoning=(
-                                "Clarification cap reached and no "
-                                "healthy agents available."
+                                "Supervisor repeatedly requested clarification "
+                                "after cap was reached. Ending to avoid "
+                                "infinite delegation loop."
                             ),
                         )
+                    else:
+                        healthy_ids = {
+                            a.agent_id for a in agent_registry if a.is_healthy
+                        }
+                        target_agent = self._pick_best_fallback_agent(
+                            trajectory, agent_registry, healthy_ids,
+                        )
+                        if target_agent:
+                            action = SupervisorAction(
+                                action=ActionType.DELEGATE,
+                                reasoning=(
+                                    "Clarification cap reached. Re-delegating "
+                                    f"to {target_agent.agent_name} based on "
+                                    "prior trajectory success."
+                                ),
+                                targets=[
+                                    DelegateTarget(
+                                        agent_id=target_agent.agent_id,
+                                        agent_name=target_agent.agent_name,
+                                        task=message_text,
+                                    )
+                                ],
+                            )
+                        else:
+                            action = SupervisorAction(
+                                action=ActionType.DONE,
+                                reasoning=(
+                                    "Clarification cap reached and no suitable "
+                                    "healthy agents available."
+                                ),
+                            )
 
             # --- Execute the action ---
             match action.action:
@@ -1216,6 +1233,53 @@ class SupervisorExecutor:
                     error_message="Agent dispatch was cancelled",
                 ))
         return results
+
+    # ------------------------------------------------------------------
+    # Clarify-cap fallback: choose the best agent from the trajectory
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pick_best_fallback_agent(
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        healthy_ids: set[str],
+    ) -> AgentProfile | None:
+        """Pick the best agent when the clarify cap forces a delegation.
+
+        Priority order:
+        1. An agent that previously succeeded in this trajectory and is
+           still healthy (most likely to handle the task correctly).
+        2. A healthy agent that has not failed in this trajectory.
+        3. Any healthy agent as a last resort.
+        """
+        healthy_map = {
+            a.agent_id: a for a in agent_registry if a.agent_id in healthy_ids
+        }
+        if not healthy_map:
+            return None
+
+        failed_ids: set[str] = set()
+        succeeded_id: str | None = None
+
+        for entry in reversed(trajectory.entries):
+            if entry.action.action != ActionType.DELEGATE:
+                continue
+            for result in entry.results:
+                if result.success and result.agent_id in healthy_map:
+                    succeeded_id = result.agent_id
+                if not result.success:
+                    failed_ids.add(result.agent_id)
+
+        if succeeded_id:
+            return healthy_map[succeeded_id]
+
+        non_failed = [
+            a for aid, a in healthy_map.items() if aid not in failed_ids
+        ]
+        if non_failed:
+            return non_failed[0]
+
+        return next(iter(healthy_map.values()))
 
     # ------------------------------------------------------------------
     # Logging helper

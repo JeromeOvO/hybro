@@ -434,17 +434,15 @@ class TaskService:
     async def get_task_from_agent(self, agent_card: AgentCard, task_id: str) -> Task | None:
         """Get task from agent via A2A client"""
 
-        a2a_client = await self.a2a_service.create_a2a_client(agent_card)
-        if not a2a_client:
-            return None
         try:
-            response = await a2a_client.get_task(GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id)))
-            if not response or isinstance(response.root, JSONRPCErrorResponse):
-                logger.error(
-                    f"Failed to get task from agent, error: {getattr(response.root, 'error', 'Unknown error')}"
-                )
-                return None
-            return response.root.result
+            async with self.a2a_service.create_a2a_client(agent_card) as a2a_client:
+                response = await a2a_client.get_task(GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id)))
+                if not response or isinstance(response.root, JSONRPCErrorResponse):
+                    logger.error(
+                        f"Failed to get task from agent, error: {getattr(response.root, 'error', 'Unknown error')}"
+                    )
+                    return None
+                return response.root.result
         except Exception as e:
             logger.error(f"Failed to get task from agent: {e}", exc_info=True)
             return None

@@ -87,9 +87,15 @@ Output ONLY valid JSON matching the schema below.
    - When you need multiple pieces of information, create a separate question for each.
      The user will see them as paginated cards and answer one at a time.
 4. DONE: The work is complete. No synthesis needed (e.g., single agent already answered fully).
+   - ONLY valid after at least one agent has been delegated to AND responded in this execution.
 
 ## Rules
 - Prefer DELEGATE with a single target unless sub-tasks are truly independent.
+- You MUST DELEGATE at least once before choosing DONE or SYNTHESIZE. You cannot
+  answer the user yourself — only agents produce visible responses. Even if the
+  "Room Conversation Background" already contains relevant information from a prior
+  exchange, the current user message is a NEW request that requires a fresh agent
+  delegation. The conversation background is context only, not results for this task.
 - After each agent result, evaluate quality. If the agent returned a successful
   response that addresses the user's question, choose DONE. Only re-delegate if
   the response is clearly wrong, off-topic, or the agent explicitly failed.
@@ -551,7 +557,7 @@ class RoomSupervisorService:
         self,
         action: SupervisorAction,
         trajectory: SupervisorTrajectory,
-        max_consecutive: int = 2,
+        max_consecutive: int = 3,
         max_consecutive_failures: int = 2,
     ) -> SupervisorAction:
         """Filter out targets that have been delegated to repeatedly.
