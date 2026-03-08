@@ -1895,7 +1895,22 @@ class RoomServices:
         # Legacy fallback: parse inline <@id|name> mentions from message text.
         # This runs AFTER persistence — legacy inline mentions are best-effort
         # and do not get reject-before-persist protection.
-        mentions = self.parse_agent_mentions(message_text, room.room_agent_set)
+        #
+        # When target_group is "all_agents", the room_agent_set may be empty
+        # (e.g. newly created rooms from the homepage).  In that case, resolve
+        # mentions against all active agents so inline @-mentions are honoured
+        # regardless of room membership.
+        if target_group == "all_agents":
+            all_agents = await self.database_service.get_all_active_agents(
+                user_id=request.user_id,
+            )
+            effective_agent_set = {
+                a.agent_id: a.agent_card.name for a in (all_agents or [])
+            }
+        else:
+            effective_agent_set = room.room_agent_set
+
+        mentions = self.parse_agent_mentions(message_text, effective_agent_set)
 
         if mentions:
             if (
@@ -3016,6 +3031,57 @@ class RoomServices:
             message_list=messages, success=True, error=None, status_code=200
         )
 
+    async def _refresh_artifact_presigned_urls(
+        self, messages: list[RoomAgentMessage],
+    ) -> None:
+        """Re-sign S3 presigned URLs embedded in agent artifact file parts.
+
+        Scans every artifact part for ``metadata.s3_key`` written during the
+        S3-upload step.  Collects them, batch-generates fresh presigned URLs,
+        and patches each ``file.uri`` in-place so the frontend always receives
+        a valid URL regardless of when the original was created.
+        """
+        from services.s3_service import s3_service
+
+        key_refs: list[tuple[object, str]] = []
+
+        for msg in messages:
+            task = msg.message_content.message_task if msg.message_content else None
+            if not task or not task.artifacts:
+                continue
+            for artifact in task.artifacts:
+                if not artifact.parts:
+                    continue
+                for part in artifact.parts:
+                    root = getattr(part, "root", part)
+                    if getattr(root, "kind", None) != "file":
+                        continue
+                    meta = getattr(root, "metadata", None)
+                    if not meta:
+                        continue
+                    s3_key = meta.get("s3_key") if isinstance(meta, dict) else None
+                    if not s3_key:
+                        continue
+                    file_content = getattr(root, "file", None)
+                    if file_content is None:
+                        continue
+                    key_refs.append((file_content, s3_key))
+
+        if not key_refs:
+            return
+
+        unique_keys = list({k for _, k in key_refs})
+        try:
+            url_map = await s3_service.batch_presigned_urls(unique_keys)
+        except Exception:
+            logger.warning("Failed to refresh artifact presigned URLs")
+            return
+
+        for file_content, s3_key in key_refs:
+            new_url = url_map.get(s3_key)
+            if new_url:
+                file_content.uri = new_url
+
     async def inquiry_agent_messages_by_room_id(
         self, request: RoomCenterAgentMessageRequest
     ) -> RoomCenterAgentMessageResponse:
@@ -3167,6 +3233,8 @@ class RoomServices:
                         e,
                     )
 
+        await self._refresh_artifact_presigned_urls(messages)
+
         return RoomCenterAgentMessageResponse(
             message_list=messages, success=True, error=None, status_code=200
         )
@@ -3186,6 +3254,8 @@ class RoomServices:
         message = await self.database_service.get_room_agent_message_by_message_id(
             message_id
         )
+        if message:
+            await self._refresh_artifact_presigned_urls([message])
         return RoomCenterAgentMessageResponse(
             message=message, success=True, error=None, status_code=200
         )

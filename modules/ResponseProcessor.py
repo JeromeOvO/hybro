@@ -22,6 +22,7 @@ from a2a.types import (
 
 from common.utils.a2a_helpers import (
     extract_error_message,
+    extract_parts_from_artifacts,
     extract_text_from_artifacts,
     get_message_from_task,
     get_text_from_a2a_response,
@@ -98,12 +99,13 @@ class ResponseProcessor:
         self, artifact, room_id: str, message_id: str,
         conversion_counter: list[int] | None = None,
     ) -> None:
-        """Convert inline base64 bytes in artifact parts to S3 URIs.
+        """Convert inline base64 bytes and external URIs in artifact parts to S3 URIs.
 
-        ``conversion_counter`` is a single-element list ``[count]`` shared
-        across calls for the same message so the per-message cap is enforced.
+        Delegates to the shared helper in a2a_helpers. ``conversion_counter``
+        is a single-element list ``[count]`` shared across calls for the same
+        message so the per-message cap is enforced.
         """
-        from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+        from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
 
         if not artifact.parts:
             return
@@ -111,61 +113,11 @@ class ResponseProcessor:
         if conversion_counter is None:
             conversion_counter = [0]
 
-        for i, part in enumerate(artifact.parts):
-            root = getattr(part, "root", part)
-            if getattr(root, "kind", None) != "file":
-                continue
-            file_content = getattr(root, "file", None)
-            if not file_content:
-                continue
-            raw_bytes = getattr(file_content, "bytes", None)
-            if not raw_bytes:
-                continue
-
-            if conversion_counter[0] >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-                logger.warning(
-                    "Inline base64 conversion cap (%d) reached: room=%s message=%s — skipping remaining",
-                    MAX_INLINE_CONVERSIONS_PER_MESSAGE, room_id, message_id,
-                )
-                break
-
-            import base64
-            import io
-
-            try:
-                decoded = base64.b64decode(raw_bytes)
-            except Exception:
-                logger.warning(
-                    "Invalid base64 in artifact part: room=%s message=%s part=%d — skipping",
-                    room_id, message_id, i,
-                )
-                continue
-
-            mime = getattr(file_content, "mime_type", None) or getattr(
-                file_content, "mimeType", "application/octet-stream"
-            )
-            ext = mime.split("/")[-1] if "/" in mime else "bin"
-            s3_key = f"artifacts/{room_id}/{message_id}/inline-{conversion_counter[0]}.{ext}"
-
-            try:
-                await self.s3_service.upload_file(
-                    file_data=io.BytesIO(decoded),
-                    s3_key=s3_key,
-                    content_type=mime,
-                    content_length=len(decoded),
-                )
-                presigned_url = await self.s3_service.generate_presigned_url(s3_key)
-                file_content.bytes = None
-                file_content.uri = presigned_url
-                conversion_counter[0] += 1
-            except Exception:
-                logger.error(
-                    "Failed to upload inline base64 to S3: room=%s message=%s part=%d",
-                    room_id,
-                    message_id,
-                    i,
-                    exc_info=True,
-                )
+        new_total = await convert_pydantic_artifacts_to_s3(
+            [artifact], room_id, message_id,
+            converted_so_far=conversion_counter[0],
+        )
+        conversion_counter[0] = new_total
 
     async def _convert_streaming_parts_to_s3(
         self,
@@ -1032,6 +984,7 @@ class ResponseProcessor:
                     message_id=message_id,
                     webhook_token=task_info["webhook_token"],
                     context_id=task_info["context_id"],
+                    room_id=room_id,
                 )
             else:
 
@@ -1290,6 +1243,16 @@ class ResponseProcessor:
         state = completed_task.status.state
         state_value = state_str(state)
 
+        # Rewrite external/base64 URIs to durable S3 URLs *before* persisting,
+        # so the DB never stores expiring external URIs.
+        if completed_task.artifacts:
+            conversion_counter: list[int] = [0]
+            for artifact in completed_task.artifacts:
+                await self._convert_inline_bytes_to_s3(
+                    artifact, room_id, message_id,
+                    conversion_counter=conversion_counter,
+                )
+
         if task_info:
             await self.database_service.update_task_on_message(
                 message_id, completed_task.model_dump(mode="json")
@@ -1297,9 +1260,15 @@ class ResponseProcessor:
 
         final_content = None
         final_error = None
-        if state == TaskState.completed and completed_task.artifacts:
-            final_content = extract_text_from_artifacts(completed_task.artifacts)
-        elif is_failure_state(state):
+        final_parts = None
+
+        if completed_task.artifacts:
+            extracted = extract_parts_from_artifacts(completed_task.artifacts)
+            final_content = extracted.text if extracted.text else None
+            if extracted.has_non_text:
+                final_parts = extracted.file_parts + extracted.data_parts
+
+        if is_failure_state(state):
             final_error = extract_error_message(completed_task) or f"Task {state_value}"
 
         if task_info:
@@ -1308,6 +1277,7 @@ class ResponseProcessor:
                 state=state,
                 room_id=ctx.room_id,
                 user_id=ctx.current_message.user_id or "",
+                parts=final_parts,
             )
         else:
             logger.info(
@@ -1324,5 +1294,6 @@ class ResponseProcessor:
                 agent_id=current_message.agent_id,
                 step_number=step_number,
                 total_steps=total_steps,
+                parts=final_parts,
             )
         return True, final_content, None

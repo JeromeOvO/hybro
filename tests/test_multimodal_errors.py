@@ -106,9 +106,9 @@ class TestSharedInlineConversionCap:
             task_service=MagicMock(),
             database_service=MagicMock(),
         )
-        processor._s3_service = AsyncMock()
-        processor._s3_service.upload_file = AsyncMock(side_effect=fake_upload)
-        processor._s3_service.generate_presigned_url = AsyncMock(
+        mock_s3 = AsyncMock()
+        mock_s3.upload_file = AsyncMock(side_effect=fake_upload)
+        mock_s3.generate_presigned_url = AsyncMock(
             return_value="https://s3.example.com/presigned"
         )
 
@@ -117,24 +117,19 @@ class TestSharedInlineConversionCap:
 
         # --- Phase 1: simulate artifact-update consuming (cap - 2) conversions ---
         streaming_state = MessageStreamingState()
+
+        from a2a.types import Artifact as A2AArtifact, FilePart, FileWithBytes, Part
+
         for idx in range(cap - 2):
-            artifact = MagicMock()
-            file_content = MagicMock()
-            file_content.bytes = raw_b64
-            file_content.mime_type = "image/png"
-            file_content.uri = None
-            root = MagicMock()
-            root.kind = "file"
-            root.file = file_content
-            part = MagicMock()
-            part.root = root
-            artifact.parts = [part]
+            fp = FilePart(file=FileWithBytes(bytes=raw_b64, mime_type="image/png"))
+            artifact = A2AArtifact(artifact_id=f"art-{idx}", parts=[Part(root=fp)])
 
             shared_counter = [streaming_state.inline_conversion_count]
-            await processor._convert_inline_bytes_to_s3(
-                artifact, "room1", "msg1",
-                conversion_counter=shared_counter,
-            )
+            with patch("services.s3_service.s3_service", mock_s3):
+                await processor._convert_inline_bytes_to_s3(
+                    artifact, "room1", "msg1",
+                    conversion_counter=shared_counter,
+                )
             streaming_state.inline_conversion_count = shared_counter[0]
 
         assert streaming_state.inline_conversion_count == cap - 2
@@ -147,7 +142,7 @@ class TestSharedInlineConversionCap:
         ]
 
         with patch(
-            "services.s3_service.s3_service", processor._s3_service
+            "services.s3_service.s3_service", mock_s3
         ):
             new_total = await processor._convert_streaming_parts_to_s3(
                 non_text_parts, "room1", "msg1",

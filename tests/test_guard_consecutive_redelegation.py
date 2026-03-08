@@ -123,6 +123,7 @@ class TestGuardPartialFiltering:
         trajectory = SupervisorTrajectory(entries=[
             _entry_with_successes(["A"]),
             _entry_with_successes(["A"]),
+            _entry_with_successes(["A"]),
         ])
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
@@ -140,6 +141,7 @@ class TestGuardPartialFiltering:
             targets=[_target("A", "Alpha"), _target("B", "Bravo"), _target("C", "Charlie")],
         )
         trajectory = SupervisorTrajectory(entries=[
+            _entry_with_successes(["A", "B"]),
             _entry_with_successes(["A", "B"]),
             _entry_with_successes(["A", "B"]),
         ])
@@ -163,6 +165,7 @@ class TestGuardAllOffenders:
         trajectory = SupervisorTrajectory(entries=[
             _entry_with_successes(["A"]),
             _entry_with_successes(["A"]),
+            _entry_with_successes(["A"]),
         ])
         result = svc._guard_consecutive_redelegation(action, trajectory)
 
@@ -177,6 +180,7 @@ class TestGuardAllOffenders:
             targets=[_target("A", "Alpha"), _target("B", "Bravo")],
         )
         trajectory = SupervisorTrajectory(entries=[
+            _entry_with_successes(["A", "B"]),
             _entry_with_successes(["A", "B"]),
             _entry_with_successes(["A", "B"]),
         ])

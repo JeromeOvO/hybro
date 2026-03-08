@@ -22,7 +22,11 @@ from a2a.types import (
 )
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from common.utils.a2a_helpers import extract_parts_from_artifacts, extract_text_from_artifacts
+from common.utils.a2a_helpers import (
+    convert_pydantic_artifacts_to_s3,
+    extract_parts_from_artifacts,
+    extract_text_from_artifacts,
+)
 from common.utils.logger import get_logger
 from modules.RoomMessageCenter import room_message_center
 from services.a2a_constants import INTERACTIVE_STATES, is_terminal_state
@@ -167,7 +171,19 @@ async def handle_a2a_webhook(
                 else str(current_state),
             }
 
-    # 5. Update task on the message
+    # 5. Rewrite inline base64 / external URIs to durable S3 URLs before persisting
+    if updated_task.artifacts:
+        try:
+            await convert_pydantic_artifacts_to_s3(
+                updated_task.artifacts, current_msg.room_id, message_id,
+            )
+        except Exception:
+            logger.warning(
+                "Webhook S3 conversion failed for task %s — persisting as-is",
+                message_id, exc_info=True,
+            )
+
+    # 6. Update task on the message
     update_success = await db_service.update_task_on_message(
         message_id, updated_task.model_dump(mode="json")
     )
@@ -183,7 +199,7 @@ async def handle_a2a_webhook(
         f"Webhook updated task {message_id} to state {updated_task.status.state}"
     )
 
-    # 6. Notify frontend via SSE (with idempotency check)
+    # 7. Notify frontend via SSE (with idempotency check)
     new_state = updated_task.status.state
     should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
 
