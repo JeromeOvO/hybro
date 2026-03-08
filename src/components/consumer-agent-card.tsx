@@ -135,7 +135,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
             className={cn(
               "inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-colors",
               isActive
-                ? "bg-primary text-primary-foreground"
+                ? "bg-primary/60 text-primary-foreground/80 group-hover:bg-primary group-hover:text-primary-foreground"
                 : "bg-muted text-muted-foreground",
             )}
           >

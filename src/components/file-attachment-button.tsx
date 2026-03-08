@@ -71,7 +71,7 @@ export function FileAttachmentButton({
             variant="ghost"
             size="icon"
             disabled={disabled}
-            className={cn('h-8 w-8 rounded-full text-primary hover:text-primary/80', className)}
+            className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors', className)}
             title="Add attachments"
           >
             <Plus className="h-4 w-4" />

@@ -53,7 +53,7 @@ export function NavMain({
   }
 
   return (
-    <SidebarGroup>
+    <SidebarGroup className="min-h-0 flex-1 overflow-auto">
       <SidebarMenu className="gap-2">
         {items.map((item) => {
           if (item.title === "History" && state === "collapsed") {
