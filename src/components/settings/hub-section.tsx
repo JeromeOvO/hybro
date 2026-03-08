@@ -23,7 +23,10 @@ export function HubSection() {
   const agentsQuery = useQuery<Agent[]>({
     queryKey: ['agents', 'active'],
     staleTime: 1000 * 60 * 60 * 24,
-    queryFn: () => getAllActiveAgents(),
+    queryFn: async () => {
+      const res = await getAllActiveAgents(undefined, undefined, getToken)
+      return res.agents ?? []
+    },
   })
 
   const hubAgents = (agentsQuery.data ?? []).filter(a => a.source === 'hub')
