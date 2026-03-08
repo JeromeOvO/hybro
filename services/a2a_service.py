@@ -323,6 +323,7 @@ class A2AService:
         message_id: str,
         webhook_token: str,
         context_id: str,
+        room_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Send message to agent with an existing task record.
@@ -450,13 +451,20 @@ class A2AService:
         if result.kind == "message":
             # Create completed task with message as artifact
             completed_task = self._message_to_completed_task(result, context_id)
+
+            from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+            if completed_task.artifacts:
+                await convert_pydantic_artifacts_to_s3(
+                    completed_task.artifacts, room_id=room_id or message_id, message_id=message_id,
+                )
+
             await db_service.update_task_on_message(
                 message_id, completed_task.model_dump(mode="json")
             )
 
-            from common.utils.a2a_helpers import extract_parts
+            from common.utils.a2a_helpers import extract_parts_from_artifacts
 
-            extracted = extract_parts(result.parts) if result.parts else None
+            extracted = extract_parts_from_artifacts(completed_task.artifacts) if completed_task.artifacts else None
             non_text_parts = None
             if extracted and extracted.has_non_text:
                 non_text_parts = extracted.file_parts + extracted.data_parts
@@ -472,12 +480,19 @@ class A2AService:
 
         # Handle Task response (async path)
         if result.kind == "task":
+            state = result.status.state
+
+            # If already terminal, convert artifacts to S3 before persisting
+            if is_terminal_state(state) and result.artifacts:
+                from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
+                await convert_pydantic_artifacts_to_s3(
+                    result.artifacts, room_id=room_id or message_id, message_id=message_id,
+                )
+
             # Update with real task from agent
             await db_service.update_task_on_message(
                 message_id, result.model_dump(mode="json")
             )
-
-            state = result.status.state
 
             # If already terminal, return content
             if is_terminal_state(state):

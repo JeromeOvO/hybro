@@ -7,7 +7,7 @@ and RoomMessageCenter.
 import uuid
 from dataclasses import dataclass, field
 
-from a2a.types import Message, Role, Task
+from a2a.types import FileWithUri, Message, Role, Task
 
 from common.utils.logger import get_logger
 
@@ -283,6 +283,9 @@ async def convert_inline_bytes_to_s3(
             presigned_url = await s3_service.generate_presigned_url(s3_key)
             file_info["bytes"] = None
             file_info["uri"] = presigned_url
+            if part.get("metadata") is None:
+                part["metadata"] = {}
+            part["metadata"]["s3_key"] = s3_key
             converted += 1
         except Exception:
             logger.error(
@@ -320,7 +323,7 @@ async def _download_external_uris_to_s3(
     logger = logging.getLogger(__name__)
     converted = converted_so_far
 
-    uri_parts: list[tuple[dict, str]] = []
+    uri_parts: list[tuple[dict, dict, str]] = []
     for part in parts:
         if part.get("kind") != "file":
             continue
@@ -341,7 +344,7 @@ async def _download_external_uris_to_s3(
                 rejection, room_id, message_id, uri[:120],
             )
             continue
-        uri_parts.append((file_info, uri))
+        uri_parts.append((part, file_info, uri))
 
     if not uri_parts:
         return converted
@@ -349,7 +352,7 @@ async def _download_external_uris_to_s3(
     max_bytes = _get_max_download_bytes()
 
     async with aiohttp.ClientSession() as session:
-        for file_info, uri in uri_parts:
+        for part_dict, file_info, uri in uri_parts:
             if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
                 logger.warning(
                     "Conversion cap (%d) reached during URI download: room=%s message=%s",
@@ -361,7 +364,7 @@ async def _download_external_uris_to_s3(
                 async with session.get(
                     uri,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    allow_redirects=False,
+                    max_redirects=3,
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(
@@ -404,11 +407,150 @@ async def _download_external_uris_to_s3(
                 )
                 presigned_url = await s3_service.generate_presigned_url(s3_key)
                 file_info["uri"] = presigned_url
+                if part_dict.get("metadata") is None:
+                    part_dict["metadata"] = {}
+                part_dict["metadata"]["s3_key"] = s3_key
                 converted += 1
             except Exception:
                 logger.error(
                     "Failed to upload downloaded URI to S3: room=%s message=%s",
                     room_id, message_id, exc_info=True,
                 )
+
+    return converted
+
+
+async def convert_pydantic_artifacts_to_s3(
+    artifacts: list,
+    room_id: str,
+    message_id: str,
+    *,
+    converted_so_far: int = 0,
+) -> int:
+    """Convert inline base64 bytes and external URIs in Pydantic artifact objects to S3 URIs.
+
+    Works with ``a2a.types.Artifact`` objects (as opposed to
+    ``convert_inline_bytes_to_s3`` which works with plain dicts).
+    Stores the durable ``s3_key`` in each part's ``metadata`` dict so that
+    presigned URLs can be regenerated on read.
+
+    Returns the total number of conversions performed (including
+    *converted_so_far*) so callers can propagate the running count.
+    """
+    import base64
+    import io
+    import logging
+
+    import aiohttp
+
+    from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+    from services.s3_service import s3_service
+
+    log = logging.getLogger(__name__)
+    converted = converted_so_far
+
+    for artifact in artifacts:
+        if not artifact.parts:
+            continue
+
+        # --- Pass 1: inline base64 → S3 ---
+        for part in artifact.parts:
+            root = getattr(part, "root", part)
+            if getattr(root, "kind", None) != "file":
+                continue
+            fc = getattr(root, "file", None)
+            if not fc:
+                continue
+            raw_bytes = getattr(fc, "bytes", None)
+            if not raw_bytes:
+                continue
+            if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
+                break
+
+            try:
+                decoded = base64.b64decode(raw_bytes)
+            except Exception:
+                continue
+
+            mime = getattr(fc, "mime_type", None) or "application/octet-stream"
+            ext = mime.split("/")[-1] if "/" in mime else "bin"
+            s3_key = f"artifacts/{room_id}/{message_id}/inline-{converted}.{ext}"
+
+            try:
+                await s3_service.upload_file(
+                    file_data=io.BytesIO(decoded), s3_key=s3_key,
+                    content_type=mime, content_length=len(decoded),
+                )
+                presigned_url = await s3_service.generate_presigned_url(s3_key)
+                root.file = FileWithUri(
+                    uri=presigned_url,
+                    mime_type=getattr(fc, "mime_type", None),
+                    name=getattr(fc, "name", None),
+                )
+                root.metadata = {**(root.metadata or {}), "s3_key": s3_key}
+                converted += 1
+            except Exception:
+                log.error("Failed to upload inline base64 to S3: room=%s message=%s", room_id, message_id, exc_info=True)
+
+        # --- Pass 2: external URIs → download & re-upload to S3 ---
+        uri_items: list[tuple[object, object, str]] = []
+        for part in artifact.parts:
+            root = getattr(part, "root", part)
+            if getattr(root, "kind", None) != "file":
+                continue
+            fc = getattr(root, "file", None)
+            if not fc:
+                continue
+            if getattr(fc, "bytes", None):
+                continue
+            uri = getattr(fc, "uri", None)
+            if not uri:
+                continue
+            if _is_own_s3_url(uri):
+                continue
+            rejection = _validate_external_uri(uri)
+            if rejection:
+                log.warning("Skipping unsafe external URI (%s): room=%s message=%s", rejection, room_id, message_id)
+                continue
+            uri_items.append((root, fc, uri))
+
+        if not uri_items:
+            continue
+
+        max_bytes = _get_max_download_bytes()
+        async with aiohttp.ClientSession() as session:
+            for root, fc, uri in uri_items:
+                if converted >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
+                    break
+                try:
+                    async with session.get(uri, timeout=aiohttp.ClientTimeout(total=30), max_redirects=3) as resp:
+                        if resp.status != 200:
+                            continue
+                        cl = resp.content_length
+                        if cl is not None and cl > max_bytes:
+                            continue
+                        data = await resp.content.read(max_bytes + 1)
+                        if len(data) > max_bytes:
+                            continue
+                        content_type = resp.content_type or "application/octet-stream"
+                except Exception:
+                    log.warning("Failed to download external URI: room=%s message=%s", room_id, message_id, exc_info=True)
+                    continue
+
+                mime = getattr(fc, "mime_type", None) or content_type
+                ext = mime.split("/")[-1] if "/" in mime else "bin"
+                s3_key = f"artifacts/{room_id}/{message_id}/ext-{converted}.{ext}"
+
+                try:
+                    await s3_service.upload_file(
+                        file_data=io.BytesIO(data), s3_key=s3_key,
+                        content_type=mime, content_length=len(data),
+                    )
+                    presigned_url = await s3_service.generate_presigned_url(s3_key)
+                    fc.uri = presigned_url
+                    root.metadata = {**(root.metadata or {}), "s3_key": s3_key}
+                    converted += 1
+                except Exception:
+                    log.error("Failed to upload downloaded URI to S3: room=%s message=%s", room_id, message_id, exc_info=True)
 
     return converted
