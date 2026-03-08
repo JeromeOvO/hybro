@@ -190,6 +190,7 @@ export async function convertApiMessageToIncoming(
 
     stepNumber: apiMessage.step_number ?? undefined,
     totalSteps: apiMessage.total_steps ?? undefined,
+    relatedMessageId: apiMessage.related_message_id ?? undefined,
 
     taskUpdatedAt: apiMessage.task_updated_at
       ? normalizeTimestampOrNow(apiMessage.task_updated_at)

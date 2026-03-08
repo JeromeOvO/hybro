@@ -130,6 +130,7 @@ function mergeIncoming(
       taskUpdatedAt: incoming.taskUpdatedAt,
       stepNumber: incoming.stepNumber,
       totalSteps: incoming.totalSteps,
+      relatedMessageId: incoming.relatedMessageId,
       hitlRequestId: incoming.hitlRequestId,
       hitlPrompt: incoming.hitlPrompt,
       hitlPromptType: incoming.hitlPromptType,
@@ -166,6 +167,7 @@ function mergeIncoming(
     taskUpdatedAt: incoming.taskUpdatedAt !== undefined ? incoming.taskUpdatedAt : existing.taskUpdatedAt,
     stepNumber: incoming.stepNumber !== undefined ? incoming.stepNumber : existing.stepNumber,
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
+    relatedMessageId: incoming.relatedMessageId !== undefined ? incoming.relatedMessageId : existing.relatedMessageId,
     hitlRequestId: incoming.hitlRequestId !== undefined ? incoming.hitlRequestId : existing.hitlRequestId,
     hitlPrompt: incoming.hitlPrompt !== undefined ? incoming.hitlPrompt : existing.hitlPrompt,
     hitlPromptType: incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
@@ -252,8 +254,9 @@ export function isNoOpUpdate(
 
 /**
  * Build a sorted array of message IDs from the entities map.
- * Sort order: timestamp (primary), stepNumber within same workflow batch
- * (timestamps within 60s), then message ID for stability.
+ * Sort order: timestamp (primary), stepNumber within the same workflow
+ * (same relatedMessageId and timestamps within 60s), then message ID
+ * for stability.
  */
 export function buildSortedIds(entities: Record<string, MessageEntity>): string[] {
   return Object.values(entities)
@@ -262,9 +265,12 @@ export function buildSortedIds(entities: Record<string, MessageEntity>): string[
       const bTime = new Date(b.timestamp).getTime()
       const timeDiff = aTime - bTime
 
-      // Within the same workflow batch (< 60s apart), sort by step number
+      // Step-number sorting only applies within the SAME workflow
+      // (same relatedMessageId) and only when timestamps are close.
       if (
         a.stepNumber != null && b.stepNumber != null &&
+        a.relatedMessageId && b.relatedMessageId &&
+        a.relatedMessageId === b.relatedMessageId &&
         Math.abs(timeDiff) < 60_000
       ) {
         const stepDiff = a.stepNumber - b.stepNumber
@@ -273,10 +279,15 @@ export function buildSortedIds(entities: Record<string, MessageEntity>): string[
 
       if (timeDiff !== 0) return timeDiff
 
-      // Tiebreakers
-      const stepA = a.stepNumber ?? Infinity
-      const stepB = b.stepNumber ?? Infinity
-      if (stepA !== stepB) return stepA - stepB
+      // Tiebreakers: step number within same workflow, then ID
+      if (
+        a.relatedMessageId && b.relatedMessageId &&
+        a.relatedMessageId === b.relatedMessageId
+      ) {
+        const stepA = a.stepNumber ?? Infinity
+        const stepB = b.stepNumber ?? Infinity
+        if (stepA !== stepB) return stepA - stepB
+      }
 
       return a.id.localeCompare(b.id)
     })

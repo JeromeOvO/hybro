@@ -57,6 +57,7 @@ export interface MessageEntity {
   timestamp: string
   stepNumber?: number
   totalSteps?: number
+  relatedMessageId?: string
 
   // ── HITL (Human-in-the-Loop) ─────────────────────────────
   hitlRequestId?: string
@@ -111,6 +112,7 @@ export interface IncomingMessage {
   taskUpdatedAt?: string
   stepNumber?: number
   totalSteps?: number
+  relatedMessageId?: string
   hitlRequestId?: string
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType

@@ -363,16 +363,19 @@ describe('buildSortedIds', () => {
     expect(buildSortedIds(entities)).toEqual(['a', 'b', 'c'])
   })
 
-  it('sorts by stepNumber within same workflow batch (< 60s)', () => {
+  it('sorts by stepNumber within same workflow batch (< 60s, same relatedMessageId)', () => {
     const entities: Record<string, MessageEntity> = {
       'step3': makeEntity({
         id: 'step3', timestamp: '2026-02-17T10:00:02Z', stepNumber: 3,
+        relatedMessageId: 'user-1',
       }),
       'step1': makeEntity({
         id: 'step1', timestamp: '2026-02-17T10:00:00Z', stepNumber: 1,
+        relatedMessageId: 'user-1',
       }),
       'step2': makeEntity({
         id: 'step2', timestamp: '2026-02-17T10:00:01Z', stepNumber: 2,
+        relatedMessageId: 'user-1',
       }),
     }
     expect(buildSortedIds(entities)).toEqual(['step1', 'step2', 'step3'])
@@ -382,12 +385,33 @@ describe('buildSortedIds', () => {
     const entities: Record<string, MessageEntity> = {
       'late': makeEntity({
         id: 'late', timestamp: '2026-02-17T10:02:00Z', stepNumber: 1,
+        relatedMessageId: 'user-1',
       }),
       'early': makeEntity({
         id: 'early', timestamp: '2026-02-17T10:00:00Z', stepNumber: 3,
+        relatedMessageId: 'user-1',
       }),
     }
     expect(buildSortedIds(entities)).toEqual(['early', 'late'])
+  })
+
+  it('does not use stepNumber ordering across different workflows', () => {
+    const entities: Record<string, MessageEntity> = {
+      'wf2-step1': makeEntity({
+        id: 'wf2-step1', timestamp: '2026-02-17T10:00:30Z', stepNumber: 1,
+        relatedMessageId: 'user-2',
+      }),
+      'wf1-step2': makeEntity({
+        id: 'wf1-step2', timestamp: '2026-02-17T10:00:20Z', stepNumber: 2,
+        relatedMessageId: 'user-1',
+      }),
+      'wf1-step1': makeEntity({
+        id: 'wf1-step1', timestamp: '2026-02-17T10:00:00Z', stepNumber: 1,
+        relatedMessageId: 'user-1',
+      }),
+    }
+    // wf1 steps should be grouped by step, but wf2 should stay in timestamp order
+    expect(buildSortedIds(entities)).toEqual(['wf1-step1', 'wf1-step2', 'wf2-step1'])
   })
 
   it('uses message ID as final tiebreaker', () => {
@@ -409,14 +433,16 @@ describe('buildSortedIds', () => {
       }),
       'step2': makeEntity({
         id: 'step2', timestamp: '2026-02-17T10:00:10Z', stepNumber: 2,
+        relatedMessageId: 'user-msg',
       }),
       'step1': makeEntity({
         id: 'step1', timestamp: '2026-02-17T10:00:05Z', stepNumber: 1,
+        relatedMessageId: 'user-msg',
       }),
     }
     const sorted = buildSortedIds(entities)
     expect(sorted[0]).toBe('user-msg')
-    // step1 and step2 within 60s, both have stepNumbers, so sort by step
+    // step1 and step2 share relatedMessageId, within 60s, so sort by step
     expect(sorted[1]).toBe('step1')
     expect(sorted[2]).toBe('step2')
   })
