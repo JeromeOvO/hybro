@@ -9,17 +9,20 @@ All endpoints require X-API-Key authentication.
 
 import json
 
-from a2a.types import Message
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
 from common.api_key_auth import get_api_key
 from common.utils.logger import get_logger
 from models.api_key import APIKey
+from models.gateway import (
+    GatewayCardResponse,
+    GatewayDiscoverRequest,
+    GatewayDiscoveryResponse,
+    GatewaySendRequest,
+)
 from services.gateway_rate_limit_service import gateway_rate_limit_service
 from services.gateway_service import (
-    GatewayDiscoveryResponse,
     GatewayService,
     gateway_service,
 )
@@ -27,24 +30,6 @@ from services.gateway_service import (
 logger = get_logger(__name__)
 
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
-
-class GatewayDiscoverRequest(BaseModel):
-    query: str
-    limit: int | None = Field(default=None, ge=1, le=100)
-
-
-class GatewaySendRequest(BaseModel):
-    message: Message
-
-
-class GatewayCardResponse(BaseModel):
-    agent_id: str
-    agent_card: dict
 
 
 # ---------------------------------------------------------------------------

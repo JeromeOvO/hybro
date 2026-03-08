@@ -24,9 +24,6 @@ from a2a.types import (
 from fastapi import HTTPException
 
 from api.gateway import (
-    GatewayCardResponse,
-    GatewayDiscoverRequest,
-    GatewaySendRequest,
     gateway_discover,
     gateway_get_card,
     gateway_send,
@@ -34,8 +31,13 @@ from api.gateway import (
 )
 from models.agent import Agent, AgentStatus
 from models.api_key import APIKey
-from services.gateway_service import (
+from models.gateway import (
+    GatewayCardResponse,
+    GatewayDiscoverRequest,
     GatewayDiscoveryResponse,
+    GatewaySendRequest,
+)
+from services.gateway_service import (
     GatewayService,
 )
 from tests.conftest import FROZEN_TIME, PATCH

@@ -71,6 +71,9 @@ class RelayService:
         # hub_id -> deque[_OfflineQueueEntry]
         self._offline_queues: dict[str, deque[_OfflineQueueEntry]] = {}
 
+        # Background indexing tasks kept alive to prevent GC
+        self._background_tasks: set[asyncio.Task] = set()
+
         # hub_id -> missed heartbeats counter
         self._heartbeat_misses: dict[str, int] = {}
 
@@ -187,6 +190,7 @@ class RelayService:
         gateway_base = settings.gateway_base_url
 
         synced: list[dict] = []
+        to_index: list[tuple[str, str]] = []
         for ag in agents:
             agent_url = ag.agent_card.get("url", "")
             normalized = normalize_agent_url(agent_url) if agent_url else None
@@ -212,8 +216,9 @@ class RelayService:
                 )
                 stored_id = existing["agent_id"]
             else:
+                new_agent_id = str(uuid4().hex)
                 agent_data = {
-                    "agent_id": str(uuid4().hex),
+                    "agent_id": new_agent_id,
                     "source": "hub",
                     "hub_id": hub_id,
                     "hub_owner_id": user_id,
@@ -228,6 +233,13 @@ class RelayService:
                 stored_id = await self._mongo.upsert_hub_agent(
                     hub_id, ag.local_agent_id, agent_data
                 )
+
+                # Only index on first insert — upsert_hub_agent uses
+                # $setOnInsert for agent_id, so a match means re-sync.
+                is_new_insert = stored_id == new_agent_id
+                description = ag.agent_card.get("description") or ag.description
+                if is_new_insert and description:
+                    to_index.append((stored_id, description))
 
             # Set public_url to the gateway proxy so external consumers can
             # discover agents via the gateway API.  Never overwrite
@@ -247,8 +259,61 @@ class RelayService:
                 "local_agent_id": ag.local_agent_id,
             })
 
+        if to_index:
+            task = asyncio.create_task(self._index_new_agents(hub_id, to_index))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
         return synced
+
+    async def _index_new_agents(
+        self, hub_id: str, to_index: list[tuple[str, str]]
+    ) -> None:
+        """Embed descriptions and upsert to Pinecone in the background.
+
+        Runs as a fire-and-forget task so sync_agents() returns immediately.
+        Embeddings are fetched in parallel; the Pinecone upsert is offloaded
+        to a thread to avoid blocking the event loop.
+        """
+        try:
+            embed_tasks = [
+                self._db.ai_service.get_embedding(desc)
+                for _, desc in to_index
+            ]
+            embeddings = await asyncio.gather(
+                *embed_tasks, return_exceptions=True
+            )
+
+            vectors: list[dict] = []
+            failed: list[str] = []
+            for (agent_id, _), emb in zip(to_index, embeddings, strict=True):
+                if isinstance(emb, BaseException):
+                    failed.append(agent_id)
+                    continue
+                vectors.append({
+                    "id": agent_id,
+                    "values": emb,
+                    "metadata": {"type": "a2a_agent", "agent_id": agent_id},
+                })
+
+            if vectors:
+                await asyncio.to_thread(self._db.pinecone.upsert, vectors)
+
+            if failed:
+                logger.warning(
+                    "Hub %s: failed to index %d/%d agents in Pinecone: %s",
+                    hub_id, len(failed), len(to_index), failed,
+                )
+            else:
+                logger.info(
+                    "Hub %s: indexed %d new agents in Pinecone",
+                    hub_id, len(vectors),
+                )
+        except Exception:
+            logger.exception(
+                "Hub %s: Pinecone batch index failed", hub_id
+            )
 
     # ------------------------------------------------------------------
     # Push event to hub

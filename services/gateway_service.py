@@ -16,32 +16,18 @@ from a2a.types import (
     SendStreamingMessageResponse,
 )
 from fastapi import HTTPException, status
-from pydantic import BaseModel
 
 from common.utils.logger import get_logger
 from config.settings import settings
 from database.mongodb import mongodb
 from models.agent import Agent, AgentStatus
+from models.gateway import GatewayDiscoveryAgentResult, GatewayDiscoveryResponse
 from services.a2a_service import A2AService
 from services.a2a_service import a2a_service as _default_a2a_service
 from services.discovery_service import DiscoveryService, discovery_service
 from services.rate_limit_service import RateLimitService, rate_limit_service
 
 logger = get_logger(__name__)
-
-
-class GatewayDiscoveryAgentResult(BaseModel):
-    """Discovery result enriched with agent_id for gateway consumers."""
-    agent_id: str
-    agent_card: dict
-    match_score: float
-
-
-class GatewayDiscoveryResponse(BaseModel):
-    """Gateway discovery response with agent_id on each result."""
-    query: str
-    agents: list[GatewayDiscoveryAgentResult]
-    count: int
 
 
 class GatewayService:
