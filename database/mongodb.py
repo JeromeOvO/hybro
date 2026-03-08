@@ -408,6 +408,23 @@ class MongoDB:
         update: dict = {"$set": {"is_online": is_online, **extra_fields}}
         await self.hubs_collection.update_one({"hub_id": hub_id}, update)
 
+    async def update_hub_status_if_current(
+        self,
+        hub_id: str,
+        *,
+        connection_id: str,
+        is_online: bool,
+    ) -> bool:
+        """Conditionally update hub status only if connection_id matches.
+
+        Returns True if the update was applied (connection_id matched).
+        """
+        result = await self.hubs_collection.update_one(
+            {"hub_id": hub_id, "connection_id": connection_id},
+            {"$set": {"is_online": is_online}},
+        )
+        return result.modified_count > 0
+
     # -------------------------------------------------------------------
     # Hub-agent helpers (Phase 2a)
     # -------------------------------------------------------------------
@@ -432,13 +449,35 @@ class MongoDB:
         return result["agent_id"]
 
     async def set_hub_agents_online_status(
-        self, hub_id: str, is_online: bool
+        self,
+        hub_id: str,
+        is_online: bool,
+        *,
+        connection_id: str | None = None,
     ) -> None:
-        """Bulk-update is_hub_online for every agent belonging to *hub_id*."""
-        await self.agents_collection.update_many(
-            {"hub_id": hub_id},
-            {"$set": {"is_hub_online": is_online}},
-        )
+        """Bulk-update is_hub_online for every agent belonging to *hub_id*.
+
+        When *connection_id* is provided and *is_online* is True, stamps each
+        agent with ``hub_connection_id`` so that a later offline update can
+        filter atomically.  When *is_online* is False and *connection_id* is
+        provided, only agents whose ``hub_connection_id`` matches are updated.
+        """
+        if is_online:
+            set_fields: dict = {"is_hub_online": True}
+            if connection_id:
+                set_fields["hub_connection_id"] = connection_id
+            await self.agents_collection.update_many(
+                {"hub_id": hub_id},
+                {"$set": set_fields},
+            )
+        else:
+            query: dict = {"hub_id": hub_id}
+            if connection_id:
+                query["hub_connection_id"] = connection_id
+            await self.agents_collection.update_many(
+                query,
+                {"$set": {"is_hub_online": False}},
+            )
 
     async def count_hub_agents(self, hub_id: str) -> int:
         return await self.agents_collection.count_documents(

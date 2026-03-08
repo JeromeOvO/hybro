@@ -133,15 +133,25 @@ class RelayService:
         token = create_connection_token(
             hub_id, settings.relay_connection_token_secret
         )
+        connection_id = str(uuid4())
         await self._mongo.update_hub_status(
             hub_id,
             is_online=True,
             last_connected_at=utcnow(),
             connection_token=token,
+            connection_id=connection_id,
         )
-        await self._mongo.set_hub_agents_online_status(hub_id, True)
+        await self._mongo.set_hub_agents_online_status(
+            hub_id, True, connection_id=connection_id
+        )
 
         queue: asyncio.Queue = asyncio.Queue()
+
+        old_queue = self._hub_queues.get(hub_id)
+        if old_queue is not None:
+            logger.info("Hub %s reconnecting — signaling stale connection", hub_id)
+            await old_queue.put({"type": "_disconnect"})
+
         self._hub_queues[hub_id] = queue
         self._heartbeat_misses[hub_id] = 0
 
@@ -160,19 +170,36 @@ class RelayService:
             while not self._shutdown:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=float(settings.relay_heartbeat_interval))
+                    if event.get("type") == "_disconnect":
+                        break
                     self._heartbeat_misses[hub_id] = 0
                     yield event
                 except TimeoutError:
                     self._heartbeat_misses[hub_id] = 0
                     yield {"type": "heartbeat", "timestamp": utcnow().isoformat()}
         finally:
-            await self._disconnect_hub(hub_id)
+            await self._disconnect_hub(hub_id, queue, connection_id)
 
-    async def _disconnect_hub(self, hub_id: str) -> None:
+    async def _disconnect_hub(
+        self, hub_id: str, queue: asyncio.Queue, connection_id: str
+    ) -> None:
+        if self._hub_queues.get(hub_id) is not queue:
+            logger.info("Hub %s: stale connection teardown skipped", hub_id)
+            return
         self._hub_queues.pop(hub_id, None)
         self._heartbeat_misses.pop(hub_id, None)
-        await self._mongo.update_hub_status(hub_id, is_online=False)
-        await self._mongo.set_hub_agents_online_status(hub_id, False)
+        result = await self._mongo.update_hub_status_if_current(
+            hub_id, connection_id=connection_id, is_online=False
+        )
+        if not result:
+            logger.info(
+                "Hub %s: connection superseded, skipping agent status update",
+                hub_id,
+            )
+            return
+        await self._mongo.set_hub_agents_online_status(
+            hub_id, False, connection_id=connection_id
+        )
         logger.info("Hub %s disconnected", hub_id)
 
     # ------------------------------------------------------------------
@@ -212,6 +239,7 @@ class RelayService:
                         "hub_owner_id": user_id,
                         "local_agent_id": ag.local_agent_id,
                         "is_hub_online": hub_id in self._hub_queues,
+                        "agent_card": ag.agent_card,
                     }},
                 )
                 stored_id = existing["agent_id"]
@@ -263,6 +291,37 @@ class RelayService:
             task = asyncio.create_task(self._index_new_agents(hub_id, to_index))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+
+        # Prune agents that the hub no longer reports.
+        # Skip when the payload is empty to guard against accidental wipes.
+        if synced:
+            synced_ids = [item["agent_id"] for item in synced]
+
+            await self._mongo.agents_collection.update_many(
+                {
+                    "hub_id": hub_id,
+                    "source": "hub",
+                    "agent_id": {"$nin": synced_ids},
+                },
+                {"$set": {"agent_status": "inactive", "is_hub_online": False}},
+            )
+
+            await self._mongo.agents_collection.update_many(
+                {
+                    "hub_id": hub_id,
+                    "source": {"$ne": "hub"},
+                    "agent_id": {"$nin": synced_ids},
+                },
+                {
+                    "$unset": {
+                        "hub_id": "",
+                        "local_agent_id": "",
+                        "hub_owner_id": "",
+                        "is_hub_online": "",
+                        "hub_connection_id": "",
+                    },
+                },
+            )
 
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
         return synced
@@ -426,6 +485,13 @@ class RelayService:
         if not msg:
             logger.warning(
                 "Publish event for unknown agent_message_id %s", agent_message_id
+            )
+            return
+
+        if msg.room_id != room_id:
+            logger.warning(
+                "agent_message_id %s belongs to room %s, not %s",
+                agent_message_id, msg.room_id, room_id,
             )
             return
 
