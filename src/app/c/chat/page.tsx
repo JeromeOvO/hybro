@@ -10,12 +10,11 @@ import {
     Loader2,
     AlertCircle,
     RefreshCw,
-    FlaskConical,
-    Code,
-    PenLine,
-    BarChart3,
     Sparkles,
     Users,
+    Youtube,
+    Palmtree,
+    ImageIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -33,12 +32,58 @@ import { cn, isWaitlistEnabled } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
 
-const quickStartTemplates = [
-    { icon: FlaskConical, label: "Research", prompt: "Help me research " },
-    { icon: Code, label: "Code", prompt: "Help me write code for " },
-    { icon: PenLine, label: "Write", prompt: "Help me write " },
-    { icon: BarChart3, label: "Analyze", prompt: "Help me analyze " },
+interface QuickStartMention {
+    agentName: string
+    textAfter: string
+}
+
+interface QuickStartTemplate {
+    icon: typeof Youtube
+    label: string
+    mentions: QuickStartMention[]
+}
+
+const quickStartTemplates: QuickStartTemplate[] = [
+    {
+        icon: Youtube,
+        label: "Fetch Youtuber Contact Info",
+        mentions: [
+            { agentName: "YouTube Creator Finder Agent", textAfter: " topic: AI agents, " },
+            { agentName: "GPT-5-mini Agent", textAfter: " simplify the result, just name and email" },
+        ],
+    },
+    {
+        icon: Palmtree,
+        label: "Give me a Travel Plan to Hawaii",
+        mentions: [
+            { agentName: "travel planner Agent", textAfter: " give me a plan to Hawaii" },
+        ],
+    },
+    {
+        icon: ImageIcon,
+        label: "Generate an Image for me about banana",
+        mentions: [
+            { agentName: "Image Generator Agent", textAfter: " give me an image of banana" },
+        ],
+    },
 ]
+
+function buildStoragePrompt(
+    template: QuickStartTemplate,
+    agents: { id: string; name: string }[],
+): string {
+    const nameMap = new Map(agents.map(a => [a.name.toLowerCase(), a]))
+    let result = ""
+    for (const m of template.mentions) {
+        const agent = nameMap.get(m.agentName.toLowerCase())
+        if (agent) {
+            result += `<@${agent.id}|${agent.name}>${m.textAfter}`
+        } else {
+            result += `@${m.agentName}${m.textAfter}`
+        }
+    }
+    return result
+}
 
 export default function ChatPage() {
     return (
@@ -186,8 +231,8 @@ function ChatPageContent() {
         }
     }
 
-    const handleQuickStart = (prompt: string) => {
-        setQuickStartValue(prompt)
+    const handleQuickStart = (template: QuickStartTemplate) => {
+        setQuickStartValue(buildStoragePrompt(template, agentListForMentions))
     }
 
     const handleClearQuickStart = () => {
@@ -349,14 +394,23 @@ function ChatPageContent() {
 
                     {/* Quick start templates */}
                     <div className="space-y-3">
-                        <div className="flex flex-wrap justify-center gap-2">
+                        {/* Separator */}
+                        <div className="flex items-center gap-3 px-4">
+                            <div className="flex-1 h-px bg-border/60" />
+                            <span className="text-xs font-medium text-muted-foreground tracking-wide">
+                                Take a try — Click and Send
+                            </span>
+                            <div className="flex-1 h-px bg-border/60" />
+                        </div>
+
+                        <div className="flex justify-center gap-2 flex-nowrap">
                             {quickStartTemplates.map((template) => (
                                 <Button
                                     key={template.label}
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => handleQuickStart(template.prompt)}
-                                    className="gap-2"
+                                    onClick={() => handleQuickStart(template)}
+                                    className="gap-2 text-primary border-primary/30 hover:bg-primary/10 hover:text-primary whitespace-nowrap"
                                     disabled={creating}
                                 >
                                     <template.icon className="h-4 w-4" />

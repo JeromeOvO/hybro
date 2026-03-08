@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
 import type { ArtifactPart } from '@/stores/message-store/types'
+import { isPresignedUrlExpired } from '@/lib/presigned-url'
 
 const INTERNAL_NAME_RE = /^(inline|notify|ext)-\d+\.\w+$/
 const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
@@ -24,28 +25,6 @@ function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ cla
       <span>This resource is no longer available</span>
     </div>
   )
-}
-
-/**
- * Parse AWS SigV4 presigned URL params to check if the URL has expired.
- * Returns true if the URL is detectably expired, false otherwise
- * (including for non-presigned URLs where we can't determine expiry).
- */
-function isPresignedUrlExpired(url: string): boolean {
-  try {
-    const params = new URL(url).searchParams
-    const date = params.get('X-Amz-Date')
-    const expires = params.get('X-Amz-Expires')
-    if (!date || !expires) return false
-    const issued = Date.UTC(
-      +date.slice(0, 4), +date.slice(4, 6) - 1, +date.slice(6, 8),
-      +date.slice(9, 11), +date.slice(11, 13), +date.slice(13, 15),
-    )
-    if (Number.isNaN(issued)) return false
-    return Date.now() > issued + (+expires * 1000)
-  } catch {
-    return false
-  }
 }
 
 function TextPartView({ text }: { text: string }) {

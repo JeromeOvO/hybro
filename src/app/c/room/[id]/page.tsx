@@ -155,7 +155,20 @@ export default function RoomChatPage() {
         : BUILTIN_GROUP_ALL_AGENTS
     )
 
-    sendUserMessage(pendingData.initialMessage, targetGroup, undefined, pendingData.attachments).then((success) => {
+    // Extract inline mentions so the backend uses canonical mention dispatch
+    // instead of the legacy parse that filters against room_agent_set.
+    let dispatch: MessageDispatchInput | undefined
+    const mentionPattern = /<@([^|]+)\|[^>]+>/g
+    const ids: string[] = []
+    let m: RegExpExecArray | null
+    while ((m = mentionPattern.exec(pendingData.initialMessage)) !== null) {
+      ids.push(m[1])
+    }
+    if (ids.length > 0) {
+      dispatch = { mentioned_agent_ids: ids }
+    }
+
+    sendUserMessage(pendingData.initialMessage, targetGroup, undefined, pendingData.attachments, dispatch).then((success) => {
       if (!success) {
         useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
         initialMessageSentRef.current = false

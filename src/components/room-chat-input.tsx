@@ -225,6 +225,22 @@ export function RoomChatInput({
     }
   }, [selectedAgentIndex, showAgentSuggestions])
 
+  // Close mention dropdown on outside click
+  useEffect(() => {
+    if (!showAgentSuggestions) return
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (
+        suggestionsRef.current?.contains(target) ||
+        editorRef.current?.contains(target)
+      ) return
+      setShowAgentSuggestions(false)
+      setSelectedAgentIndex(0)
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [showAgentSuggestions])
+
   // Convert storage format to display HTML
   const convertToDisplayHTML = (content: string) => {
     // Escape HTML to prevent XSS

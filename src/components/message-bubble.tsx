@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle } from 'l
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp } from '@/lib/time'
+import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import { StreamingCursor } from './streaming-cursor'
 import { useStreamingContent } from '@/hooks/useStreamingContent'
@@ -50,23 +51,6 @@ function AttachmentExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ c
       <span>Resource expired</span>
     </div>
   )
-}
-
-function isPresignedUrlExpired(url: string): boolean {
-  try {
-    const params = new URL(url).searchParams
-    const date = params.get('X-Amz-Date')
-    const expires = params.get('X-Amz-Expires')
-    if (!date || !expires) return false
-    const issued = Date.UTC(
-      +date.slice(0, 4), +date.slice(4, 6) - 1, +date.slice(6, 8),
-      +date.slice(9, 11), +date.slice(11, 13), +date.slice(13, 15),
-    )
-    if (Number.isNaN(issued)) return false
-    return Date.now() > issued + (+expires * 1000)
-  } catch {
-    return false
-  }
 }
 
 function GenericAttachmentLink({ url, fileName, sizeLabel }: { url: string; fileName: string; sizeLabel: string }) {
