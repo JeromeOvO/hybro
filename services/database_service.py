@@ -1381,27 +1381,52 @@ class DatabaseService:
             )
             return False, "verification_error"
 
-    async def update_task_on_message(self, message_id: str, task_data: dict) -> bool:
+    async def update_task_on_message(
+        self,
+        message_id: str,
+        task_data: dict,
+        message_text: str | None = None,
+    ) -> bool:
         """
         Update the task data on a room agent message.
+
+        Includes an atomic terminal-state guard: if the document already has a
+        terminal task status (completed, failed, canceled, rejected), the update
+        is skipped to prevent a concurrent writer (e.g. stale-task poller) from
+        overwriting a final state with stale non-terminal data.
 
         Args:
             message_id: The message ID
             task_data: The task data to update (serialized Task)
+            message_text: Optional text extracted from task artifacts to persist
+                alongside the task so that DB-hydrated messages have content
+                for proper display-type resolution on the frontend.
 
         Returns:
             True if updated successfully
         """
         try:
+            terminal_values = ["completed", "failed", "canceled", "rejected"]
+            set_fields: dict = {
+                "message_content.message_task": task_data,
+                "task_updated_at": utcnow(),
+            }
+            if message_text:
+                set_fields["message_content.message_text"] = message_text
             result = await self.mongo.room_agent_messages_collection.update_one(
-                {"message_id": message_id},
                 {
-                    "$set": {
-                        "message_content.message_task": task_data,
-                        "task_updated_at": utcnow(),
-                    }
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
                 },
+                {"$set": set_fields},
             )
+            if result.matched_count == 0:
+                logger.debug(
+                    "update_task_on_message: skipped %s (already terminal or not found)",
+                    message_id,
+                )
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update task on message {message_id}: {str(e)}")

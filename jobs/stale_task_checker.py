@@ -240,8 +240,15 @@ class StaleTaskChecker:
                 return
 
             # Update our record
+            task_text = None
+            if is_terminal_state(current_task.status.state) and current_task.status.state == TaskState.completed:
+                from common.utils.a2a_helpers import extract_text_from_artifacts
+                if current_task.artifacts:
+                    task_text = extract_text_from_artifacts(current_task.artifacts) or None
             await db_service.update_task_on_message(
-                message_id, current_task.model_dump(mode="json")
+                message_id,
+                current_task.model_dump(mode="json"),
+                message_text=task_text,
             )
 
             # Notify if terminal or interactive state changed

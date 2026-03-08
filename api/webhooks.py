@@ -183,27 +183,9 @@ async def handle_a2a_webhook(
                 message_id, exc_info=True,
             )
 
-    # 6. Update task on the message
-    update_success = await db_service.update_task_on_message(
-        message_id, updated_task.model_dump(mode="json")
-    )
-    if not update_success:
-        logger.error(
-            f"Webhook for task {message_id}: Failed to update task in database"
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to update task status in database",
-        )
-    logger.info(
-        f"Webhook updated task {message_id} to state {updated_task.status.state}"
-    )
-
-    # 7. Notify frontend via SSE (with idempotency check)
+    # 6. Extract content from artifacts before DB update so message_text
+    #    can be persisted alongside the task for proper hydration.
     new_state = updated_task.status.state
-    should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
-
-    # Extract content for queue resumption (if task completed successfully)
     task_result_text = None
     task_result_parts = None
     if is_terminal_state(new_state):
@@ -216,6 +198,24 @@ async def handle_a2a_webhook(
                 else None
             )
 
+    # 6. Update task on the message (include message_text for hydration)
+    update_success = await db_service.update_task_on_message(
+        message_id,
+        updated_task.model_dump(mode="json"),
+        message_text=task_result_text,
+    )
+    if not update_success:
+        logger.info(
+            "Webhook for task %s: skipped DB update (already terminal or no change)",
+            message_id,
+        )
+    logger.info(
+        f"Webhook updated task {message_id} to state {updated_task.status.state}"
+    )
+
+    # 7. Notify frontend via SSE (with idempotency check)
+    should_notify = is_terminal_state(new_state) or new_state in INTERACTIVE_STATES
+
     if should_notify:
         background_tasks.add_task(
             notify_task_update,
@@ -227,7 +227,7 @@ async def handle_a2a_webhook(
             parts=task_result_parts,
         )
 
-    # 7. Resume queue processing if task reached terminal state and has continuation
+    # 8. Resume queue processing if task reached terminal state and has continuation
     if is_terminal_state(new_state):
         background_tasks.add_task(
             resume_queue_continuation,

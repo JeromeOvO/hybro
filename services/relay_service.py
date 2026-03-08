@@ -520,6 +520,15 @@ class RelayService:
             # Update the pre-created RoomAgentMessage
             if msg.message_content:
                 msg.message_content.message_text = response_text
+                # Transition task status to completed so DB hydration renders
+                # the message as an agent-bubble instead of a task-status card.
+                task = msg.message_content.message_task
+                if task and task.status:
+                    from a2a.types import TaskState, TaskStatus
+                    from services.a2a_constants import is_terminal_state
+
+                    if not is_terminal_state(task.status.state):
+                        task.status = TaskStatus(state=TaskState.completed)
             await self._db.update_room_agent_message_by_message_id(
                 agent_message_id, msg
             )

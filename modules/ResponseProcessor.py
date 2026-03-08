@@ -837,7 +837,34 @@ class ResponseProcessor:
             return False
 
         if message_data.kind == "task":
-            room_agent_message.message_content.message_task = message_data
+            existing_task = get_task(room_agent_message)
+            if (
+                existing_task
+                and existing_task.status
+                and is_terminal_state(existing_task.status.state)
+            ):
+                # The in-memory task already has a terminal status (e.g. completed).
+                # The re-fetched task may carry stale non-terminal data — merge
+                # only artifacts and history without downgrading the status.
+                incoming_state = (
+                    message_data.status.state if message_data.status else None
+                )
+                if incoming_state and not is_terminal_state(incoming_state):
+                    logger.info(
+                        "_handle_a2a_response_for_room: preserving terminal status %s, "
+                        "incoming had %s for %s",
+                        state_str(existing_task.status.state),
+                        state_str(incoming_state),
+                        room_agent_message.message_id,
+                    )
+                    if message_data.artifacts:
+                        existing_task.artifacts = message_data.artifacts
+                    if message_data.history:
+                        existing_task.history = message_data.history
+                else:
+                    room_agent_message.message_content.message_task = message_data
+            else:
+                room_agent_message.message_content.message_task = message_data
             return await self.tsm.persist_message(room_agent_message)
 
         if message_data.kind == "message":
@@ -1253,11 +1280,6 @@ class ResponseProcessor:
                     conversion_counter=conversion_counter,
                 )
 
-        if task_info:
-            await self.database_service.update_task_on_message(
-                message_id, completed_task.model_dump(mode="json")
-            )
-
         final_content = None
         final_error = None
         final_parts = None
@@ -1270,6 +1292,13 @@ class ResponseProcessor:
 
         if is_failure_state(state):
             final_error = extract_error_message(completed_task) or f"Task {state_value}"
+
+        if task_info:
+            await self.database_service.update_task_on_message(
+                message_id,
+                completed_task.model_dump(mode="json"),
+                message_text=final_content or None,
+            )
 
         if task_info:
             await notify_task_update(
