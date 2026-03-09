@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -63,6 +63,7 @@ async def relay_register(
 @router.get("/hub/{hub_id}/events")
 async def relay_events(
     hub_id: str,
+    request: Request,
     api_key: APIKey = Depends(get_api_key),
 ):
     svc = _get_relay_service()
@@ -70,7 +71,8 @@ async def relay_events(
     async def event_generator():
         try:
             async for event in svc.connect_hub(hub_id, api_key):
-                # Sentinel to close stream on forced disconnect
+                if await request.is_disconnected():
+                    break
                 if isinstance(event, dict) and event.get("type") == "_disconnect":
                     break
                 yield f"data: {json.dumps(event)}\n\n"
@@ -155,3 +157,22 @@ async def relay_status(
     svc = _get_relay_service()
     hubs = await svc.get_hub_status(api_key.user_id)
     return HubStatusResponse(hubs=hubs)
+
+
+# ------------------------------------------------------------------
+# POST /relay/hub/{hub_id}/heartbeat
+# ------------------------------------------------------------------
+
+@router.post("/hub/{hub_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+async def relay_heartbeat(
+    hub_id: str,
+    api_key: APIKey = Depends(get_api_key),
+):
+    """Lightweight liveness signal from the hub daemon."""
+    svc = _get_relay_service()
+    try:
+        svc.record_hub_heartbeat(hub_id, api_key)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc

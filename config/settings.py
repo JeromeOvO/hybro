@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check
+    cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
+    cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
 
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
@@ -63,6 +65,7 @@ class Settings(BaseSettings):
     relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
     relay_connection_token_secret: str = ""  # JWT signing secret for /publish auth
     relay_hub_agent_heartbeat_miss_limit: int = 3
+    relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
     
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (

@@ -417,13 +417,14 @@ class MongoDB:
     ) -> bool:
         """Conditionally update hub status only if connection_id matches.
 
-        Returns True if the update was applied (connection_id matched).
+        Returns True if the document matched (connection_id is still current),
+        regardless of whether the is_online value actually changed.
         """
         result = await self.hubs_collection.update_one(
             {"hub_id": hub_id, "connection_id": connection_id},
             {"$set": {"is_online": is_online}},
         )
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     # -------------------------------------------------------------------
     # Hub-agent helpers (Phase 2a)
@@ -463,7 +464,7 @@ class MongoDB:
         provided, only agents whose ``hub_connection_id`` matches are updated.
         """
         if is_online:
-            set_fields: dict = {"is_hub_online": True}
+            set_fields: dict = {"is_hub_online": True, "agent_status": "active"}
             if connection_id:
                 set_fields["hub_connection_id"] = connection_id
             await self.agents_collection.update_many(
@@ -476,7 +477,7 @@ class MongoDB:
                 query["hub_connection_id"] = connection_id
             await self.agents_collection.update_many(
                 query,
-                {"$set": {"is_hub_online": False}},
+                {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
             )
 
     async def count_hub_agents(self, hub_id: str) -> int:

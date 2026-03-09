@@ -75,8 +75,12 @@ class RelayService:
         # Background indexing tasks kept alive to prevent GC
         self._background_tasks: set[asyncio.Task] = set()
 
-        # hub_id -> missed heartbeats counter
-        self._heartbeat_misses: dict[str, int] = {}
+        # hub_id -> monotonic timestamp of last hub-initiated heartbeat
+        self._last_hub_heartbeat: dict[str, float] = {}
+
+        # hub_id -> monotonic timestamp when _disconnect_hub was called;
+        # used to distinguish transient blips from genuine offline.
+        self._hub_disconnected_at: dict[str, float] = {}
 
         self._heartbeat_task: asyncio.Task | None = None
         self._shutdown = False
@@ -154,8 +158,12 @@ class RelayService:
             connection_token=token,
             connection_id=connection_id,
         )
-        await self._mongo.set_hub_agents_online_status(
-            hub_id, True, connection_id=connection_id
+        # Mark the hub channel as online but do NOT set agent_status=active
+        # yet.  Only sync_agents (triggered by the hub after reconnect) is
+        # authoritative for activating individual agents.
+        await self._mongo.agents_collection.update_many(
+            {"hub_id": hub_id},
+            {"$set": {"is_hub_online": True, "hub_connection_id": connection_id}},
         )
 
         queue: asyncio.Queue = asyncio.Queue()
@@ -166,7 +174,8 @@ class RelayService:
             await old_queue.put({"type": "_disconnect"})
 
         self._hub_queues[hub_id] = queue
-        self._heartbeat_misses[hub_id] = 0
+        self._last_hub_heartbeat[hub_id] = time.monotonic()
+        self._hub_disconnected_at.pop(hub_id, None)
 
         # Deliver connection token first
         yield {"type": "connection_token", "connection_token": token}
@@ -185,10 +194,8 @@ class RelayService:
                     event = await asyncio.wait_for(queue.get(), timeout=float(settings.relay_heartbeat_interval))
                     if event.get("type") == "_disconnect":
                         break
-                    self._heartbeat_misses[hub_id] = 0
                     yield event
                 except TimeoutError:
-                    self._heartbeat_misses[hub_id] = 0
                     yield {"type": "heartbeat", "timestamp": utcnow().isoformat()}
         finally:
             await self._disconnect_hub(hub_id, queue, connection_id)
@@ -200,7 +207,21 @@ class RelayService:
             logger.info("Hub %s: stale connection teardown skipped", hub_id)
             return
         self._hub_queues.pop(hub_id, None)
-        self._heartbeat_misses.pop(hub_id, None)
+        self._last_hub_heartbeat.pop(hub_id, None)
+        self._hub_disconnected_at[hub_id] = time.monotonic()
+
+        # Rescue pending messages from the live queue into offline queue
+        # so they survive a reconnect rather than being silently lost.
+        oq = self._offline_queues.setdefault(hub_id, deque())
+        while not queue.empty():
+            try:
+                event_dict = queue.get_nowait()
+                if isinstance(event_dict, dict) and event_dict.get("type") == "_disconnect":
+                    continue
+                oq.append(_OfflineQueueEntry(RelayToHubEvent(**event_dict)))
+            except (asyncio.QueueEmpty, Exception):
+                break
+
         result = await self._mongo.update_hub_status_if_current(
             hub_id, connection_id=connection_id, is_online=False
         )
@@ -222,9 +243,32 @@ class RelayService:
                 "hub_connection_id": {"$exists": False},
                 "is_hub_online": True,
             },
-            {"$set": {"is_hub_online": False}},
+            {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
         )
         logger.info("Hub %s disconnected", hub_id)
+
+    # ------------------------------------------------------------------
+    # Hub heartbeat (hub-initiated liveness signal)
+    # ------------------------------------------------------------------
+
+    def record_hub_heartbeat(self, hub_id: str, api_key: APIKey) -> None:
+        """Record a hub-initiated heartbeat.  Only accepted for connected hubs."""
+        if hub_id not in self._hub_queues:
+            raise PermissionError(
+                f"Hub {hub_id} is not connected — heartbeat rejected"
+            )
+        self._last_hub_heartbeat[hub_id] = time.monotonic()
+
+    def is_hub_connected(self, hub_id: str) -> bool:
+        """Live check — is this hub currently connected via SSE?"""
+        return hub_id in self._hub_queues
+
+    async def mark_hub_agents_offline(self, hub_id: str) -> None:
+        """Eagerly correct stale is_hub_online flags for a disconnected hub."""
+        await self._mongo.agents_collection.update_many(
+            {"hub_id": hub_id, "is_hub_online": True},
+            {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
+        )
 
     # ------------------------------------------------------------------
     # Agent sync
@@ -349,6 +393,7 @@ class RelayService:
                     "agent_id": {"$nin": synced_ids},
                 },
                 {
+                    "$set": {"agent_status": "inactive"},
                     "$unset": {
                         "hub_id": "",
                         "local_agent_id": "",
@@ -361,10 +406,9 @@ class RelayService:
 
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
 
-        # Re-stamp hub_connection_id on all agents for this hub so that
-        # _disconnect_hub can atomically clear them later.  sync_agents
-        # creates/updates agents without hub_connection_id, so this sweep
-        # ensures every agent is tagged with the current connection.
+        # Re-stamp hub_connection_id on synced agents for this hub so that
+        # _disconnect_hub can atomically clear them later.  Only synced
+        # agents are stamped — pruned agents must stay inactive.
         #
         # Re-read the hub doc to get the *current* connection_id.  If a
         # reconnect happened during this (potentially slow) sync, the
@@ -376,9 +420,18 @@ class RelayService:
             current_conn_id
             and current_conn_id == hub_doc.get("connection_id")
             and hub_id in self._hub_queues
+            and synced
         ):
-            await self._mongo.set_hub_agents_online_status(
-                hub_id, True, connection_id=current_conn_id
+            synced_ids = [item["agent_id"] for item in synced]
+            set_fields: dict = {
+                "is_hub_online": True,
+                "agent_status": "active",
+            }
+            if current_conn_id:
+                set_fields["hub_connection_id"] = current_conn_id
+            await self._mongo.agents_collection.update_many(
+                {"hub_id": hub_id, "agent_id": {"$in": synced_ids}},
+                {"$set": set_fields},
             )
 
         return synced
@@ -448,13 +501,37 @@ class RelayService:
     # ------------------------------------------------------------------
 
     async def push_to_hub(self, hub_id: str, event: RelayToHubEvent) -> bool:
-        """Push an event to a connected hub, or queue for offline delivery."""
+        """Push an event to a connected hub, or queue for offline delivery.
+
+        Returns True if delivered to the live SSE queue, False otherwise.
+        During the grace period after disconnect, messages are queued for
+        offline delivery.  After the grace period expires, returns False
+        without queuing so the caller can reject.
+        """
         queue = self._hub_queues.get(hub_id)
         if queue is not None:
             await queue.put(event.model_dump(mode="json"))
             return True
 
-        # Offline: enqueue
+        await self.mark_hub_agents_offline(hub_id)
+
+        # If disconnected beyond the grace period, don't queue — let the
+        # caller surface an immediate error to the user.
+        disconnected_at = self._hub_disconnected_at.get(hub_id)
+        if disconnected_at is not None:
+            elapsed = time.monotonic() - disconnected_at
+            if elapsed > settings.relay_offline_grace_period:
+                logger.info(
+                    "Hub %s offline for %.0fs (> grace %ds) — rejecting message",
+                    hub_id, elapsed, settings.relay_offline_grace_period,
+                )
+                await self._fail_offline_message(
+                    event,
+                    error_text="Agent is offline — hub has been unreachable",
+                )
+                return False
+
+        # Within grace period (or hub never connected on this instance) — queue
         oq = self._offline_queues.setdefault(hub_id, deque())
         if len(oq) >= settings.relay_offline_queue_max:
             logger.warning(
@@ -471,11 +548,14 @@ class RelayService:
         )
         return False
 
-    async def _fail_offline_message(self, event: RelayToHubEvent) -> None:
-        """Mark a RoomAgentMessage as failed when its offline queue entry is evicted."""
+    async def _fail_offline_message(
+        self, event: RelayToHubEvent, error_text: str | None = None,
+    ) -> None:
+        """Mark a RoomAgentMessage as failed when delivery is impossible."""
         if not event.agent_message_id:
             return
-        error_text = "Hub agent message expired (offline queue overflow)"
+        if error_text is None:
+            error_text = "Hub agent message expired (offline queue overflow)"
         msg = await self._db.get_room_agent_message_by_message_id(
             event.agent_message_id
         )
@@ -484,16 +564,24 @@ class RelayService:
                 from models.room import MessageContent
                 msg.message_content = MessageContent()
             msg.message_content.message_text = error_text
-            if msg.message_content.message_task:
-                task = msg.message_content.message_task
-                from a2a.types import Message as A2AMessage
-                from a2a.types import Role, TaskState, TaskStatus, TextPart
-                task.status = TaskStatus(
-                    state=TaskState.failed,
-                    message=A2AMessage(
-                        role=Role.agent,
-                        parts=[TextPart(text=error_text)],
-                    ),
+            try:
+                if msg.message_content.message_task:
+                    task = msg.message_content.message_task
+                    from a2a.types import Message as A2AMessage
+                    from a2a.types import Role, TaskState, TaskStatus, TextPart
+                    task.status = TaskStatus(
+                        state=TaskState.failed,
+                        message=A2AMessage(
+                            role=Role.agent,
+                            parts=[TextPart(text=error_text)],
+                            message_id=str(uuid4()),
+                        ),
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to update A2A task status for message %s",
+                    event.agent_message_id,
+                    exc_info=True,
                 )
             await self._db.update_room_agent_message_by_message_id(
                 event.agent_message_id, msg
@@ -624,17 +712,21 @@ class RelayService:
 
     async def _heartbeat_loop(self) -> None:
         """Periodically check for unresponsive hubs and sweep expired offline entries."""
+        stale_threshold = (
+            settings.relay_heartbeat_interval
+            * settings.relay_hub_agent_heartbeat_miss_limit
+        )
         while not self._shutdown:
             try:
                 await asyncio.sleep(settings.relay_heartbeat_interval)
+                now = time.monotonic()
                 for hub_id in list(self._hub_queues.keys()):
-                    misses = self._heartbeat_misses.get(hub_id, 0) + 1
-                    self._heartbeat_misses[hub_id] = misses
-                    if misses >= settings.relay_hub_agent_heartbeat_miss_limit:
+                    last = self._last_hub_heartbeat.get(hub_id)
+                    if last is not None and (now - last) > stale_threshold:
                         logger.warning(
-                            "Hub %s missed %d heartbeats — disconnecting",
+                            "Hub %s has not sent a heartbeat for %.0fs — disconnecting",
                             hub_id,
-                            misses,
+                            now - last,
                         )
                         q = self._hub_queues.get(hub_id)
                         if q:

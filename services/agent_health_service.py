@@ -60,7 +60,7 @@ class AgentHealthService:
         # Track active retry tasks per agent to avoid duplicates
         self._retry_tasks: dict[str, asyncio.Task] = {}
 
-    async def check_agent_health(self, agent: Agent) -> bool:
+    async def check_agent_health(self, agent: Agent, *, timeout: float | None = None) -> bool:
         """
         Check if an agent is reachable by making an HTTP request to its URL.
 
@@ -70,14 +70,16 @@ class AgentHealthService:
 
         Args:
             agent: The agent to check
+            timeout: Optional override for HTTP timeout (defaults to self.timeout)
 
         Returns:
             bool: True if agent is reachable, False otherwise
         """
         agent_url = agent.agent_card.url
+        effective_timeout = timeout if timeout is not None else self.timeout
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=effective_timeout) as client:
                 # Try current A2A well-known path first
                 agent_card_url = agent_url.rstrip("/") + AGENT_CARD_WELL_KNOWN_PATH
                 response = await client.get(agent_card_url)
@@ -293,7 +295,7 @@ class AgentHealthService:
                 await asyncio.sleep(self.check_interval)
             except Exception as e:
                 logger.error(f"Health check loop failed: {e}", exc_info=True)
-                raise
+                await asyncio.sleep(60)
 
     async def start(self):
         """Start the health check background task."""

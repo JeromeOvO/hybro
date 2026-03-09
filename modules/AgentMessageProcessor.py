@@ -67,32 +67,35 @@ class AgentMessageProcessor:
 
         At module-import time the relay_service singleton is still ``None``
         because ``init_relay_service()`` runs during the FastAPI lifespan.
-        This method re-checks on first call and wires up the middleware.
-
-        The ``RelayTransport`` itself is constructed eagerly inside
-        ``init_relay_service()``, so we only need to register it here.
+        This method re-checks on each call until relay is resolved, while
+        ensuring CloudHealthMiddleware is always present from the first call.
         """
-        if self._lazy_initialized:
+        if self._dispatch_chain_explicit is not None:
             return
-        self._lazy_initialized = True
 
-        if self._relay_service_explicit is not None:
+        if not self._lazy_initialized:
+            self._lazy_initialized = True
+            from modules.middleware.cloud_health import CloudHealthMiddleware
+            from services.agent_health_service import agent_health_service
+            chain = DispatchChain()
+            chain.add(CloudHealthMiddleware(agent_health_service))
+            self.dispatch_chain = chain
+            logger.info("AgentMessageProcessor: CloudHealthMiddleware initialized")
+
+        if self._relay_service_explicit is not None or self.relay_service is not None:
             return
 
         try:
             from services.relay_service import relay_service as _svc
             if _svc is not None:
                 self.relay_service = _svc
-                if self._dispatch_chain_explicit is None:
-                    from modules.middleware.hub_transport import HubTransportMiddleware
-                    chain = DispatchChain()
-                    chain.add(HubTransportMiddleware(_svc))
-                    self.dispatch_chain = chain
+                from modules.middleware.hub_transport import HubTransportMiddleware
+                self.dispatch_chain.add(HubTransportMiddleware(_svc))
                 if "relay" not in self.transports and _svc.relay_transport is not None:
                     self.transports["relay"] = _svc.relay_transport
                 logger.info("AgentMessageProcessor: relay_service resolved lazily")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AgentMessageProcessor: relay init deferred: %s", exc)
 
     async def process_single_message(
         self,
