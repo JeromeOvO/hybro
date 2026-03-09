@@ -12,6 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -207,6 +208,17 @@ class RelayService:
         await self._mongo.set_hub_agents_online_status(
             hub_id, False, connection_id=connection_id
         )
+        # Fallback: clear any agents that were never stamped with a
+        # hub_connection_id (e.g. created by sync_agents before the
+        # re-stamp could run).
+        await self._mongo.agents_collection.update_many(
+            {
+                "hub_id": hub_id,
+                "hub_connection_id": {"$exists": False},
+                "is_hub_online": True,
+            },
+            {"$set": {"is_hub_online": False}},
+        )
         logger.info("Hub %s disconnected", hub_id)
 
     # ------------------------------------------------------------------
@@ -214,7 +226,12 @@ class RelayService:
     # ------------------------------------------------------------------
 
     async def sync_agents(
-        self, hub_id: str, agents: list[HubAgentSync], api_key: APIKey
+        self,
+        hub_id: str,
+        agents: list[HubAgentSync],
+        api_key: APIKey,
+        *,
+        prune_missing: bool = True,
     ) -> list[dict]:
         hub_doc = await self._mongo.get_hub(hub_id)
         if not hub_doc or hub_doc["user_id"] != api_key.user_id:
@@ -224,7 +241,7 @@ class RelayService:
         gateway_base = settings.gateway_base_url
 
         synced: list[dict] = []
-        to_index: list[tuple[str, str]] = []
+        to_index: list[tuple[str, str, str]] = []
         for ag in agents:
             agent_url = ag.agent_card.get("url", "")
             normalized = normalize_agent_url(agent_url) if agent_url else None
@@ -269,12 +286,20 @@ class RelayService:
                     hub_id, ag.local_agent_id, agent_data
                 )
 
-                # Only index on first insert — upsert_hub_agent uses
-                # $setOnInsert for agent_id, so a match means re-sync.
-                is_new_insert = stored_id == new_agent_id
-                description = ag.agent_card.get("description") or ag.description
-                if is_new_insert and description:
-                    to_index.append((stored_id, description))
+            # Re-index in Pinecone whenever the description changed or was
+            # never successfully indexed.  We store a hash of the last-indexed
+            # description so that transient Pinecone failures are retried on
+            # the next sync and description updates are always picked up.
+            description = ag.agent_card.get("description") or ag.description
+            if description:
+                new_hash = hashlib.sha256(description.encode()).hexdigest()
+                doc = await self._mongo.agents_collection.find_one(
+                    {"agent_id": stored_id},
+                    {"indexed_description_hash": 1},
+                )
+                old_hash = (doc or {}).get("indexed_description_hash")
+                if new_hash != old_hash:
+                    to_index.append((stored_id, description, new_hash))
 
             # Set public_url to the gateway proxy so external consumers can
             # discover agents via the gateway API.  Never overwrite
@@ -295,13 +320,12 @@ class RelayService:
             })
 
         if to_index:
-            task = asyncio.create_task(self._index_new_agents(hub_id, to_index))
+            task = asyncio.create_task(self._index_agents(hub_id, to_index))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
         # Prune agents that the hub no longer reports.
-        # Skip when the payload is empty to guard against accidental wipes.
-        if synced:
+        if prune_missing:
             synced_ids = [item["agent_id"] for item in synced]
 
             await self._mongo.agents_collection.update_many(
@@ -331,29 +355,45 @@ class RelayService:
             )
 
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
+
+        # Re-stamp hub_connection_id on all agents for this hub so that
+        # _disconnect_hub can atomically clear them later.  sync_agents
+        # creates/updates agents without hub_connection_id, so this sweep
+        # ensures every agent is tagged with the current connection.
+        current_conn_id = hub_doc.get("connection_id")
+        if current_conn_id and hub_id in self._hub_queues:
+            await self._mongo.set_hub_agents_online_status(
+                hub_id, True, connection_id=current_conn_id
+            )
+
         return synced
 
-    async def _index_new_agents(
-        self, hub_id: str, to_index: list[tuple[str, str]]
+    async def _index_agents(
+        self, hub_id: str, to_index: list[tuple[str, str, str]]
     ) -> None:
         """Embed descriptions and upsert to Pinecone in the background.
 
-        Runs as a fire-and-forget task so sync_agents() returns immediately.
-        Embeddings are fetched in parallel; the Pinecone upsert is offloaded
-        to a thread to avoid blocking the event loop.
+        Each entry in *to_index* is ``(agent_id, description, desc_hash)``.
+        After a successful Pinecone upsert the corresponding
+        ``indexed_description_hash`` is written back to Mongo so that
+        unchanged descriptions are not re-embedded on subsequent syncs and
+        transient failures are automatically retried.
         """
         try:
             embed_tasks = [
                 self._db.ai_service.get_embedding(desc)
-                for _, desc in to_index
+                for _, desc, _ in to_index
             ]
             embeddings = await asyncio.gather(
                 *embed_tasks, return_exceptions=True
             )
 
             vectors: list[dict] = []
+            succeeded: list[tuple[str, str]] = []
             failed: list[str] = []
-            for (agent_id, _), emb in zip(to_index, embeddings, strict=True):
+            for (agent_id, _, desc_hash), emb in zip(
+                to_index, embeddings, strict=True
+            ):
                 if isinstance(emb, BaseException):
                     failed.append(agent_id)
                     continue
@@ -362,9 +402,16 @@ class RelayService:
                     "values": emb,
                     "metadata": {"type": "a2a_agent", "agent_id": agent_id},
                 })
+                succeeded.append((agent_id, desc_hash))
 
             if vectors:
                 await asyncio.to_thread(self._db.pinecone.upsert, vectors)
+
+            for agent_id, desc_hash in succeeded:
+                await self._mongo.agents_collection.update_one(
+                    {"agent_id": agent_id},
+                    {"$set": {"indexed_description_hash": desc_hash}},
+                )
 
             if failed:
                 logger.warning(
@@ -373,7 +420,7 @@ class RelayService:
                 )
             else:
                 logger.info(
-                    "Hub %s: indexed %d new agents in Pinecone",
+                    "Hub %s: indexed %d agents in Pinecone",
                     hub_id, len(vectors),
                 )
         except Exception:

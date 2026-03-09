@@ -300,12 +300,13 @@ class DirectTransport(AgentTransport):
         self, artifact, room_id: str, message_id: str,
         conversion_counter: list[int] | None = None,
     ) -> None:
-        """Convert inline base64 bytes in artifact parts to S3 URIs.
+        """Convert inline base64 bytes and external URIs in artifact parts to S3 URIs.
 
-        ``conversion_counter`` is a single-element list ``[count]`` shared
-        across calls for the same message so the per-message cap is enforced.
+        Delegates to the shared helper in a2a_helpers. ``conversion_counter``
+        is a single-element list ``[count]`` shared across calls for the same
+        message so the per-message cap is enforced.
         """
-        from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
+        from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
 
         if not artifact.parts:
             return
@@ -313,61 +314,11 @@ class DirectTransport(AgentTransport):
         if conversion_counter is None:
             conversion_counter = [0]
 
-        for i, part in enumerate(artifact.parts):
-            root = getattr(part, "root", part)
-            if getattr(root, "kind", None) != "file":
-                continue
-            file_content = getattr(root, "file", None)
-            if not file_content:
-                continue
-            raw_bytes = getattr(file_content, "bytes", None)
-            if not raw_bytes:
-                continue
-
-            if conversion_counter[0] >= MAX_INLINE_CONVERSIONS_PER_MESSAGE:
-                logger.warning(
-                    "Inline base64 conversion cap (%d) reached: room=%s message=%s — skipping remaining",
-                    MAX_INLINE_CONVERSIONS_PER_MESSAGE, room_id, message_id,
-                )
-                break
-
-            import base64
-            import io
-
-            try:
-                decoded = base64.b64decode(raw_bytes)
-            except Exception:
-                logger.warning(
-                    "Invalid base64 in artifact part: room=%s message=%s part=%d — skipping",
-                    room_id, message_id, i,
-                )
-                continue
-
-            mime = getattr(file_content, "mime_type", None) or getattr(
-                file_content, "mimeType", "application/octet-stream"
-            )
-            ext = mime.split("/")[-1] if "/" in mime else "bin"
-            s3_key = f"artifacts/{room_id}/{message_id}/inline-{conversion_counter[0]}.{ext}"
-
-            try:
-                await self.s3_service.upload_file(
-                    file_data=io.BytesIO(decoded),
-                    s3_key=s3_key,
-                    content_type=mime,
-                    content_length=len(decoded),
-                )
-                presigned_url = await self.s3_service.generate_presigned_url(s3_key)
-                file_content.bytes = None
-                file_content.uri = presigned_url
-                conversion_counter[0] += 1
-            except Exception:
-                logger.error(
-                    "Failed to upload inline base64 to S3: room=%s message=%s part=%d",
-                    room_id,
-                    message_id,
-                    i,
-                    exc_info=True,
-                )
+        new_total = await convert_pydantic_artifacts_to_s3(
+            [artifact], room_id, message_id,
+            converted_so_far=conversion_counter[0],
+        )
+        conversion_counter[0] = new_total
 
     async def _convert_streaming_parts_to_s3(
         self,

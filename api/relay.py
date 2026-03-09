@@ -134,7 +134,9 @@ async def relay_sync_agents(
 ):
     svc = _get_relay_service()
     try:
-        synced = await svc.sync_agents(hub_id, body.agents, api_key)
+        synced = await svc.sync_agents(
+            hub_id, body.agents, api_key, prune_missing=body.prune_missing,
+        )
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)

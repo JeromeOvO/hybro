@@ -205,6 +205,9 @@ class TestRelayServiceAgentSync:
         svc._mongo.upsert_hub_agent = AsyncMock(
             side_effect=lambda hub_id, local_id, data: data["agent_id"]
         )
+        # No existing doc -> find_one returns None (no indexed_description_hash)
+        svc._mongo.agents_collection.find_one = AsyncMock(return_value=None)
+        svc._mongo.agents_collection.update_one = AsyncMock()
 
         agents = [
             HubAgentSync(
@@ -230,10 +233,21 @@ class TestRelayServiceAgentSync:
         assert vectors[0]["values"] == fake_embedding
         assert vectors[0]["metadata"]["type"] == "a2a_agent"
 
+        # Verify indexed_description_hash was written back to Mongo
+        hash_writes = [
+            call for call in svc._mongo.agents_collection.update_one.call_args_list
+            if "indexed_description_hash" in str(call)
+        ]
+        assert len(hash_writes) == 1
+
     @pytest.mark.asyncio
-    async def test_sync_existing_agent_skips_pinecone_index(self):
-        """Pre-existing agents (registered via web UI) should not be re-indexed."""
+    async def test_sync_existing_agent_skips_pinecone_when_hash_matches(self):
+        """Pre-existing agents with matching hash should not be re-indexed."""
         import asyncio
+        import hashlib
+
+        description = "A hub test agent"
+        desc_hash = hashlib.sha256(description.encode()).hexdigest()
 
         db_service = MagicMock()
         db_service.ai_service.get_embedding = AsyncMock()
@@ -241,11 +255,13 @@ class TestRelayServiceAgentSync:
         svc = _make_relay_service(db_service=db_service)
         svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
         svc._mongo.agents_collection = AsyncMock()
-        svc._mongo.agents_collection.find_one = AsyncMock(return_value={
-            "agent_id": "existing-001",
-            "normalized_url": "localhost:8000",
-        })
+        # First call: URL lookup returns existing agent; second call: hash lookup
+        svc._mongo.agents_collection.find_one = AsyncMock(side_effect=[
+            {"agent_id": "existing-001", "normalized_url": "localhost:8000"},
+            {"indexed_description_hash": desc_hash},
+        ])
         svc._mongo.agents_collection.update_one = AsyncMock()
+        svc._mongo.agents_collection.update_many = AsyncMock()
 
         agents = [
             HubAgentSync(
@@ -262,6 +278,83 @@ class TestRelayServiceAgentSync:
             await asyncio.gather(*pending)
 
         db_service.ai_service.get_embedding.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sync_reindexes_when_description_changes(self):
+        """A description change should trigger Pinecone re-indexing."""
+        import asyncio
+        import hashlib
+
+        old_hash = hashlib.sha256(b"old description").hexdigest()
+        fake_embedding = [0.2] * 128
+        db_service = MagicMock()
+        db_service.ai_service.get_embedding = AsyncMock(return_value=fake_embedding)
+        db_service.pinecone.upsert = MagicMock()
+
+        svc = _make_relay_service(db_service=db_service)
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+        svc._mongo.agents_collection = AsyncMock()
+        # First call: URL lookup returns existing agent; second call: hash lookup
+        svc._mongo.agents_collection.find_one = AsyncMock(side_effect=[
+            {"agent_id": "existing-001", "normalized_url": "localhost:8000"},
+            {"indexed_description_hash": old_hash},
+        ])
+        svc._mongo.agents_collection.update_one = AsyncMock()
+        svc._mongo.agents_collection.update_many = AsyncMock()
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Agent A",
+                description="A helpful agent",
+                agent_card=_make_agent_card("Agent A"),
+            ),
+        ]
+        await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending)
+
+        db_service.ai_service.get_embedding.assert_awaited_once()
+        db_service.pinecone.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sync_retries_indexing_after_prior_failure(self):
+        """If indexed_description_hash is missing, re-sync should retry indexing."""
+        import asyncio
+
+        fake_embedding = [0.3] * 128
+        db_service = MagicMock()
+        db_service.ai_service.get_embedding = AsyncMock(return_value=fake_embedding)
+        db_service.pinecone.upsert = MagicMock()
+
+        svc = _make_relay_service(db_service=db_service)
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+        # Simulate re-sync: upsert_hub_agent returns an *existing* agent_id
+        svc._mongo.upsert_hub_agent = AsyncMock(return_value="existing-agent-001")
+        svc._mongo.agents_collection.find_one = AsyncMock(side_effect=[
+            None,  # URL lookup: no match
+            {},    # hash lookup: no indexed_description_hash field
+        ])
+        svc._mongo.agents_collection.update_one = AsyncMock()
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Agent A",
+                description="A helpful agent",
+                agent_card=_make_agent_card("Agent A"),
+            ),
+        ]
+        await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending)
+
+        db_service.ai_service.get_embedding.assert_awaited_once()
+        db_service.pinecone.upsert.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_sync_agents_rejects_wrong_owner(self):
@@ -299,6 +392,38 @@ class TestRelayServiceAgentSync:
         update_call = svc._mongo.agents_collection.update_one.call_args
         set_fields = update_call[0][1]["$set"]
         assert "gateway" in set_fields["public_url"]
+
+    @pytest.mark.asyncio
+    async def test_sync_empty_with_prune_missing_deactivates_all(self):
+        """An empty roster with prune_missing=True should deactivate all hub agents."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        synced = await svc.sync_agents(
+            "hub-001", [], _make_api_key(), prune_missing=True,
+        )
+
+        assert synced == []
+        assert svc._mongo.agents_collection.update_many.await_count == 2
+
+        hub_source_call = svc._mongo.agents_collection.update_many.call_args_list[0]
+        query = hub_source_call[0][0]
+        assert query["hub_id"] == "hub-001"
+        assert query["source"] == "hub"
+        assert query["agent_id"] == {"$nin": []}
+
+    @pytest.mark.asyncio
+    async def test_sync_empty_without_prune_missing_skips_pruning(self):
+        """An empty roster with prune_missing=False should not touch existing agents."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        synced = await svc.sync_agents(
+            "hub-001", [], _make_api_key(), prune_missing=False,
+        )
+
+        assert synced == []
+        svc._mongo.agents_collection.update_many.assert_not_awaited()
 
 
 # ===========================================================================

@@ -123,6 +123,7 @@ class HubAgentSyncRequest(BaseModel):
     """POST /relay/hub/{hub_id}/agents/sync body."""
 
     agents: list[HubAgentSync]
+    prune_missing: bool = True
 
 
 class HubAgentSyncResponse(BaseModel):
