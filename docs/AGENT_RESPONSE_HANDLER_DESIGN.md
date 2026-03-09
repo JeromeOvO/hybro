@@ -1,7 +1,7 @@
 # Agent Response Handler — Unified Result Processing
 
 **Date**: March 8, 2026
-**Status**: Phases 1–2 implemented, Phase 3 in progress (wrapper stage)
+**Status**: Phases 1–3 implemented, Phase 4 not started
 **Scope**: Extract shared agent-result processing into a single `AgentResponseHandler` used by all three entry points, and organize transport-specific logic into three dedicated `AgentTransport` classes
 **Depends on**: Relay parity fixes (completed), A2A spec compliance fixes (completed)
 
@@ -706,7 +706,7 @@ This is the most delicate phase because `ResponseProcessor` has complex in-memor
 |---|---|---|---|---|
 | 1 | Foundation + `RelayTransport` | 4–5 hrs | Low | **COMPLETED** |
 | 2 | `WebhookTransport` | 2–3 hrs | Low | **COMPLETED** |
-| 3 | `DirectTransport` (ResponseProcessor) | 7–9 hrs | Medium-High | **In progress** (wrapper only) |
+| 3 | `DirectTransport` (ResponseProcessor) | 7–9 hrs | Medium-High | **COMPLETED** |
 | 4 | Router refactor + cleanup + parity test | 2–3 hrs | Low | Not started |
 
 Each phase is independently shippable and testable. Phases 1–2 can be done together. Phase 3 can be deferred if needed; the parity benefit is already significant after phase 2 because the relay and webhook paths (the two most bug-prone) are unified.
@@ -749,17 +749,39 @@ All Phase 1 deliverables are implemented, integrated, and tested.
 | `WebhookTransport` | `modules/transports/webhook.py` (~260 lines) | Implemented — `handle_webhook` with token validation, `parse_stream_response` (4 StreamResponse formats + raw Task fallback), `_task_to_event` normalization, idempotency check |
 | `api/webhooks.py` thinned | `api/webhooks.py` | Integrated — thin FastAPI route delegates to `WebhookTransport.handle_webhook()` via `_get_webhook_transport()` factory |
 
-### Phase 3: DirectTransport — IN PROGRESS (wrapper stage)
+### Phase 3: DirectTransport — COMPLETED
+
+All `ResponseProcessor` logic has been absorbed into `DirectTransport`. All 16 `notify_task_update` call sites replaced with `_emit_terminal()` → `AgentEvent(skip_persist=True)` → `AgentResponseHandler.handle()`. `AgentMessageProcessor` updated to use `DirectTransport` directly. `ResponseProcessor.py` retained as dead code (removed in Phase 4).
 
 | Deliverable | File | Status |
 |---|---|---|
-| `DirectTransport` wrapper | `modules/transports/direct.py` (~80 lines) | Implemented as **thin wrapper** around existing `ResponseProcessor` — delegates `handle_streaming_response` / `handle_sync_response` to `ResponseProcessor` directly. Terminal notification sites have **not yet** been replaced with `AgentEvent` emissions. |
+| `DirectTransport` full implementation | `modules/transports/direct.py` (~1,405 lines) | All `ResponseProcessor` methods absorbed: streaming (`handle_streaming_response`, all `_handle_stream_*` sub-handlers, `_finalize_streaming`), sync (`handle_sync_response`, `_process_sync_response`, `_poll_task_until_complete`, `_finalize_polled_task`), setup (`_setup_task_tracking`, `_setup_tracking_context`), S3 conversion (`_convert_inline_bytes_to_s3`, `_convert_streaming_parts_to_s3`), cancellation (`_handle_streaming_cancellation`, `_try_cancel_remote_task`). `MessageStreamingState` dataclass moved to module level. |
+| `_emit_terminal` helper | `modules/transports/direct.py` | New method: maps `TaskState` → `AgentEvent.kind` (`canceled` / `error` / `interactive` / `response`), sets `skip_persist=True`, delegates to `self.response_handler.handle()`. 16 call sites replaced. |
+| `AgentMessageProcessor` updated | `modules/AgentMessageProcessor.py` (~340 lines) | Removed `response_processor` parameter (now required `direct_transport`). Exception handler builds `ProcessingContext` fallback and calls `dt._emit_terminal()`. Removed `notify_task_update` import. `_dispatch_via_relay` simplified (legacy fallback removed — requires `relay_transport`). |
+| `RoomMessageCenter` updated | `modules/RoomMessageCenter.py` | Removed `ResponseProcessor` instantiation. `AgentMessageProcessor` no longer receives `response_processor=`. `QueueExecutor` receives `direct_transport` as `response_processor`. |
+| `QueueExecutor` updated | `modules/QueueExecutor.py` | Import changed from `ResponseProcessor` to `DirectTransport`. Type annotation updated. Legacy `_process_single_message_inline` still works (same method signatures). |
+| Tests updated | `tests/test_module_response_processor.py` | All imports → `DirectTransport`. `_make_processor` creates `DirectTransport` via `object.__new__`. All `patch("...notify_task_update")` replaced with `response_handler.handle = AsyncMock()` assertions. |
+| Tests updated | `tests/test_dispatch_middleware.py` | Removed `response_processor=` from constructor calls. Added `direct_transport=`. Relay test uses `relay_transport` mock. |
+| Tests updated | `tests/test_multimodal_errors.py` | All imports → `DirectTransport` with `response_handler=MagicMock()`. |
+| Bug fixes during review | `modules/transports/direct.py` | Fixed operator precedence in `_emit_terminal` `text=` field (added explicit parentheses). Removed duplicate `s3_service` property definition. |
 
-Phase 3 completion requires replacing the 16 `notify_task_update` call sites inside `ResponseProcessor` with `AgentEvent(skip_persist=True)` emissions through `AgentResponseHandler`, then deleting `ResponseProcessor.py`. This is the highest-effort/risk phase (estimated 7–9 hours).
+**Test results:** 97 tests pass (11 response processor + 10 dispatch middleware + 6 multimodal + 13 handler + 20 webhooks + 37 relay).
 
-### Phase 4: Router refactor + cleanup — NOT STARTED
+### Phase 4: Router refactor + cleanup — COMPLETE
 
-Depends on Phase 3 completion.
+Phase 4 completed. Changes made:
+- Deleted `modules/ResponseProcessor.py` (1,430-line dead file, zero live importers)
+- Extended `DispatchContext` with optional `token`, `step_number`, `total_steps` fields
+- Implemented `DirectTransport.dispatch(ctx, message)` with logic from `AgentMessageProcessor._dispatch_direct`
+- Refactored `AgentMessageProcessor` into a thin router with `self.transports[ctx.transport].dispatch(ctx, message)` dict lookup
+- Removed `QueueExecutor._process_single_message_inline` (130-line legacy fallback) and `response_processor` param entirely
+- Made `agent_message_processor` a required param in `QueueExecutor`
+- Updated `RoomMessageCenter` wiring: `transports={"direct": ...}` dict, removed `response_processor=`
+- Updated `test_dispatch_middleware.py` integration tests to mock `dt.dispatch()` instead of `dt.handle_sync_response`
+- Added `tests/test_transport_parity.py` — multi-event sequence parity tests asserting identical DB+SSE outcomes for `skip_persist=True` (direct) vs `skip_persist=False` (relay/webhook)
+- Renamed `tests/test_module_response_processor.py` → `tests/test_direct_transport.py`
+- `update_task_on_message` kept for now (single caller in `_finalize_polled_task` polling path) with Phase 5 TODO comment
+- `SupervisorExecutor` required zero changes (public API of `process_single_message` unchanged)
 
 ### Hub-side streaming improvements (related)
 
@@ -805,9 +827,9 @@ In addition to the backend refactoring, the `hybro-hub` dispatcher was updated t
 
 3. ~~**`RelayService` vs `RelayTransport` boundary**~~ **RESOLVED**: `RelayService` retains hub connection management (connect/disconnect, agent sync, offline queues, heartbeat). `RelayTransport` owns all business logic (event normalization, delegation to `AgentResponseHandler`, cancel/reply). `RelayService._process_single_publish_event` is replaced by a thin call to `RelayTransport.handle_publish_event()`.
 
-4. **Transport selection at runtime**: `AgentMessageProcessor` needs to pick the right transport based on agent metadata (cloud vs. hub-connected vs. webhook-capable). Currently this is an if/elif chain reading `agent.hub_id` via `HubTransportMiddleware`. Keep the existing middleware approach in Phase 1–3; evaluate whether a formal `AgentRoutingPolicy` is warranted in Phase 4 cleanup.
+4. ~~**Transport selection at runtime**~~ **RESOLVED (Phase 4)**: `AgentMessageProcessor` uses a `transports` dict keyed by name (`"direct"` / `"relay"`) and looks up `ctx.transport` (defaults to `"direct"`). `HubTransportMiddleware` mutates `ctx.transport = "relay"` for hub-connected agents via the composable `DispatchChain`. A formal `AgentRoutingPolicy` is not warranted — the middleware chain already fulfils that role and is extensible to new transports.
 
-5. **Webhook path `failed` kwarg**: The webhook path currently calls `resume_queue_from_continuation(message_id, task_result_text)` without passing `failed=True` for error states. After refactoring, `AgentResponseHandler._on_error` always passes `failed=True`. This is a behavior correction (improvement), not a bug — but should be tested carefully.
+5. ~~**Webhook path `failed` kwarg**~~ **RESOLVED (Phase 4)**: `WebhookTransport` no longer calls `resume_queue_from_continuation` directly. It normalizes the task to an `AgentEvent` and delegates to `AgentResponseHandler.handle()`. `_on_error` and `_on_canceled` both call `_resume_orchestration(..., failed=True)`, guaranteeing correct behavior for all transports. Covered by `test_transport_parity.py`.
 
 ---
 
@@ -827,7 +849,7 @@ The following issues were identified during the design review and are addressed 
 | 8 | `sse_manager` injected in both `DirectTransport` and `AgentResponseHandler` | Low | Documented as accepted asymmetry with clear rationale (§2.3, §2.8) |
 | 9 | `task_service` dependency missing from `DirectTransport` | Low | Added to `DirectTransport.__init__` (§2.3) |
 | 10 | Phase 3 effort underestimated (15+ `notify_task_update` call sites to replace) | Low | Revised from 5–6 hrs to 7–9 hrs (§4) |
-| 11 | Webhook `resume_queue_continuation` doesn't pass `failed=True` for errors | Low | Noted as behavior correction in open question 5 (§7) |
+| 11 | Webhook `resume_queue_continuation` doesn't pass `failed=True` for errors | Low | **Resolved**: all transports now delegate to `AgentResponseHandler`, which passes `failed=True` in `_on_error` and `_on_canceled` (§7 item 5) |
 | 12 | `_on_canceled` missing orchestration resume — relay path calls `_resume_orchestration(failed=True)` for canceled tasks; omitting it would leave relay queues stuck | **Critical** | `_on_canceled` now calls `_resume_orchestration(failed=True)` (§2.2). `DirectTransport` handles cancellation internally and never emits a `"canceled"` `AgentEvent`, so this only affects relay/webhook paths |
 | 13 | `_on_submitted` missing `message_id` — `send_task_submitted` requires `message_id` as 2nd positional arg; also missing `step_number`, `total_steps` | Medium | Added `message_id`, `step_number`, `total_steps` to `_on_submitted` call (§2.2) |
 | 14 | Duplication table `notify_task_update` counts wrong — ResponseProcessor has 16 calls (not ~8), relay has 2 (not 1) | Low | Corrected table counts (§1) |

@@ -227,13 +227,16 @@ class TestAMPRelayDispatch:
         db_service = MagicMock()
         db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
 
+        relay_transport_mock = MagicMock()
+        relay_transport_mock.dispatch = AsyncMock(
+            return_value=ProcessingResult(ProcessingStatus.RELAY_DISPATCHED, response_text="", message_id="amsg-001")
+        )
+
         amp = AgentMessageProcessor(
-            tsm=MagicMock(),
             sse_manager=MagicMock(),
-            response_processor=MagicMock(),
-            a2a_service=MagicMock(),
             room_services=room_services,
             database_service=db_service,
+            transports={"direct": MagicMock(), "relay": relay_transport_mock},
             relay_service=relay_svc,
             dispatch_chain=chain,
         )
@@ -251,7 +254,7 @@ class TestAMPRelayDispatch:
         )
 
         assert result.status == ProcessingStatus.RELAY_DISPATCHED
-        relay_svc.push_to_hub.assert_awaited_once()
+        relay_transport_mock.dispatch.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_cloud_agent_uses_direct_path(self):
@@ -267,21 +270,17 @@ class TestAMPRelayDispatch:
 
         db_service = MagicMock()
         db_service.get_room_memory_by_room_id = AsyncMock(return_value=None)
-        db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=MagicMock())
 
-        a2a_svc = MagicMock()
-        a2a_svc.has_streaming_capability = MagicMock(return_value=False)
-
-        rp = MagicMock()
-        rp.handle_sync_response = AsyncMock(return_value=(True, "response text", None))
+        dt = MagicMock()
+        dt.dispatch = AsyncMock(
+            return_value=ProcessingResult(ProcessingStatus.SUCCESS, response_text="response text")
+        )
 
         amp = AgentMessageProcessor(
-            tsm=MagicMock(),
             sse_manager=MagicMock(),
-            response_processor=rp,
-            a2a_service=a2a_svc,
             room_services=room_services,
             database_service=db_service,
+            transports={"direct": dt},
             dispatch_chain=chain,
         )
 
@@ -298,4 +297,4 @@ class TestAMPRelayDispatch:
         )
 
         assert result.status == ProcessingStatus.SUCCESS
-        rp.handle_sync_response.assert_awaited_once()
+        dt.dispatch.assert_awaited_once()

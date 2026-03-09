@@ -8,13 +8,16 @@ and in reverse on post-dispatch (N→0).  If any middleware sets
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from a2a.types import Message
 
 from models.agent import Agent
 from models.processing import ProcessingResult
 from models.room import RoomAgentMessage
+
+if TYPE_CHECKING:
+    from common.utils.cancellation import CancellationToken
 
 
 @dataclass
@@ -28,6 +31,9 @@ class DispatchContext:
     denied: bool = False
     deny_reason: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    token: CancellationToken | None = None
+    step_number: int | None = None
+    total_steps: int | None = None
 
 
 @runtime_checkable

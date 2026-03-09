@@ -22,10 +22,9 @@ from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
 from modules.agent_response_handler import AgentResponseHandler
 from modules.QueueExecutor import QueueExecutor, QueueResult
-from modules.ResponseProcessor import ResponseProcessor
+from modules.transports.direct import DirectTransport
 from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
-from modules.transports.direct import DirectTransport
 from modules.transports.relay import RelayTransport
 from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
@@ -54,13 +53,6 @@ class RoomMessageCenter:
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.tsm = TaskStateManager(room_services, notification_service)
-        self.response_processor = ResponseProcessor(
-            tsm=self.tsm,
-            sse_manager=self.sse_manager,
-            a2a_service=a2a_service,
-            task_service=task_service,
-            database_service=self.database_service,
-        )
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
@@ -73,7 +65,7 @@ class RoomMessageCenter:
             room_message_center=self,
         )
 
-        # DirectTransport wraps ResponseProcessor
+        # DirectTransport contains all streaming/sync response processing
         self.direct_transport = DirectTransport(
             response_handler=self.agent_response_handler,
             tsm=self.tsm,
@@ -90,18 +82,14 @@ class RoomMessageCenter:
         self._relay_transport: RelayTransport | None = None
 
         self.agent_message_processor = AgentMessageProcessor(
-            tsm=self.tsm,
             sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
-            a2a_service=a2a_service,
             room_services=self.room_services,
             database_service=self.database_service,
-            direct_transport=self.direct_transport,
+            transports={"direct": self.direct_transport},
         )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
             a2a_service=a2a_service,
             room_services=self.room_services,
             room_memory_service=room_memory_service,
