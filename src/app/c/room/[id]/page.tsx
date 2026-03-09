@@ -353,7 +353,7 @@ export default function RoomChatPage() {
       <div className="flex-1 overflow-hidden">
         <div className="w-full h-full flex flex-col">
           {/* Fixed Header */}
-          <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 px-4 sm:px-6 max-w-4xl mx-auto w-full">
+          <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
             <div className="flex items-center gap-3">
               <div className="space-y-1">
                 {/* Inline-editable room name */}
@@ -458,7 +458,7 @@ export default function RoomChatPage() {
       </div>
 
       <div className="bg-background p-4">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6">
+        <div className="max-w-4xl mx-auto">
           <RoomChatInput
             onSubmit={handleSendMessage}
             disableSend={sending || processing}

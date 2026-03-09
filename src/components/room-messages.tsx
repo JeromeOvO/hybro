@@ -261,7 +261,7 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
         onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
       >
-        <div className="py-4 min-h-full px-4 sm:px-6 max-w-4xl mx-auto">
+        <div className="py-4 min-h-full max-w-4xl mx-auto">
           {orderedIds.length === 0 ? (
             <EmptyState />
           ) : (
