@@ -55,8 +55,6 @@ PATCH = {
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
-    "webhooks.room_message_center": "api.webhooks.room_message_center",
-    "webhooks.notification_service": "api.webhooks.notification_service",
     # Agent group endpoints
     "agent_group.db_service": "api.agent_group.db_service",
     # Discovery endpoints

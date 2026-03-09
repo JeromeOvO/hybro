@@ -5,7 +5,7 @@ Tests cover:
 - Token validation (missing, invalid, task not found)
 - StreamResponse parsing (task, statusUpdate, message, artifactUpdate, raw fallback)
 - Idempotency (already-terminal tasks)
-- Background task scheduling (notify + resume)
+- WebhookTransport event normalization
 - Error handling
 """
 
@@ -18,8 +18,9 @@ from a2a.types import (
     Task, TaskState, TaskStatus, TaskStatusUpdateEvent,
     Artifact, Part, TextPart, Message,
 )
-from api.webhooks import handle_a2a_webhook, parse_stream_response
-from tests.conftest import PATCH
+from modules.agent_event import AgentEvent
+from modules.agent_response_handler import AgentResponseHandler
+from modules.transports.webhook import WebhookTransport, parse_stream_response
 
 
 # =============================================================================
@@ -79,13 +80,22 @@ class TestParseStreamResponse:
         assert result.artifacts is not None
         assert len(result.artifacts) == 1
 
-    def test_rejects_artifact_update_variant(self):
-        """Should raise 400 for unsupported artifactUpdate."""
-        payload = {"artifactUpdate": {"taskId": "task-004"}}
-        with pytest.raises(HTTPException) as exc:
-            parse_stream_response(payload, "msg-004")
-        assert exc.value.status_code == 400
-        assert "artifactUpdate" in exc.value.detail
+    def test_parses_artifact_update_variant(self):
+        """Should parse artifactUpdate as working Task with artifact."""
+        payload = {
+            "artifactUpdate": {
+                "taskId": "task-004",
+                "contextId": "ctx-004",
+                "artifact": {
+                    "artifactId": "art-004",
+                    "name": "streamed",
+                    "parts": [{"text": "chunk"}],
+                },
+            }
+        }
+        result = parse_stream_response(payload, "msg-004")
+        assert result.status.state == TaskState.working
+        assert len(result.artifacts) == 1
 
     def test_parses_raw_task_fallback(self):
         """Should parse raw Task (backwards compatibility)."""
@@ -114,293 +124,200 @@ class TestParseStreamResponse:
 
 
 # =============================================================================
-# handle_a2a_webhook Tests
+# WebhookTransport Tests
 # =============================================================================
 
 
-class TestHandleA2AWebhookAuth:
-    """Tests for webhook authentication."""
+def _make_webhook_transport(*, db=None, handler=None):
+    if handler is None:
+        handler = MagicMock(spec=AgentResponseHandler)
+        handler.handle = AsyncMock()
+    if db is None:
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    return WebhookTransport(response_handler=handler, db=db)
+
+
+def _make_tracked_message(room_id="room-001", state=None, agent_id="agent-001"):
+    msg = MagicMock()
+    msg.has_task_tracking = True
+    msg.room_id = room_id
+    msg.user_id = "user-001"
+    msg.agent_id = agent_id
+    msg.message_id = "msg-001"
+    msg.related_message_id = "user-msg-001"
+    msg.message_content = MagicMock()
+    if state:
+        task = MagicMock()
+        task.status.state = state
+        msg.message_content.message_task = task
+    else:
+        msg.message_content.message_task = None
+    return msg
+
+
+class TestWebhookTransportAuth:
+    """Tests for webhook authentication via WebhookTransport."""
 
     @pytest.mark.asyncio
-    async def test_rejects_missing_token(self, mock_db_service):
-        """Should raise 401 when both auth headers are empty."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={})
-        mock_bg = MagicMock()
-
+    async def test_rejects_missing_token(self):
+        wt = _make_webhook_transport()
         with pytest.raises(HTTPException) as exc:
-            await handle_a2a_webhook(
-                mock_request, "msg-001", mock_bg,
-                authorization="",
-                x_a2a_notification_token="",
-            )
+            await wt.handle_webhook("msg-001", {}, "")
         assert exc.value.status_code == 401
         assert "Missing" in exc.value.detail
 
     @pytest.mark.asyncio
-    async def test_rejects_invalid_token(self, mock_db_service):
-        """Should raise 401 when token hash doesn't match."""
-        mock_db_service.verify_webhook_token_for_task = AsyncMock(
-            return_value=(False, "invalid_token")
-        )
-        mock_request = MagicMock()
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer bad-token",
-                    x_a2a_notification_token="",
-                )
+    async def test_rejects_invalid_token(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(False, "invalid_token"))
+        wt = _make_webhook_transport(db=db)
+        with pytest.raises(HTTPException) as exc:
+            await wt.handle_webhook("msg-001", {}, "bad-token")
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_accepts_x_a2a_notification_token_header(self, mock_db_service):
-        """Should authenticate via X-A2A-Notification-Token (A2A spec header)."""
-        mock_db_service.verify_webhook_token_for_task = AsyncMock(
-            return_value=(False, "invalid_token")
-        )
-        mock_request = MagicMock()
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="",
-                    x_a2a_notification_token="my-opaque-token",
-                )
-        # Should reach token verification (not fail with "Missing")
-        assert exc.value.status_code == 401
-        assert "Invalid" in exc.value.detail
-
-    @pytest.mark.asyncio
-    async def test_x_a2a_token_takes_precedence_over_bearer(self, mock_db_service):
-        """X-A2A-Notification-Token should be preferred over Authorization: Bearer."""
-        captured_tokens = []
-
-        async def capture_token(message_id, token):
-            captured_tokens.append(token)
-            return (True, "")
-
-        mock_db_service.verify_webhook_token_for_task = capture_token
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "task": {"id": "t1", "contextId": "c1", "status": {"state": "working"}}
-        })
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException):
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer legacy-token",
-                    x_a2a_notification_token="a2a-spec-token",
-                )
-        assert captured_tokens[0] == "a2a-spec-token"
-
-    @pytest.mark.asyncio
-    async def test_returns_404_when_task_not_found(self, mock_db_service):
-        """Should raise 404 when task doesn't exist (race condition)."""
-        mock_db_service.verify_webhook_token_for_task = AsyncMock(
-            return_value=(False, "task_not_found")
-        )
-        mock_request = MagicMock()
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer some-token",
-                    x_a2a_notification_token="",
-                )
+    async def test_returns_404_when_task_not_found(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(False, "task_not_found"))
+        wt = _make_webhook_transport(db=db)
+        with pytest.raises(HTTPException) as exc:
+            await wt.handle_webhook("msg-001", {}, "some-token")
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_returns_500_on_verification_error(self, mock_db_service):
-        """Should raise 500 on unexpected verification error."""
-        mock_db_service.verify_webhook_token_for_task = AsyncMock(
-            return_value=(False, "db_error")
-        )
-        mock_request = MagicMock()
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer some-token",
-                    x_a2a_notification_token="",
-                )
+    async def test_returns_500_on_verification_error(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(False, "db_error"))
+        wt = _make_webhook_transport(db=db)
+        with pytest.raises(HTTPException) as exc:
+            await wt.handle_webhook("msg-001", {}, "some-token")
         assert exc.value.status_code == 500
 
 
-class TestHandleA2AWebhookFlow:
+class TestWebhookTransportFlow:
     """Tests for webhook processing flow after auth."""
 
-    def _setup_valid_auth(self, mock_db_service):
-        mock_db_service.verify_webhook_token_for_task = AsyncMock(
-            return_value=(True, None)
-        )
-
-    def _make_tracked_message(self, room_id="room-001", state=None, agent_id="agent-001"):
-        """Create a mock agent message with task tracking."""
-        msg = MagicMock()
-        msg.has_task_tracking = True
-        msg.room_id = room_id
-        msg.user_id = "user-001"
-        msg.agent_id = agent_id
-        msg.related_message_id = "user-msg-001"
-        msg.step_number = 1
-        msg.total_steps = 3
-        msg.task_created_at = None
-        msg.task_content = None
-        msg.message_content = MagicMock()
-        if state:
-            task = MagicMock()
-            task.status.state = state
-            msg.message_content.message_task = task
-        else:
-            msg.message_content.message_task = None
-        return msg
-
     @pytest.mark.asyncio
-    async def test_accepts_valid_webhook(self, mock_db_service):
-        """Should accept valid webhook and schedule background tasks."""
-        self._setup_valid_auth(mock_db_service)
+    async def test_accepts_valid_webhook(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        msg = _make_tracked_message()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
+        wt = _make_webhook_transport(db=db)
+        payload = {
             "task": {
                 "id": "task-001",
                 "contextId": "ctx-001",
                 "status": {"state": "completed"},
                 "artifacts": [{"artifactId": "a1", "name": "r", "parts": [{"text": "done"}]}],
             }
-        })
-
-        msg = self._make_tracked_message()
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
-        mock_db_service.update_task_on_message = AsyncMock(return_value=True)
-        mock_db_service.update_last_notified_state = AsyncMock(return_value=True)
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            result = await handle_a2a_webhook(
-                mock_request, "msg-001", mock_bg,
-                authorization="Bearer valid-token",
-                x_a2a_notification_token="",
-            )
-
+        }
+        result = await wt.handle_webhook("msg-001", payload, "valid-token")
         assert result["status"] == "accepted"
-        mock_db_service.update_task_on_message.assert_called_once()
-        assert mock_bg.add_task.call_count >= 1
+        wt.response_handler.handle.assert_awaited_once()
+        event = wt.response_handler.handle.call_args[0][0]
+        assert isinstance(event, AgentEvent)
+        assert event.kind == "response"
 
     @pytest.mark.asyncio
-    async def test_skips_already_terminal_task(self, mock_db_service):
-        """Should return 'already_terminal' without updating for completed tasks."""
-        self._setup_valid_auth(mock_db_service)
+    async def test_skips_already_terminal_task(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        msg = _make_tracked_message(state=TaskState.completed)
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
+        wt = _make_webhook_transport(db=db)
+        payload = {
             "task": {
                 "id": "task-001",
                 "contextId": "ctx-001",
                 "status": {"state": "working"},
             }
-        })
-
-        msg = self._make_tracked_message(state=TaskState.completed)
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            result = await handle_a2a_webhook(
-                mock_request, "msg-001", mock_bg,
-                authorization="Bearer valid-token",
-                x_a2a_notification_token="",
-            )
-
+        }
+        result = await wt.handle_webhook("msg-001", payload, "valid-token")
         assert result["status"] == "already_terminal"
-        mock_db_service.update_task_on_message = AsyncMock()
-        mock_db_service.update_task_on_message.assert_not_called()
+        wt.response_handler.handle.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_returns_404_when_message_has_no_tracking(self, mock_db_service):
-        """Should raise 404 when message exists but has no task tracking."""
-        self._setup_valid_auth(mock_db_service)
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "task": {
-                "id": "task-001",
-                "contextId": "ctx-001",
-                "status": {"state": "working"},
-            }
-        })
-
+    async def test_returns_404_when_no_tracking(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
         msg = MagicMock()
         msg.has_task_tracking = False
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
-        mock_bg = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
 
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer valid-token",
-                    x_a2a_notification_token="",
-                )
+        wt = _make_webhook_transport(db=db)
+        payload = {
+            "task": {"id": "t-1", "contextId": "c-1", "status": {"state": "working"}}
+        }
+        with pytest.raises(HTTPException) as exc:
+            await wt.handle_webhook("msg-001", payload, "valid-token")
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_raises_400_for_invalid_payload(self, mock_db_service):
-        """Should raise 400 when payload cannot be parsed."""
-        self._setup_valid_auth(mock_db_service)
+    async def test_raises_400_for_invalid_payload(self):
+        db = MagicMock()
+        db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
+        msg = _make_tracked_message()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"garbage": True})
-
-        msg = self._make_tracked_message()
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
-        mock_bg = MagicMock()
-
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer valid-token",
-                    x_a2a_notification_token="",
-                )
+        wt = _make_webhook_transport(db=db)
+        with pytest.raises(HTTPException) as exc:
+            await wt.handle_webhook("msg-001", {"garbage": True}, "valid-token")
         assert exc.value.status_code == 400
 
-    @pytest.mark.asyncio
-    async def test_raises_500_on_db_update_failure(self, mock_db_service):
-        """Should raise 500 when database update fails."""
-        self._setup_valid_auth(mock_db_service)
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={
-            "task": {
-                "id": "task-001",
-                "contextId": "ctx-001",
-                "status": {"state": "working"},
-            }
-        })
+class TestWebhookTransportNormalize:
+    """Tests for _task_to_event normalization."""
 
-        msg = self._make_tracked_message()
-        mock_db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
-        mock_db_service.update_task_on_message = AsyncMock(return_value=False)
-        mock_bg = MagicMock()
+    def _make_task(self, state="completed", artifacts=None):
+        return Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(state=TaskState(state)),
+            artifacts=artifacts,
+        )
 
-        with patch(PATCH["webhooks.db_service"], mock_db_service):
-            with pytest.raises(HTTPException) as exc:
-                await handle_a2a_webhook(
-                    mock_request, "msg-001", mock_bg,
-                    authorization="Bearer valid-token",
-                    x_a2a_notification_token="",
-                )
-        assert exc.value.status_code == 500
+    def test_completed_task(self):
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = self._make_task("completed", [
+            Artifact(artifact_id="a1", name="r", parts=[TextPart(text="done")])
+        ])
+        event = wt._task_to_event(task, msg)
+        assert event.kind == "response"
+        assert event.text == "done"
+        assert event.send_processing_status is True
+
+    def test_failed_task(self):
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = self._make_task("failed")
+        event = wt._task_to_event(task, msg)
+        assert event.kind == "error"
+        assert event.state == "failed"
+
+    def test_canceled_task(self):
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = self._make_task("canceled")
+        event = wt._task_to_event(task, msg)
+        assert event.kind == "canceled"
+
+    def test_interactive_task(self):
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = self._make_task("input-required")
+        event = wt._task_to_event(task, msg)
+        assert event.kind == "interactive"
+        assert event.state == "input-required"
+
+    def test_working_task(self):
+        wt = _make_webhook_transport()
+        msg = _make_tracked_message()
+        task = self._make_task("working")
+        event = wt._task_to_event(task, msg)
+        assert event.kind == "status_update"

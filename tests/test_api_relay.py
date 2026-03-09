@@ -26,6 +26,9 @@ from models.hub import (
     RelayToHubEvent,
 )
 from models.room import MessageContent, Room, RoomAgentMessage
+from modules.agent_event import AgentEvent
+from modules.agent_response_handler import AgentResponseHandler
+from modules.transports.relay import RelayTransport
 from services.relay_service import RelayService
 from tests.conftest import FROZEN_TIME
 
@@ -82,6 +85,8 @@ def _make_relay_service(
         db_service.get_room_by_room_id = AsyncMock(return_value=None)
         db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
         db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
+        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.is_message_cancelled = AsyncMock(return_value=False)
         db_service.ai_service.get_embedding = AsyncMock(return_value=[0.0] * 128)
         db_service.pinecone.upsert = MagicMock()
     if sse_manager is None:
@@ -92,11 +97,24 @@ def _make_relay_service(
         sse_manager.send_processing_status = AsyncMock()
         sse_manager.send_error = AsyncMock()
 
-    return RelayService(
+    svc = RelayService(
         mongo=mongo,
         database_service=db_service,
         sse_manager=sse_manager,
     )
+
+    # Wire up RelayTransport for publish event delegation
+    handler = MagicMock(spec=AgentResponseHandler)
+    handler.handle = AsyncMock()
+    relay_transport = RelayTransport(
+        response_handler=handler,
+        relay_service=svc,
+        db=db_service,
+        sse_manager=sse_manager,
+    )
+    svc.set_relay_transport(relay_transport)
+
+    return svc
 
 
 # ===========================================================================
@@ -400,6 +418,8 @@ class TestRelayServicePublish:
             return_value=agent_msg
         )
         db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
+        db_service.update_task_state_on_message = AsyncMock(return_value=True)
+        db_service.is_message_cancelled = AsyncMock(return_value=False)
 
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
@@ -420,14 +440,15 @@ class TestRelayServicePublish:
 
         with patch("services.relay_service.settings") as ms:
             ms.relay_connection_token_secret = secret
-            with patch(
-                "services.relay_service.RelayService._resume_orchestration",
-                new_callable=AsyncMock,
-            ):
-                await svc.process_publish("hub-001", request, token)
+            await svc.process_publish("hub-001", request, token)
 
-        sse.send_agent_response.assert_awaited_once()
-        db_service.update_room_agent_message_by_message_id.assert_awaited_once()
+        # RelayTransport delegates to AgentResponseHandler.handle()
+        handler = svc._relay_transport.response_handler
+        handler.handle.assert_awaited_once()
+        event = handler.handle.call_args[0][0]
+        assert isinstance(event, AgentEvent)
+        assert event.kind == "response"
+        assert event.text == "Hello from hub!"
 
 
 # ===========================================================================
@@ -448,3 +469,217 @@ class TestRelayServiceStatus:
         assert len(result) == 1
         assert result[0].hub_id == "hub-001"
         assert result[0].agent_count == 3
+
+
+# ===========================================================================
+# RelayTransport — Normalization
+# ===========================================================================
+
+
+def _make_relay_transport(*, handler=None, db_service=None, sse_manager=None):
+    handler = handler or MagicMock(spec=AgentResponseHandler)
+    handler.handle = AsyncMock()
+    relay_svc = MagicMock()
+    if db_service is None:
+        db_service = MagicMock()
+        db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+        db_service.is_message_cancelled = AsyncMock(return_value=False)
+    if sse_manager is None:
+        sse_manager = MagicMock()
+    return RelayTransport(
+        response_handler=handler,
+        relay_service=relay_svc,
+        db=db_service,
+        sse_manager=sse_manager,
+    )
+
+
+def _make_msg(
+    room_id="room-1", message_id="amsg-001", agent_id="agent-001",
+    related_message_id="umsg-001", user_id="user-001",
+):
+    return RoomAgentMessage(
+        room_id=room_id,
+        message_id=message_id,
+        agent_id=agent_id,
+        related_message_id=related_message_id,
+        user_id=user_id,
+        message_content=MessageContent(message_text=""),
+    )
+
+
+class TestRelayTransportNormalize:
+    def test_agent_token(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("agent_token", "amsg-001", {"token": "hi"}, msg)
+        assert event is not None
+        assert event.kind == "token"
+        assert event.text == "hi"
+
+    def test_agent_response(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("agent_response", "amsg-001", {"content": "done"}, msg)
+        assert event is not None
+        assert event.kind == "response"
+        assert event.text == "done"
+
+    def test_agent_error(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("agent_error", "amsg-001", {"error": "boom"}, msg)
+        assert event is not None
+        assert event.kind == "error"
+        assert event.error_text == "boom"
+        assert event.state == "failed"
+
+    def test_task_submitted(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_submitted", "amsg-001",
+            {"task_id": "t-1", "agent_name": "Agent X"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "task_submitted"
+        assert event.task_id == "t-1"
+        assert event.agent_name == "Agent X"
+
+    def test_artifact_update(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "artifact_update", "amsg-001",
+            {"text": "chunk", "artifact": {"id": "a1"}}, msg,
+        )
+        assert event is not None
+        assert event.kind == "artifact_update"
+        assert event.text == "chunk"
+        assert event.artifacts == [{"id": "a1"}]
+
+    def test_task_status_completed(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "completed", "status_text": "all done"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "response"
+        assert event.text == "all done"
+
+    def test_task_status_failed(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "failed", "status_text": "oops"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "error"
+        assert event.error_text == "oops"
+
+    def test_task_status_canceled(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "canceled", "status_text": ""}, msg,
+        )
+        assert event is not None
+        assert event.kind == "canceled"
+
+    def test_task_status_interactive(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "input-required", "status_text": "need input"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "interactive"
+
+    def test_task_status_working(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "working", "status_text": "still going"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "status_update"
+
+    def test_task_interactive(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_interactive", "amsg-001",
+            {"state": "input-required", "status_text": "need info", "task_id": "t-1"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "interactive"
+        assert event.task_id == "t-1"
+
+    def test_processing_status(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "processing_status", "amsg-001",
+            {"status": "completed", "user_message_id": "umsg-001", "details": "done"}, msg,
+        )
+        assert event is not None
+        assert event.kind == "processing_status"
+        assert event.details == "done"
+
+    def test_unknown_event_returns_none(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("unknown_type", "amsg-001", {}, msg)
+        assert event is None
+
+    def test_unknown_task_state_returns_none(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "task_status", "amsg-001",
+            {"state": "not-a-state"}, msg,
+        )
+        assert event is None
+
+
+class TestRelayTransportHandlePublish:
+    @pytest.mark.asyncio
+    async def test_discards_cancelled_message(self):
+        db = MagicMock()
+        msg = _make_msg()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=True)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event("agent_token", "amsg-001", {"token": "hi"}, "room-1")
+        rt.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unknown_message_ignored(self):
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event("agent_token", "amsg-999", {"token": "hi"}, "room-1")
+        rt.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_handler(self):
+        db = MagicMock()
+        msg = _make_msg()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event("agent_response", "amsg-001", {"content": "hi"}, "room-1")
+
+        rt.response_handler.handle.assert_awaited_once()
+        event = rt.response_handler.handle.call_args[0][0]
+        assert event.kind == "response"
+        assert event.text == "hi"

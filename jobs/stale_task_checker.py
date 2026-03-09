@@ -208,7 +208,7 @@ class StaleTaskChecker:
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending"):
+        if agent_task_id.startswith("pending") or agent_task_id.startswith("relay-pending"):
             logger.warning(
                 f"Task for message {message_id} never acknowledged, marking failed"
             )

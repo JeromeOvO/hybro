@@ -1406,12 +1406,14 @@ class DatabaseService:
             True if updated successfully
         """
         try:
-            terminal_values = ["completed", "failed", "canceled", "rejected"]
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
             set_fields: dict = {
                 "message_content.message_task": task_data,
                 "task_updated_at": utcnow(),
             }
-            if message_text:
+            if message_text is not None:
                 set_fields["message_content.message_text"] = message_text
             result = await self.mongo.room_agent_messages_collection.update_one(
                 {
@@ -1430,6 +1432,73 @@ class DatabaseService:
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update task on message {message_id}: {str(e)}")
+            return False
+
+    async def update_task_state_on_message(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> bool:
+        """Partial update of task fields on a room agent message using dot-notation.
+
+        Unlike ``update_task_on_message`` which replaces the entire task object,
+        this method only updates the specific fields provided, preserving all
+        other existing task fields (``id``, ``contextId``, ``kind``, etc.).
+
+        Includes the same atomic terminal-state guard.
+
+        Args:
+            message_id: The message ID.
+            state: The new task state value (e.g. ``"completed"``).
+            message_text: Optional text to persist for frontend hydration.
+            artifacts: Optional artifacts list to set on the task.
+            task_id: Optional override for the task ``id`` field.
+            context_id: Optional override for the task ``contextId`` field.
+
+        Returns:
+            True if updated successfully.
+        """
+        try:
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+            set_fields: dict = {
+                "message_content.message_task.status.state": state,
+                "task_updated_at": utcnow(),
+            }
+            if message_text is not None:
+                set_fields["message_content.message_text"] = message_text
+            if artifacts is not None:
+                set_fields["message_content.message_task.artifacts"] = artifacts
+            if task_id is not None:
+                set_fields["message_content.message_task.id"] = task_id
+            if context_id is not None:
+                set_fields["message_content.message_task.contextId"] = context_id
+
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
+                },
+                {"$set": set_fields},
+            )
+            if result.matched_count == 0:
+                logger.debug(
+                    "update_task_state_on_message: skipped %s (already terminal or not found)",
+                    message_id,
+                )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to update task state on message %s: %s", message_id, e
+            )
             return False
 
     # room memory management

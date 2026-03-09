@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from models.agent import Agent
     from modules.ResponseProcessor import ResponseProcessor
     from modules.TaskStateManager import TaskStateManager
+    from modules.transports.direct import DirectTransport
+    from modules.transports.relay import RelayTransport
     from services.a2a_service import A2AService
     from services.database_service import DatabaseService
     from services.relay_service import RelayService
@@ -57,6 +59,8 @@ class AgentMessageProcessor:
         room_services: RoomServices,
         database_service: DatabaseService,
         relay_service: RelayService | None = None,
+        relay_transport: RelayTransport | None = None,
+        direct_transport: DirectTransport | None = None,
         dispatch_chain: DispatchChain | None = None,
     ) -> None:
         self.tsm = tsm
@@ -65,10 +69,13 @@ class AgentMessageProcessor:
         self.a2a_service = a2a_service
         self.room_services = room_services
         self.database_service = database_service
+        self.direct_transport: DirectTransport | None = direct_transport
         self._relay_service_explicit = relay_service
+        self._relay_transport_explicit = relay_transport
         self._dispatch_chain_explicit = dispatch_chain
         self._lazy_initialized = False
         self.relay_service: RelayService | None = relay_service
+        self.relay_transport: RelayTransport | None = relay_transport
         self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()
 
     def _ensure_relay_initialized(self) -> None:
@@ -94,6 +101,15 @@ class AgentMessageProcessor:
                     chain = DispatchChain()
                     chain.add(HubTransportMiddleware(_svc))
                     self.dispatch_chain = chain
+                if self._relay_transport_explicit is None and self.relay_transport is None:
+                    from modules.transports.relay import RelayTransport as _RT
+                    from modules.agent_response_handler import AgentResponseHandler
+                    from services.database_service import db_service
+                    from services.sse_services import sse_manager as _sse
+                    from modules.RoomMessageCenter import room_message_center as _rmc
+                    handler = AgentResponseHandler(db_service, _sse, _rmc)
+                    self.relay_transport = _RT(handler, _svc, db_service, _sse)
+                    _svc.set_relay_transport(self.relay_transport)
                 logger.info("AgentMessageProcessor: relay_service resolved lazily")
         except Exception:
             pass
@@ -174,11 +190,38 @@ class AgentMessageProcessor:
         ctx: DispatchContext,
         current_message: RoomAgentMessage,
     ) -> ProcessingResult:
+        if self.relay_transport is not None:
+            result = await self.relay_transport.dispatch(ctx, current_message)
+            return await self.dispatch_chain.run_post_dispatch(ctx, result)
+
         if not self.relay_service:
             logger.error(
                 "Relay transport selected but relay_service not available"
             )
             return ProcessingResult(ProcessingStatus.FAILED, "Relay service unavailable")
+
+        from common.utils.time import utcnow as _utcnow
+
+        now = _utcnow()
+        task_data = {
+            "id": f"relay-pending-{current_message.message_id[:12]}",
+            "status": {"state": "submitted"},
+            "context_id": current_message.message_id,
+        }
+        agent_url = ""
+        if hasattr(ctx.agent, "agent_card") and hasattr(ctx.agent.agent_card, "url"):
+            agent_url = ctx.agent.agent_card.url or ""
+        elif hasattr(ctx.agent, "agent_card") and isinstance(ctx.agent.agent_card, dict):
+            agent_url = ctx.agent.agent_card.get("url", "")
+
+        await self.database_service.enable_task_tracking_on_message(
+            message_id=current_message.message_id,
+            webhook_token_hash="",
+            agent_url=agent_url,
+            task_created_at=now,
+            task_updated_at=now,
+            task_data=task_data,
+        )
 
         event = RelayToHubEvent(
             type="user_message",
@@ -229,7 +272,7 @@ class AgentMessageProcessor:
             agent_card=agent.agent_card
         )
 
-        rp = self.response_processor
+        rp = self.direct_transport.response_processor if self.direct_transport else self.response_processor
         full_response_text = ""
         paused_message_id = None
         if support_streaming:

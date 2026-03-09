@@ -59,6 +59,8 @@ class MessageStreamingState:
     inline_conversion_count: int = 0
     agent_message_id: str | None = None
     message_added_to_history: bool = False
+    stream_finalized: bool = False
+    final_state: TaskState | None = None
 
 
 class ResponseProcessor:
@@ -479,6 +481,11 @@ class ResponseProcessor:
                     await self._handle_stream_artifact_update(
                         result, ctx, streaming_state
                     )
+                case _:
+                    logger.warning(
+                        "ResponseProcessor: Unknown streaming event kind '%s' for message %s",
+                        result.kind, ctx.user_message_id,
+                    )
 
         return await self._finalize_streaming(ctx, streaming_state)
 
@@ -611,11 +618,17 @@ class ResponseProcessor:
     ) -> None:
         """Handle a 'status-update' event during streaming."""
         state = result.status.state
+        is_final = getattr(result, "final", False)
         logger.info(
-            "ResponseProcessor: Status update for message %s: %s",
+            "ResponseProcessor: Status update for message %s: %s (final=%s)",
             ctx.current_message.message_id,
             state,
+            is_final,
         )
+
+        if is_final:
+            streaming_state.stream_finalized = True
+            streaming_state.final_state = state
 
         a2a_status_message_text: str | None = None
         if result.status.message:
@@ -772,21 +785,80 @@ class ResponseProcessor:
                 )
 
         if task and not already_terminal:
-            if streaming_state.full_response_text:
+            if streaming_state.stream_finalized:
+                final_st = streaming_state.final_state or TaskState.completed
+                if is_failure_state(final_st):
+                    if streaming_state.full_response_text:
+                        ctx.current_message.message_content.message_text = (
+                            streaming_state.full_response_text
+                        )
+                    await self.tsm.transition_task(
+                        ctx.current_message, final_st, persist=True
+                    )
+                    await notify_task_update(
+                        message_id=ctx.current_message.message_id,
+                        state=final_st,
+                        room_id=ctx.room_id,
+                        user_id=ctx.current_message.user_id or "",
+                    )
+                    return ProcessingStatus.FAILED, streaming_state.full_response_text
+                elif final_st in INTERACTIVE_STATES:
+                    await self.tsm.transition_task(
+                        ctx.current_message, final_st, persist=True
+                    )
+                    await notify_task_update(
+                        message_id=ctx.current_message.message_id,
+                        state=final_st,
+                        room_id=ctx.room_id,
+                        user_id=ctx.current_message.user_id or "",
+                    )
+                    return ProcessingStatus.SUCCESS, streaming_state.full_response_text
+                else:
+                    if streaming_state.full_response_text:
+                        ctx.current_message.message_content.message_text = (
+                            streaming_state.full_response_text
+                        )
+                    await self.tsm.transition_task(
+                        ctx.current_message, TaskState.completed, persist=True
+                    )
+                    await notify_task_update(
+                        message_id=ctx.current_message.message_id,
+                        state=TaskState.completed,
+                        room_id=ctx.room_id,
+                        user_id=ctx.current_message.user_id or "",
+                    )
+            elif streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
                 )
-            await self.tsm.transition_task(
-                ctx.current_message,
-                TaskState.completed,
-                persist=True,
-            )
-            await notify_task_update(
-                message_id=ctx.current_message.message_id,
-                state=TaskState.completed,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-            )
+                await self.tsm.transition_task(
+                    ctx.current_message,
+                    TaskState.completed,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=ctx.current_message.message_id,
+                    state=TaskState.completed,
+                    room_id=ctx.room_id,
+                    user_id=ctx.current_message.user_id or "",
+                )
+            else:
+                logger.warning(
+                    "ResponseProcessor: Stream ended without terminal status or content for %s",
+                    ctx.current_message.message_id,
+                )
+                await self.tsm.transition_task(
+                    ctx.current_message,
+                    TaskState.failed,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=ctx.current_message.message_id,
+                    state=TaskState.failed,
+                    room_id=ctx.room_id,
+                    user_id=ctx.current_message.user_id or "",
+                )
+                return ProcessingStatus.FAILED, streaming_state.full_response_text
 
         if already_terminal:
             final_state = task.status.state

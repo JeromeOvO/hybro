@@ -15,7 +15,7 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from common.utils.connection_token import (
@@ -79,6 +79,13 @@ class RelayService:
 
         self._heartbeat_task: asyncio.Task | None = None
         self._shutdown = False
+
+        # Set by RoomMessageCenter after RelayTransport is constructed
+        self._relay_transport: Any | None = None
+
+    def set_relay_transport(self, transport: Any) -> None:
+        """Wire up the RelayTransport so publish events can be delegated."""
+        self._relay_transport = transport
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -479,99 +486,55 @@ class RelayService:
         data: dict,
         room_id: str,
     ) -> None:
-        msg = await self._db.get_room_agent_message_by_message_id(
-            agent_message_id
+        """Delegate to RelayTransport for event normalization and handling."""
+        if self._relay_transport is None:
+            logger.error(
+                "RelayTransport not set — cannot process publish event %s",
+                event_type,
+            )
+            return
+        await self._relay_transport.handle_publish_event(
+            event_type, agent_message_id, data, room_id,
         )
-        if not msg:
-            logger.warning(
-                "Publish event for unknown agent_message_id %s", agent_message_id
-            )
-            return
 
-        if msg.room_id != room_id:
-            logger.warning(
-                "agent_message_id %s belongs to room %s, not %s",
-                agent_message_id, msg.room_id, room_id,
-            )
-            return
+    # ------------------------------------------------------------------
+    # Relay task operations (cancel + HITL reply)
+    # ------------------------------------------------------------------
 
-        if event_type == "task_submitted":
-            await self._sse.send_task_submitted(
-                room_id=room_id,
-                message_id=agent_message_id,
-                task_id=data.get("task_id", ""),
-                agent_name=data.get("agent_name", ""),
-                agent_id=msg.agent_id,
-                status="working",
-                related_message_id=msg.related_message_id,
-            )
+    async def cancel_relay_task(
+        self, hub_id: str, agent_message_id: str, local_agent_id: str,
+        task_id: str | None = None,
+    ) -> bool:
+        """Push a cancel_task event to the hub for an in-flight task."""
+        event = RelayToHubEvent(
+            type="cancel_task",
+            agent_message_id=agent_message_id,
+            local_agent_id=local_agent_id,
+            task_id=task_id,
+        )
+        return await self.push_to_hub(hub_id, event)
 
-        elif event_type == "agent_token":
-            await self._sse.send_agent_token(
-                room_id=room_id,
-                message_id=agent_message_id,
-                agent_id=msg.agent_id or "",
-                token=data.get("token", ""),
-            )
-
-        elif event_type == "agent_response":
-            response_text = data.get("content", "")
-            parts = data.get("parts")
-            # Update the pre-created RoomAgentMessage
-            if msg.message_content:
-                msg.message_content.message_text = response_text
-                # Transition task status to completed so DB hydration renders
-                # the message as an agent-bubble instead of a task-status card.
-                task = msg.message_content.message_task
-                if task and task.status:
-                    from a2a.types import TaskState, TaskStatus
-                    from services.a2a_constants import is_terminal_state
-
-                    if not is_terminal_state(task.status.state):
-                        task.status = TaskStatus(state=TaskState.completed)
-            await self._db.update_room_agent_message_by_message_id(
-                agent_message_id, msg
-            )
-            await self._sse.send_agent_response(
-                room_id=room_id,
-                message_id=agent_message_id,
-                agent_id=msg.agent_id or "",
-                content=response_text,
-                related_message_id=msg.related_message_id,
-                parts=parts,
-            )
-            # Resume orchestration
-            await self._resume_orchestration(agent_message_id, response_text)
-
-        elif event_type == "processing_status":
-            await self._sse.send_processing_status(
-                room_id=room_id,
-                status=data.get("status", "completed"),
-                message_id=data.get("user_message_id"),
-                details=data.get("details"),
-            )
-
-    async def _resume_orchestration(
-        self, agent_message_id: str, response_text: str
-    ) -> None:
-        """Resume paused queue/supervisor orchestration after hub publishes a response."""
-        from modules.RoomMessageCenter import room_message_center
-
-        try:
-            resumed = await room_message_center.resume_queue_from_continuation(
-                message_id=agent_message_id,
-                task_result_text=response_text,
-            )
-            if resumed:
-                logger.info(
-                    "Orchestration resumed for agent_message %s",
-                    agent_message_id,
-                )
-        except Exception:
-            logger.exception(
-                "Failed to resume orchestration for agent_message %s",
-                agent_message_id,
-            )
+    async def reply_to_relay_task(
+        self,
+        hub_id: str,
+        agent_message_id: str,
+        local_agent_id: str,
+        reply_text: str,
+        room_id: str,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> bool:
+        """Push a user_reply event to the hub for a HITL interaction."""
+        event = RelayToHubEvent(
+            type="user_reply",
+            room_id=room_id,
+            agent_message_id=agent_message_id,
+            local_agent_id=local_agent_id,
+            reply_text=reply_text,
+            task_id=task_id,
+            context_id=context_id,
+        )
+        return await self.push_to_hub(hub_id, event)
 
     # ------------------------------------------------------------------
     # Hub status
