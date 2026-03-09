@@ -81,12 +81,17 @@ class RelayService:
         self._heartbeat_task: asyncio.Task | None = None
         self._shutdown = False
 
-        # Set by RoomMessageCenter after RelayTransport is constructed
+        # Set eagerly by init_relay_service(); must not be None at request time.
         self._relay_transport: Any | None = None
 
     def set_relay_transport(self, transport: Any) -> None:
         """Wire up the RelayTransport so publish events can be delegated."""
         self._relay_transport = transport
+
+    @property
+    def relay_transport(self) -> Any | None:
+        """Public read accessor for the eagerly-initialised transport."""
+        return self._relay_transport
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -360,8 +365,18 @@ class RelayService:
         # _disconnect_hub can atomically clear them later.  sync_agents
         # creates/updates agents without hub_connection_id, so this sweep
         # ensures every agent is tagged with the current connection.
-        current_conn_id = hub_doc.get("connection_id")
-        if current_conn_id and hub_id in self._hub_queues:
+        #
+        # Re-read the hub doc to get the *current* connection_id.  If a
+        # reconnect happened during this (potentially slow) sync, the
+        # snapshotted connection_id is stale and stamping it would
+        # overwrite the new session's stamp, leaving agents stuck online.
+        fresh_hub = await self._mongo.get_hub(hub_id)
+        current_conn_id = fresh_hub.get("connection_id") if fresh_hub else None
+        if (
+            current_conn_id
+            and current_conn_id == hub_doc.get("connection_id")
+            and hub_id in self._hub_queues
+        ):
             await self._mongo.set_hub_agents_online_status(
                 hub_id, True, connection_id=current_conn_id
             )
@@ -523,7 +538,8 @@ class RelayService:
         # 3. Process events
         for ev in request.events:
             await self._process_single_publish_event(
-                ev.type, ev.agent_message_id, ev.data, request.room_id
+                ev.type, ev.agent_message_id, ev.data, request.room_id,
+                hub_id,
             )
 
     async def _process_single_publish_event(
@@ -532,16 +548,16 @@ class RelayService:
         agent_message_id: str,
         data: dict,
         room_id: str,
+        hub_id: str,
     ) -> None:
         """Delegate to RelayTransport for event normalization and handling."""
         if self._relay_transport is None:
-            logger.error(
-                "RelayTransport not set — cannot process publish event %s",
-                event_type,
+            raise RuntimeError(
+                f"RelayTransport not set — cannot process publish event {event_type}. "
+                "This indicates init_relay_service() was not called at startup."
             )
-            return
         await self._relay_transport.handle_publish_event(
-            event_type, agent_message_id, data, room_id,
+            event_type, agent_message_id, data, room_id, hub_id,
         )
 
     # ------------------------------------------------------------------
@@ -660,6 +676,7 @@ def init_relay_service(
     mongo: MongoDB,
     database_service: DatabaseService,
     sse_manager: SSEManager,
+    room_message_center: object,
 ) -> RelayService:
     global relay_service
     if not settings.relay_connection_token_secret:
@@ -667,9 +684,25 @@ def init_relay_service(
             "RELAY_CONNECTION_TOKEN_SECRET is empty — hub /publish "
             "authentication will reject all requests until a secret is set"
         )
-    relay_service = RelayService(
+    svc = RelayService(
         mongo=mongo,
         database_service=database_service,
         sse_manager=sse_manager,
     )
-    return relay_service
+
+    from modules.agent_response_handler import AgentResponseHandler
+    from modules.transports.relay import RelayTransport
+
+    handler = AgentResponseHandler(
+        db=database_service, sse=sse_manager, room_message_center=room_message_center,
+    )
+    transport = RelayTransport(
+        response_handler=handler,
+        relay_service=svc,
+        db=database_service,
+        sse_manager=sse_manager,
+    )
+    svc.set_relay_transport(transport)
+
+    relay_service = svc
+    return svc

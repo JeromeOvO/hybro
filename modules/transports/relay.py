@@ -128,6 +128,7 @@ class RelayTransport(AgentTransport):
         agent_message_id: str,
         data: dict,
         room_id: str,
+        hub_id: str,
     ) -> None:
         """Called when hub publishes a result back. Normalize and delegate."""
         msg = await self._db.get_room_agent_message_by_message_id(agent_message_id)
@@ -141,6 +142,25 @@ class RelayTransport(AgentTransport):
             logger.warning(
                 "agent_message_id %s belongs to room %s, not %s",
                 agent_message_id, msg.room_id, room_id,
+            )
+            return
+
+        if not msg.agent_id:
+            logger.warning(
+                "Publish event for agent_message_id %s has no agent_id",
+                agent_message_id,
+            )
+            return
+
+        agent = await self._db.get_agent_by_agent_id(msg.agent_id)
+        if not agent or agent.hub_id != hub_id:
+            logger.warning(
+                "agent_message_id %s: agent %s belongs to hub %s, "
+                "not authenticated hub %s — rejecting",
+                agent_message_id,
+                msg.agent_id,
+                agent.hub_id if agent else "unknown",
+                hub_id,
             )
             return
 

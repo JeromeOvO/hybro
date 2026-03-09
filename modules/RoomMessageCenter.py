@@ -25,7 +25,6 @@ from modules.QueueExecutor import QueueExecutor, QueueResult
 from modules.transports.direct import DirectTransport
 from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
-from modules.transports.relay import RelayTransport
 from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_resolver_service import agent_resolver_service
@@ -75,12 +74,9 @@ class RoomMessageCenter:
             database_service=self.database_service,
         )
 
-        # Relay service + dispatch middleware
-        # NOTE: relay_service is None at import time (initialized in main.py
-        # lifespan).  AgentMessageProcessor resolves it lazily on first use.
-        self._relay_service = None
-        self._relay_transport: RelayTransport | None = None
-
+        # Relay service + dispatch middleware are initialized eagerly in
+        # init_relay_service().  AgentMessageProcessor resolves the singleton
+        # lazily on first use and registers the already-built transport.
         self.agent_message_processor = AgentMessageProcessor(
             sse_manager=self.sse_manager,
             room_services=self.room_services,

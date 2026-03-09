@@ -68,6 +68,9 @@ class AgentMessageProcessor:
         At module-import time the relay_service singleton is still ``None``
         because ``init_relay_service()`` runs during the FastAPI lifespan.
         This method re-checks on first call and wires up the middleware.
+
+        The ``RelayTransport`` itself is constructed eagerly inside
+        ``init_relay_service()``, so we only need to register it here.
         """
         if self._lazy_initialized:
             return
@@ -85,16 +88,8 @@ class AgentMessageProcessor:
                     chain = DispatchChain()
                     chain.add(HubTransportMiddleware(_svc))
                     self.dispatch_chain = chain
-                if "relay" not in self.transports:
-                    from modules.transports.relay import RelayTransport as _RT
-                    from modules.agent_response_handler import AgentResponseHandler
-                    from services.database_service import db_service
-                    from services.sse_services import sse_manager as _sse
-                    from modules.RoomMessageCenter import room_message_center as _rmc
-                    handler = AgentResponseHandler(db_service, _sse, _rmc)
-                    relay_transport = _RT(handler, _svc, db_service, _sse)
-                    self.transports["relay"] = relay_transport
-                    _svc.set_relay_transport(relay_transport)
+                if "relay" not in self.transports and _svc.relay_transport is not None:
+                    self.transports["relay"] = _svc.relay_transport
                 logger.info("AgentMessageProcessor: relay_service resolved lazily")
         except Exception:
             pass

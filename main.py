@@ -131,8 +131,10 @@ async def lifespan(app: FastAPI):
     # Initialize relay service (Phase 2a)
     from services.database_service import db_service as _db_svc
     from services.relay_service import init_relay_service
+    from modules.RoomMessageCenter import room_message_center as _rmc
     _relay_svc = init_relay_service(
-        mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager
+        mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
+        room_message_center=_rmc,
     )
     await _relay_svc.start()
     logger.info("Relay service initialized and heartbeat checker started")

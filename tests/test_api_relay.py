@@ -545,6 +545,9 @@ class TestRelayServicePublish:
         db_service.update_room_agent_message_by_message_id = AsyncMock(return_value=True)
         db_service.update_task_state_on_message = AsyncMock(return_value=True)
         db_service.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db_service.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
 
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
@@ -609,6 +612,9 @@ def _make_relay_transport(*, handler=None, db_service=None, sse_manager=None):
         db_service = MagicMock()
         db_service.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
         db_service.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db_service.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
     if sse_manager is None:
         sse_manager = MagicMock()
     return RelayTransport(
@@ -780,9 +786,12 @@ class TestRelayTransportHandlePublish:
         msg = _make_msg()
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
         db.is_message_cancelled = AsyncMock(return_value=True)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
 
         rt = _make_relay_transport(db_service=db)
-        await rt.handle_publish_event("agent_token", "amsg-001", {"token": "hi"}, "room-1")
+        await rt.handle_publish_event("agent_token", "amsg-001", {"token": "hi"}, "room-1", "hub-001")
         rt.response_handler.handle.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -791,7 +800,7 @@ class TestRelayTransportHandlePublish:
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
 
         rt = _make_relay_transport(db_service=db)
-        await rt.handle_publish_event("agent_token", "amsg-999", {"token": "hi"}, "room-1")
+        await rt.handle_publish_event("agent_token", "amsg-999", {"token": "hi"}, "room-1", "hub-001")
         rt.response_handler.handle.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -800,11 +809,57 @@ class TestRelayTransportHandlePublish:
         msg = _make_msg()
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
         db.is_message_cancelled = AsyncMock(return_value=False)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-001"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
 
         rt = _make_relay_transport(db_service=db)
-        await rt.handle_publish_event("agent_response", "amsg-001", {"content": "hi"}, "room-1")
+        await rt.handle_publish_event("agent_response", "amsg-001", {"content": "hi"}, "room-1", "hub-001")
 
         rt.response_handler.handle.assert_awaited_once()
         event = rt.response_handler.handle.call_args[0][0]
         assert event.kind == "response"
         assert event.text == "hi"
+
+    @pytest.mark.asyncio
+    async def test_rejects_cross_hub_publish(self):
+        """A hub must not publish events for agents belonging to a different hub."""
+        db = MagicMock()
+        msg = _make_msg()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        agent_mock = MagicMock()
+        agent_mock.hub_id = "hub-A"
+        db.get_agent_by_agent_id = AsyncMock(return_value=agent_mock)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event(
+            "agent_response", "amsg-001", {"content": "hijack"}, "room-1", "hub-B",
+        )
+        rt.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_agent(self):
+        """Publish is rejected if the agent doc doesn't exist."""
+        db = MagicMock()
+        msg = _make_msg()
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.get_agent_by_agent_id = AsyncMock(return_value=None)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event(
+            "agent_response", "amsg-001", {"content": "orphan"}, "room-1", "hub-001",
+        )
+        rt.response_handler.handle.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejects_message_with_no_agent_id(self):
+        """Publish is rejected if the message has no agent_id."""
+        db = MagicMock()
+        msg = _make_msg(agent_id=None)
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+
+        rt = _make_relay_transport(db_service=db)
+        await rt.handle_publish_event(
+            "agent_response", "amsg-001", {"content": "no agent"}, "room-1", "hub-001",
+        )
+        rt.response_handler.handle.assert_not_awaited()
