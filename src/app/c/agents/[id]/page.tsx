@@ -216,6 +216,8 @@ export default function ConsumerAgentProfilePage() {
   const card = agent.agent_card
   const isOwner = userId && agent.provider_id === userId
   const enabledCaps = visibleCapabilities(card.capabilities)
+  const isActive = agent.agent_status === "active"
+  const isChatDisabled = !isActive
 
   return (
     <div className="page-container animate-in fade-in duration-500">
@@ -287,13 +289,27 @@ export default function ConsumerAgentProfilePage() {
           {/* Right: Action card */}
           <div className="lg:col-span-5">
             <div className="space-y-3">
-                <Button
-                  className="w-full btn-brand-gradient"
-                  onClick={() => router.push(`/chat?agentId=${agentId}`)}
-                >
-                  <MessageCirclePlus className="h-4 w-4 mr-2" />
-                  Chat with this agent
-                </Button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="w-full">
+                        <Button
+                          className="w-full btn-brand-gradient"
+                          onClick={() => router.push(`/chat?agentId=${agentId}`)}
+                          disabled={isChatDisabled}
+                        >
+                          <MessageCirclePlus className="h-4 w-4 mr-2" />
+                          Chat with this agent
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {isChatDisabled && (
+                      <TooltipContent>
+                        Agent is inactive
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
 
                 {card.documentationUrl && (
                   <Button variant="outline" className="w-full" asChild>

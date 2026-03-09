@@ -23,6 +23,9 @@ interface ConsumerAgentCardProps {
 export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
   const isActive = agent.agent_status === "active"
 
+  const badgeVariant = isActive ? "success" : "inactive"
+  const badgeLabel = isActive ? "Active" : "Inactive"
+
   const allModes = [
     ...(agent.agent_card.defaultInputModes ?? []),
     ...(agent.agent_card.defaultOutputModes ?? []),
@@ -61,10 +64,10 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           className="absolute top-3 left-3 h-4 w-4"
         />
         <Badge
-          variant={isActive ? "success" : "inactive"}
+          variant={badgeVariant}
           className="absolute top-3 right-3"
         >
-          {isActive ? "Active" : "Inactive"}
+          {badgeLabel}
         </Badge>
 
         <div className="relative mt-2">

@@ -26,7 +26,6 @@ export function AgentCard({ agent }: AgentCardProps) {
   }
 
   const isActive = agent.agent_status === "active"
-  const isHubOffline = agent.source === 'hub' && !agent.is_hub_online
   const allModes = [
     ...(agent.agent_card.defaultInputModes ?? []),
     ...(agent.agent_card.defaultOutputModes ?? [])
@@ -48,7 +47,6 @@ export function AgentCard({ agent }: AgentCardProps) {
         "before:opacity-0 before:transition-opacity before:duration-300",
         "hover:before:opacity-100",
         "bg-secondary/40 dark:bg-muted/30 shadow-sm hover:shadow-md hover:dark:shadow-black/30",
-        isHubOffline && "opacity-50"
       )}
       onClick={handleCardClick}
     >
@@ -67,9 +65,7 @@ export function AgentCard({ agent }: AgentCardProps) {
             <span
               className={cn(
                 "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background",
-                isHubOffline
-                  ? "bg-muted-foreground/30 animate-pulse"
-                  : isActive ? "bg-green-500" : "bg-muted-foreground/30"
+                isActive ? "bg-green-500" : "bg-muted-foreground/30"
               )}
             />
           </div>
