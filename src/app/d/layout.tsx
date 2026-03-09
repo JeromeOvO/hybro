@@ -26,7 +26,7 @@ export default function DeveloperLayout({
           <SidebarInset>
             <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
             <DeveloperHeader />
-            <main className="flex flex-1 flex-col min-w-0">
+            <main className="flex flex-1 flex-col min-w-0 px-8 sm:px-12">
               {children}
             </main>
           </SidebarInset>

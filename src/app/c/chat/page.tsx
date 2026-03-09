@@ -294,7 +294,7 @@ function ChatPageContent() {
     return (
         <div className="flex flex-col h-full bg-background">
             {/* Fixed Header */}
-            <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 px-4 sm:px-6 max-w-4xl mx-auto w-full">
+            <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
                     <div className="flex items-center gap-3">
                         <div className="space-y-1">
                             {preConfiguredRoom?.roomName && (

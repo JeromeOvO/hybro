@@ -11,7 +11,7 @@ import {
 export default function InspectorPage() {
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6">
+      <div className="max-w-4xl mx-auto">
         {/* Hero */}
         <section className="pt-16 pb-12">
           <div className="flex items-center gap-2 mb-4">

@@ -100,7 +100,7 @@ function PricingClient() {
   }
 
   return (
-    <div className="min-h-screen py-16 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-background to-background/50">
+    <div className="min-h-screen py-16 bg-gradient-to-b from-background to-background/50">
       <div className="max-w-7xl mx-auto space-y-16">
         {/* Header Section */}
         <div className="text-center space-y-6 max-w-3xl mx-auto">
@@ -237,7 +237,7 @@ function PricingClient() {
 
 function PricingSkeleton() {
   return (
-    <div className="px-4 sm:px-6 py-8">
+    <div className="py-8">
       <div className="w-full max-w-6xl mx-auto space-y-6">
         <div className="h-14 w-72 mx-auto rounded-md bg-muted/50 animate-pulse" />
         <div className="h-10 w-[520px] max-w-full mx-auto rounded-md bg-muted/40 animate-pulse" />
