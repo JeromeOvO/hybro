@@ -320,7 +320,7 @@ class MongoDB:
         Returns:
             str: inserted_id
         """
-        result = await self.agents_collection.insert_one(agent.model_dump(mode="json"))
+        result = await self.agents_collection.insert_one(agent.db_dump())
         return str(result.inserted_id)
 
     async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
@@ -336,6 +336,29 @@ class MongoDB:
         result = await self.agents_collection.delete_one({"agent_id": agent_id})
         return result.deleted_count > 0
 
+    async def _enrich_hub_fields(self, agents: list[Agent]) -> list[Agent]:
+        """Populate derived hub fields (hub_owner_id, is_hub_online) from the hub document.
+
+        These fields are no longer stored on the agent document; they are
+        looked up from the canonical hubs collection at read time.
+        """
+        hub_ids = {a.hub_id for a in agents if a.hub_id}
+        if not hub_ids:
+            return agents
+        cursor = self.hubs_collection.find(
+            {"hub_id": {"$in": list(hub_ids)}},
+            {"hub_id": 1, "user_id": 1, "is_online": 1},
+        )
+        hub_map: dict[str, dict] = {}
+        async for doc in cursor:
+            hub_map[doc["hub_id"]] = doc
+        for agent in agents:
+            if agent.hub_id and agent.hub_id in hub_map:
+                hub = hub_map[agent.hub_id]
+                agent.hub_owner_id = hub.get("user_id")
+                agent.is_hub_online = hub.get("is_online", False)
+        return agents
+
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
         """
         Get an agent by AgentID
@@ -348,7 +371,11 @@ class MongoDB:
         """
         agent = await self.agents_collection.find_one({"agent_id": agent_id})
 
-        return Agent(**agent) if agent else None
+        if not agent:
+            return None
+        result = Agent(**agent)
+        await self._enrich_hub_fields([result])
+        return result
 
     async def get_agents_by_provider_id(self, provider_id: str) -> list[Agent]:
         """
@@ -362,7 +389,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": provider_id})
         agents = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in agents]
+        result = [Agent(**agent) for agent in agents]
+        await self._enrich_hub_fields(result)
+        return result
 
     async def get_all_agents(self) -> list[Agent]:
         """
@@ -370,7 +399,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find()
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def increment_agent_call_count(
         self, agent_id: str, *, success: bool = True
@@ -449,37 +480,6 @@ class MongoDB:
         )
         return result["agent_id"]
 
-    async def set_hub_agents_online_status(
-        self,
-        hub_id: str,
-        is_online: bool,
-        *,
-        connection_id: str | None = None,
-    ) -> None:
-        """Bulk-update is_hub_online for every agent belonging to *hub_id*.
-
-        When *connection_id* is provided and *is_online* is True, stamps each
-        agent with ``hub_connection_id`` so that a later offline update can
-        filter atomically.  When *is_online* is False and *connection_id* is
-        provided, only agents whose ``hub_connection_id`` matches are updated.
-        """
-        if is_online:
-            set_fields: dict = {"is_hub_online": True, "agent_status": "active"}
-            if connection_id:
-                set_fields["hub_connection_id"] = connection_id
-            await self.agents_collection.update_many(
-                {"hub_id": hub_id},
-                {"$set": set_fields},
-            )
-        else:
-            query: dict = {"hub_id": hub_id}
-            if connection_id:
-                query["hub_connection_id"] = connection_id
-            await self.agents_collection.update_many(
-                query,
-                {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
-            )
-
     async def count_hub_agents(self, hub_id: str) -> int:
         return await self.agents_collection.count_documents(
             {"hub_id": hub_id}
@@ -491,7 +491,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": user_id})
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -514,7 +516,9 @@ class MongoDB:
             cursor = cursor.limit(limit)
 
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
@@ -544,7 +548,7 @@ class MongoDB:
 
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent.model_dump(exclude_unset=True, mode="json")},
+            {"$set": agent.db_dump(exclude_unset=True)},
         )
 
         return result.modified_count > 0

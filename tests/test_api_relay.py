@@ -73,7 +73,6 @@ def _make_relay_service(
         mongo.get_hubs_by_user = AsyncMock(return_value=[])
         mongo.update_hub_status = AsyncMock()
         mongo.update_hub_status_if_current = AsyncMock(return_value=True)
-        mongo.set_hub_agents_online_status = AsyncMock()
         mongo.upsert_hub_agent = AsyncMock(return_value="agent-new-001")
         mongo.count_hub_agents = AsyncMock(return_value=0)
         mongo.agents_collection = MagicMock()

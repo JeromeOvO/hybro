@@ -158,13 +158,6 @@ class RelayService:
             connection_token=token,
             connection_id=connection_id,
         )
-        # Mark the hub channel as online but do NOT set agent_status=active
-        # yet.  Only sync_agents (triggered by the hub after reconnect) is
-        # authoritative for activating individual agents.
-        await self._mongo.agents_collection.update_many(
-            {"hub_id": hub_id},
-            {"$set": {"is_hub_online": True, "hub_connection_id": connection_id}},
-        )
 
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -231,19 +224,9 @@ class RelayService:
                 hub_id,
             )
             return
-        await self._mongo.set_hub_agents_online_status(
-            hub_id, False, connection_id=connection_id
-        )
-        # Fallback: clear any agents that were never stamped with a
-        # hub_connection_id (e.g. created by sync_agents before the
-        # re-stamp could run).
         await self._mongo.agents_collection.update_many(
-            {
-                "hub_id": hub_id,
-                "hub_connection_id": {"$exists": False},
-                "is_hub_online": True,
-            },
-            {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
+            {"hub_id": hub_id},
+            {"$set": {"agent_status": "inactive"}},
         )
         logger.info("Hub %s disconnected", hub_id)
 
@@ -264,10 +247,11 @@ class RelayService:
         return hub_id in self._hub_queues
 
     async def mark_hub_agents_offline(self, hub_id: str) -> None:
-        """Eagerly correct stale is_hub_online flags for a disconnected hub."""
+        """Eagerly correct stale agent status for a disconnected hub."""
+        await self._mongo.update_hub_status(hub_id, is_online=False)
         await self._mongo.agents_collection.update_many(
-            {"hub_id": hub_id, "is_hub_online": True},
-            {"$set": {"is_hub_online": False, "agent_status": "inactive"}},
+            {"hub_id": hub_id, "agent_status": "active"},
+            {"$set": {"agent_status": "inactive"}},
         )
 
     # ------------------------------------------------------------------
@@ -309,9 +293,7 @@ class RelayService:
                     {"agent_id": existing["agent_id"]},
                     {"$set": {
                         "hub_id": hub_id,
-                        "hub_owner_id": user_id,
                         "local_agent_id": ag.local_agent_id,
-                        "is_hub_online": hub_id in self._hub_queues,
                         "agent_card": ag.agent_card,
                     }},
                 )
@@ -322,9 +304,7 @@ class RelayService:
                     "agent_id": new_agent_id,
                     "source": "hub",
                     "hub_id": hub_id,
-                    "hub_owner_id": user_id,
                     "local_agent_id": ag.local_agent_id,
-                    "is_hub_online": hub_id in self._hub_queues,
                     "provider_id": user_id,
                     "agent_card": ag.agent_card,
                     "normalized_url": normalized,
@@ -383,7 +363,7 @@ class RelayService:
                     "source": "hub",
                     "agent_id": {"$nin": synced_ids},
                 },
-                {"$set": {"agent_status": "inactive", "is_hub_online": False}},
+                {"$set": {"agent_status": "inactive"}},
             )
 
             await self._mongo.agents_collection.update_many(
@@ -397,41 +377,18 @@ class RelayService:
                     "$unset": {
                         "hub_id": "",
                         "local_agent_id": "",
-                        "hub_owner_id": "",
-                        "is_hub_online": "",
-                        "hub_connection_id": "",
                     },
                 },
             )
 
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
 
-        # Re-stamp hub_connection_id on synced agents for this hub so that
-        # _disconnect_hub can atomically clear them later.  Only synced
-        # agents are stamped — pruned agents must stay inactive.
-        #
-        # Re-read the hub doc to get the *current* connection_id.  If a
-        # reconnect happened during this (potentially slow) sync, the
-        # snapshotted connection_id is stale and stamping it would
-        # overwrite the new session's stamp, leaving agents stuck online.
-        fresh_hub = await self._mongo.get_hub(hub_id)
-        current_conn_id = fresh_hub.get("connection_id") if fresh_hub else None
-        if (
-            current_conn_id
-            and current_conn_id == hub_doc.get("connection_id")
-            and hub_id in self._hub_queues
-            and synced
-        ):
+        # Activate synced agents if this hub is still connected.
+        if hub_id in self._hub_queues and synced:
             synced_ids = [item["agent_id"] for item in synced]
-            set_fields: dict = {
-                "is_hub_online": True,
-                "agent_status": "active",
-            }
-            if current_conn_id:
-                set_fields["hub_connection_id"] = current_conn_id
             await self._mongo.agents_collection.update_many(
                 {"hub_id": hub_id, "agent_id": {"$in": synced_ids}},
-                {"$set": set_fields},
+                {"$set": {"agent_status": "active"}},
             )
 
         return synced

@@ -174,7 +174,7 @@ class TestHubTransportMiddleware:
         relay.is_hub_connected = MagicMock(return_value=True)
         mw = HubTransportMiddleware(relay)
         ctx = _make_ctx(
-            agent=_make_agent(source="hub", hub_id="hub-001", is_hub_online=True)
+            agent=_make_agent(source="hub", hub_id="hub-001")
         )
 
         ctx = await mw.pre_dispatch(ctx)
@@ -188,7 +188,7 @@ class TestHubTransportMiddleware:
         relay.mark_hub_agents_offline = AsyncMock()
         mw = HubTransportMiddleware(relay)
         ctx = _make_ctx(
-            agent=_make_agent(source="hub", hub_id="hub-001", is_hub_online=False)
+            agent=_make_agent(source="hub", hub_id="hub-001")
         )
 
         ctx = await mw.pre_dispatch(ctx)
@@ -247,7 +247,7 @@ class TestAMPRelayDispatch:
             dispatch_chain=chain,
         )
 
-        agent = _make_agent(source="hub", hub_id="hub-001", is_hub_online=True)
+        agent = _make_agent(source="hub", hub_id="hub-001")
         msg = RoomAgentMessage(
             room_id="room-001",
             message_id="amsg-001",

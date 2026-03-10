@@ -75,7 +75,6 @@ async def _check_hub_agent(agent: Agent) -> Agent:
     if not _svc.is_hub_connected(agent.hub_id):
         await _svc.mark_hub_agents_offline(agent.hub_id)
         agent.agent_status = AgentStatus.inactive
-        agent.is_hub_online = False
         logger.info(
             "Liveness: hub %s disconnected — agent %s marked inactive",
             agent.hub_id,
