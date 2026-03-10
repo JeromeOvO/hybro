@@ -451,15 +451,17 @@ class A2AService:
         if result.kind == "message":
             # Create completed task with message as artifact
             completed_task = self._message_to_completed_task(result, context_id)
-
             from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
             if completed_task.artifacts:
                 await convert_pydantic_artifacts_to_s3(
                     completed_task.artifacts, room_id=room_id or message_id, message_id=message_id,
                 )
 
+            message_text = self._extract_text_from_message(result)
             await db_service.update_task_on_message(
-                message_id, completed_task.model_dump(mode="json")
+                message_id,
+                completed_task.model_dump(mode="json"),
+                message_text=message_text or None,
             )
 
             from common.utils.a2a_helpers import extract_parts_from_artifacts
@@ -472,7 +474,7 @@ class A2AService:
             resp = {
                 "type": "message",
                 "message_id": message_id,
-                "content": self._extract_text_from_message(result),
+                "content": message_text,
             }
             if non_text_parts:
                 resp["parts"] = non_text_parts
@@ -481,7 +483,6 @@ class A2AService:
         # Handle Task response (async path)
         if result.kind == "task":
             state = result.status.state
-
             # If already terminal, convert artifacts to S3 before persisting
             if is_terminal_state(state) and result.artifacts:
                 from common.utils.a2a_helpers import convert_pydantic_artifacts_to_s3
@@ -489,9 +490,13 @@ class A2AService:
                     result.artifacts, room_id=room_id or message_id, message_id=message_id,
                 )
 
+            task_text = self._extract_text_from_task(result) if is_terminal_state(state) else None
+
             # Update with real task from agent
             await db_service.update_task_on_message(
-                message_id, result.model_dump(mode="json")
+                message_id,
+                result.model_dump(mode="json"),
+                message_text=task_text or None,
             )
 
             # If already terminal, return content
@@ -506,7 +511,7 @@ class A2AService:
                 resp = {
                     "type": "message",
                     "message_id": message_id,
-                    "content": self._extract_text_from_task(result),
+                    "content": task_text,
                     "status": state.value if hasattr(state, "value") else str(state),
                 }
                 if non_text_parts:

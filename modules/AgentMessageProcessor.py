@@ -1,4 +1,4 @@
-"""AgentMessageProcessor — shared single-message dispatch logic.
+"""AgentMessageProcessor — thin transport router.
 
 Extracted from ``QueueExecutor._process_single_message`` so that both
 ``QueueExecutor`` and ``SupervisorExecutor`` can dispatch individual
@@ -6,31 +6,28 @@ agent messages without duplicating code.
 
 Contains zero orchestration logic — only the mechanics of:
 1. Building the A2A message via ``room_services.process_agent_message``
-2. Choosing streaming vs sync dispatch
-3. Handling PAUSED (push notification) results
-4. Returning a ``ProcessingResult``
+2. Running the DispatchChain (pre-dispatch middleware)
+3. Looking up the selected transport and calling ``transport.dispatch()``
+4. Running post-dispatch middleware
+5. Returning a ``ProcessingResult``
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from a2a.types import TaskState
-
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from models.processing import ProcessingResult, ProcessingStatus
 from models.request import RoomCenterAgentMessageRequest
 from models.room import RoomAgentMessage
-from modules.TaskStateManager import get_task
-from services.task_notification_service import notify_task_update
+from modules.dispatch_middleware import DispatchChain, DispatchContext
 
 if TYPE_CHECKING:
     from models.agent import Agent
-    from modules.ResponseProcessor import ResponseProcessor
-    from modules.TaskStateManager import TaskStateManager
-    from services.a2a_service import A2AService
+    from modules.transports.base import AgentTransport
     from services.database_service import DatabaseService
+    from services.relay_service import RelayService
     from services.room_services import RoomServices
     from services.sse_services import SSEManager
 
@@ -41,24 +38,64 @@ class AgentMessageProcessor:
     """Shared single-message dispatch logic.
 
     Used by both ``QueueExecutor`` and ``SupervisorExecutor``.
+    Routes to the appropriate transport via a ``transports`` dict keyed
+    by transport name (``"direct"`` / ``"relay"``).
     """
 
     def __init__(
         self,
         *,
-        tsm: TaskStateManager,
         sse_manager: SSEManager,
-        response_processor: ResponseProcessor,
-        a2a_service: A2AService,
         room_services: RoomServices,
         database_service: DatabaseService,
+        transports: dict[str, AgentTransport],
+        relay_service: RelayService | None = None,
+        dispatch_chain: DispatchChain | None = None,
     ) -> None:
-        self.tsm = tsm
         self.sse_manager = sse_manager
-        self.response_processor = response_processor
-        self.a2a_service = a2a_service
         self.room_services = room_services
         self.database_service = database_service
+        self.transports = dict(transports)
+        self._relay_service_explicit = relay_service
+        self._dispatch_chain_explicit = dispatch_chain
+        self._lazy_initialized = False
+        self.relay_service: RelayService | None = relay_service
+        self.dispatch_chain: DispatchChain = dispatch_chain or DispatchChain()
+
+    def _ensure_relay_initialized(self) -> None:
+        """Lazily resolve relay_service and build the dispatch chain.
+
+        At module-import time the relay_service singleton is still ``None``
+        because ``init_relay_service()`` runs during the FastAPI lifespan.
+        This method re-checks on each call until relay is resolved, while
+        ensuring CloudHealthMiddleware is always present from the first call.
+        """
+        if self._dispatch_chain_explicit is not None:
+            return
+
+        if not self._lazy_initialized:
+            self._lazy_initialized = True
+            from modules.middleware.cloud_health import CloudHealthMiddleware
+            from services.agent_health_service import agent_health_service
+            chain = DispatchChain()
+            chain.add(CloudHealthMiddleware(agent_health_service))
+            self.dispatch_chain = chain
+            logger.info("AgentMessageProcessor: CloudHealthMiddleware initialized")
+
+        if self._relay_service_explicit is not None or self.relay_service is not None:
+            return
+
+        try:
+            from services.relay_service import relay_service as _svc
+            if _svc is not None:
+                self.relay_service = _svc
+                from modules.middleware.hub_transport import HubTransportMiddleware
+                self.dispatch_chain.add(HubTransportMiddleware(_svc))
+                if "relay" not in self.transports and _svc.relay_transport is not None:
+                    self.transports["relay"] = _svc.relay_transport
+                logger.info("AgentMessageProcessor: relay_service resolved lazily")
+        except Exception as exc:
+            logger.warning("AgentMessageProcessor: relay init deferred: %s", exc)
 
     async def process_single_message(
         self,
@@ -72,14 +109,13 @@ class AgentMessageProcessor:
         total_steps: int | None = None,
         quoted_text: str | None = None,
     ) -> ProcessingResult:
-        """Process a single agent message with streaming support.
+        """Process a single agent message.
 
-        Delegates the actual agent communication (streaming/sync) to the
-        ``ResponseProcessor``, keeping orchestration logic in the caller.
-
-        # TODO: Refactor to reduce cyclomatic complexity (currently 11 > 10).
-        # Consider splitting streaming and sync paths into separate private methods.
+        Delegates the actual agent communication to the selected transport's
+        ``dispatch()`` method, keeping orchestration logic in the caller.
         """
+        self._ensure_relay_initialized()
+
         room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
 
         process_response = await self.room_services.process_agent_message(
@@ -95,132 +131,40 @@ class AgentMessageProcessor:
         if prepared_message is None:
             return ProcessingResult(ProcessingStatus.FAILED)
 
-        support_streaming = self.a2a_service.has_streaming_capability(
-            agent_card=agent.agent_card
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=current_message,
+            room_id=room_id,
+            user_message_id=user_message_id,
+            prepared_message=prepared_message,
+            token=token,
+            step_number=step_number,
+            total_steps=total_steps,
         )
+        ctx = await self.dispatch_chain.run_pre_dispatch(ctx)
 
-        rp = self.response_processor
-        full_response_text = ""
-        paused_message_id = None
-        if support_streaming:
-            try:
-                (
-                    status,
-                    full_response_text,
-                ) = await rp.handle_streaming_response(
-                    current_message,
-                    agent.agent_card,
-                    prepared_message,
-                    room_id,
-                    user_message_id,
-                    token=token,
-                    send_sse=True,
-                    step_number=step_number,
-                    total_steps=total_steps,
-                )
-            except Exception as exc:
-                logger.error(
-                    "AgentMessageProcessor: Unhandled exception in streaming for message %s: %s",
-                    current_message.message_id,
-                    exc,
-                    exc_info=True,
-                )
-                await self.tsm.transition_task(
-                    current_message, TaskState.failed,
-                    error=f"Agent streaming failed: {exc}",
-                    persist=True,
-                )
-                await notify_task_update(
-                    message_id=current_message.message_id,
-                    state=TaskState.failed,
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                    error=f"Agent streaming failed: {exc}",
-                )
-                return ProcessingResult(ProcessingStatus.FAILED, "")
-            if status != ProcessingStatus.SUCCESS:
-                return ProcessingResult(status, full_response_text)
-        else:
-            (
-                success,
-                full_response_text,
-                paused_message_id,
-            ) = await rp.handle_sync_response(
-                current_message,
-                agent.agent_card,
-                prepared_message,
-                room_id,
-                current_message.user_id,
-                user_message_id=user_message_id,
-                token=token,
-                step_number=step_number,
-                total_steps=total_steps,
-            )
-            if not success:
-                task = get_task(current_message)
-                was_canceled = (
-                    (token and token.is_cancelled)
-                    or (task and task.status and task.status.state == TaskState.canceled)
-                )
-                if was_canceled:
-                    return ProcessingResult(ProcessingStatus.CANCELED)
-                return ProcessingResult(ProcessingStatus.FAILED)
-
-        if full_response_text is None and paused_message_id:
-            # Detect input_required vs. regular push-notification pause
-            # by checking the task state on the message
-            task = get_task(current_message)
-            if task and task.status and task.status.state == TaskState.input_required:
-                logger.info(
-                    "AgentMessageProcessor: Agent returned input_required for message %s",
-                    paused_message_id,
-                )
-                task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
-                status_msg = None
-                if task.status and task.status.message:
-                    parts = task.status.message.parts or []
-                    for p in parts:
-                        if hasattr(p, "root") and hasattr(p.root, "text"):
-                            status_msg = p.root.text
-                            break
-                        if hasattr(p, "text"):
-                            status_msg = p.text
-                            break
-                return ProcessingResult(
-                    ProcessingStatus.AWAITING_INPUT,
-                    response_text="",
-                    message_id=paused_message_id,
-                    a2a_task_id=task_data.get("id") or (task.id if hasattr(task, "id") else None),
-                    a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
-                    status_message=status_msg,
-                )
-
+        if ctx.denied:
             logger.info(
-                "AgentMessageProcessor: Push notification task submitted for message %s; "
-                "queue will be paused until task completes",
-                paused_message_id,
+                "Dispatch denied for message %s: %s",
+                current_message.message_id,
+                ctx.deny_reason,
             )
             return ProcessingResult(
-                ProcessingStatus.PAUSED,
-                response_text="",
-                message_id=paused_message_id,
+                ProcessingStatus.FAILED,
+                response_text=ctx.deny_reason or "Dispatch denied",
             )
 
-        if full_response_text is None:
-            logger.info(
-                "AgentMessageProcessor: Async task submitted for message %s; "
-                "skipping immediate agent response",
+        transport = self.transports.get(ctx.transport)
+        if transport is None:
+            logger.error(
+                "Unknown transport %r for message %s",
+                ctx.transport,
                 current_message.message_id,
             )
-            return ProcessingResult(ProcessingStatus.SUCCESS)
-
-        current_message = (
-            await self.database_service.get_room_agent_message_by_message_id(
-                current_message.message_id
+            return ProcessingResult(
+                ProcessingStatus.FAILED,
+                response_text=f"Unknown transport: {ctx.transport}",
             )
-        )
 
-        if current_message is None:
-            return ProcessingResult(ProcessingStatus.FAILED, full_response_text)
-
-        return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
+        result = await transport.dispatch(ctx, current_message)
+        return await self.dispatch_chain.run_post_dispatch(ctx, result)

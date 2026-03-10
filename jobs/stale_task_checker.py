@@ -208,7 +208,7 @@ class StaleTaskChecker:
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending"):
+        if agent_task_id.startswith("pending") or agent_task_id.startswith("relay-pending"):
             logger.warning(
                 f"Task for message {message_id} never acknowledged, marking failed"
             )
@@ -240,8 +240,15 @@ class StaleTaskChecker:
                 return
 
             # Update our record
+            task_text = None
+            if is_terminal_state(current_task.status.state) and current_task.status.state == TaskState.completed:
+                from common.utils.a2a_helpers import extract_text_from_artifacts
+                if current_task.artifacts:
+                    task_text = extract_text_from_artifacts(current_task.artifacts) or None
             await db_service.update_task_on_message(
-                message_id, current_task.model_dump(mode="json")
+                message_id,
+                current_task.model_dump(mode="json"),
+                message_text=task_text,
             )
 
             # Notify if terminal or interactive state changed
@@ -548,6 +555,12 @@ class StaleTaskChecker:
         user_messages_to_process: dict[str, str] = {}  # user_message_id -> room_id
 
         for msg in orphaned_messages:
+            # Skip hub-sourced agents — their timeouts are managed by the
+            # relay offline queue TTL, not the orphan recovery job.
+            agent = await db_service.get_agent_by_agent_id(msg.agent_id) if msg.agent_id else None
+            if agent and getattr(agent, "source", "cloud") == "hub":
+                continue
+
             user_message_id = msg.related_message_id
             if user_message_id and user_message_id not in user_messages_to_process:
                 user_messages_to_process[user_message_id] = msg.room_id

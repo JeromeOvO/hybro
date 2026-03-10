@@ -184,13 +184,23 @@ async def deduplicate_agents(dry_run: bool = False):
     # Step 6: Create unique index
     logger.info("\nStep 6: Creating unique index on normalized_url...")
     try:
+        # Drop the old sparse index if it exists — sparse indexes still
+        # include documents where the field is explicitly null, which causes
+        # DuplicateKeyError for hub agents.  A partial index limited to
+        # string values avoids this.
+        try:
+            await mongo_db.agents.drop_index("unique_normalized_url")
+        except Exception:
+            pass
         await mongo_db.agents.create_index(
             "normalized_url",
             unique=True,
-            sparse=True,  # Allow null for agents without URL
             name="unique_normalized_url",
+            partialFilterExpression={
+                "normalized_url": {"$type": "string"},
+            },
         )
-        logger.info("Successfully created unique index")
+        logger.info("Successfully created unique partial index")
     except Exception as e:
         logger.error(f"Failed to create index: {e}")
         raise

@@ -1,5 +1,5 @@
 """
-Unit tests for ResponseProcessor module.
+Unit tests for DirectTransport module.
 
 Tests cover:
 - _parse_sync_fallback_response: None input, message kind, task kind,
@@ -7,7 +7,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from contextlib import asynccontextmanager
 
 from a2a.types import (
@@ -21,7 +21,7 @@ from a2a.types import (
 from common.utils.cancellation import CancellationToken
 from models.processing import ProcessingContext, ProcessingStatus
 from models.room import MessageContent, RoomAgentMessage
-from modules.ResponseProcessor import MessageStreamingState, ResponseProcessor
+from modules.transports.direct import DirectTransport, MessageStreamingState
 from services.a2a_service import A2AServiceError
 
 
@@ -34,7 +34,7 @@ class TestParseSyncFallbackResponse:
     """Tests for sync response parsing into normalized dict."""
 
     def test_returns_empty_for_none(self):
-        result = ResponseProcessor._parse_sync_fallback_response(None, "msg-1")
+        result = DirectTransport._parse_sync_fallback_response(None, "msg-1")
         assert result == {"type": "message", "message_id": "msg-1", "content": ""}
 
     def test_parses_message_kind(self):
@@ -54,7 +54,7 @@ class TestParseSyncFallbackResponse:
 
         assert not isinstance(response.root, JSONRPCErrorResponse)
 
-        result = ResponseProcessor._parse_sync_fallback_response(response, "msg-1")
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["type"] == "message"
         assert result["content"] == "Hello"
 
@@ -73,7 +73,7 @@ class TestParseSyncFallbackResponse:
 
         assert not isinstance(response.root, JSONRPCErrorResponse)
 
-        result = ResponseProcessor._parse_sync_fallback_response(response, "msg-1")
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["type"] == "task"
         assert result["task_id"] == "task-001"
         assert result["status"] == "completed"
@@ -88,7 +88,7 @@ class TestParseSyncFallbackResponse:
         response.root = error_response
 
         with pytest.raises(A2AServiceError):
-            ResponseProcessor._parse_sync_fallback_response(response, "msg-1")
+            DirectTransport._parse_sync_fallback_response(response, "msg-1")
 
     def test_unknown_kind_returns_empty(self):
         inner_result = MagicMock()
@@ -102,7 +102,7 @@ class TestParseSyncFallbackResponse:
 
         assert not isinstance(response.root, JSONRPCErrorResponse)
 
-        result = ResponseProcessor._parse_sync_fallback_response(response, "msg-1")
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result == {"type": "message", "message_id": "msg-1", "content": ""}
 
     def test_concatenates_multiple_text_parts(self):
@@ -125,7 +125,7 @@ class TestParseSyncFallbackResponse:
 
         assert not isinstance(response.root, JSONRPCErrorResponse)
 
-        result = ResponseProcessor._parse_sync_fallback_response(response, "msg-1")
+        result = DirectTransport._parse_sync_fallback_response(response, "msg-1")
         assert result["content"] == "Hello world"
 
 
@@ -135,8 +135,9 @@ class TestParseSyncFallbackResponse:
 
 
 def _make_processor(**overrides):
-    """Create a ResponseProcessor with mocked dependencies, bypassing __init__."""
-    proc = object.__new__(ResponseProcessor)
+    """Create a DirectTransport with mocked dependencies, bypassing __init__."""
+    proc = object.__new__(DirectTransport)
+    proc.response_handler = overrides.get("response_handler", MagicMock())
     proc.tsm = overrides.get("tsm", MagicMock())
     proc.sse_manager = overrides.get("sse_manager", MagicMock())
     proc.a2a_service = overrides.get("a2a_service", MagicMock())
@@ -206,18 +207,16 @@ class TestHandleSyncResponseSuccess:
         )
         proc.tsm.transition_task = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.response_handler.handle = AsyncMock()
 
-        with patch(
-            "modules.ResponseProcessor.notify_task_update", new_callable=AsyncMock
-        ) as mock_notify:
-            success, text, paused = await proc.handle_sync_response(
-                current_message=current_message,
-                agent_card=agent_card,
-                prepared_message=prepared_message,
-                room_id="room-1",
-                _user_id="user-1",
-                user_message_id="msg-1",
-            )
+        success, text, paused = await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=prepared_message,
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
 
         assert success is True
         assert text == "Hello from agent"
@@ -274,18 +273,16 @@ class TestHandleSyncResponseWithPolling:
 
         proc._poll_task_until_complete = AsyncMock(return_value=completed_task)
         proc._finalize_polled_task = AsyncMock(return_value=(True, "done", None))
+        proc.response_handler.handle = AsyncMock()
 
-        with patch(
-            "modules.ResponseProcessor.notify_task_update", new_callable=AsyncMock
-        ):
-            success, text, paused = await proc.handle_sync_response(
-                current_message=current_message,
-                agent_card=agent_card,
-                prepared_message=prepared_message,
-                room_id="room-1",
-                _user_id="user-1",
-                user_message_id="msg-1",
-            )
+        success, text, paused = await proc.handle_sync_response(
+            current_message=current_message,
+            agent_card=agent_card,
+            prepared_message=prepared_message,
+            room_id="room-1",
+            _user_id="user-1",
+            user_message_id="msg-1",
+        )
 
         proc._poll_task_until_complete.assert_awaited_once()
         call_args = proc._poll_task_until_complete.call_args
@@ -369,13 +366,11 @@ class TestHandleStreamingCancellation:
         )
         streaming_state = MagicMock()
         streaming_state.full_response_text = "partial text"
+        proc.response_handler.handle = AsyncMock()
 
-        with patch(
-            "modules.ResponseProcessor.notify_task_update", new_callable=AsyncMock
-        ) as mock_notify:
-            status, text = await proc._handle_streaming_cancellation(
-                ctx, streaming_state
-            )
+        status, text = await proc._handle_streaming_cancellation(
+            ctx, streaming_state
+        )
 
         assert status == ProcessingStatus.CANCELED
         assert text == "partial text"
@@ -384,11 +379,11 @@ class TestHandleStreamingCancellation:
         proc._try_cancel_remote_task.assert_awaited_once_with(
             current_message, agent_card
         )
-        mock_notify.assert_awaited_once()
+        proc.response_handler.handle.assert_awaited_once()
 
 
 class TestFinalizeStreamingWritesArtifacts:
-    """_finalize_streaming transitions to completed and calls notify_task_update
+    """_finalize_streaming transitions to completed and calls _emit_terminal
     with the accumulated content."""
 
     @pytest.mark.asyncio
@@ -415,19 +410,16 @@ class TestFinalizeStreamingWritesArtifacts:
         streaming_state.full_response_text = "Final answer from agent."
         streaming_state.accumulated_parts = [MagicMock(), MagicMock()]
         streaming_state.non_text_parts = []
+        proc.response_handler.handle = AsyncMock()
 
-        with patch(
-            "modules.ResponseProcessor.notify_task_update", new_callable=AsyncMock
-        ) as mock_notify:
-            status, text = await proc._finalize_streaming(ctx, streaming_state)
+        status, text = await proc._finalize_streaming(ctx, streaming_state)
 
         assert status == ProcessingStatus.SUCCESS
         assert text == "Final answer from agent."
         proc.tsm.transition_task.assert_awaited_once()
         assert proc.tsm.transition_task.call_args[0][1] == TaskState.completed
-        mock_notify.assert_awaited_once()
-        notify_kwargs = mock_notify.call_args.kwargs
-        assert notify_kwargs["message_id"] == "msg-1"
-        assert notify_kwargs["state"] == TaskState.completed
-        assert notify_kwargs["room_id"] == "room-1"
+        proc.response_handler.handle.assert_awaited_once()
+        event_arg = proc.response_handler.handle.call_args[0][0]
+        assert event_arg.message_id == "msg-1"
+        assert event_arg.room_id == "room-1"
         assert current_message.message_content.message_text == "Final answer from agent."

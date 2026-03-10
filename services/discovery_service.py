@@ -52,9 +52,6 @@ class DiscoveryService:
             
         Returns:
             DiscoveryResponse with matching agents and their scores
-            
-        Raises:
-            ValueError: If no agents meet the confidence threshold
         """
         # Use default limit if not specified
         if limit is None:
@@ -79,7 +76,7 @@ class DiscoveryService:
         
         if not matches:
             logger.info("DiscoveryService: No matches found in Pinecone")
-            raise ValueError("No agent found matching your query with sufficient confidence")
+            return DiscoveryResponse(query=query, agents=[], count=0)
         
         # Step 3: Filter by confidence threshold and extract IDs with scores
         agent_id_to_score = {}
@@ -96,8 +93,8 @@ class DiscoveryService:
         
         if not agent_id_to_score:
             best_score = max(all_scores) if all_scores else 0.0
-            logger.warning(f"(No match: threshold: {self.threshold}, best score: {best_score})")    
-            raise ValueError(f"No agent found matching your query with sufficient confidence ")
+            logger.info(f"DiscoveryService: No agents above threshold ({self.threshold}), best score: {best_score}")
+            return DiscoveryResponse(query=query, agents=[], count=0)
                       
         logger.info(f"DiscoveryService: Found {len(agent_id_to_score)} agents meeting threshold")
             

@@ -20,8 +20,9 @@ from models.supervisor_v2 import (
 )
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
+from modules.agent_response_handler import AgentResponseHandler
 from modules.QueueExecutor import QueueExecutor, QueueResult
-from modules.ResponseProcessor import ResponseProcessor
+from modules.transports.direct import DirectTransport
 from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
 from services.a2a_constants import SSEProcessingStatus, is_terminal_state
@@ -51,29 +52,40 @@ class RoomMessageCenter:
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.tsm = TaskStateManager(room_services, notification_service)
-        self.response_processor = ResponseProcessor(
-            tsm=self.tsm,
-            sse_manager=self.sse_manager,
-            a2a_service=a2a_service,
-            task_service=task_service,
-            database_service=self.database_service,
-        )
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
         )
-        self.agent_message_processor = AgentMessageProcessor(
+
+        # Shared result handler used by all transports
+        self.agent_response_handler = AgentResponseHandler(
+            db=self.database_service,
+            sse=self.sse_manager,
+            room_message_center=self,
+        )
+
+        # DirectTransport contains all streaming/sync response processing
+        self.direct_transport = DirectTransport(
+            response_handler=self.agent_response_handler,
             tsm=self.tsm,
-            sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
             a2a_service=a2a_service,
+            task_service=task_service,
+            sse_manager=self.sse_manager,
+            database_service=self.database_service,
+        )
+
+        # Relay service + dispatch middleware are initialized eagerly in
+        # init_relay_service().  AgentMessageProcessor resolves the singleton
+        # lazily on first use and registers the already-built transport.
+        self.agent_message_processor = AgentMessageProcessor(
+            sse_manager=self.sse_manager,
             room_services=self.room_services,
             database_service=self.database_service,
+            transports={"direct": self.direct_transport},
         )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
             a2a_service=a2a_service,
             room_services=self.room_services,
             room_memory_service=room_memory_service,
@@ -1446,6 +1458,8 @@ class RoomMessageCenter:
         self,
         message_id: str,
         task_result_text: str | None = None,
+        *,
+        failed: bool = False,
     ) -> bool:
         """Resume queue processing after a push notification task completes.
 
@@ -1457,8 +1471,18 @@ class RoomMessageCenter:
         trajectory, refreshes the agent registry, and resumes the adaptive
         loop via ``_resume_supervisor_v2``.
 
+        Args:
+            message_id: The agent message ID whose continuation to resume.
+            task_result_text: Text result from the completed task (None on failure).
+            failed: If True, the step that triggered the resume failed. The
+                orchestrator should treat this as an error rather than a
+                successful response.
+
         Returns ``True`` if the queue was resumed successfully.
         """
+        if failed and task_result_text is None:
+            task_result_text = ""
+
         # Peek at the continuation data to detect V2 before QueueExecutor
         # consumes it (get_and_clear is destructive). The V2 flag is checked
         # first; if present, we handle it here instead of delegating to the

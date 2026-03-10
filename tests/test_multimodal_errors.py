@@ -56,9 +56,10 @@ class TestS3ServiceErrors:
 
 class TestInlineBase64ConversionErrors:
     async def test_s3_upload_failure_logs_error(self):
-        from modules.ResponseProcessor import ResponseProcessor
+        from modules.transports.direct import DirectTransport
 
-        processor = ResponseProcessor(
+        processor = DirectTransport(
+            response_handler=MagicMock(),
             tsm=MagicMock(),
             sse_manager=MagicMock(),
             a2a_service=MagicMock(),
@@ -91,7 +92,7 @@ class TestSharedInlineConversionCap:
     MAX_INLINE_CONVERSIONS_PER_MESSAGE."""
 
     async def test_total_conversions_respect_cap_across_both_paths(self):
-        from modules.ResponseProcessor import ResponseProcessor, MessageStreamingState
+        from modules.transports.direct import DirectTransport, MessageStreamingState
         from models.file_upload import MAX_INLINE_CONVERSIONS_PER_MESSAGE
 
         upload_calls: list[str] = []
@@ -99,7 +100,8 @@ class TestSharedInlineConversionCap:
         async def fake_upload(*, file_data, s3_key, content_type, content_length):
             upload_calls.append(s3_key)
 
-        processor = ResponseProcessor(
+        processor = DirectTransport(
+            response_handler=MagicMock(),
             tsm=MagicMock(),
             sse_manager=MagicMock(),
             a2a_service=MagicMock(),

@@ -70,6 +70,39 @@ class MongoDB:
         if self.client:
             self.client.close()
 
+    async def ensure_agent_indexes(self) -> None:
+        """Ensure the agents collection has the correct indexes.
+
+        Replaces the old sparse ``unique_normalized_url`` index with a partial
+        unique index that only constrains non-null string values, allowing
+        multiple agents to have ``normalized_url: null``.
+        """
+        col = self.agents_collection
+        existing = await col.index_information()
+        idx = existing.get("unique_normalized_url")
+        needs_recreate = False
+        if idx is not None:
+            pfe = idx.get("partialFilterExpression")
+            if pfe != {"normalized_url": {"$type": "string"}}:
+                needs_recreate = True
+        else:
+            needs_recreate = True
+
+        if needs_recreate:
+            try:
+                await col.drop_index("unique_normalized_url")
+            except Exception:
+                pass
+            await col.create_index(
+                "normalized_url",
+                unique=True,
+                name="unique_normalized_url",
+                partialFilterExpression={
+                    "normalized_url": {"$type": "string"},
+                },
+            )
+            print("Ensured unique_normalized_url partial index on agents")
+
     @property
     def db(self):
         """Get database instance"""
@@ -207,6 +240,24 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.discovery_api_requests
+    
+    @property
+    def gateway_api_requests_collection(self):
+        """Get gateway API requests collection for rate limiting"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.gateway_api_requests
+    
+    @property
+    def hubs_collection(self):
+        """Get hubs collection for hub registrations"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.hubs
       
     @property
     def a2a_tasks_collection(self):
@@ -269,7 +320,7 @@ class MongoDB:
         Returns:
             str: inserted_id
         """
-        result = await self.agents_collection.insert_one(agent.model_dump(mode="json"))
+        result = await self.agents_collection.insert_one(agent.db_dump())
         return str(result.inserted_id)
 
     async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
@@ -285,6 +336,29 @@ class MongoDB:
         result = await self.agents_collection.delete_one({"agent_id": agent_id})
         return result.deleted_count > 0
 
+    async def _enrich_hub_fields(self, agents: list[Agent]) -> list[Agent]:
+        """Populate derived hub fields (hub_owner_id, is_hub_online) from the hub document.
+
+        These fields are no longer stored on the agent document; they are
+        looked up from the canonical hubs collection at read time.
+        """
+        hub_ids = {a.hub_id for a in agents if a.hub_id}
+        if not hub_ids:
+            return agents
+        cursor = self.hubs_collection.find(
+            {"hub_id": {"$in": list(hub_ids)}},
+            {"hub_id": 1, "user_id": 1, "is_online": 1},
+        )
+        hub_map: dict[str, dict] = {}
+        async for doc in cursor:
+            hub_map[doc["hub_id"]] = doc
+        for agent in agents:
+            if agent.hub_id and agent.hub_id in hub_map:
+                hub = hub_map[agent.hub_id]
+                agent.hub_owner_id = hub.get("user_id")
+                agent.is_hub_online = hub.get("is_online", False)
+        return agents
+
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
         """
         Get an agent by AgentID
@@ -297,7 +371,11 @@ class MongoDB:
         """
         agent = await self.agents_collection.find_one({"agent_id": agent_id})
 
-        return Agent(**agent) if agent else None
+        if not agent:
+            return None
+        result = Agent(**agent)
+        await self._enrich_hub_fields([result])
+        return result
 
     async def get_agents_by_provider_id(self, provider_id: str) -> list[Agent]:
         """
@@ -311,7 +389,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": provider_id})
         agents = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in agents]
+        result = [Agent(**agent) for agent in agents]
+        await self._enrich_hub_fields(result)
+        return result
 
     async def get_all_agents(self) -> list[Agent]:
         """
@@ -319,7 +399,91 @@ class MongoDB:
         """
         cursor = self.agents_collection.find()
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
+
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool = True
+    ) -> None:
+        """Atomically increment call_count (and call_success_count if success) for an agent."""
+        inc_fields: dict = {"call_count": 1}
+        if success:
+            inc_fields["call_success_count"] = 1
+        await self.agents_collection.update_one(
+            {"agent_id": agent_id}, {"$inc": inc_fields}
+        )
+
+    # -------------------------------------------------------------------
+    # Hub CRUD (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub(self, hub: dict) -> None:
+        """Insert or update a hub registration keyed by hub_id."""
+        await self.hubs_collection.update_one(
+            {"hub_id": hub["hub_id"]},
+            {"$set": hub},
+            upsert=True,
+        )
+
+    async def get_hub(self, hub_id: str) -> dict | None:
+        return await self.hubs_collection.find_one({"hub_id": hub_id})
+
+    async def get_hubs_by_user(self, user_id: str) -> list[dict]:
+        cursor = self.hubs_collection.find({"user_id": user_id})
+        return await cursor.to_list(length=None)
+
+    async def update_hub_status(
+        self, hub_id: str, *, is_online: bool, **extra_fields
+    ) -> None:
+        update: dict = {"$set": {"is_online": is_online, **extra_fields}}
+        await self.hubs_collection.update_one({"hub_id": hub_id}, update)
+
+    async def update_hub_status_if_current(
+        self,
+        hub_id: str,
+        *,
+        connection_id: str,
+        is_online: bool,
+    ) -> bool:
+        """Conditionally update hub status only if connection_id matches.
+
+        Returns True if the document matched (connection_id is still current),
+        regardless of whether the is_online value actually changed.
+        """
+        result = await self.hubs_collection.update_one(
+            {"hub_id": hub_id, "connection_id": connection_id},
+            {"$set": {"is_online": is_online}},
+        )
+        return result.matched_count > 0
+
+    # -------------------------------------------------------------------
+    # Hub-agent helpers (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub_agent(self, hub_id: str, local_agent_id: str, agent_data: dict) -> str:
+        """Upsert an agent using (hub_id, local_agent_id) as the dedup key.
+
+        Returns the agent_id (existing or newly assigned).
+        ``agent_id`` is only written on first insert via ``$setOnInsert``
+        so that re-syncs never change an existing agent's identity.
+        """
+        new_agent_id = agent_data.pop("agent_id", None)
+        update: dict = {"$set": agent_data}
+        if new_agent_id:
+            update["$setOnInsert"] = {"agent_id": new_agent_id}
+        result = await self.agents_collection.find_one_and_update(
+            {"hub_id": hub_id, "local_agent_id": local_agent_id},
+            update,
+            upsert=True,
+            return_document=True,
+        )
+        return result["agent_id"]
+
+    async def count_hub_agents(self, hub_id: str) -> int:
+        return await self.agents_collection.count_documents(
+            {"hub_id": hub_id}
+        )
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
         """
@@ -327,7 +491,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": user_id})
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -350,7 +516,9 @@ class MongoDB:
             cursor = cursor.limit(limit)
 
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
@@ -380,7 +548,7 @@ class MongoDB:
 
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent.model_dump(exclude_unset=True, mode="json")},
+            {"$set": agent.db_dump(exclude_unset=True)},
         )
 
         return result.modified_count > 0

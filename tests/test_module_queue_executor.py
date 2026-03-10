@@ -43,8 +43,8 @@ def _make_queue_executor():
     qe.database_service = MagicMock()
     qe.a2a_service = MagicMock()
     qe.room_services = MagicMock()
-    qe.response_processor = MagicMock()
-    qe.dispatcher = MagicMock()
+    qe.agent_dispatcher = MagicMock()
+    qe._agent_message_processor = MagicMock()
     return qe
 
 
@@ -124,11 +124,9 @@ class TestCheckRateLimit:
 
 class TestProcessQueue:
     @pytest.mark.asyncio
-    async def test_process_single_message_dispatches_to_response_processor(self):
-        """Inline path (no AgentMessageProcessor) routes through
-        response_processor.handle_streaming_response."""
+    async def test_process_single_message_delegates_to_amp(self):
+        """_process_single_message delegates to AgentMessageProcessor."""
         qe = _make_queue_executor()
-        qe._agent_message_processor = None
 
         msg = MagicMock()
         msg.message_id = "msg-1"
@@ -137,38 +135,24 @@ class TestProcessQueue:
         agent = MagicMock()
         agent.agent_card = MagicMock()
 
-        qe.database_service.get_room_memory_by_room_id = AsyncMock(
-            return_value=MagicMock()
+        qe._agent_message_processor.process_single_message = AsyncMock(
+            return_value=ProcessingResult(ProcessingStatus.SUCCESS, "reply")
         )
 
-        process_resp = MagicMock()
-        process_resp.success = True
-        process_resp.a2a_message = MagicMock()
-        qe.room_services.process_agent_message = AsyncMock(
-            return_value=process_resp
+        result = await qe._process_single_message(
+            msg, "room-1", agent, "umsg-1"
         )
 
-        qe.a2a_service.has_streaming_capability = MagicMock(return_value=True)
-        qe.response_processor.handle_streaming_response = AsyncMock(
-            return_value=(ProcessingStatus.SUCCESS, "reply")
+        qe._agent_message_processor.process_single_message.assert_awaited_once_with(
+            msg, "room-1", agent, "umsg-1",
+            token=None, step_number=None, total_steps=None, quoted_text=None,
         )
-        qe.database_service.get_room_agent_message_by_message_id = AsyncMock(
-            return_value=msg
-        )
-
-        with patch("models.request.RoomCenterAgentMessageRequest"):
-            result = await qe._process_single_message(
-                msg, "room-1", agent, "umsg-1"
-            )
-
-        qe.response_processor.handle_streaming_response.assert_called_once()
         assert result.status == ProcessingStatus.SUCCESS
 
     @pytest.mark.asyncio
     async def test_process_queue_completes_all_messages(self):
         """Two-item queue where both succeed -> QueueResult.COMPLETED."""
         qe = _make_queue_executor()
-        qe._agent_message_processor = None
         qe.room_memory_service = AsyncMock()
 
         msg1 = MagicMock(

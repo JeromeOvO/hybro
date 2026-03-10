@@ -200,6 +200,13 @@ async def get_agent(
         agent_center_request
     )
 
+    if agent_center_response.success and agent_center_response.agent:
+        from services.agent_liveness_service import check_and_sync_liveness
+
+        agent_center_response.agent = await check_and_sync_liveness(
+            agent_center_response.agent
+        )
+
     return agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
     )

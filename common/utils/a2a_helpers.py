@@ -225,7 +225,7 @@ async def convert_inline_bytes_to_s3(
 ) -> int:
     """Convert inline base64 file.bytes and external URIs in part dicts to S3 URIs in-place.
 
-    Shared by ResponseProcessor (streaming finalization) and
+    Shared by DirectTransport (streaming finalization) and
     task_notification_service (webhook/poll completion).  Respects the
     per-message conversion cap defined in models.file_upload.
 
