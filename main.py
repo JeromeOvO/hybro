@@ -14,13 +14,16 @@ from api import (
     a2a_tasks,
     agent,
     agent_group,
-    discovery_api_keys,
     discovery,
+    discovery_api_keys,
     files,
+    gateway,
     hitl,
+    hub,
     inspection_center,
     memory_center,
     orchestration_center,
+    relay,
     room_center,
     sse,
     task,
@@ -31,9 +34,9 @@ from common.middleware.discovery_cors_middleware import DiscoveryCORSMiddleware
 from config.settings import settings
 from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
+from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from jobs.compaction_sweep import compaction_sweep
 from jobs.stale_task_checker import stale_task_checker
-from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
 
@@ -86,6 +89,7 @@ async def lifespan(app: FastAPI):
     pinecone_db.connect()
 
     await mongodb.create_context_memory_indexes()
+    await mongodb.ensure_agent_indexes()
 
     # Start the agent health check service
     await agent_health_service.start()
@@ -124,9 +128,25 @@ async def lifespan(app: FastAPI):
     # Start orphaned upload cleaner
     await orphaned_upload_cleaner.start()
 
+    # Initialize relay service (Phase 2a)
+    from services.database_service import db_service as _db_svc
+    from services.relay_service import init_relay_service
+    from modules.RoomMessageCenter import room_message_center as _rmc
+    _relay_svc = init_relay_service(
+        mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
+        room_message_center=_rmc,
+    )
+    await _relay_svc.start()
+    logger.info("Relay service initialized and heartbeat checker started")
+
     try:
         yield
     finally:
+        # Stop the relay service heartbeat checker
+        from services.relay_service import relay_service as _relay_svc_shutdown
+        if _relay_svc_shutdown:
+            await _relay_svc_shutdown.stop()
+
         # Stop the stale task checker
         await stale_task_checker.stop()
 
@@ -148,8 +168,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Multi-Agent AI System")
 
-# Add Discovery API CORS middleware
-# This applies permissive CORS only to /api/v1/discovery/* paths
+# Add Discovery, Gateway & Relay API CORS middleware
+# This applies permissive CORS to /api/v1/discovery/*, /api/v1/gateway/*, and /api/v1/relay/* paths
 # Note: Middleware runs in reverse order, so adding first means it runs last
 app.add_middleware(DiscoveryCORSMiddleware)
 
@@ -215,6 +235,12 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(
+    hub.router,
+    prefix=api_prefix,
+    tags=["hub"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
     task.router,
     prefix=api_prefix,
     tags=["task"],
@@ -260,6 +286,23 @@ app.include_router(
     prefix=api_prefix,
     tags=["a2a_tasks"],
     # Auth handled per-route in a2a_tasks.py
+)
+
+# Gateway API - External public API with API key auth
+# Uses open CORS to allow external SDK/hub access from any origin
+app.include_router(
+    gateway.router,
+    prefix=api_prefix,
+    tags=["gateway"],
+    # Auth handled per-route via X-API-Key header in gateway.py
+)
+# Relay API - Hub communication endpoints with API key / JWT auth
+# Uses open CORS to allow hub daemon access from any origin
+app.include_router(
+    relay.router,
+    prefix=api_prefix,
+    tags=["relay"],
+    # Auth handled per-route via X-API-Key or Bearer token in relay.py
 )
 # Webhook endpoint - no auth prefix, no authentication (uses token validation)
 app.include_router(

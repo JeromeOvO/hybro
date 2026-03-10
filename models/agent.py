@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import ClassVar
 
 from a2a.types import AgentCard
 from pydantic import BaseModel, field_serializer
@@ -50,6 +51,23 @@ class Agent(BaseModel):
 
     # Visibility: True = public (everyone can see/use), False = private (owner only)
     is_public: bool = True
+
+    # Hub Phase 2 additions (see HYBRO_HUB_DESIGN.md §5.1, §15)
+    source: str = "cloud"
+    hub_id: str | None = None
+    local_agent_id: str | None = None
+
+    # Derived at read time from the hub document — not persisted in MongoDB.
+    hub_owner_id: str | None = None
+    is_hub_online: bool = False
+
+    # Fields excluded from DB serialization (populated at read time).
+    _DB_EXCLUDE_FIELDS: ClassVar[set[str]] = {"hub_owner_id", "is_hub_online"}
+
+    def db_dump(self, **kwargs) -> dict:
+        """Serialize for MongoDB, excluding derived hub fields."""
+        kwargs.setdefault("mode", "json")
+        return self.model_dump(exclude=self._DB_EXCLUDE_FIELDS, **kwargs)
 
     @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:

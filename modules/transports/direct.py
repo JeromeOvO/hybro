@@ -1,7 +1,12 @@
-"""Streaming and synchronous response processing from A2A agents.
+"""DirectTransport — cloud SSE/sync transport to cloud-reachable A2A agents.
 
-Handles chunk accumulation, artifact collection, stream finalization,
-sync response handling with polling, and cancellation/error handling.
+Absorbs all response-processing logic (formerly in ``ResponseProcessor``)
+and replaces terminal ``notify_task_update`` calls with ``AgentEvent``
+emissions through ``AgentResponseHandler``.
+
+Mid-stream SSE (``send_agent_token`` during streaming) stays inside
+``DirectTransport`` via its own ``sse_manager`` reference — this is an
+accepted asymmetry (see design doc §2.8).
 """
 
 import asyncio
@@ -22,7 +27,6 @@ from a2a.types import (
 
 from common.utils.a2a_helpers import (
     extract_error_message,
-    extract_parts_from_artifacts,
     extract_text_from_artifacts,
     get_message_from_task,
     get_text_from_a2a_response,
@@ -30,21 +34,23 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
-from models.processing import ProcessingContext, ProcessingStatus
+from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
+from modules.agent_event import AgentEvent
+from modules.dispatch_middleware import DispatchContext
 from modules.TaskStateManager import (
     TaskStateManager,
     get_task,
     state_str,
 )
+from modules.transports.base import AgentTransport
 from services.a2a_constants import (
-    INTERACTIVE_STATES,  # noqa: F401 — needed by callers / upcoming usage
+    INTERACTIVE_STATES,
     TERMINAL_STATES,
     SyntheticTaskId,
     is_failure_state,
     is_terminal_state,
 )
-from services.task_notification_service import notify_task_update
 
 logger = get_logger(__name__)
 
@@ -59,27 +65,28 @@ class MessageStreamingState:
     inline_conversion_count: int = 0
     agent_message_id: str | None = None
     message_added_to_history: bool = False
+    stream_finalized: bool = False
+    final_state: TaskState | None = None
 
 
-class ResponseProcessor:
-    """Handles streaming and sync response processing from A2A agents.
+class DirectTransport(AgentTransport):
+    """Direct HTTP/SSE transport to cloud-reachable A2A agents.
 
-    Responsible for:
-    - Streaming chunk handling and accumulation
-    - Artifact accumulation
-    - Stream finalization (persist + notify)
-    - Sync response handling and polling
-    - Cancellation/error handling during responses
+    Contains all streaming and sync response processing logic (formerly
+    in ``ResponseProcessor``).  Terminal notifications go through
+    ``AgentResponseHandler`` via ``_emit_terminal``.
     """
 
     def __init__(
         self,
+        response_handler,
         tsm: TaskStateManager,
-        sse_manager,
         a2a_service,
         task_service,
+        sse_manager,
         database_service,
-    ):
+    ) -> None:
+        super().__init__(response_handler)
         self.tsm = tsm
         self.sse_manager = sse_manager
         self.a2a_service = a2a_service
@@ -94,6 +101,200 @@ class ResponseProcessor:
 
             self._s3_service = s3_service
         return self._s3_service
+
+    # ------------------------------------------------------------------
+    # Terminal event emission
+    # ------------------------------------------------------------------
+
+    async def _emit_terminal(
+        self,
+        ctx: ProcessingContext,
+        state: TaskState,
+        *,
+        error: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> None:
+        """Emit a terminal AgentEvent through the shared response handler.
+
+        skip_persist=True because tsm.transition_task / tsm.persist_message
+        already wrote the full document to DB.
+        """
+        msg = ctx.current_message
+        kind: str
+        if state == TaskState.canceled:
+            kind = "canceled"
+        elif is_failure_state(state):
+            kind = "error"
+        elif state in INTERACTIVE_STATES:
+            kind = "interactive"
+        else:
+            kind = "response"
+
+        await self.response_handler.handle(AgentEvent(
+            kind=kind,
+            message_id=msg.message_id,
+            room_id=ctx.room_id,
+            agent_id=msg.agent_id or "",
+            text=(error or (msg.message_content.message_text if hasattr(msg, 'message_content') and msg.message_content else "")),
+            error_text=error if kind == "error" else None,
+            state=state.value if hasattr(state, 'value') else str(state),
+            related_message_id=msg.related_message_id,
+            user_id=msg.user_id or "",
+            parts=parts,
+            skip_persist=True,
+        ))
+
+    # ------------------------------------------------------------------
+    # dispatch — unified entry point for AgentMessageProcessor router
+    # ------------------------------------------------------------------
+
+    async def dispatch(
+        self,
+        ctx: DispatchContext,
+        message: RoomAgentMessage,
+    ) -> ProcessingResult:
+        """Execute direct (cloud) dispatch: streaming or sync based on agent capabilities.
+
+        Extracts all needed params from ``ctx`` (DispatchContext) and the
+        ``message`` (RoomAgentMessage).  Returns a ``ProcessingResult``.
+        """
+        agent = ctx.agent
+        room_id = ctx.room_id
+        user_message_id = ctx.user_message_id
+        prepared_message = ctx.prepared_message
+        token = ctx.token
+        step_number = ctx.step_number
+        total_steps = ctx.total_steps
+
+        support_streaming = self.a2a_service.has_streaming_capability(
+            agent_card=agent.agent_card
+        )
+
+        full_response_text = ""
+        paused_message_id = None
+        if support_streaming:
+            try:
+                (
+                    status,
+                    full_response_text,
+                ) = await self.handle_streaming_response(
+                    message,
+                    agent.agent_card,
+                    prepared_message,
+                    room_id,
+                    user_message_id,
+                    token=token,
+                    send_sse=True,
+                    step_number=step_number,
+                    total_steps=total_steps,
+                )
+            except Exception as exc:
+                logger.error(
+                    "DirectTransport.dispatch: Unhandled exception in streaming for message %s: %s",
+                    message.message_id,
+                    exc,
+                    exc_info=True,
+                )
+                await self.tsm.transition_task(
+                    message, TaskState.failed,
+                    error=f"Agent streaming failed: {exc}",
+                    persist=True,
+                )
+                fallback_ctx = ProcessingContext(
+                    room_id=room_id,
+                    current_message=message,
+                    agent_card=agent.agent_card,
+                    user_message_id=user_message_id,
+                )
+                await self._emit_terminal(
+                    fallback_ctx, TaskState.failed,
+                    error=f"Agent streaming failed: {exc}",
+                )
+                return ProcessingResult(ProcessingStatus.FAILED, "")
+            if status != ProcessingStatus.SUCCESS:
+                return ProcessingResult(status, full_response_text)
+        else:
+            (
+                success,
+                full_response_text,
+                paused_message_id,
+            ) = await self.handle_sync_response(
+                message,
+                agent.agent_card,
+                prepared_message,
+                room_id,
+                message.user_id,
+                user_message_id=user_message_id,
+                token=token,
+                step_number=step_number,
+                total_steps=total_steps,
+            )
+            if not success:
+                task = get_task(message)
+                was_canceled = (
+                    (token and token.is_cancelled)
+                    or (task and task.status and task.status.state == TaskState.canceled)
+                )
+                if was_canceled:
+                    return ProcessingResult(ProcessingStatus.CANCELED)
+                return ProcessingResult(ProcessingStatus.FAILED)
+
+        if full_response_text is None and paused_message_id:
+            task = get_task(message)
+            if task and task.status and task.status.state == TaskState.input_required:
+                logger.info(
+                    "DirectTransport.dispatch: Agent returned input_required for message %s",
+                    paused_message_id,
+                )
+                task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
+                status_msg = None
+                if task.status and task.status.message:
+                    parts = task.status.message.parts or []
+                    for p in parts:
+                        if hasattr(p, "root") and hasattr(p.root, "text"):
+                            status_msg = p.root.text
+                            break
+                        if hasattr(p, "text"):
+                            status_msg = p.text
+                            break
+                return ProcessingResult(
+                    ProcessingStatus.AWAITING_INPUT,
+                    response_text="",
+                    message_id=paused_message_id,
+                    a2a_task_id=task_data.get("id") or (task.id if hasattr(task, "id") else None),
+                    a2a_context_id=task_data.get("context_id") or (task.context_id if hasattr(task, "context_id") else None),
+                    status_message=status_msg,
+                )
+
+            logger.info(
+                "DirectTransport.dispatch: Push notification task submitted for message %s; "
+                "queue will be paused until task completes",
+                paused_message_id,
+            )
+            return ProcessingResult(
+                ProcessingStatus.PAUSED,
+                response_text="",
+                message_id=paused_message_id,
+            )
+
+        if full_response_text is None:
+            logger.info(
+                "DirectTransport.dispatch: Async task submitted for message %s; "
+                "skipping immediate agent response",
+                message.message_id,
+            )
+            return ProcessingResult(ProcessingStatus.SUCCESS)
+
+        message = (
+            await self.database_service.get_room_agent_message_by_message_id(
+                message.message_id
+            )
+        )
+
+        if message is None:
+            return ProcessingResult(ProcessingStatus.FAILED, full_response_text)
+
+        return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
     async def _convert_inline_bytes_to_s3(
         self, artifact, room_id: str, message_id: str,
@@ -202,13 +403,13 @@ class ResponseProcessor:
         remote_task_id = task.id if task.id else None
         if not remote_task_id or remote_task_id.startswith("pending-"):
             logger.debug(
-                "ResponseProcessor: No remote task ID to cancel for message %s",
+                "DirectTransport: No remote task ID to cancel for message %s",
                 current_message.message_id,
             )
             return
 
         logger.info(
-            "ResponseProcessor: Attempting to cancel remote task %s on agent %s",
+            "DirectTransport: Attempting to cancel remote task %s on agent %s",
             remote_task_id,
             agent_card.name,
         )
@@ -225,7 +426,7 @@ class ResponseProcessor:
     ) -> dict[str, Any] | None:
         try:
             logger.info(
-                "ResponseProcessor: Setting up task tracking for message %s (step %s/%s, agent: %s)",
+                "DirectTransport: Setting up task tracking for message %s (step %s/%s, agent: %s)",
                 current_message.message_id,
                 step_number,
                 total_steps,
@@ -244,7 +445,7 @@ class ResponseProcessor:
             task_content = current_message.task_content
 
             logger.info(
-                "ResponseProcessor: Sending task_submitted SSE for step %s/%s, task_content: %s",
+                "DirectTransport: Sending task_submitted SSE for step %s/%s, task_content: %s",
                 step_number,
                 total_steps,
                 task_content[:50] if task_content else "None",
@@ -328,7 +529,7 @@ class ResponseProcessor:
         poll_count = 0
 
         logger.info(
-            "ResponseProcessor: Starting poll for task %s (agent task: %s), timeout: %ds",
+            "DirectTransport: Starting poll for task %s (agent task: %s), timeout: %ds",
             message_id,
             task_id,
             timeout_seconds,
@@ -338,7 +539,7 @@ class ResponseProcessor:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout_seconds:
                 logger.warning(
-                    "ResponseProcessor: Poll timeout for task %s after %.1fs (%d polls)",
+                    "DirectTransport: Poll timeout for task %s after %.1fs (%d polls)",
                     message_id,
                     elapsed,
                     poll_count,
@@ -347,7 +548,7 @@ class ResponseProcessor:
 
             if token and token.is_cancelled:
                 logger.info(
-                    "ResponseProcessor: Polling cancelled for task %s after %d polls",
+                    "DirectTransport: Polling cancelled for task %s after %d polls",
                     message_id,
                     poll_count,
                 )
@@ -361,7 +562,7 @@ class ResponseProcessor:
                         await asyncio.sleep(delay)
                 except CancellationError:
                     logger.info(
-                        "ResponseProcessor: Polling sleep interrupted by cancellation for task %s",
+                        "DirectTransport: Polling sleep interrupted by cancellation for task %s",
                         message_id,
                     )
                     return None
@@ -377,7 +578,7 @@ class ResponseProcessor:
 
                 if not response or isinstance(response.root, JSONRPCErrorResponse):
                     logger.warning(
-                        "ResponseProcessor: Poll %d for task %s returned error/empty",
+                        "DirectTransport: Poll %d for task %s returned error/empty",
                         poll_count,
                         message_id,
                     )
@@ -386,7 +587,7 @@ class ResponseProcessor:
                 task = response.root.result
                 if task is None:
                     logger.warning(
-                        "ResponseProcessor: Poll %d for task %s returned no result",
+                        "DirectTransport: Poll %d for task %s returned no result",
                         poll_count,
                         message_id,
                     )
@@ -397,7 +598,7 @@ class ResponseProcessor:
 
                 if is_terminal_state(state):
                     logger.info(
-                        "ResponseProcessor: Task %s completed with state %s after %.1fs (%d polls)",
+                        "DirectTransport: Task %s completed with state %s after %.1fs (%d polls)",
                         message_id,
                         state_value,
                         asyncio.get_event_loop().time() - start_time,
@@ -406,7 +607,7 @@ class ResponseProcessor:
                     return task
 
                 logger.debug(
-                    "ResponseProcessor: Poll %d for task %s: state=%s",
+                    "DirectTransport: Poll %d for task %s: state=%s",
                     poll_count,
                     message_id,
                     state_value,
@@ -414,7 +615,7 @@ class ResponseProcessor:
 
             except Exception as e:
                 logger.warning(
-                    "ResponseProcessor: Poll %d for task %s failed: %s",
+                    "DirectTransport: Poll %d for task %s failed: %s",
                     poll_count,
                     message_id,
                     e,
@@ -479,6 +680,11 @@ class ResponseProcessor:
                     await self._handle_stream_artifact_update(
                         result, ctx, streaming_state
                     )
+                case _:
+                    logger.warning(
+                        "DirectTransport: Unknown streaming event kind '%s' for message %s",
+                        result.kind, ctx.user_message_id,
+                    )
 
         return await self._finalize_streaming(ctx, streaming_state)
 
@@ -496,18 +702,13 @@ class ResponseProcessor:
         ``_managed_queue`` has persisted all remaining siblings.
         """
         logger.info(
-            "ResponseProcessor: Streaming cancelled for message %s", ctx.user_message_id
+            "DirectTransport: Streaming cancelled for message %s", ctx.user_message_id
         )
         await self.tsm.transition_task(
             ctx.current_message, TaskState.canceled, persist=True
         )
         if ctx.task_info:
-            await notify_task_update(
-                message_id=ctx.current_message.message_id,
-                state=TaskState.canceled,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-            )
+            await self._emit_terminal(ctx, TaskState.canceled)
         # NOTE: Do NOT send processing_status here — QueueExecutor handles
         # workflow-level SSE after all siblings are persisted.
         await self._try_cancel_remote_task(ctx.current_message, ctx.agent_card)
@@ -521,19 +722,13 @@ class ResponseProcessor:
     ) -> tuple[ProcessingStatus, str]:
         """Handle JSON-RPC error during streaming."""
         error_message = a2a_response.root.error.model_dump_json()
-        logger.error("ResponseProcessor: Agent error: %s", error_message)
+        logger.error("DirectTransport: Agent error: %s", error_message)
         await self.tsm.transition_task(
             ctx.current_message, TaskState.failed, error=error_message,
             persist=True,
         )
         if ctx.task_info:
-            await notify_task_update(
-                message_id=ctx.current_message.message_id,
-                state=TaskState.failed,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-                error=error_message,
-            )
+            await self._emit_terminal(ctx, TaskState.failed, error=error_message)
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
         return ProcessingStatus.FAILED, streaming_state.full_response_text
@@ -600,7 +795,7 @@ class ResponseProcessor:
         """Handle a 'task' event during streaming (log only)."""
         status = result.status
         logger.debug(
-            "ResponseProcessor: Task event: %s", status.state if status else "no status"
+            "DirectTransport: Task event: %s", status.state if status else "no status"
         )
 
     async def _handle_stream_status_update(
@@ -611,11 +806,17 @@ class ResponseProcessor:
     ) -> None:
         """Handle a 'status-update' event during streaming."""
         state = result.status.state
+        is_final = getattr(result, "final", False)
         logger.info(
-            "ResponseProcessor: Status update for message %s: %s",
+            "DirectTransport: Status update for message %s: %s (final=%s)",
             ctx.current_message.message_id,
             state,
+            is_final,
         )
+
+        if is_final:
+            streaming_state.stream_finalized = True
+            streaming_state.final_state = state
 
         a2a_status_message_text: str | None = None
         if result.status.message:
@@ -633,7 +834,7 @@ class ResponseProcessor:
 
         if state in TERMINAL_STATES:
             logger.info(
-                "ResponseProcessor: Final status for message %s: %s",
+                "DirectTransport: Final status for message %s: %s",
                 ctx.current_message.message_id,
                 state,
             )
@@ -650,18 +851,18 @@ class ResponseProcessor:
                         and fetched_text != streaming_state.full_response_text
                     ):
                         logger.warning(
-                            "ResponseProcessor: Fetched final text differs from streaming text for %s",
+                            "DirectTransport: Fetched final text differs from streaming text for %s",
                             ctx.current_message.message_id,
                         )
                     streaming_state.full_response_text = fetched_text
                 else:
                     logger.warning(
-                        "ResponseProcessor: Fetched task returned empty text for %s, keeping streaming text",
+                        "DirectTransport: Fetched task returned empty text for %s, keeping streaming text",
                         ctx.current_message.message_id,
                     )
             else:
                 logger.error(
-                    "ResponseProcessor: Failed to retrieve final task for task id %s",
+                    "DirectTransport: Failed to retrieve final task for task id %s",
                     result.task_id,
                 )
 
@@ -740,7 +941,7 @@ class ResponseProcessor:
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
         logger.info(
-            "ResponseProcessor: Streaming complete for message %s, text length: %d",
+            "DirectTransport: Streaming complete for message %s, text length: %d",
             ctx.current_message.message_id,
             len(streaming_state.full_response_text),
         )
@@ -748,7 +949,7 @@ class ResponseProcessor:
         task = get_task(ctx.current_message)
         if not task:
             logger.warning(
-                "ResponseProcessor: _finalize_streaming: no in-memory task for message %s; "
+                "DirectTransport: _finalize_streaming: no in-memory task for message %s; "
                 "task_update SSE will not be sent via this path",
                 ctx.current_message.message_id,
             )
@@ -772,21 +973,55 @@ class ResponseProcessor:
                 )
 
         if task and not already_terminal:
-            if streaming_state.full_response_text:
+            if streaming_state.stream_finalized:
+                final_st = streaming_state.final_state or TaskState.completed
+                if is_failure_state(final_st):
+                    if streaming_state.full_response_text:
+                        ctx.current_message.message_content.message_text = (
+                            streaming_state.full_response_text
+                        )
+                    await self.tsm.transition_task(
+                        ctx.current_message, final_st, persist=True
+                    )
+                    await self._emit_terminal(ctx, final_st)
+                    return ProcessingStatus.FAILED, streaming_state.full_response_text
+                elif final_st in INTERACTIVE_STATES:
+                    await self.tsm.transition_task(
+                        ctx.current_message, final_st, persist=True
+                    )
+                    await self._emit_terminal(ctx, final_st)
+                    return ProcessingStatus.SUCCESS, streaming_state.full_response_text
+                else:
+                    if streaming_state.full_response_text:
+                        ctx.current_message.message_content.message_text = (
+                            streaming_state.full_response_text
+                        )
+                    await self.tsm.transition_task(
+                        ctx.current_message, TaskState.completed, persist=True
+                    )
+                    await self._emit_terminal(ctx, TaskState.completed)
+            elif streaming_state.full_response_text:
                 ctx.current_message.message_content.message_text = (
                     streaming_state.full_response_text
                 )
-            await self.tsm.transition_task(
-                ctx.current_message,
-                TaskState.completed,
-                persist=True,
-            )
-            await notify_task_update(
-                message_id=ctx.current_message.message_id,
-                state=TaskState.completed,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-            )
+                await self.tsm.transition_task(
+                    ctx.current_message,
+                    TaskState.completed,
+                    persist=True,
+                )
+                await self._emit_terminal(ctx, TaskState.completed)
+            else:
+                logger.warning(
+                    "DirectTransport: Stream ended without terminal status or content for %s",
+                    ctx.current_message.message_id,
+                )
+                await self.tsm.transition_task(
+                    ctx.current_message,
+                    TaskState.failed,
+                    persist=True,
+                )
+                await self._emit_terminal(ctx, TaskState.failed)
+                return ProcessingStatus.FAILED, streaming_state.full_response_text
 
         if already_terminal:
             final_state = task.status.state
@@ -807,12 +1042,7 @@ class ResponseProcessor:
                     streaming_state.full_response_text
                 )
             await self.tsm.persist_message(ctx.current_message)
-            await notify_task_update(
-                message_id=ctx.current_message.message_id,
-                state=final_state,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-            )
+            await self._emit_terminal(ctx, final_state)
 
             if is_failure_state(final_state):
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
@@ -833,11 +1063,38 @@ class ResponseProcessor:
         self, room_agent_message: RoomAgentMessage, message_data: None | Task | Message
     ) -> bool:
         if message_data is None:
-            logger.error("ResponseProcessor: process_a2a_response returned None")
+            logger.error("DirectTransport: process_a2a_response returned None")
             return False
 
         if message_data.kind == "task":
-            room_agent_message.message_content.message_task = message_data
+            existing_task = get_task(room_agent_message)
+            if (
+                existing_task
+                and existing_task.status
+                and is_terminal_state(existing_task.status.state)
+            ):
+                # The in-memory task already has a terminal status (e.g. completed).
+                # The re-fetched task may carry stale non-terminal data — merge
+                # only artifacts and history without downgrading the status.
+                incoming_state = (
+                    message_data.status.state if message_data.status else None
+                )
+                if incoming_state and not is_terminal_state(incoming_state):
+                    logger.info(
+                        "_handle_a2a_response_for_room: preserving terminal status %s, "
+                        "incoming had %s for %s",
+                        state_str(existing_task.status.state),
+                        state_str(incoming_state),
+                        room_agent_message.message_id,
+                    )
+                    if message_data.artifacts:
+                        existing_task.artifacts = message_data.artifacts
+                    if message_data.history:
+                        existing_task.history = message_data.history
+                else:
+                    room_agent_message.message_content.message_task = message_data
+            else:
+                room_agent_message.message_content.message_task = message_data
             return await self.tsm.persist_message(room_agent_message)
 
         if message_data.kind == "message":
@@ -849,7 +1106,7 @@ class ResponseProcessor:
             return await self.tsm.persist_message(room_agent_message)
 
         logger.error(
-            "ResponseProcessor: Unexpected data kind in A2A response: %s",
+            "DirectTransport: Unexpected data kind in A2A response: %s",
             message_data.kind,
         )
         return False
@@ -940,7 +1197,7 @@ class ResponseProcessor:
         )
         if not task_info:
             logger.warning(
-                "ResponseProcessor: task tracking setup failed for message %s — degraded mode",
+                "DirectTransport: task tracking setup failed for message %s — degraded mode",
                 current_message.message_id,
             )
             await self.sse_manager.send_task_submitted(
@@ -959,7 +1216,7 @@ class ResponseProcessor:
         # Check for cancellation before the (potentially long) sync agent call
         if token and token.is_cancelled:
             logger.info(
-                "ResponseProcessor: Sync call cancelled before agent call for %s",
+                "DirectTransport: Sync call cancelled before agent call for %s",
                 message_id,
             )
             await self.tsm.transition_task(
@@ -967,12 +1224,7 @@ class ResponseProcessor:
                 persist=True,
             )
             if task_info:
-                await notify_task_update(
-                    message_id=current_message.message_id,
-                    state=TaskState.canceled,
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                )
+                await self._emit_terminal(ctx, TaskState.canceled)
             return False, "", None
 
         # Call the agent
@@ -984,7 +1236,6 @@ class ResponseProcessor:
                     message_id=message_id,
                     webhook_token=task_info["webhook_token"],
                     context_id=task_info["context_id"],
-                    room_id=room_id,
                 )
             else:
 
@@ -1003,7 +1254,7 @@ class ResponseProcessor:
                 response = await agent_coro
         except CancellationError:
             logger.info(
-                "ResponseProcessor: Sync call cancelled during agent call for %s",
+                "DirectTransport: Sync call cancelled during agent call for %s",
                 message_id,
             )
             await self.tsm.transition_task(
@@ -1011,12 +1262,7 @@ class ResponseProcessor:
                 persist=True,
             )
             if task_info:
-                await notify_task_update(
-                    message_id=current_message.message_id,
-                    state=TaskState.canceled,
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                )
+                await self._emit_terminal(ctx, TaskState.canceled)
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None
         except Exception as exc:
@@ -1028,12 +1274,7 @@ class ResponseProcessor:
                 persist=True,
             )
             if task_info:
-                await notify_task_update(
-                    message_id=current_message.message_id,
-                    state=TaskState.failed,
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                    error=str(exc),
+                await self._emit_terminal(ctx, TaskState.failed, error=str(exc),
                 )
             await self.sse_manager.send_error(room_id, str(exc))
             return False, "", None
@@ -1041,7 +1282,7 @@ class ResponseProcessor:
         # Post-call cancellation check
         if token and token.is_cancelled:
             logger.info(
-                "ResponseProcessor: Sync call cancelled after agent response for %s",
+                "DirectTransport: Sync call cancelled after agent response for %s",
                 message_id,
             )
             await self.tsm.transition_task(
@@ -1049,12 +1290,7 @@ class ResponseProcessor:
                 persist=True,
             )
             if task_info:
-                await notify_task_update(
-                    message_id=current_message.message_id,
-                    state=TaskState.canceled,
-                    room_id=room_id,
-                    user_id=current_message.user_id or "",
-                )
+                await self._emit_terminal(ctx, TaskState.canceled)
             await self._try_cancel_remote_task(current_message, agent_card)
             return False, "", None
 
@@ -1109,17 +1345,11 @@ class ResponseProcessor:
                 TaskState.completed,
                 persist=True,
             )
-            await notify_task_update(
-                message_id=current_message.message_id,
-                state=TaskState.completed,
-                room_id=room_id,
-                user_id=current_message.user_id or "",
-                parts=non_text_parts if non_text_parts else None,
-            )
+            await self._emit_terminal(ctx, TaskState.completed, parts=non_text_parts if non_text_parts else None)
 
             if not task_info:
                 logger.info(
-                    "ResponseProcessor: Degraded mode — sending task_update directly for %s",
+                    "DirectTransport: Degraded mode — sending task_update directly for %s",
                     message_id,
                 )
                 await self.sse_manager.send_task_update(
@@ -1158,12 +1388,12 @@ class ResponseProcessor:
             agent_task_id = response.get("task_id")
             if not agent_task_id:
                 logger.warning(
-                    "ResponseProcessor: Non-push agent task response without task_id"
+                    "DirectTransport: Non-push agent task response without task_id"
                 )
                 return True, None, None
 
             logger.info(
-                "ResponseProcessor: Polling non-push agent task %s", agent_task_id
+                "DirectTransport: Polling non-push agent task %s", agent_task_id
             )
             completed_task = await self._poll_task_until_complete(
                 agent_card=agent_card,
@@ -1175,7 +1405,7 @@ class ResponseProcessor:
 
             if completed_task is None and (token and token.is_cancelled):
                 logger.info(
-                    "ResponseProcessor: Poll cancelled for task %s, transitioning to canceled",
+                    "DirectTransport: Poll cancelled for task %s, transitioning to canceled",
                     message_id,
                 )
                 await self.tsm.transition_task(
@@ -1183,12 +1413,7 @@ class ResponseProcessor:
                     persist=True,
                 )
                 if task_info:
-                    await notify_task_update(
-                        message_id=current_message.message_id,
-                        state=TaskState.canceled,
-                        room_id=room_id,
-                        user_id=current_message.user_id or "",
-                    )
+                    await self._emit_terminal(ctx, TaskState.canceled)
                 await self._try_cancel_remote_task(current_message, agent_card)
                 return False, "", None
 
@@ -1206,7 +1431,7 @@ class ResponseProcessor:
                 )
             else:
                 logger.warning(
-                    "ResponseProcessor: Polling timed out for task %s",
+                    "DirectTransport: Polling timed out for task %s",
                     message_id,
                 )
                 await self.tsm.transition_task(
@@ -1214,13 +1439,7 @@ class ResponseProcessor:
                     error="Task polling timed out",
                     persist=True,
                 )
-                await notify_task_update(
-                    message_id=message_id,
-                    state=TaskState.failed,
-                    room_id=ctx.room_id,
-                    user_id=ctx.current_message.user_id or "",
-                    error="Task polling timed out",
-                )
+                await self._emit_terminal(ctx, TaskState.failed, error="Task polling timed out")
                 return True, None, None
 
         logger.error("Unexpected response type from task tracking: %s", response)
@@ -1243,8 +1462,6 @@ class ResponseProcessor:
         state = completed_task.status.state
         state_value = state_str(state)
 
-        # Rewrite external/base64 URIs to durable S3 URLs *before* persisting,
-        # so the DB never stores expiring external URIs.
         if completed_task.artifacts:
             conversion_counter: list[int] = [0]
             for artifact in completed_task.artifacts:
@@ -1253,35 +1470,29 @@ class ResponseProcessor:
                     conversion_counter=conversion_counter,
                 )
 
-        if task_info:
-            await self.database_service.update_task_on_message(
-                message_id, completed_task.model_dump(mode="json")
-            )
-
         final_content = None
         final_error = None
-        final_parts = None
-
-        if completed_task.artifacts:
-            extracted = extract_parts_from_artifacts(completed_task.artifacts)
-            final_content = extracted.text if extracted.text else None
-            if extracted.has_non_text:
-                final_parts = extracted.file_parts + extracted.data_parts
-
-        if is_failure_state(state):
+        if state == TaskState.completed and completed_task.artifacts:
+            final_content = extract_text_from_artifacts(completed_task.artifacts)
+        elif is_failure_state(state):
             final_error = extract_error_message(completed_task) or f"Task {state_value}"
 
         if task_info:
-            await notify_task_update(
-                message_id=message_id,
-                state=state,
-                room_id=ctx.room_id,
-                user_id=ctx.current_message.user_id or "",
-                parts=final_parts,
+            # TODO: Phase 5 -- migrate to incremental update_task_state_on_message.
+            # This is the last caller of the full-document update_task_on_message;
+            # the polled task has a complete Task model that doesn't yet fit the
+            # incremental pattern.
+            await self.database_service.update_task_on_message(
+                message_id,
+                completed_task.model_dump(mode="json"),
+                message_text=final_content or None,
             )
+
+        if task_info:
+            await self._emit_terminal(ctx, state)
         else:
             logger.info(
-                "ResponseProcessor: Degraded mode — sending polled task_update for %s",
+                "DirectTransport: Degraded mode — sending polled task_update for %s",
                 message_id,
             )
             await self.sse_manager.send_task_update(
@@ -1294,6 +1505,5 @@ class ResponseProcessor:
                 agent_id=current_message.agent_id,
                 step_number=step_number,
                 total_steps=total_steps,
-                parts=final_parts,
             )
         return True, final_content, None

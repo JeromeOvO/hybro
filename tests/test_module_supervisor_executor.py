@@ -25,11 +25,11 @@ def _make_supervisor_executor():
     se.room_services = MagicMock()
     se.supervisor_service = MagicMock()
     se.tsm = MagicMock()
-    se.dispatcher = MagicMock()
-    se.response_processor = MagicMock()
-    se.a2a_service = MagicMock()
-    se.notification_service = MagicMock()
+    se.agent_dispatcher = MagicMock()
+    se.agent_message_processor = MagicMock()
+    se.room_memory_service = MagicMock()
     se.rate_limit_service = MagicMock()
+    se.room_coordinator_service = MagicMock()
     return se
 
 

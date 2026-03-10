@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check
+    cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
+    cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
 
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
@@ -51,6 +53,19 @@ class Settings(BaseSettings):
     discovery_query_expansion_threshold: int = 5  # Maximum word count for query expansion
     discovery_rate_limit_per_key: int | None = 100  # Requests per API key per hour (None = unlimited)
     discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
+
+    # Gateway API Settings
+    gateway_base_url: str = ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime
+    gateway_rate_limit_per_key: int | None = 200  # Requests per API key per hour (None = unlimited)
+    gateway_rate_limit_global: int | None = 20000  # Total requests per hour across all keys (None = unlimited)
+
+    # Relay (Hub Phase 2) Settings
+    relay_heartbeat_interval: int = 30  # seconds
+    relay_offline_queue_max: int = 100  # per hub
+    relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
+    relay_connection_token_secret: str = ""  # JWT signing secret for /publish auth
+    relay_hub_agent_heartbeat_miss_limit: int = 3
+    relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
     
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (

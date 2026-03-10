@@ -55,8 +55,6 @@ PATCH = {
     # Webhook endpoints
     "webhooks.db_service": "api.webhooks.db_service",
     "webhooks.sse_manager": "api.webhooks.sse_manager",
-    "webhooks.room_message_center": "api.webhooks.room_message_center",
-    "webhooks.notification_service": "api.webhooks.notification_service",
     # Agent group endpoints
     "agent_group.db_service": "api.agent_group.db_service",
     # Discovery endpoints
@@ -72,6 +70,9 @@ PATCH = {
     "file_upload_service": "services.file_upload_service.file_upload_service",
     "room_services.mongodb": "services.room_services.mongodb",
     "room_services.s3_service": "services.room_services.s3_service",
+    # Gateway endpoints
+    "gateway.gateway_service": "api.gateway.gateway_service",
+    "gateway.gateway_rate_limit_service": "api.gateway.gateway_rate_limit_service",
 }
 
 

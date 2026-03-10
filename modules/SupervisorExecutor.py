@@ -1022,7 +1022,10 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
 
-                if result.status == ProcessingStatus.PAUSED:
+                if result.status in (
+                    ProcessingStatus.PAUSED,
+                    ProcessingStatus.RELAY_DISPATCHED,
+                ):
                     return V2StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
