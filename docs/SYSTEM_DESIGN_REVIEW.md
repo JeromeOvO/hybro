@@ -1,28 +1,13 @@
-# System Design Review: Hybro Frontend + Multi-Agents Backend
+# System Design Review: Multi-Agents Backend
 
-**Date**: February 25, 2026 (updated from Feb 23; audit pass Feb 25 PM)
-**Scope**: Full-stack architecture review covering `hybro-frontend` and `multi-agents-backend`
+**Date**: March 9, 2026 (updated from Feb 25; Hub/HITL/Backend overhaul pass Mar 9)
+**Scope**: Backend architecture review for `hybro-multi-agents-backend`
+
+> **Frontend review**: See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` for frontend-specific issues and architecture.
 
 ---
 
 ## 1. Architecture Overview
-
-### Frontend (`hybro-frontend`)
-
-| Layer            | Technology                               |
-| ---------------- | ---------------------------------------- |
-| Framework        | Next.js 15 (App Router) + React 19       |
-| Auth             | Clerk (`@clerk/nextjs` ^6.24.0)          |
-| Server State     | TanStack React Query 5                   |
-| Client State     | Zustand 5                                |
-| Styling          | Tailwind CSS v4 + shadcn/ui (Radix)      |
-| Real-time        | SSE via native `EventSource`             |
-| Forms            | React Hook Form + Zod 4                  |
-| Markdown         | react-markdown + remark-gfm + rehype     |
-
-The frontend serves two portals via subdomain routing:
-- **Consumer** (`hybro.ai` → `/c/*`): Chat rooms, agent marketplace
-- **Developer** (`developer.hybro.ai` → `/d/*`): Agent registration, inspector
 
 ### Backend (`multi-agents-backend`)
 
@@ -34,7 +19,8 @@ The frontend serves two portals via subdomain routing:
 | Auth             | Clerk JWT + API Key (SHA-256)             |
 | Agent Protocol   | A2A (Agent-to-Agent) via `a2a-sdk`        |
 | Real-time        | SSE via `sse-starlette`                   |
-| LLMs             | OpenAI (GPT-5-mini), Google Gemini 2.0    |
+| LLMs             | OpenAI (GPT-5-mini), Google Gemini 2.0, AWS Bedrock (Claude Opus 4.6) |
+| Hub/Relay        | Hybro Hub A2A relay (in-process SSE, heartbeat, offline queue) |
 | Config           | pydantic-settings                         |
 | Observability    | OpenTelemetry + Loguru                    |
 | Caching/TTL      | `cachetools.TTLCache`                     |
@@ -42,25 +28,45 @@ The frontend serves two portals via subdomain routing:
 ### Core Data Flow
 
 ```
-User types message
-    └─→ RoomChatInput.onSubmit()
-        └─→ useRoomWebhook.sendUserMessage()
-            ├─→ Zustand: addLiveMessage (optimistic user msg + processing placeholder)
-            ├─→ POST /api/v1/roomCenter/sendMessage
-            │       ├─→ Creates user message + agent messages in DB
-            │       └─→ background_tasks.add_task(process_room_user_message)
-            │               ├─→ V2 Supervisor path (if room.extend_info.use_supervisor)
-            │               │       └─→ SupervisorExecutor.run() → decide → dispatch → synthesis
-            │               └─→ V1 Legacy path (QueueExecutor)
-            │                       └─→ Sequential agent processing + coordinator summary
-            └─→ SSE stream delivers events:
-                ├─→ task_submitted  → addLiveMessage (task bubble)
-                ├─→ task_update     → replaceLiveMessage (update task status)
-                ├─→ agent_token     → streaming token display
-                └─→ processing_status=completed → setProcessing(false)
+POST /api/v1/roomCenter/sendMessage
+    ├─→ Creates user message + N agent messages in DB
+    └─→ background_tasks.add_task(process_room_user_message)
+            ├─→ V2 Supervisor path (if room.extend_info.use_supervisor)
+            │       └─→ SupervisorExecutor.run() → decide → dispatch → synthesis
+            └─→ V1 Legacy path (QueueExecutor)
+                    └─→ Sequential agent processing + coordinator summary
 
-Final UI = React Query cached messages ∪ Zustand live messages (deduped by ID, sorted)
+SSE stream delivers events to connected clients:
+    ├─→ task_submitted   (agent task created)
+    ├─→ task_update      (working → completed/failed/input-required)
+    ├─→ agent_token      (streaming token chunks)
+    ├─→ artifact_update  (multimodal content chunks)
+    ├─→ hitl_input_requested / hitl_status_update (HITL lifecycle)
+    └─→ processing_status=completed (all agents done)
 ```
+
+### Hub & Gateway Architecture
+
+The platform now supports **Hybro Hubs** — self-hosted agent runtime environments that connect to the cloud backend via a relay service:
+
+```
+External Client (Python SDK)
+    └─→ POST /api/v1/gateway/sendTask (API key auth)
+        └─→ GatewayService resolves agent → dispatch middleware
+            ├─→ Cloud agent: direct A2A call
+            └─→ Hub agent: RelayService SSE queue → Hub polls events
+                └─→ Hub processes task, publishes result via POST /api/v1/relay/publish
+
+Hub ←→ Backend:
+    ├─→ GET /api/v1/relay/events (long-lived SSE, heartbeat every 30s)
+    ├─→ POST /api/v1/relay/publish (task results back to backend)
+    └─→ POST /api/v1/hub/sync (agent catalog sync)
+```
+
+- **Gateway API** (`api/gateway.py`): External agent access via API keys with MongoDB-backed sliding-window rate limiting
+- **Relay Service** (`services/relay_service.py`): In-memory `asyncio.Queue` per hub, offline queue with TTL for brief disconnects
+- **Trust Layer**: Hub agents are sandboxed; see [HYBRO_TRUST_LAYER_DESIGN.md](./HYBRO_TRUST_LAYER_DESIGN.md)
+- **Full design**: [GATEWAY_API.md](./GATEWAY_API.md), [HYBRO_HUB_DESIGN.md](./HYBRO_HUB_DESIGN.md)
 
 ---
 
@@ -86,6 +92,8 @@ class SSEManager:
 - The `cancelled_messages` set is also in-memory; while the MongoDB change stream propagates cancellations cross-instance, the core `room_connections` dict has no such mechanism.
 
 **Downstream dependency**: The HITL (Human-in-the-Loop) design (`HITL_DESIGN.md`) adds new SSE event types (`hitl_input_requested`, `hitl_status_update`) and relies on SSE for the full HITL interaction lifecycle. In a multi-instance deployment, HITL prompts may never reach users if the request is created on a different instance than the user's SSE connection. HITL should either block on this fix or implement a polling fallback.
+
+**Partial Mitigation (Mar 9)**: A MongoDB Change Stream now propagates **cancellation events** cross-instance (`sse_services.py` lines 457-596) with exponential backoff, resume token persistence, and health flag reporting. However, this only covers the `cancelled_messages` collection. Core SSE event fan-out for room messages, agent tokens, HITL prompts, and task updates still requires a message broker.
 
 **Recommendation**: Introduce Redis Pub/Sub, NATS, or a similar message broker for cross-instance SSE event fan-out. Each backend instance subscribes to room-level channels and relays events to its local SSE connections. This decouples event production from event delivery.
 
@@ -114,33 +122,29 @@ background_tasks.add_task(
 
 ---
 
-### 2.3 HIGH: httpx Client Leak — Connections Never Closed
+### 2.3 ~~HIGH~~ PARTIAL: httpx Client Leak — Largely Fixed, Two Methods Remain
 
 **Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_a2a_client`, `get_agent_card_from_url`)
 
-Every A2A interaction creates a new `httpx.AsyncClient` with a 600-second timeout that is never explicitly closed:
+**Previous state**: Every A2A interaction created a new `httpx.AsyncClient` with a 600-second timeout that was never explicitly closed.
+
+**Current state (Mar 9)**: `create_a2a_client()` has been converted to an `@asynccontextmanager` with `await httpx_client.aclose()` in a `finally` block. All 4 primary call sites (`send_message_streaming`, `send_message_sync`, `reply_to_task`, `cancel_task`) now use `async with self.create_a2a_client()` for proper cleanup.
 
 ```python
-async def create_a2a_client(self, agent_card: AgentCard) -> A2AClient:
-    httpx_client = httpx.AsyncClient(timeout=600.0)  # never closed
-    a2a_client = A2AClient(httpx_client, agent_card=agent_card)
-    return a2a_client
+@asynccontextmanager
+async def create_a2a_client(self, agent_card: AgentCard) -> AsyncGenerator[A2AClient, None]:
+    httpx_client = httpx.AsyncClient(timeout=600.0)
+    try:
+        yield A2AClient(httpx_client, agent_card=agent_card)
+    finally:
+        await httpx_client.aclose()
 ```
 
-**Impact**:
-- Each call leaks an HTTP connection. Under load, this exhausts file descriptors and OS-level connection limits.
-- With the 600-second timeout, connections remain open far longer than necessary.
-- The same pattern repeats in `get_agent_card_from_url` and `get_a2a_client`.
+**Remaining issue**: `get_agent_card_from_url()` and `get_a2a_client()` still create `httpx.AsyncClient` instances without context managers or explicit close. These are lower-traffic paths (agent card fetching during discovery) but still leak connections.
 
-**Downstream dependency**: The HITL design adds a new `reply_to_task()` method that calls `_get_a2a_client()`, inheriting this leak. The fix must be applied before or alongside HITL implementation.
+**Downstream dependency**: The HITL `reply_to_task()` method now properly uses `async with httpx.AsyncClient()` for cleanup — this blocker is resolved.
 
-**Recommendation**:
-- The same pattern repeats in `get_agent_card_from_url` and `get_a2a_client`.
-
-**Recommendation**:
-- Use a **shared `httpx.AsyncClient` instance** (connection pool) as a class attribute, created once at startup and closed on shutdown.
-- Alternatively, wrap each usage in `async with httpx.AsyncClient() as client:` to ensure automatic cleanup.
-- Consider reducing the 600s timeout to a more reasonable value (30-60s) with per-operation overrides where needed.
+**Recommendation**: Convert the remaining two methods to the `@asynccontextmanager` pattern, or use a shared `httpx.AsyncClient` connection pool as a class attribute.
 
 ---
 
@@ -197,23 +201,23 @@ However, the legacy `POST /api/v1/orchestrationCenter/processRoomUserMessage` en
 
 ### 2.6 HIGH: JWT Token Exposed in SSE Query Parameter
 
-**Location**: `hybro-frontend/src/lib/api/sse.ts`, `multi-agents-backend/api/sse.py`
+**Location**: `api/sse.py` (`get_current_user_with_query_token`), frontend `sse.ts`
 
-Because `EventSource` cannot send custom HTTP headers, the Clerk JWT is passed as a URL query parameter:
+The SSE endpoint accepts the Clerk JWT as a URL query parameter because `EventSource` cannot send custom HTTP headers:
 
 ```
 GET /api/v1/sse/room/{roomId}/stream?token=<clerk-jwt>
 ```
 
 **Impact**:
-- Tokens appear in **server access logs**, **CDN/proxy logs**, **browser history**, and **referrer headers**.
-- URLs containing tokens can be cached by intermediate proxies.
+- Tokens appear in **server access logs**, **CDN/proxy logs**, and can be cached by intermediate proxies.
 - If an attacker obtains the URL, they can replay the SSE connection and receive all room events.
 
 **Recommendation**:
-- Issue a **short-lived, single-use SSE token** (e.g., a 30-second nonce exchanged via a POST endpoint) instead of exposing the main Clerk JWT.
-- Alternatively, migrate to a fetch-based SSE implementation using `ReadableStream` (which supports custom headers) or use WebSockets.
+- Add a backend endpoint (e.g., `POST /api/v1/sse/token`) that exchanges a Clerk JWT for a **short-lived, single-use SSE nonce** (30-second TTL). The SSE stream then validates the nonce instead of the raw JWT.
 - At minimum, ensure server logs redact the `token` query parameter.
+
+> **Frontend side**: See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.1 and `hybro-frontend/docs/architecture.md` §15.2 for the client-side perspective.
 
 ---
 
@@ -258,38 +262,24 @@ The `SendMessage` flow creates a user message plus N agent messages across separ
 
 ### 2.9 MEDIUM: Frontend Optimistic Update ID Mismatch Window
 
-**Location**: `hybro-frontend/src/hooks/useRoomWebhook.ts` (`sendUserMessage`)
+> **This is a frontend-only issue.** See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.2 for full details.
 
-```typescript
-const tempMessageId = `temp-${Date.now()}-...`
-addLiveMessage(roomId, { id: tempMessageId, ... })
-// ... API call returns real messageId ...
-replaceLiveMessage(roomId, tempMessageId, { ...optimisticUserMessage, id: messageId })
-```
-
-Between adding the temp message and replacing it with the real ID, any SSE event referencing the real `messageId` (e.g., `user_message` echo) won't match the temp ID.
-
-**Impact**: If the SSE `user_message` event arrives before `replaceLiveMessage` completes (possible with fast backends), the UI briefly shows duplicate user messages. The Zustand deduplication logic works by ID, so the temp and real IDs are treated as separate messages.
-
-**Recommendation**:
-- Deduplicate by `(content, user_id, timestamp_within_threshold)` in addition to ID.
-- Or: delay adding the optimistic message until the real ID is available (sacrificing instant feedback for correctness).
-- Or: use a server-assigned ID by making the message creation synchronous (wait for `SendMessage` response before adding to UI).
+**Summary**: If the SSE `user_message` event arrives before the frontend replaces its optimistic temp ID with the real server-assigned ID, duplicate user messages briefly appear. The backend could help by supporting a `client_request_id` field on `sendMessage` that is echoed in the SSE `user_message` event, allowing the frontend to correlate without relying on timing.
 
 ---
 
 ### 2.10 MEDIUM: No Input Validation or Size Limits on User Messages
 
-**Location**: Frontend chat input, backend `SendMessage` endpoint
+**Location**: `api/room_center.py` (`sendMessage` endpoint)
 
-No explicit validation on user message content size was found in either codebase.
+No explicit validation on user message content size exists on the backend `SendMessage` endpoint.
 
 **Impact**:
 - A malicious or accidental extremely large message can bloat MongoDB documents (which have a 16MB BSON limit).
 - Large messages cause OOM when building conversation history context.
 - LLM token limits can overflow when the message is passed as context, leading to unexpected errors or truncation.
 
-**Recommendation**: Add message size validation (e.g., max 10,000 characters) on both frontend (immediate feedback) and backend (authoritative enforcement).
+**Recommendation**: Add message size validation (e.g., max 10,000 characters) as authoritative enforcement on the backend `SendMessage` endpoint. The frontend should also enforce this for immediate user feedback (see frontend review).
 
 ---
 
@@ -326,7 +316,9 @@ app.add_middleware(
 
 **Impact**: While `allow_origins` is configurable, `allow_methods=["*"]` and `allow_headers=["*"]` combined with `allow_credentials=True` expands the attack surface unnecessarily. Any origin in the allowed list can send any HTTP method with any header.
 
-**Recommendation**: Restrict to the specific methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`) and headers (`Authorization`, `Content-Type`, `X-API-Key`) actually used by the frontend.
+**Additional surface (Mar 9)**: `DiscoveryCORSMiddleware` (`common/middleware/discovery_cors_middleware.py`) now applies fully permissive CORS (all origins, all methods, all headers) to `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` paths. This is by design for external API/Hub access, but increases the surface area that must be protected by API key authentication and rate limiting.
+
+**Recommendation**: Restrict the main CORS policy to the specific methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`) and headers (`Authorization`, `Content-Type`, `X-API-Key`) actually used by the frontend. Ensure the permissive discovery/gateway/relay CORS paths have adequate API key auth and rate limiting (currently in place via `gateway_rate_limit_service.py` with MongoDB-backed sliding window).
 
 ---
 
@@ -364,13 +356,55 @@ When an external A2A agent is down or slow, every user message targeting that ag
 
 ---
 
+### 2.15 MEDIUM: Hub Relay Single-Point-of-Failure — In-Memory SSE Queue
+
+**Location**: `services/relay_service.py`
+
+The relay service holds per-hub SSE connections in an in-memory `asyncio.Queue` dict:
+
+```python
+self._hub_queues: dict[str, asyncio.Queue] = {}
+self._offline_queues: dict[str, deque] = {}  # bounded deque with TTL
+```
+
+**Impact**:
+- If the relay instance goes down, all hub agent connections drop. Hubs must reconnect to a (potentially different) instance, losing any in-flight events.
+- The offline queue (bounded deque with TTL) mitigates brief outages by buffering events, but extended downtime permanently loses events.
+- Cannot horizontally scale relay — a hub is bound to one backend instance via its SSE connection.
+
+**Recommendation**: Share relay state via Redis Streams or a database-backed queue for hub events. Alternatively, implement hub-side reconnect with event replay using monotonic sequence numbers.
+
+---
+
+### 2.16 LOW-MEDIUM: Remaining httpx Leak in Agent Card Fetching
+
+**Location**: `services/a2a_service.py` (`get_agent_card_from_url`, `get_a2a_client`)
+
+While `create_a2a_client()` was fixed (see 2.3), two methods still create `httpx.AsyncClient` instances without closing them:
+
+```python
+async def get_agent_card_from_url(self, url: str) -> AgentCard:
+    httpx_client = httpx.AsyncClient(timeout=30.0)  # never closed
+    ...
+
+async def get_a2a_client(self, agent_url: str) -> A2AClient:
+    httpx_client = httpx.AsyncClient(timeout=600.0)  # never closed
+    ...
+```
+
+**Impact**: Lower traffic than the main `create_a2a_client()` path (card fetching during discovery and health checks), but still a leak per invocation. Under high agent discovery traffic, this can accumulate.
+
+**Recommendation**: Convert to `@asynccontextmanager` pattern consistent with `create_a2a_client()`, or use a shared `httpx.AsyncClient` connection pool.
+
+---
+
 ## 3. Summary
 
 | #    | Severity   | Issue                                            | Impact                     |
 | ---- | ---------- | ------------------------------------------------ | -------------------------- |
 | 2.1  | Critical   | In-memory SSE state prevents horizontal scaling   | Cannot scale backend       |
 | 2.2  | Critical   | No durable task queue, all in-process             | Lost work on crash         |
-| 2.3  | High       | httpx client leak (connections never closed)       | Resource exhaustion        |
+| 2.3  | ~~High~~   | httpx client leak — largely fixed, 2 methods remain | Mostly resolved            |
 | 2.4  | High       | Sequential agent processing                       | Poor latency (V1 only)    |
 | 2.5  | High       | Potential double-processing race condition         | Duplicate agent calls      |
 | 2.6  | High       | JWT token in SSE query parameter                   | Token exposure             |
@@ -382,6 +416,8 @@ When an external A2A agent is down or slow, every user message targeting that ag
 | 2.12 | Low-Medium | Overly permissive CORS                             | Attack surface             |
 | 2.13 | Low        | Unbounded orphan recovery tasks                    | Event loop saturation      |
 | 2.14 | Low        | No circuit breaker for external agents             | Cascading failures         |
+| 2.15 | Medium     | Hub relay in-memory SSE queue (SPOF)               | Hub disconnect on crash    |
+| 2.16 | Low-Medium | `get_agent_card_from_url`/`get_a2a_client` httpx leak | Minor resource leak     |
 
 ### Priority Recommendations
 
@@ -390,22 +426,23 @@ When an external A2A agent is down or slow, every user message targeting that ag
 - Introduce a durable task queue (Celery/Dramatiq/arq) for agent message processing.
 
 **Phase 2 — Reliability** (Issues 2.3, 2.5, 2.6, 2.8):
-- Fix httpx client lifecycle (shared pool or context manager).
+- Complete httpx client lifecycle fix (2 remaining methods: `get_agent_card_from_url`, `get_a2a_client`).
 - Remove duplicate `processRoomUserMessage` call or add backend idempotency.
 - Replace SSE JWT query param with short-lived nonce.
 - Wrap multi-document writes in MongoDB transactions.
 
-**Phase 3 — Performance & Scalability** (Issues 2.4, 2.10, 2.11, 2.14):
+**Phase 3 — Performance & Scalability** (Issues 2.4, 2.10, 2.14, 2.15):
 - Parallelize independent agent execution.
 - Add message size limits.
-- Implement conversation memory windowing/summarization.
 - Add circuit breakers for external agent calls.
+- Add cross-instance relay for Hub HA (2.15).
 
-**Phase 4 — Hardening** (Issues 2.9, 2.12, 2.13):
+**Phase 4 — Hardening** (Issues 2.9, 2.12, 2.13, 2.16):
 - ~~TTL-based cleanup for cancellation set.~~ ✅ Resolved
 - Improve optimistic update deduplication.
 - Tighten CORS configuration.
 - Cap concurrent orphan recovery tasks.
+- Fix remaining httpx leak in card fetching (2.16).
 
 ---
 
@@ -415,9 +452,9 @@ This section tracks the resolution status of each identified issue. Updated as f
 
 | #    | Issue                                            | Status       | Resolution Notes                                                                 |
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
-| 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — HITL design (§3) depends on this fix; requires Redis Pub/Sub |
+| 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — MongoDB Change Stream covers cancellation cross-instance; core SSE fan-out still needs Redis/NATS |
 | 2.2  | No durable task queue, all in-process             | 🔴 Open      | Production blocker; no work started                                              |
-| 2.3  | httpx client leak (connections never closed)       | 🔴 Open      | **Blocker for HITL** — 3 methods still create `httpx.AsyncClient(timeout=600.0)` without closing |
+| 2.3  | httpx client leak (connections never closed)       | 🟡 Partial   | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`. `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16). HITL `reply_to_task()` unblocked. |
 | 2.4  | Sequential agent processing                       | 🟡 Partial   | V2 Supervisor supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
 | 2.5  | Potential double-processing race condition         | 🟡 Partial   | `sendMessage` now auto-triggers processing; legacy `processRoomUserMessage` endpoint still exists |
 | 2.6  | JWT token in SSE query parameter                   | 🔴 Open      | Security risk; no work started                                                   |
@@ -426,9 +463,11 @@ This section tracks the resolution status of each identified issue. Updated as f
 | 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
 | 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
 | 2.11 | Unbounded conversation memory                      | 🟢 Resolved  | Context Memory Phases 1–5 complete (token budgets, lossless compaction, memory search) |
-| 2.12 | Overly permissive CORS                             | 🔴 Open      | Low priority; no work started                                                    |
+| 2.12 | Overly permissive CORS                             | 🔴 Open      | `DiscoveryCORSMiddleware` adds permissive CORS for gateway/relay paths; main CORS still `["*"]` methods/headers |
 | 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
 | 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
+| 2.15 | Hub relay in-memory SSE queue (SPOF)               | 🔴 Open      | New issue (Mar 9) — relay cannot scale horizontally; hub bound to single instance |
+| 2.16 | Remaining httpx leak in card fetching              | 🔴 Open      | New issue (Mar 9) — split from 2.3; `get_agent_card_from_url` + `get_a2a_client` |
 
 **Legend:**
 - 🔴 Open — Not started or blocked
@@ -439,10 +478,11 @@ This section tracks the resolution status of each identified issue. Updated as f
 
 ## 5. Unified Implementation Dependency Graph
 
-This section maps dependencies across all three design documents:
+This section maps dependencies across all design documents:
 - **SYSTEM_DESIGN_REVIEW.md** (this document) — Infrastructure issues
 - **CONTEXT_MEMORY_SYSTEM_DESIGN.md** — Memory and context architecture
 - **HITL_DESIGN.md** — Human-in-the-loop interactions
+- **GATEWAY_API.md** / **HYBRO_HUB_DESIGN.md** — Hub and gateway architecture
 
 ### 5.1 Cross-Document Dependency Map
 
@@ -456,6 +496,7 @@ This section maps dependencies across all three design documents:
 │    [SDR] SYSTEM_DESIGN_REVIEW.md issue                                           │
 │    [CM]  CONTEXT_MEMORY_SYSTEM_DESIGN.md phase                                   │
 │    [HITL] HITL_DESIGN.md phase                                                   │
+│    [HUB]  GATEWAY_API.md / HYBRO_HUB_DESIGN.md                                  │
 │                                                                                  │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
@@ -465,7 +506,7 @@ This section maps dependencies across all three design documents:
 │  ┌──────────────────────┐         ┌──────────────────────┐                       │
 │  │ [SDR 2.1] Redis      │         │ [SDR 2.3] httpx      │                       │
 │  │ Pub/Sub for SSE      │         │ Client Lifecycle     │                       │
-│  │ (horizontal scaling) │         │ (connection leak)    │                       │
+│  │ (horizontal scaling) │         │ (PARTIAL — 2 remain) │                       │
 │  └──────────┬───────────┘         └──────────┬───────────┘                       │
 │             │                                │                                   │
 │             │ ◀─────────────────────────────▶│                                   │
@@ -622,7 +663,22 @@ This section maps dependencies across all three design documents:
 │  ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐    │
 │  │ [SDR 2.7] TTL for    │  │ [SDR 2.8] MongoDB    │  │ [SDR 2.14] Circuit   │    │
 │  │ cancelled_messages   │  │ Transactions         │  │ Breaker              │    │
+│  │ ✅ RESOLVED          │  │                      │  │                      │    │
 │  └──────────────────────┘  └──────────────────────┘  └──────────────────────┘    │
+│                                                                                  │
+│  ┌──────────────────────┐  ┌──────────────────────┐                              │
+│  │ [HUB] Gateway API    │  │ [HUB] Relay Service   │                             │
+│  │ (API key auth,       │  │ (in-memory SSE queue, │                             │
+│  │  rate limiting)      │  │  heartbeat, offline Q)│                             │
+│  │ ✅ Phase 2a DONE     │  │ ✅ Phase 2a DONE      │                             │
+│  └──────────┬───────────┘  └──────────┬───────────┘                              │
+│             └──────────┬───────────────┘                                         │
+│                        ▼                                                         │
+│  ┌──────────────────────────────────────────┐                                    │
+│  │ [SDR 2.15] Hub Relay HA                   │                                   │
+│  │ (soft dep on [SDR 2.1] Redis for          │                                   │
+│  │  cross-instance relay fan-out)            │                                   │
+│  └──────────────────────────────────────────┘                                    │
 │                                                                                  │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
@@ -657,7 +713,7 @@ The **critical path** for full HITL functionality:
 
 [SDR 2.3] httpx fix ──▶ [HITL Phase 1] Foundation ──▶ [HITL Phase 4] Response Endpoint
          │
-         └──▶ (unblocks reply_to_task() without connection leak)
+         └──▶ ✅ UNBLOCKED (create_a2a_client fixed; reply_to_task uses async with)
 ```
 
 The **critical path** for full Context Memory functionality:
@@ -683,7 +739,7 @@ Based on dependency analysis and impact:
 | Priority | Item | Rationale |
 |----------|------|-----------|
 | **P0** | [SDR 2.1] Redis Pub/Sub | Blocks HITL multi-instance delivery; production blocker |
-| **P0** | [SDR 2.3] httpx client fix | Blocks HITL reply_to_task; resource exhaustion risk |
+| **P0** | ~~[SDR 2.3] httpx client fix~~ | ✅ Largely resolved (Mar 9); 2 minor methods remain (see 2.16) |
 | **P1** | [CM Phase 1] Data Models | Foundation for all memory work; no blockers |
 | **P1** | [HITL Phase 1-4] Core HITL | High user value; blocked only by P0 items |
 | **P2** | [CM Phase 2] Context Assembly | Enables token budget enforcement |
@@ -700,11 +756,12 @@ These work streams can proceed independently:
 
 | Stream | Items | Team |
 |--------|-------|------|
-| **Infrastructure** | [SDR 2.1], [SDR 2.2], [SDR 2.3] | Platform/DevOps |
-| **Context Memory** | [CM Phase 1-5] | Backend |
+| **Infrastructure** | [SDR 2.1], [SDR 2.2], [SDR 2.15] | Platform/DevOps |
+| **Context Memory** | [CM Phase 1-5] ✅ ALL COMPLETE | Backend |
 | **HITL Backend** | [HITL Phase 1-5, 7-8] | Backend |
-| **HITL Frontend** | [HITL Phase 6] | Frontend |
-| **Security** | [SDR 2.6], [SDR 2.12] | Security |
+| **HITL Frontend** | [HITL Phase 6] 🟡 IN PROGRESS | Frontend |
+| **Hub & Gateway** | [HUB Phase 2a] ✅, [HUB Phase 2b+] | Backend + Platform |
+| **Security** | [SDR 2.6], [SDR 2.12], [SDR 2.16] | Security |
 
 ---
 
@@ -905,8 +962,7 @@ Run `python scripts/migrate_room_memories.py --execute` to migrate existing room
 - `brief_summary` generation for very old turns (>50) not yet implemented
   - Design allows for this but deferred to future enhancement
 - S3 storage for binary content not yet implemented (§6.8 future extension)
-- Background compaction job not yet implemented (§6.9)
-  - Current implementation is on-demand only
+- ~~Background compaction job not yet implemented (§6.9)~~ → ✅ Implemented as `jobs/compaction_sweep.py` (Mar 9)
 
 #### CM Phase 4 Details (Completed 2026-02-25)
 
@@ -1143,7 +1199,7 @@ Comprehensive item-by-item verification of the entire Context Memory System impl
 |---|---|---|
 | User Memory / Agent Memory population | §4.3, §4.4 | Models exist; not yet populated by other system components |
 | S3 storage for binary content | §6.8 | Future extension — design placeholder only |
-| Background compaction job | §6.9 | On-demand trigger is primary; background is secondary |
+| ~~Background compaction job~~ | §6.9 | ✅ Implemented as `jobs/compaction_sweep.py` (Mar 9) |
 | Graph-based retrieval (dual-route) | §8.4 | Phase 4B — after hybrid search is production-stable |
 | Agent-driven compaction tool | §2.4.5 | Post-Phase 4 evolution |
 | `brief_summary` for very old turns | §6.7 | Optional enhancement, deferred |
@@ -1187,7 +1243,7 @@ The monolithic `RoomMessageCenter` was decomposed into focused modules:
 
 **File**: `common/middleware/discovery_cors_middleware.py`
 
-Separate permissive CORS middleware applied only to `/api/v1/discovery/*` paths, allowing external API access from any origin while keeping the main CORS policy restricted to frontend origins.
+Separate permissive CORS middleware applied to `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` paths, allowing external API and Hub access from any origin while keeping the main CORS policy restricted to frontend origins.
 
 #### Rate Limiting
 
@@ -1204,7 +1260,7 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 | HITL Phase 3: V2 Queue Integration | 🔲 NOT STARTED | - | |
 | HITL Phase 4: Response Endpoint | 🔲 NOT STARTED | - | |
 | HITL Phase 5: Risk Mitigations | 🔲 NOT STARTED | - | |
-| HITL Phase 6: Frontend | 🔲 NOT STARTED | - | |
+| HITL Phase 6: Frontend | 🟡 IN PROGRESS | 2026-03-09 | See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §3.1 for details |
 | HITL Phase 7: Turn Recording | 🔲 NOT STARTED | - | Depends on CM Phase 1 ✅ |
 | HITL Phase 8: Legacy Shim Removal | 🔲 NOT STARTED | - | |
 
@@ -1212,12 +1268,67 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 
 | Issue | Status | Date | Notes |
 |-------|--------|------|-------|
-| SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker |
+| SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker; MongoDB Change Stream covers cancellation only |
 | SDR 2.2: Durable Task Queue | 🔲 NOT STARTED | - | |
-| SDR 2.3: httpx client fix | 🔲 NOT STARTED | - | P0 blocker — 3 methods still leak |
+| SDR 2.3: httpx client fix | 🟡 PARTIAL | 2026-03-09 | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`; `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16) |
 | SDR 2.5: Double-Processing Guard | 🟡 PARTIAL | 2026-02-25 | `sendMessage` auto-triggers; legacy endpoint still exists |
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
 | SDR 2.7: TTL for cancelled_messages | ✅ RESOLVED | 2026-02-25 | `TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
 | SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |
+| SDR 2.15: Hub Relay SPOF | 🔴 Open | 2026-03-09 | New issue — in-memory SSE queue per hub; no cross-instance fan-out |
+| SDR 2.16: Remaining httpx leak | 🔴 Open | 2026-03-09 | New issue — `get_agent_card_from_url` + `get_a2a_client` (split from 2.3) |
+
+### 6.6 Hybro Hub Integration (Phase 2a — Completed 2026-03-09)
+
+**Reference**: `GATEWAY_API.md`, `HYBRO_HUB_DESIGN.md`, `HYBRO_TRUST_LAYER_DESIGN.md`
+
+**New Models:**
+- `models/hub.py` — `HubConfig`, `HubAgentSync`, `HubPublishRequest`, `HubStatus`, `RelayToHubEvent`
+- `models/gateway.py` — Gateway API request/response models for Python SDK integration
+
+**New Endpoints:**
+- `api/gateway.py` — External agent access via API keys (`POST /gateway/sendTask`, `GET /gateway/getTask`)
+- `api/relay.py` — Hub-to-backend relay (`GET /relay/events` SSE, `POST /relay/publish`)
+- `api/hub.py` — Hub management and agent catalog sync
+
+**New Services:**
+- `services/relay_service.py` — In-memory `asyncio.Queue` per hub, offline queue with TTL for brief disconnects, heartbeat monitoring (30s interval)
+- `services/gateway_service.py` — Gateway orchestration, agent resolution, dispatch middleware routing
+- `services/gateway_rate_limit_service.py` — MongoDB-backed sliding-window rate limiting with TTL indexes (2-hour window)
+
+**New Middleware:**
+- `common/middleware/discovery_cors_middleware.py` — Permissive CORS for `/discovery/*`, `/gateway/*`, `/relay/*` paths
+
+**Database Migrations:**
+- `database/migration/add_gateway_api_requests_indexes.py` — TTL indexes for gateway rate limiting
+- `database/migration/add_hub_indexes.py` — Unique indexes on `hubs.hub_id`, compound index on `agents.(hub_id, local_agent_id)`
+- `database/migration/deduplicate_agents.py` — Agent URL normalization and deduplication with `normalized_url` backfill
+
+**Known Risks:**
+- Hub Relay SPOF (SDR 2.15) — relay state is in-memory; cannot scale horizontally
+- Permissive CORS surface (SDR 2.12 note) — gateway/relay paths open to all origins
+
+### 6.7 Additional Backend Additions (Since Feb 25)
+
+**Agent Response Handler** (`modules/agent_response_handler.py`):
+- Transport layer for agent response handling (Phases 1-2 of response refactoring)
+- Separates transport concerns from business logic in `AgentMessageProcessor`
+
+**Bedrock Claude Support** (`services/bedrock_service.py`):
+- AWS Bedrock integration for Claude Opus 4.6 as supervisor LLM
+- Feature-flagged; configurable alongside existing OpenAI/Gemini options
+
+**Processing Pipeline Models** (`models/processing.py`):
+- `ProcessingStatus` enum: `SUCCESS`, `FAILED`, `CANCELED`, `PAUSED`, `RELAY_DISPATCHED`, `AWAITING_INPUT`
+- `ProcessingResult` and `ProcessingContext` dataclasses for structured pipeline state
+
+**Agent Liveness & Health:**
+- `services/agent_liveness_service.py` — On-demand probes + hub heartbeat monitoring
+- `services/agent_health_service.py` — Periodic health checks with status tracking
+
+**Background Jobs:**
+- `jobs/cleanup_orphaned_uploads.py` — S3 orphaned upload cleanup
+- `jobs/compaction_sweep.py` — Background memory compaction (supplements on-demand trigger from CM Phase 3)
+- `jobs/stale_task_checker.py` — Expanded with `_recover_stuck_supervisor_trajectories()` and `_process_recovered_supervisor_message()` for V2 supervisor recovery
