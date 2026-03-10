@@ -98,7 +98,7 @@ class TestMultiEventSequenceWithPersist:
         )
         assert calls[1] == call(
             "msg-001", "completed",
-            message_text="Hello world",
+            message_text="Hello world", artifacts=None,
         )
 
         # response with parts -> send_agent_response

@@ -122,7 +122,7 @@ class TestResponseEvent:
             await h.handle(event)
 
         h._db.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "completed", message_text="Done!",
+            "msg-001", "completed", message_text="Done!", artifacts=None,
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
 
