@@ -147,30 +147,28 @@ class A2AService:
             raise IllgalParameterError()
 
         try:
-            httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
-            card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
-            return card
+            async with httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT) as httpx_client:
+                card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
+                return card
 
         except Exception as e:
             logger.error(f"Failed to get agent card from url: {e}", exc_info=True)
             raise A2AServiceError() from e
 
-    async def get_a2a_client(self, agent_url: str) -> A2AClient:
-        # check if agent url is valid
-
+    @asynccontextmanager
+    async def get_a2a_client(self, agent_url: str):
         if not agent_url:
             raise IllgalParameterError()
 
+        httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
         try:
-            httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
             card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
-            a2a_client = A2AClient(httpx_client, agent_card=card)
-
-            return a2a_client
-
+            yield A2AClient(httpx_client, agent_card=card)
         except Exception as e:
             logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
             raise A2AServiceError() from e
+        finally:
+            await httpx_client.aclose()
 
     @asynccontextmanager
     async def create_a2a_client(

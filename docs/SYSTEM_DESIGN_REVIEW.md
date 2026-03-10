@@ -122,29 +122,19 @@ background_tasks.add_task(
 
 ---
 
-### 2.3 ~~HIGH~~ PARTIAL: httpx Client Leak — Largely Fixed, Two Methods Remain
+### 2.3 ~~HIGH~~ ~~PARTIAL~~ FIXED: httpx Client Leak — All Methods Now Properly Close Connections
 
 **Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_a2a_client`, `get_agent_card_from_url`)
 
 **Previous state**: Every A2A interaction created a new `httpx.AsyncClient` with a 600-second timeout that was never explicitly closed.
 
-**Current state (Mar 9)**: `create_a2a_client()` has been converted to an `@asynccontextmanager` with `await httpx_client.aclose()` in a `finally` block. All 4 primary call sites (`send_message_streaming`, `send_message_sync`, `reply_to_task`, `cancel_task`) now use `async with self.create_a2a_client()` for proper cleanup.
+**Current state (Mar 10)**: All three methods now properly manage httpx client lifecycle:
 
-```python
-@asynccontextmanager
-async def create_a2a_client(self, agent_card: AgentCard) -> AsyncGenerator[A2AClient, None]:
-    httpx_client = httpx.AsyncClient(timeout=600.0)
-    try:
-        yield A2AClient(httpx_client, agent_card=agent_card)
-    finally:
-        await httpx_client.aclose()
-```
+- `create_a2a_client()` — `@asynccontextmanager` with `await httpx_client.aclose()` in `finally`. All 4 primary call sites (`send_message_streaming`, `send_message_sync`, `reply_to_task`, `cancel_task`) use `async with self.create_a2a_client()`.
+- `get_a2a_client()` — converted to `@asynccontextmanager` with the same `yield` / `finally: aclose()` pattern as `create_a2a_client()`.
+- `get_agent_card_from_url()` — now uses `async with httpx.AsyncClient()` so the transport is closed after the card fetch completes.
 
-**Remaining issue**: `get_agent_card_from_url()` and `get_a2a_client()` still create `httpx.AsyncClient` instances without context managers or explicit close. These are lower-traffic paths (agent card fetching during discovery) but still leak connections.
-
-**Downstream dependency**: The HITL `reply_to_task()` method now properly uses `async with httpx.AsyncClient()` for cleanup — this blocker is resolved.
-
-**Recommendation**: Convert the remaining two methods to the `@asynccontextmanager` pattern, or use a shared `httpx.AsyncClient` connection pool as a class attribute.
+**Downstream dependency**: The HITL `reply_to_task()` method properly uses `async with httpx.AsyncClient()` for cleanup — this blocker is resolved.
 
 ---
 
