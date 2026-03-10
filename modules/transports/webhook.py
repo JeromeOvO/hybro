@@ -184,12 +184,20 @@ class WebhookTransport(AgentTransport):
             )
 
         if is_terminal_state(state):
+            # Serialize full artifacts for DB persistence so file parts survive refresh
+            serialized_artifacts = None
+            if task.artifacts:
+                serialized_artifacts = [
+                    a.model_dump(mode="json", exclude_none=True)
+                    for a in task.artifacts
+                ]
             return AgentEvent(
                 kind="response",
                 **base,
                 text=text or "",
                 state=state.value,
                 parts=parts,
+                artifacts=serialized_artifacts,
             )
 
         return AgentEvent(
