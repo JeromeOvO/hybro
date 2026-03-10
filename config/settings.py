@@ -129,6 +129,11 @@ class Settings(BaseSettings):
     s3_presigned_url_ttl: int = 3600  # presigned URL validity in seconds
     max_file_size_mb: int = 50
 
+    # AWS Bedrock Settings (Supervisor LLM)
+    bedrock_region: str = "us-east-1"
+    bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    use_bedrock_supervisor: bool = False
+
     class Config:
         env_file = ".env"
         extra = "ignore"
