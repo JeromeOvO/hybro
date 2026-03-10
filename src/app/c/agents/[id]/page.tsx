@@ -26,6 +26,7 @@ import {
   Share2,
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
+import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -135,41 +136,18 @@ export default function ConsumerAgentProfilePage() {
   const router = useRouter()
   const { userId } = useAuth()
   const agentId = params.id as string
-  const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
-  const [loading, setLoading] = useState(true)
   const [techOpen, setTechOpen] = useState(false)
   const ctaRef = useRef<HTMLDivElement>(null)
   const [showStickyBar, setShowStickyBar] = useState(false)
 
-  const loadAgentDetail = useCallback(async () => {
-    if (isSystemAgent(agentId)) {
-      setLoading(false)
-      return
-    }
-    try {
-      setLoading(true)
-      const response = await getAgent(agentId)
-
-      if (response.success && response.agent) {
-        setAgentData(response)
-      } else {
-        const errorMessage = response.error || "Failed to load agent details"
-        banner.error("Failed to load agent details", {
-          description: errorMessage,
-        })
-      }
-    } catch {
-      banner.error("Failed to load agent details")
-    } finally {
-      setLoading(false)
-    }
-  }, [agentId])
-
-  useEffect(() => {
-    if (agentId) {
-      loadAgentDetail()
-    }
-  }, [agentId, loadAgentDetail])
+  const isSystem = isSystemAgent(agentId)
+  const { data: agentData, isLoading: loading } = useQuery<AgentCenterResponse>({
+    queryKey: ["agent", agentId],
+    enabled: !!agentId && !isSystem,
+    queryFn: () => getAgent(agentId),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
 
   useEffect(() => {
     const el = ctaRef.current

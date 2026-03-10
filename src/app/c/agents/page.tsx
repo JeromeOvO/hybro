@@ -1,15 +1,15 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { Search, ChevronDown, Check, Bot, Cloud, Home } from "lucide-react"
 import { ConsumerAgentCard } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useQuery } from "@tanstack/react-query"
 
 import { useAuth } from "@clerk/nextjs"
-import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
-import type { Agent } from "@/lib/types"
+import type { Agent, AgentCenterResponse } from "@/lib/types"
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All Status" },
@@ -73,37 +73,21 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 
 export default function ConsumerAgentsPage() {
   const { getToken } = useAuth()
-  const [allAgents, setAllAgents] = useState<Agent[]>([])
-  const [loadingAll, setLoadingAll] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const { isOpen: isDropdownOpen, setIsOpen: setIsDropdownOpen, ref: dropdownRef } = useDropdown()
 
+  const { data, isLoading } = useQuery<AgentCenterResponse>({
+    queryKey: ["allAgents"],
+    queryFn: () => getAllAgents(undefined, undefined, getToken),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
+
+  const allAgents = data?.success && data.agents ? data.agents : []
   const filteredAgents = useFilteredAgents(allAgents, searchTerm, statusFilter)
 
-  const loadAllAgents = useCallback(async () => {
-    try {
-      setLoadingAll(true)
-      const response = await getAllAgents(undefined, undefined, getToken)
-
-      if (response.success && response.agents) {
-        setAllAgents(response.agents)
-      } else {
-        banner.error(response.error || 'Failed to load agents')
-      }
-    } catch {
-      banner.error('Failed to load agents')
-    } finally {
-      setLoadingAll(false)
-    }
-  }, [getToken])
-
-  // Load all agents on mount
-  useEffect(() => {
-    loadAllAgents()
-  }, [loadAllAgents])
-
-  if (loadingAll && allAgents.length === 0) {
+  if (isLoading && allAgents.length === 0) {
     return (
       <div className="page-container">
         <div className="page-content flex items-center justify-center min-h-[60vh]">
@@ -216,7 +200,7 @@ export default function ConsumerAgentsPage() {
         })()}
 
         {/* Empty State */}
-        {filteredAgents.length === 0 && !loadingAll && (
+        {filteredAgents.length === 0 && !isLoading && (
           <div className="flex flex-col items-center justify-center py-8 gap-3">
             <Bot className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">

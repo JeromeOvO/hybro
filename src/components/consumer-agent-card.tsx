@@ -23,9 +23,6 @@ interface ConsumerAgentCardProps {
 export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
   const isActive = agent.agent_status === "active"
 
-  const badgeVariant = isActive ? "success" : "inactive"
-  const badgeLabel = isActive ? "Active" : "Inactive"
-
   const allModes = [
     ...(agent.agent_card.defaultInputModes ?? []),
     ...(agent.agent_card.defaultOutputModes ?? []),
@@ -63,13 +60,6 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           isHubOnline={agent.is_hub_online}
           className="absolute top-3 left-3 h-4 w-4"
         />
-        <Badge
-          variant={badgeVariant}
-          className="absolute top-3 right-3"
-        >
-          {badgeLabel}
-        </Badge>
-
         <div className="relative mt-2">
           <Avatar
             className={cn(
@@ -90,7 +80,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           </Avatar>
           <span
             className={cn(
-              "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background",
+              "absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background",
               isActive ? "bg-green-500" : "bg-muted-foreground/30",
             )}
           />
