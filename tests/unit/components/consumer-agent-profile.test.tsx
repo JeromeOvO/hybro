@@ -9,9 +9,26 @@ import type { AgentCenterResponse, Agent, AgentCard, AgentSkill, AgentCapabiliti
 const mockPush = vi.fn()
 const mockParamId = vi.fn(() => 'agent-test-1')
 
+const mockIntersectionObserver = vi.fn(() => ({
+  observe: vi.fn(),
+  unobserve: vi.fn(),
+  disconnect: vi.fn(),
+}))
+vi.stubGlobal('IntersectionObserver', mockIntersectionObserver)
+
+Object.assign(navigator, {
+  clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+})
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: mockParamId() }),
   useRouter: () => ({ push: mockPush }),
+}))
+
+vi.mock('next/link', () => ({
+  default: ({ children, href, ...rest }: { children: React.ReactNode; href: string; [k: string]: unknown }) => (
+    <a href={href} {...rest}>{children}</a>
+  ),
 }))
 
 vi.mock('@clerk/nextjs', () => ({
@@ -34,6 +51,7 @@ vi.mock('@/lib/agent-icon-utils', () => ({
     Stub.displayName = 'StubIcon'
     return Stub
   },
+  getModeLabel: (mime: string) => mime,
 }))
 
 /* ── Local factory ── */
@@ -116,7 +134,7 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('Test Agent')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
       expect(screen.getByText('A helpful test agent.')).toBeInTheDocument()
       expect(screen.getByText('Active')).toBeInTheDocument()
@@ -124,8 +142,14 @@ describe('ConsumerAgentProfilePage', () => {
       expect(screen.getByText(/Acme Corp/)).toBeInTheDocument()
     })
 
-    it('shows examples in skills section (max 2 per skill)', async () => {
-      mockGetAgent.mockResolvedValue(buildAgentResponse())
+    it('shows examples in skills section (max 3 per skill)', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse({
+        card: {
+          skills: [buildSkill({
+            examples: ['example one', 'example two', 'example three', 'example four'],
+          })],
+        },
+      }))
 
       render(<ConsumerAgentProfilePage />)
 
@@ -134,10 +158,11 @@ describe('ConsumerAgentProfilePage', () => {
       })
       expect(screen.getByText('example one')).toBeInTheDocument()
       expect(screen.getByText('example two')).toBeInTheDocument()
-      expect(screen.queryByText('example three')).not.toBeInTheDocument()
+      expect(screen.getByText('example three')).toBeInTheDocument()
+      expect(screen.queryByText('example four')).not.toBeInTheDocument()
     })
 
-    it('does not render skill name, description, or tags in skills section', async () => {
+    it('renders skill name, description, and tags in skills section', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse())
 
       render(<ConsumerAgentProfilePage />)
@@ -147,14 +172,14 @@ describe('ConsumerAgentProfilePage', () => {
       })
 
       const section = screen.getByTestId('skills-section')
-      expect(section.textContent).not.toContain('Default Skill')
-      expect(section.textContent).not.toContain('Skill description')
-      expect(section.textContent).not.toContain('tag-a')
+      expect(section.textContent).toContain('Default Skill')
+      expect(section.textContent).toContain('Skill description')
+      expect(section.textContent).toContain('tag-a')
     })
   })
 
   describe('agent with no examples', () => {
-    it('hides skills section when no skill has examples', async () => {
+    it('still renders skills section when skills exist but have no examples', async () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({
           card: {
@@ -166,9 +191,8 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByTestId('technical-section')).toBeInTheDocument()
+        expect(screen.getByTestId('skills-section')).toBeInTheDocument()
       })
-      expect(screen.queryByTestId('skills-section')).not.toBeInTheDocument()
     })
 
     it('hides skills section when skills array is empty', async () => {
@@ -187,7 +211,7 @@ describe('ConsumerAgentProfilePage', () => {
       ).not.toBeInTheDocument()
     })
 
-    it('still renders "How this agent works" with modes', async () => {
+    it('still renders "How this agent works" section', async () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({ card: { skills: [] } }),
       )
@@ -197,8 +221,6 @@ describe('ConsumerAgentProfilePage', () => {
       await waitFor(() => {
         expect(screen.getByText('How this agent works')).toBeInTheDocument()
       })
-      expect(screen.getByText('You can send')).toBeInTheDocument()
-      expect(screen.getByText('It returns')).toBeInTheDocument()
     })
   })
 
@@ -223,7 +245,7 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('Test Agent')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
       expect(screen.queryByText('Manage')).not.toBeInTheDocument()
     })
@@ -261,14 +283,14 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('Test Agent')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
       expect(screen.queryByText('View Documentation')).not.toBeInTheDocument()
     })
   })
 
   describe('capabilities', () => {
-    it('shows enabled capabilities as badges', async () => {
+    it('shows enabled capabilities as badges after expanding technical section', async () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({
           card: {
@@ -283,6 +305,12 @@ describe('ConsumerAgentProfilePage', () => {
       )
 
       render(<ConsumerAgentProfilePage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('How this agent works')).toBeInTheDocument()
+      })
+
+      await userEvent.click(screen.getByText('How this agent works'))
 
       await waitFor(() => {
         expect(screen.getByTestId('capabilities')).toBeInTheDocument()
@@ -311,6 +339,9 @@ describe('ConsumerAgentProfilePage', () => {
       await waitFor(() => {
         expect(screen.getByTestId('technical-section')).toBeInTheDocument()
       })
+
+      await userEvent.click(screen.getByText('How this agent works'))
+
       expect(screen.queryByTestId('capabilities')).not.toBeInTheDocument()
     })
   })
@@ -357,7 +388,7 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('Test Agent')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
       expect(screen.queryByTestId('best-for')).not.toBeInTheDocument()
       expect(screen.queryByText('Best for')).not.toBeInTheDocument()

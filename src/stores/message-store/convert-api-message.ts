@@ -13,6 +13,7 @@ export interface ConvertApiMessageOptions {
   userId?: string
   userName?: string
   getAgentName: (agentId: string) => Promise<string>
+  getAgentSource?: (agentId: string) => 'cloud' | 'hub' | undefined
 }
 
 /**
@@ -26,7 +27,7 @@ export async function convertApiMessageToIncoming(
   apiMessage: RoomMessage,
   options: ConvertApiMessageOptions,
 ): Promise<IncomingMessage> {
-  const { userId, userName, getAgentName } = options
+  const { userId, userName, getAgentName, getAgentSource } = options
 
   // ── Extract content ──────────────────────────────────────────
   let content = ''
@@ -182,6 +183,9 @@ export async function convertApiMessageToIncoming(
     timestamp: normalizeTimestampOrNow(apiMessage.message_created_at),
 
     agentId: apiMessage.message_type === 'agent' ? (agentId || undefined) : undefined,
+    agentSource: apiMessage.message_type === 'agent' && agentId && getAgentSource
+      ? getAgentSource(agentId)
+      : undefined,
     userId: apiMessage.message_type === 'user' ? userId : undefined,
 
     taskStatus,

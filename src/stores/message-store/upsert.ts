@@ -119,6 +119,7 @@ function mergeIncoming(
       senderName: incoming.senderName,
       timestamp: incoming.timestamp,
       agentId: incoming.agentId,
+      agentSource: incoming.agentSource,
       userId: incoming.userId,
       taskStatus: incoming.taskStatus ?? undefined,
       taskError: incoming.taskError,
@@ -154,6 +155,7 @@ function mergeIncoming(
     senderName: incoming.senderName,
     timestamp: incoming.timestamp,
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
+    agentSource: incoming.agentSource !== undefined ? incoming.agentSource : existing.agentSource,
     userId: incoming.userId !== undefined ? incoming.userId : existing.userId,
     taskStatus: incoming.taskStatus !== undefined
       ? (incoming.taskStatus ?? undefined)  // null → undefined (clear the field)

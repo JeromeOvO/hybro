@@ -1,15 +1,15 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react"
-import { Search, ChevronDown, Check, Bot } from "lucide-react"
-import { ConsumerAgentCard, ConsumerAgentCardSkeleton } from "@/components/consumer-agent-card"
+import { useState, useEffect, useRef, useMemo } from "react"
+import { Search, ChevronDown, Check, Bot, Cloud, Home } from "lucide-react"
+import { ConsumerAgentCard } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { useQuery } from "@tanstack/react-query"
 
 import { useAuth } from "@clerk/nextjs"
-import { banner } from "@/components/ui/banner"
 import { getAllAgents } from "@/lib/api"
-import type { Agent } from "@/lib/types"
+import type { Agent, AgentCenterResponse } from "@/lib/types"
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All Status" },
@@ -73,48 +73,32 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 
 export default function ConsumerAgentsPage() {
   const { getToken } = useAuth()
-  const [allAgents, setAllAgents] = useState<Agent[]>([])
-  const [loadingAll, setLoadingAll] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const { isOpen: isDropdownOpen, setIsOpen: setIsDropdownOpen, ref: dropdownRef } = useDropdown()
 
+  const { data, isLoading } = useQuery<AgentCenterResponse>({
+    queryKey: ["allAgents"],
+    queryFn: () => getAllAgents(undefined, undefined, getToken),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
+
+  const allAgents = data?.success && data.agents ? data.agents : []
   const filteredAgents = useFilteredAgents(allAgents, searchTerm, statusFilter)
 
-  const loadAllAgents = useCallback(async () => {
-    try {
-      setLoadingAll(true)
-      const response = await getAllAgents(undefined, undefined, getToken)
-
-      if (response.success && response.agents) {
-        setAllAgents(response.agents)
-      } else {
-        banner.error(response.error || 'Failed to load agents')
-      }
-    } catch {
-      banner.error('Failed to load agents')
-    } finally {
-      setLoadingAll(false)
-    }
-  }, [getToken])
-
-  // Load all agents on mount
-  useEffect(() => {
-    loadAllAgents()
-  }, [loadAllAgents])
-
-  if (loadingAll && allAgents.length === 0) {
+  if (isLoading && allAgents.length === 0) {
     return (
       <div className="page-container">
-        <div className="page-content space-y-4">
-          <div>
-            <h1 className="text-2xl font-bold">Explore Agents</h1>
-            <p className="text-sm text-muted-foreground">Discover AI agents on the HYBRO network</p>
-          </div>
-          <div className="grid grid-auto-fill-cards gap-4">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <ConsumerAgentCardSkeleton key={i} />
-            ))}
+        <div className="page-content flex items-center justify-center min-h-[60vh]">
+          <div className="flex flex-col items-center justify-center gap-4">
+            <div className="relative">
+              <div className="h-12 w-12 rounded-full border-4 border-primary/20 animate-spin border-t-primary" />
+              <Bot className="h-6 w-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-primary/60" />
+            </div>
+            <span className="text-base font-medium text-muted-foreground animate-pulse">
+              Loading Agents...
+            </span>
           </div>
         </div>
       </div>
@@ -144,7 +128,7 @@ export default function ConsumerAgentsPage() {
               <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
             </Button>
             {isDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-border/50 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
+              <div className="absolute top-full left-0 mt-1 z-50 w-[130px] py-1 bg-background/95 backdrop-blur-md border border-muted-foreground/30 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
                 {STATUS_OPTIONS.map((option) => (
                   <button
                     key={option.value}
@@ -172,21 +156,51 @@ export default function ConsumerAgentsPage() {
           </div>
         </div>
 
-        {/* Results summary */}
-        <p className="text-sm text-muted-foreground">
-          Showing {filteredAgents.length} agent{filteredAgents.length !== 1 ? "s" : ""}
-          {(searchTerm || statusFilter !== "all") ? " (filtered)" : ""}
-        </p>
+        {/* Agent Cards — split by source */}
+        {(() => {
+          const cloudAgents = filteredAgents.filter(a => a.source !== 'hub')
+          const localAgents = filteredAgents.filter(a => a.source === 'hub')
+          return (
+            <div className="space-y-8">
+              {cloudAgents.length > 0 && (
+                <section>
+                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-muted-foreground/30">
+                    <Cloud className="h-4 w-4 text-sky-500" />
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Cloud Agents
+                    </h2>
+                    <span className="text-xs text-muted-foreground/60">{cloudAgents.length}</span>
+                  </div>
+                  <div className="grid grid-auto-fill-cards gap-4">
+                    {cloudAgents.map((agent) => (
+                      <ConsumerAgentCard key={agent.agent_id} agent={agent} />
+                    ))}
+                  </div>
+                </section>
+              )}
 
-        {/* Agent Cards Grid */}
-        <div className="grid grid-auto-fill-cards gap-4">
-          {filteredAgents.map((agent) => (
-            <ConsumerAgentCard key={agent.agent_id} agent={agent} />
-          ))}
-        </div>
+              {localAgents.length > 0 && (
+                <section>
+                  <div className="flex items-center gap-2 mb-4 pb-2 border-b border-muted-foreground/30">
+                    <Home className="h-4 w-4 text-emerald-500" />
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Local Agents
+                    </h2>
+                    <span className="text-xs text-muted-foreground/60">{localAgents.length}</span>
+                  </div>
+                  <div className="grid grid-auto-fill-cards gap-4">
+                    {localAgents.map((agent) => (
+                      <ConsumerAgentCard key={agent.agent_id} agent={agent} />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Empty State */}
-        {filteredAgents.length === 0 && !loadingAll && (
+        {filteredAgents.length === 0 && !isLoading && (
           <div className="flex flex-col items-center justify-center py-8 gap-3">
             <Bot className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">

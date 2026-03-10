@@ -45,4 +45,14 @@ export interface Agent {
   call_success_count?: number;
   like_count?: number;
   dislike_count?: number;
+  /** Agent source: "cloud" for cloud-hosted, "hub" for local hub agents */
+  source?: "cloud" | "hub";
+  /** Hub ID if this is a hub-sourced agent */
+  hub_id?: string;
+  /** User ID of the hub owner */
+  hub_owner_id?: string;
+  /** Whether the hub providing this agent is currently online */
+  is_hub_online?: boolean;
+  /** Agent ID on the local hub (maps to the hub's internal registry) */
+  local_agent_id?: string;
 }

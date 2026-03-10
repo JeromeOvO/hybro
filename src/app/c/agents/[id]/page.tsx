@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
+import Link from "next/link"
 import {
   ArrowLeft,
   Bot,
@@ -15,8 +16,17 @@ import {
   Zap,
   MessageCirclePlus,
   ShieldCheck,
+  BarChart3,
+  ThumbsUp,
+  Activity,
+  ChevronDown,
+  Link2,
+  Tag,
+  Sparkles,
+  Share2,
 } from "lucide-react"
 import { useAuth } from "@clerk/nextjs"
+import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -28,12 +38,41 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { banner } from "@/components/ui/banner"
 import { getAgent } from "@/lib/api"
 import type { Agent, AgentCenterResponse, AgentCapabilities } from "@/lib/types"
+import type { AgentSkill } from "@/lib/types"
 import { developerUrl } from "@/lib/urls"
 import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
-import { getModeIcon } from "@/lib/agent-icon-utils"
+import { getModeIcon, getModeLabel } from "@/lib/agent-icon-utils"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
+
+const CAPABILITY_TOOLTIPS: Record<string, string> = {
+  "Streaming": "Responses appear in real-time as they're generated",
+  "Push Notifications": "Can send updates even after the conversation ends",
+  "State History": "Remembers context across multiple interactions",
+  "Extensions": "Supports additional protocol extensions",
+}
 
 function visibleCapabilities(caps: AgentCapabilities): string[] {
   const all: [string, unknown][] = [
@@ -75,43 +114,78 @@ function getStatusBadge(status: Agent["agent_status"]) {
   }
 }
 
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function collectQuickPrompts(skills: AgentSkill[]): string[] {
+  const prompts: string[] = []
+  for (const skill of skills) {
+    for (const example of skill.examples ?? []) {
+      if (prompts.length >= 3) return prompts
+      prompts.push(example)
+    }
+  }
+  return prompts
+}
+
 export default function ConsumerAgentProfilePage() {
   const params = useParams()
   const router = useRouter()
   const { userId } = useAuth()
   const agentId = params.id as string
-  const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [techOpen, setTechOpen] = useState(false)
+  const ctaRef = useRef<HTMLDivElement>(null)
+  const [showStickyBar, setShowStickyBar] = useState(false)
 
-  const loadAgentDetail = useCallback(async () => {
-    if (isSystemAgent(agentId)) {
-      setLoading(false)
-      return
-    }
-    try {
-      setLoading(true)
-      const response = await getAgent(agentId)
-
-      if (response.success && response.agent) {
-        setAgentData(response)
-      } else {
-        const errorMessage = response.error || "Failed to load agent details"
-        banner.error("Failed to load agent details", {
-          description: errorMessage,
-        })
-      }
-    } catch {
-      banner.error("Failed to load agent details")
-    } finally {
-      setLoading(false)
-    }
-  }, [agentId])
+  const isSystem = isSystemAgent(agentId)
+  const { data: agentData, isLoading: loading } = useQuery<AgentCenterResponse>({
+    queryKey: ["agent", agentId],
+    enabled: !!agentId && !isSystem,
+    queryFn: () => getAgent(agentId),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
 
   useEffect(() => {
-    if (agentId) {
-      loadAgentDetail()
+    const el = ctaRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => setShowStickyBar(!entry.isIntersecting),
+      { threshold: 0 },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [loading, agentData])
+
+  const handleCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      banner.success("Link copied to clipboard")
+    } catch {
+      banner.error("Failed to copy link")
     }
-  }, [agentId, loadAgentDetail])
+  }, [])
+
+  const handleNativeShare = useCallback(async (name: string, description: string) => {
+    try {
+      await navigator.share({
+        title: name,
+        text: description,
+        url: window.location.href,
+      })
+    } catch (e) {
+      if (e instanceof Error && e.name !== "AbortError") {
+        banner.error("Failed to share")
+      }
+    }
+  }, [])
+
+  const openShareWindow = useCallback((url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer,width=600,height=500")
+  }, [])
 
   /* ───────── Loading ───────── */
 
@@ -215,201 +289,403 @@ export default function ConsumerAgentProfilePage() {
   const card = agent.agent_card
   const isOwner = userId && agent.provider_id === userId
   const enabledCaps = visibleCapabilities(card.capabilities)
+  const isActive = agent.agent_status === "active"
+  const isChatDisabled = !isActive
+
+  const callCount = agent.call_count ?? 0
+  const successCount = agent.call_success_count ?? 0
+  const likeCount = agent.like_count ?? 0
+  const successRate = callCount > 0 ? Math.round((successCount / callCount) * 100) : null
+  const hasStats = callCount > 0 || likeCount > 0
+
+  const quickPrompts = collectQuickPrompts(card.skills)
+
+  const navigateToChat = (prompt?: string) => {
+    const params = new URLSearchParams({ agentId })
+    if (prompt) params.set("prompt", prompt)
+    router.push(`/chat?${params.toString()}`)
+  }
 
   return (
     <div className="page-container animate-in fade-in duration-500">
-      <div className="page-content space-y-10">
-        {/* ── Top nav ── */}
+      <div className="page-content space-y-10 pb-24 lg:pb-10">
+        {/* ── Breadcrumb + actions ── */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <Button
-            variant="ghost"
-            onClick={() => router.push("/agents")}
-            className="group pl-0 hover:pl-2 transition-all"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2 group-hover:-translate-x-1 transition-transform" />
-            Back to Agents
-          </Button>
-          {isOwner && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="brandTint" size="sm" asChild>
-                    <a
-                      href={developerUrl(`/agents/${agentId}`)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Manage
-                      <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
-                    </a>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Manage on Developer Portal</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link href="/agents">Agents</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{card.name}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+
+          <div className="flex items-center gap-2">
+            {isOwner && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="brandTint" size="sm" asChild>
+                      <a
+                        href={developerUrl(`/agents/${agentId}`)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Manage
+                        <SquareArrowOutUpRight className="h-4 w-4 ml-2" />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Manage on Developer Portal</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
         </div>
 
         {/* ── Hero ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* Left: Identity */}
-          <div className="lg:col-span-7 space-y-5">
-            <div className="flex items-start gap-5">
-              <Avatar className="h-24 w-24 shrink-0 border-4 border-background shadow-xl">
-                <AvatarImage src={card.iconUrl || undefined} alt={card.name} />
-                <AvatarFallback className="bg-primary/5 text-primary">
-                  <Bot className="h-10 w-10" />
-                </AvatarFallback>
-              </Avatar>
+        <div className="space-y-5">
+          <div className="flex items-start gap-5">
+            <Avatar className="h-24 w-24 shrink-0 border-4 border-background shadow-xl">
+              <AvatarImage src={card.iconUrl || undefined} alt={card.name} />
+              <AvatarFallback className="bg-primary/5 text-primary">
+                <Bot className="h-10 w-10" />
+              </AvatarFallback>
+            </Avatar>
 
-              <div className="space-y-2 min-w-0">
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-2xl font-bold tracking-tight">{card.name}</h1>
-                  {getStatusBadge(agent.agent_status)}
-                </div>
-                <p className="text-sm text-muted-foreground font-medium">
-                  v{card.version}
-                  <span className="mx-1.5 text-border">·</span>
-                  Built by {card.provider?.organization || "Unknown Provider"}
-                </p>
+            <div className="space-y-2 min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-2xl font-bold tracking-tight">{card.name}</h1>
+                {getStatusBadge(agent.agent_status)}
+                <AgentSourceBadge
+                  source={agent.source}
+                  isHubOnline={agent.is_hub_online}
+                  className="h-5 w-5"
+                />
               </div>
+              <p className="text-sm text-muted-foreground font-medium">
+                v{card.version}
+                <span className="mx-1.5 text-border">·</span>
+                Built by {card.provider?.organization || "Unknown Provider"}
+              </p>
             </div>
-
-            <p className="text-muted-foreground leading-relaxed">{card.description}</p>
           </div>
 
-          {/* Right: Action card */}
-          <div className="lg:col-span-5">
-            <div className="space-y-3">
-                <Button
-                  className="w-full btn-brand-gradient"
-                  onClick={() => router.push(`/chat?agentId=${agentId}`)}
-                >
-                  <MessageCirclePlus className="h-4 w-4 mr-2" />
-                  Chat with this agent
-                </Button>
+          <p className="text-muted-foreground leading-relaxed max-w-2xl">{card.description}</p>
 
-                {card.documentationUrl && (
-                  <Button variant="outline" className="w-full" asChild>
-                    <a
-                      href={card.documentationUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+          {/* CTA inline with hero */}
+          <div ref={ctaRef} className="flex flex-wrap items-center gap-3 pt-1">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      className="btn-brand-gradient"
+                      onClick={() => navigateToChat()}
+                      disabled={isChatDisabled}
                     >
-                      <SquareArrowOutUpRight className="h-4 w-4 mr-2" />
-                      View Documentation
-                    </a>
-                  </Button>
+                      <MessageCirclePlus className="h-4 w-4 mr-2" />
+                      Chat with this agent
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {isChatDisabled && (
+                  <TooltipContent>Agent is inactive</TooltipContent>
                 )}
-            </div>
+              </Tooltip>
+            </TooltipProvider>
+
+            {card.documentationUrl && (
+              <Button variant="outline" size="sm" asChild>
+                <a
+                  href={card.documentationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <SquareArrowOutUpRight className="h-4 w-4 mr-2" />
+                  View Documentation
+                </a>
+              </Button>
+            )}
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="brandTint" size="sm">
+                  <Share2 className="h-4 w-4 mr-2" />
+                  Share
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={handleCopyLink}>
+                  <Link2 className="h-4 w-4" />
+                  Copy Link
+                </DropdownMenuItem>
+                {typeof navigator !== "undefined" && "share" in navigator && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => handleNativeShare(card.name, card.description)}>
+                      <Share2 className="h-4 w-4" />
+                      More Options…
+                    </DropdownMenuItem>
+                  </>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => {
+                    const url = encodeURIComponent(window.location.href)
+                    const text = encodeURIComponent(`Check out ${card.name} on Hybro`)
+                    openShareWindow(`https://x.com/intent/post?url=${url}&text=${text}`)
+                  }}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
+                  Share on X
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    const text = encodeURIComponent(`Check out ${card.name} on Hybro\n\n${window.location.href}`)
+                    openShareWindow(`https://www.linkedin.com/feed/?shareActive=true&text=${text}`)
+                  }}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" /></svg>
+                  Share on LinkedIn
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    const url = encodeURIComponent(window.location.href)
+                    const title = encodeURIComponent(card.name)
+                    openShareWindow(`https://reddit.com/submit?url=${url}&title=${title}`)
+                  }}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z" /></svg>
+                  Share on Reddit
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
+
+          {/* Quick prompts */}
+          {quickPrompts.length > 0 && !isChatDisabled && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Try asking:</span>
+              {quickPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  onClick={() => navigateToChat(prompt)}
+                  className="text-xs px-3 py-1.5 rounded-full border border-border bg-muted/40 text-foreground/80 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground transition-colors cursor-pointer truncate max-w-[280px]"
+                >
+                  &ldquo;{prompt}&rdquo;
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* ── What this agent can help with ── */}
-        {card.skills.some((s) => s.examples && s.examples.length > 0) && (
+        {/* ── Stats ── */}
+        {hasStats && (
+          <div className="flex flex-wrap items-center gap-6 text-sm text-muted-foreground">
+            {callCount > 0 && (
+              <span className="flex items-center gap-1.5">
+                <BarChart3 className="h-4 w-4" />
+                {formatCount(callCount)} calls
+              </span>
+            )}
+            {successRate !== null && (
+              <span className="flex items-center gap-1.5">
+                <Activity className="h-4 w-4" />
+                {successRate}% success
+              </span>
+            )}
+            {likeCount > 0 && (
+              <span className="flex items-center gap-1.5">
+                <ThumbsUp className="h-4 w-4" />
+                {formatCount(likeCount)} likes
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* ── Skills ── */}
+        {card.skills.length > 0 && (
           <section className="space-y-4" data-testid="skills-section">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Lightbulb className="h-5 w-5 text-primary" />
               What this agent can help with
             </h2>
 
-            <div className="space-y-1.5 rounded-lg bg-muted/30 border border-border/50 p-3">
-              {card.skills.flatMap((skill) =>
-                (skill.examples ?? []).slice(0, 2).map((example) => (
-                  <p
-                    key={`${skill.id}-${example}`}
-                    className="text-xs text-foreground/80 font-mono break-words"
-                  >
-                    {example}
-                  </p>
-                )),
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {card.skills.map((skill) => (
+                <Card key={skill.id} className="overflow-hidden">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold">{skill.name}</CardTitle>
+                    {skill.description && (
+                      <CardDescription className="text-xs leading-relaxed">
+                        {skill.description}
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {skill.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {skill.tags.map((tag) => (
+                          <Badge key={tag} variant="badgeMuted" className="gap-1 text-[10px]">
+                            <Tag className="h-2.5 w-2.5" />
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {(skill.examples ?? []).length > 0 && (
+                      <div className="space-y-1.5">
+                        {(skill.examples ?? []).slice(0, 3).map((example) => (
+                          <button
+                            key={example}
+                            onClick={() => !isChatDisabled && navigateToChat(example)}
+                            disabled={isChatDisabled}
+                            className="flex items-start gap-2 w-full text-left text-xs text-foreground/70 hover:text-foreground disabled:opacity-50 disabled:cursor-default transition-colors group"
+                          >
+                            <Sparkles className="h-3 w-3 mt-0.5 shrink-0 text-primary/50 group-hover:text-primary transition-colors" />
+                            <span className="wrap-break-word">{example}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           </section>
         )}
 
-        {/* ── How this agent works ── */}
-        <section className="space-y-4" data-testid="technical-section">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Zap className="h-5 w-5 text-primary" />
-            How this agent works
-          </h2>
+        {/* ── Technical details (collapsible) ── */}
+        <Collapsible open={techOpen} onOpenChange={setTechOpen}>
+          <section className="space-y-4" data-testid="technical-section">
+            <CollapsibleTrigger className="flex items-center gap-2 group cursor-pointer w-full">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Zap className="h-5 w-5 text-primary" />
+                How this agent works
+              </h2>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${techOpen ? "rotate-180" : ""}`} />
+            </CollapsibleTrigger>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* You can send */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Send className="h-4 w-4 text-muted-foreground" />
-                  You can send
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {card.defaultInputModes.map((mode) => {
-                    const Icon = getModeIcon(mode)
-                    return (
-                      <Badge
-                        key={mode}
-                        variant="outline"
-                        className="gap-1.5 font-normal"
-                      >
-                        <Icon className="h-3 w-3" />
-                        {mode}
-                      </Badge>
-                    )
-                  })}
+            <CollapsibleContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* You can send */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <Send className="h-4 w-4 text-muted-foreground" />
+                      You can send
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {card.defaultInputModes.map((mode) => {
+                        const Icon = getModeIcon(mode)
+                        const label = getModeLabel(mode)
+                        return (
+                          <TooltipProvider key={mode}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="outline"
+                                  className="gap-1.5 font-normal"
+                                >
+                                  <Icon className="h-3 w-3" />
+                                  {label}
+                                </Badge>
+                              </TooltipTrigger>
+                              {label !== mode && (
+                                <TooltipContent className="font-mono text-xs">{mode}</TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
+                        )
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* It returns */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <Reply className="h-4 w-4 text-muted-foreground" />
+                      It returns
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {card.defaultOutputModes.map((mode) => {
+                        const Icon = getModeIcon(mode)
+                        const label = getModeLabel(mode)
+                        return (
+                          <TooltipProvider key={mode}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="outline"
+                                  className="gap-1.5 font-normal"
+                                >
+                                  <Icon className="h-3 w-3" />
+                                  {label}
+                                </Badge>
+                              </TooltipTrigger>
+                              {label !== mode && (
+                                <TooltipContent className="font-mono text-xs">{mode}</TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
+                        )
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Capabilities with tooltips */}
+              {enabledCaps.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 pt-2" data-testid="capabilities">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Capabilities
+                  </span>
+                  <TooltipProvider>
+                    {enabledCaps.map((cap) => (
+                      <Tooltip key={cap}>
+                        <TooltipTrigger asChild>
+                          <Badge variant="secondary" className="font-normal cursor-default">
+                            {cap}
+                          </Badge>
+                        </TooltipTrigger>
+                        {CAPABILITY_TOOLTIPS[cap] && (
+                          <TooltipContent>{CAPABILITY_TOOLTIPS[cap]}</TooltipContent>
+                        )}
+                      </Tooltip>
+                    ))}
+                  </TooltipProvider>
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* It returns */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Reply className="h-4 w-4 text-muted-foreground" />
-                  It returns
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {card.defaultOutputModes.map((mode) => {
-                    const Icon = getModeIcon(mode)
-                    return (
-                      <Badge
-                        key={mode}
-                        variant="outline"
-                        className="gap-1.5 font-normal"
-                      >
-                        <Icon className="h-3 w-3" />
-                        {mode}
-                      </Badge>
-                    )
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Capabilities */}
-          {enabledCaps.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pt-2" data-testid="capabilities">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Capabilities
-              </span>
-              {enabledCaps.map((cap) => (
-                <Badge
-                  key={cap}
-                  variant="secondary"
-                  className="font-normal"
-                >
-                  {cap}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </section>
+              )}
+            </CollapsibleContent>
+          </section>
+        </Collapsible>
       </div>
+
+      {/* ── Sticky mobile CTA ── */}
+      {showStickyBar && !isChatDisabled && (
+        <div className="fixed bottom-0 inset-x-0 p-3 bg-background/95 backdrop-blur-sm border-t z-40 lg:hidden animate-in slide-in-from-bottom-4 duration-200">
+          <Button
+            className="w-full btn-brand-gradient"
+            onClick={() => navigateToChat()}
+          >
+            <MessageCirclePlus className="h-4 w-4 mr-2" />
+            Chat with this agent
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

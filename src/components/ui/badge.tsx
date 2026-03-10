@@ -25,6 +25,8 @@ const badgeVariants = cva(
           "bg-[rgb(254,242,242)] text-[rgb(220,38,38)] border-[rgb(252,165,165)] dark:bg-[rgb(69,10,10)] dark:text-[rgb(248,113,113)] dark:border-[rgb(185,28,28)]",
         inactive:
           "bg-[rgb(249,250,251)] text-[rgb(55,65,81)] border-[rgb(229,231,235)] dark:bg-[rgb(31,41,55,0.5)] dark:text-[rgb(156,163,175)] dark:border-[rgb(55,65,81)]",
+        warning:
+          "bg-[rgb(255,251,235)] text-[rgb(161,98,7)] border-[rgb(253,224,71)] dark:bg-[rgb(69,26,3,0.3)] dark:text-[rgb(253,186,116)] dark:border-[rgb(120,53,15)]",
         badgeMuted:
           "text-muted-foreground border-muted bg-muted/50 hover:bg-muted/70",
       },

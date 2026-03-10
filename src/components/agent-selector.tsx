@@ -11,6 +11,7 @@ import {
   HoverCardTrigger,
 } from '@/components/ui/hover-card'
 import type { Agent } from '@/lib/types/agent'
+import { AgentSourceBadge } from './agent-source-badge'
 
 interface AgentSelectorProps {
   selectedAgents: { [agentId: string]: Agent }
@@ -175,9 +176,13 @@ export function AgentSelector({
   const uniqueAgents = Array.from(
     new Map(availableAgents.map(agent => [agent.agent_id, agent])).values()
   );
-  const unselectedAgents = uniqueAgents.filter(
-    agent => !selectedAgents[agent.agent_id]
-  );
+  const unselectedAgents = uniqueAgents
+    .filter(agent => !selectedAgents[agent.agent_id])
+    .sort((a, b) => {
+      const aIsHub = a.source === 'hub' ? 1 : 0
+      const bIsHub = b.source === 'hub' ? 1 : 0
+      return aIsHub - bIsHub
+    });
 
   return (
     <div className={`space-y-4 ${className}`}>
@@ -212,7 +217,9 @@ export function AgentSelector({
             {selectedAgentsList.map((agent) => (
               <AgentCardHover key={agent.agent_id} agent={agent}>
                 <div
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors cursor-pointer h-10"
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border bg-muted/50 hover:bg-muted transition-colors cursor-pointer h-10${
+                    agent.source === 'hub' && !agent.is_hub_online ? ' opacity-50' : ''
+                  }`}
                 >
                   <Avatar className="w-6 h-6 flex-shrink-0">
                     <AvatarImage src={agent.agent_card.iconUrl || undefined} />
@@ -220,8 +227,12 @@ export function AgentSelector({
                       {agent.agent_card.name.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
+                  <AgentSourceBadge source={agent.source} isHubOnline={agent.is_hub_online} className="h-3 w-3" />
                   <span className="text-sm font-medium truncate max-w-32">
                     {agent.agent_card.name}
+                    {agent.source === 'hub' && !agent.is_hub_online && (
+                      <span className="text-muted-foreground font-normal"> (offline)</span>
+                    )}
                   </span>
                   <Minus 
                     className="w-4 h-4 text-destructive ml-2 flex-shrink-0 cursor-pointer hover:text-destructive/80" 
@@ -259,7 +270,9 @@ export function AgentSelector({
             {unselectedAgents.map((agent) => (
               <AgentCardHover key={agent.agent_id} agent={agent}>
                 <div
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer h-10"
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted/30 transition-colors cursor-pointer h-10${
+                    agent.source === 'hub' && !agent.is_hub_online ? ' opacity-50' : ''
+                  }`}
                   onClick={() => onAgentAdd(agent)}
                 >
                   <Avatar className="w-6 h-6 flex-shrink-0">
@@ -268,8 +281,12 @@ export function AgentSelector({
                       {agent.agent_card.name.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
+                  <AgentSourceBadge source={agent.source} isHubOnline={agent.is_hub_online} className="h-3 w-3" />
                   <span className="text-sm font-medium truncate max-w-32">
                     {agent.agent_card.name}
+                    {agent.source === 'hub' && !agent.is_hub_online && (
+                      <span className="text-muted-foreground font-normal"> (offline)</span>
+                    )}
                   </span>
                   <Plus className="w-4 h-4 text-primary ml-2 flex-shrink-0" />
                 </div>

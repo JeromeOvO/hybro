@@ -946,7 +946,7 @@ export function RoomChatInput({
                 variant="ghost"
                 size="icon"
                 disabled={disabled || sending || processing}
-                className="h-8 w-8 rounded-full text-primary hover:text-primary/80"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors"
                 title="Mention an agent (@)"
                 onClick={() => {
                   if (!editorRef.current) return

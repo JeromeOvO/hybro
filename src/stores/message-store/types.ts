@@ -41,6 +41,7 @@ export interface MessageEntity {
   content: string
   senderName: string
   agentId?: string
+  agentSource?: 'cloud' | 'hub'
   userId?: string
 
   // ── Task state (agent messages backed by A2A tasks) ───────
@@ -101,6 +102,7 @@ export interface IncomingMessage {
 
   // All optional — omitted fields preserve existing values on update
   agentId?: string
+  agentSource?: 'cloud' | 'hub'
   userId?: string
   taskStatus?: TaskState | null
   taskError?: string | null

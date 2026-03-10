@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { deduplicateIcons } from "@/lib/agent-icon-utils"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
 import type { Agent } from "@/lib/types"
 
 function getSkillLabel(skill: { name: string; tags: string[] }): string | null {
@@ -54,13 +55,11 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
             : "border-muted bg-muted/20",
         )}
       >
-        <Badge
-          variant={isActive ? "success" : "inactive"}
-          className="absolute top-3 right-3"
-        >
-          {isActive ? "Active" : "Inactive"}
-        </Badge>
-
+        <AgentSourceBadge
+          source={agent.source}
+          isHubOnline={agent.is_hub_online}
+          className="absolute top-3 left-3 h-4 w-4"
+        />
         <div className="relative mt-2">
           <Avatar
             className={cn(
@@ -81,7 +80,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           </Avatar>
           <span
             className={cn(
-              "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background",
+              "absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-[1.5px] border-background",
               isActive ? "bg-green-500" : "bg-muted-foreground/30",
             )}
           />
@@ -129,7 +128,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
             className={cn(
               "inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-colors",
               isActive
-                ? "bg-primary text-primary-foreground"
+                ? "bg-primary/60 text-primary-foreground/80 group-hover:bg-primary group-hover:text-primary-foreground"
                 : "bg-muted text-muted-foreground",
             )}
           >
