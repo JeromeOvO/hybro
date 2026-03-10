@@ -27,6 +27,7 @@ from models.supervisor_v2 import (
 )
 
 if TYPE_CHECKING:
+    from services.bedrock_service import BedrockService
     from services.database_service import DatabaseService
     from services.openai_service import OpenAIService
 
@@ -165,6 +166,7 @@ class RoomSupervisorService:
     def __init__(
         self,
         openai_service: OpenAIService | None = None,
+        bedrock_service: BedrockService | None = None,
         database_service: DatabaseService | None = None,
     ):
         if openai_service is None:
@@ -173,6 +175,13 @@ class RoomSupervisorService:
             self._openai_service = _openai_service
         else:
             self._openai_service = openai_service
+
+        if bedrock_service is None:
+            from services.bedrock_service import bedrock_service as _bedrock_service
+
+            self._bedrock_service = _bedrock_service
+        else:
+            self._bedrock_service = bedrock_service
 
         if database_service is None:
             from services.database_service import db_service
@@ -729,22 +738,48 @@ class RoomSupervisorService:
         system_prompt: str,
         user_prompt: str,
     ) -> dict:
-        """Call the Supervisor LLM and return JSON response."""
-        return await self._openai_service.call_supervisor_llm_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        """Call the Supervisor LLM and return JSON response.
+
+        Routes to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini)
+        based on the USE_BEDROCK_SUPERVISOR feature flag.
+        """
+        from config.settings import settings
+
+        if settings.use_bedrock_supervisor:
+            return await self._bedrock_service.call_claude_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=settings.bedrock_supervisor_model,
+            )
+        else:
+            return await self._openai_service.call_supervisor_llm_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
 
     async def _call_supervisor_llm_text(
         self,
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        """Call the Supervisor LLM and return text response (for synthesis)."""
-        return await self._openai_service.call_supervisor_llm_text(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        """Call the Supervisor LLM and return text response (for synthesis).
+
+        Routes to either Bedrock (Claude Opus 4.6) or OpenAI (gpt-4o-mini)
+        based on the USE_BEDROCK_SUPERVISOR feature flag.
+        """
+        from config.settings import settings
+
+        if settings.use_bedrock_supervisor:
+            return await self._bedrock_service.call_claude_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model=settings.bedrock_supervisor_model,
+            )
+        else:
+            return await self._openai_service.call_supervisor_llm_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
 
 
 # Singleton instance
