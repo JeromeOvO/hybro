@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
 
     await mongodb.create_context_memory_indexes()
     await mongodb.ensure_agent_indexes()
+    await mongodb.create_capability_issue_indexes()
 
     # Start the agent health check service
     await agent_health_service.start()

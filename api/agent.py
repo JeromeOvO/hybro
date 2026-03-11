@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from api.agent_viewset import AgentViewSet
 from common.auth import ClerkUser, get_current_user, get_optional_user
+from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
 from modules.AgentCenter import AgentCenter
+from services.agent_capability_issue_service import capability_issue_service
 from services.agent_service import agent_service
 
 router = APIRouter()
@@ -161,6 +163,91 @@ async def update_agent(
     agent_center_response = await agent_center.update_agent(agent_center_request)
 
     return agent_center_response
+
+
+# ============= CAPABILITY ISSUE ENDPOINTS (Auth Required) =============
+
+
+@router.get("/agent/capability-issues/{agent_id}")
+async def get_capability_issues(
+    agent_id: str,
+    status: str | None = Query(None, description="Filter by status: open or resolved"),
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Get capability issues for an agent - PROTECTED (requires ownership)"""
+    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if existing_agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to view issues for this agent",
+        )
+
+    issue_status = None
+    if status:
+        try:
+            issue_status = IssueStatus(status)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid status. Use 'open' or 'resolved'."
+            ) from None
+
+    issues = await capability_issue_service.get_issues_for_agent(
+        agent_id, status=issue_status
+    )
+    return {"issues": [issue.model_dump(mode="json") for issue in issues]}
+
+
+@router.post("/agent/capability-issues/{issue_id}/resolve")
+async def resolve_capability_issue(
+    issue_id: str,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Resolve a single capability issue - PROTECTED (requires ownership)"""
+    # Find the issue first to verify ownership
+    from database.mongodb import mongodb
+
+    doc = await mongodb.agent_capability_issues_collection.find_one(
+        {"issue_id": issue_id}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    agent = await agent_service.get_agent_by_agent_id(doc["agent_id"])
+    if not agent or agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to resolve this issue",
+        )
+
+    result = await capability_issue_service.resolve_issue(issue_id, user.user_id)
+    if not result:
+        raise HTTPException(
+            status_code=400, detail="Issue is already resolved or not found"
+        )
+    return {"issue": result.model_dump(mode="json")}
+
+
+@router.post("/agent/capability-issues/{agent_id}/resolve-all")
+async def resolve_all_capability_issues(
+    agent_id: str,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Bulk resolve all open capability issues for an agent - PROTECTED"""
+    existing_agent = await agent_service.get_agent_by_agent_id(agent_id)
+    if not existing_agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if existing_agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to resolve issues for this agent",
+        )
+
+    count = await capability_issue_service.resolve_all_for_agent(
+        agent_id, user.user_id
+    )
+    return {"resolved_count": count}
 
 
 # ============= PUBLIC ENDPOINTS (No Auth Required) =============

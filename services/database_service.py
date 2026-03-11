@@ -251,6 +251,7 @@ class DatabaseService:
         query_text: str,
         count: int = 5,
         allowed_agent_ids: list[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
         active_only: bool = True,
         user_id: str | None = None,
     ) -> list[Agent]:
@@ -261,6 +262,7 @@ class DatabaseService:
             query_text: Text to find similar agents for
             count: Number of results to return
             allowed_agent_ids: Optional list of agent IDs to restrict the search to
+            excluded_agent_ids: Optional set of agent IDs to exclude ($nin filter)
             active_only: If True, only return agents with active status (default: True)
             user_id: Optional user ID to include private agents
 
@@ -280,6 +282,14 @@ class DatabaseService:
             pinecone_filter = {
                 "agent_id": {"$in": [str(aid) for aid in allowed_agent_ids]}
             }
+
+        # Exclude agents with repeated capability issues
+        if excluded_agent_ids:
+            nin_filter = {"agent_id": {"$nin": list(excluded_agent_ids)}}
+            if pinecone_filter:
+                pinecone_filter = {"$and": [pinecone_filter, nin_filter]}
+            else:
+                pinecone_filter = nin_filter
 
         # Then use the embedding with Pinecone - remove the incompatible parameter
         results = self.pinecone.query(

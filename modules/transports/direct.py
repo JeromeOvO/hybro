@@ -731,6 +731,29 @@ class DirectTransport(AgentTransport):
             await self._emit_terminal(ctx, TaskState.failed, error=error_message)
         if ctx.send_sse:
             await self.sse_manager.send_error(ctx.room_id, error_message)
+
+        # Record capability issue for the agent
+        try:
+            from services.agent_capability_issue_service import (
+                capability_issue_service,
+            )
+
+            await capability_issue_service.record_issue(
+                agent_id=ctx.current_message.agent_id,
+                error_message=error_message,
+                query_text=(
+                    ctx.current_message.task_content
+                    or (ctx.current_message.message_content.message_text or "")
+                ),
+                room_id=ctx.room_id,
+                message_id=ctx.current_message.message_id,
+            )
+        except Exception as rec_exc:  # noqa: BLE001
+            logger.warning(
+                "ResponseProcessor: Failed to record capability issue: %s",
+                rec_exc,
+            )
+
         return ProcessingStatus.FAILED, streaming_state.full_response_text
 
     async def _handle_stream_message_chunk(
@@ -1277,6 +1300,29 @@ class DirectTransport(AgentTransport):
                 await self._emit_terminal(ctx, TaskState.failed, error=str(exc),
                 )
             await self.sse_manager.send_error(room_id, str(exc))
+
+            # Record capability issue for the agent
+            try:
+                from services.agent_capability_issue_service import (
+                    capability_issue_service,
+                )
+
+                await capability_issue_service.record_issue(
+                    agent_id=current_message.agent_id,
+                    error_message=str(exc),
+                    query_text=(
+                        current_message.task_content
+                        or (current_message.message_content.message_text or "")
+                    ),
+                    room_id=room_id,
+                    message_id=current_message.message_id,
+                )
+            except Exception as rec_exc:  # noqa: BLE001
+                logger.warning(
+                    "ResponseProcessor: Failed to record capability issue: %s",
+                    rec_exc,
+                )
+
             return False, "", None
 
         # Post-call cancellation check
