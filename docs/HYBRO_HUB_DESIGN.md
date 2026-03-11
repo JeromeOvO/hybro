@@ -566,24 +566,24 @@ The relay bridges two auth systems: frontend uses Clerk JWT, hub uses API key.
 - Frontend calls `sendMessage` with Clerk JWT → backend resolves `user_id`
 - Relay verifies: `api_key.user_id == room.room_owner_id` before forwarding
 
-**Relay SSE Connection Security**: The SSE subscription
-(`GET /api/v1/relay/hub/{hub_id}/events`) is a long-lived connection
-authenticated by API key. Because API keys don't expire per-request like
-JWTs, additional safeguards are needed:
+**Relay Publish Security**: All relay endpoints use API key authentication,
+including `POST .../publish`. Publish requests are further validated by:
 
-- **Connection-scoped token**: On SSE connect, the relay issues a short-lived
-  session token (JWT, 1h TTL) bound to the `hub_id` and client IP. The hub
-  includes this token in subsequent `POST .../publish` requests. This prevents
-  a leaked API key from being used to publish events from a different host.
-  The signing secret (`relay_connection_token_secret`) must be configured in
-  production — the relay service logs a warning on startup if it is empty,
-  and `create_connection_token` raises `ValueError` if called without a secret.
-- **Heartbeat-based reauth**: The relay sends periodic heartbeat events. If
-  the hub fails to acknowledge 3 consecutive heartbeats, the connection is
-  closed. On reconnect, the API key is re-validated (catching revoked keys).
-- **IP binding (optional, Phase 3)**: For enterprise hubs, the relay can pin
-  the SSE connection to the originating IP. Connection attempts from a new IP
-  require re-authentication.
+- **Hub ownership**: The hub's `user_id` (resolved from API key) must match
+  the hub document in the database.
+- **Room ownership**: The hub owner must match the room owner.
+- **Message ownership**: Each `agent_message_id` is validated to belong to
+  the publishing hub (checked in `RelayTransport`).
+
+**SSE Connection Resilience**: The hub's SSE client uses a 90-second read
+timeout (3x the server heartbeat interval). If no SSE event arrives within
+this window, the connection is treated as dead and automatically reconnected
+with exponential backoff. Publish is decoupled from SSE health — agent
+responses are delivered even during SSE reconnection.
+
+- **Heartbeat-based liveness**: The relay sends periodic heartbeat events. If
+  the hub fails to send heartbeats for 3 consecutive intervals, the server
+  closes the connection. On reconnect, the API key is re-validated.
 
 ### 5.6 Offline Handling
 
@@ -1020,9 +1020,8 @@ through the relay to the browser. The response shows a 🏠 badge.
       agents by normalized URL and creates the partial unique index
 
 11. **Supporting Changes**:
-    - `common/utils/connection_token.py` — JWT create/verify with secret guard
     - `config/settings.py` — `relay_heartbeat_interval`, `relay_offline_queue_max`,
-      `relay_offline_queue_ttl`, `relay_connection_token_secret`,
+      `relay_offline_queue_ttl`,
       `relay_hub_agent_heartbeat_miss_limit`
     - `common/middleware/discovery_cors_middleware.py` — extended to `/relay` paths
     - `jobs/stale_task_checker.py` — skips `source == "hub"` agents in orphan recovery
@@ -1054,9 +1053,6 @@ through the relay to the browser. The response shows a 🏠 badge.
 - **`RELAY_DISPATCHED` reuses PAUSED semantics**: Both `SupervisorExecutor` and
   `QueueExecutor` treat `RELAY_DISPATCHED` identically to `PAUSED`, persisting
   continuation state for later resume when the hub publishes a response.
-- **Connection token secret guard**: `create_connection_token` raises
-  `ValueError` if the secret is empty. `verify_connection_token` returns
-  `False`. The relay service logs a startup warning if unconfigured.
 - **Heartbeat miss counter**: The miss counter is reset both when a real event
   is delivered AND when a heartbeat is sent (proving the SSE connection is alive),
   preventing false disconnections of idle-but-healthy hubs.
@@ -1088,11 +1084,8 @@ and an Ollama A2A adapter in the `a2a-adapter` library.
      - HTTP client: `connect=10, read=30, write=10` for register/sync/publish/status
      - SSE client: `connect=10, read=None, write=10` for long-lived event stream
        (prevents heartbeat-interval read timeouts from killing the connection)
-   - `publish()` with retry queue: on 403 (expired token) or missing token, events
-     are queued in a bounded `deque(maxlen=50)` and flushed automatically when the
-     SSE stream reconnects and delivers a fresh `connection_token`
-   - `_do_publish()` raw HTTP call (no queue logic) used by both `publish()` and
-     `_flush_retry_queue()` to prevent circular append bugs
+   - `publish()` sends events to the backend with API key authentication
+   - Publish is decoupled from SSE health — works even during SSE reconnection
    - `_flush_retry_queue()` drains queue into a local list before iterating,
      stops immediately if token is lost mid-flush, re-queues remaining items
    - Internal handling of `connection_token` and `heartbeat` SSE events

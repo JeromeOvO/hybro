@@ -63,7 +63,6 @@ class Settings(BaseSettings):
     relay_heartbeat_interval: int = 30  # seconds
     relay_offline_queue_max: int = 100  # per hub
     relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
-    relay_connection_token_secret: str = ""  # JWT signing secret for /publish auth
     relay_hub_agent_heartbeat_miss_limit: int = 3
     relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
     

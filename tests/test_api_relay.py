@@ -5,7 +5,7 @@ Tests cover:
 - Hub registration (success, duplicate, invalid key)
 - Agent sync (upsert, dedup by hub_id+local_agent_id, agent_card.url rewriting)
 - SSE events endpoint (connection, message delivery)
-- Publish endpoint (token validation, room ownership auth, event persistence, resume)
+- Publish endpoint (API key auth, room ownership auth, event persistence, resume)
 - Hub status endpoint
 - Offline queue behavior (enqueue, overflow)
 """
@@ -14,10 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from common.utils.connection_token import (
-    create_connection_token,
-    verify_connection_token,
-)
 from models.api_key import APIKey
 from models.hub import (
     HubAgentSync,
@@ -114,27 +110,6 @@ def _make_relay_service(
     svc.set_relay_transport(relay_transport)
 
     return svc
-
-
-# ===========================================================================
-# Connection Token
-# ===========================================================================
-
-
-class TestConnectionToken:
-    def test_create_and_verify(self):
-        secret = "test-secret-key-for-jwt"
-        token = create_connection_token("hub-123", secret)
-        assert verify_connection_token(token, "hub-123", secret)
-
-    def test_wrong_hub_id_rejected(self):
-        secret = "test-secret"
-        token = create_connection_token("hub-123", secret)
-        assert not verify_connection_token(token, "hub-999", secret)
-
-    def test_wrong_secret_rejected(self):
-        token = create_connection_token("hub-123", "secret-a")
-        assert not verify_connection_token(token, "hub-123", "secret-b")
 
 
 # ===========================================================================
@@ -383,7 +358,6 @@ class TestRelayServiceAgentSync:
             mock_settings.relay_heartbeat_interval = 30
             mock_settings.relay_offline_queue_max = 100
             mock_settings.relay_offline_queue_ttl = 86400
-            mock_settings.relay_connection_token_secret = ""
             mock_settings.relay_hub_agent_heartbeat_miss_limit = 3
 
             await svc.sync_agents("hub-001", agents, _make_api_key())
@@ -481,19 +455,17 @@ class TestRelayServicePush:
 
 class TestRelayServicePublish:
     @pytest.mark.asyncio
-    async def test_publish_rejects_invalid_token(self):
+    async def test_publish_rejects_wrong_hub_owner(self):
         svc = _make_relay_service()
-        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-B"}
 
+        key = _make_api_key(user_id="user-A")
         request = HubPublishRequest(room_id="room-1", events=[])
-        with pytest.raises(PermissionError, match="Invalid"):
-            await svc.process_publish("hub-001", request, "bad-token")
+        with pytest.raises(PermissionError, match="not owned"):
+            await svc.process_publish("hub-001", request, key)
 
     @pytest.mark.asyncio
     async def test_publish_rejects_wrong_room_owner(self):
-        secret = "test-secret"
-        token = create_connection_token("hub-001", secret)
-
         mongo = MagicMock()
         mongo.get_hub = AsyncMock(return_value={"hub_id": "hub-001", "user_id": "user-A"})
         db_service = MagicMock()
@@ -507,17 +479,13 @@ class TestRelayServicePublish:
 
         svc = _make_relay_service(mongo=mongo, db_service=db_service)
 
+        key = _make_api_key(user_id="user-A")
         request = HubPublishRequest(room_id="room-1", events=[])
-        with patch("services.relay_service.settings") as ms:
-            ms.relay_connection_token_secret = secret
-            with pytest.raises(PermissionError, match="owner"):
-                await svc.process_publish("hub-001", request, token)
+        with pytest.raises(PermissionError, match="owner"):
+            await svc.process_publish("hub-001", request, key)
 
     @pytest.mark.asyncio
     async def test_publish_agent_response_updates_message(self):
-        secret = "test-secret"
-        token = create_connection_token("hub-001", secret)
-
         mongo = MagicMock()
         mongo.get_hub = AsyncMock(
             return_value={"hub_id": "hub-001", "user_id": "user-001"}
@@ -564,12 +532,10 @@ class TestRelayServicePublish:
             )
         ]
         request = HubPublishRequest(room_id="room-1", events=events)
+        key = _make_api_key(user_id="user-001")
 
-        with patch("services.relay_service.settings") as ms:
-            ms.relay_connection_token_secret = secret
-            await svc.process_publish("hub-001", request, token)
+        await svc.process_publish("hub-001", request, key)
 
-        # RelayTransport delegates to AgentResponseHandler.handle()
         handler = svc._relay_transport.response_handler
         handler.handle.assert_awaited_once()
         event = handler.handle.call_args[0][0]
