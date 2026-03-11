@@ -17,7 +17,7 @@
 | Server State     | TanStack React Query 5                   |
 | Client State     | Zustand 5                                |
 | Styling          | Tailwind CSS v4 + shadcn/ui (Radix)      |
-| Real-time        | SSE via `SSEConnection` class (auto-reconnect, exponential backoff) |
+| Real-time        | SSE via `SSEConnection` class (auto-reconnect, linear backoff) |
 | Message Store    | Normalized entity store (Zustand 5 + `useSyncExternalStore` streaming buffer) |
 | Forms            | React Hook Form + Zod 4                  |
 | Markdown         | react-markdown + remark-gfm + rehype     |
@@ -211,7 +211,7 @@ Major refactoring of the frontend message state management.
 ### 3.4 SSE Connection Management (Completed 2026-03-09)
 
 **SSEConnection** (`src/lib/api/sse.ts`):
-- Auto-reconnection with exponential backoff (max 5 attempts, starting 1000ms delay)
+- Auto-reconnection with linear backoff (max 5 attempts, delay = 1000ms * attempt)
 - Heartbeat message filtering
 - Graceful disconnect with `isManualClose` flag
 - Connection state tracking via `EventSource.readyState`
@@ -285,7 +285,7 @@ Major refactoring of the frontend message state management.
 
 | #    | Issue                                            | Status       | Resolution Notes                                                                 |
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
-| 2.1  | SSE auth token in URL query parameter             | Open         | Requires backend nonce endpoint + frontend migration to fetch-based SSE          |
+| 2.1  | SSE auth token in URL query parameter             | Resolved     | Migrated from EventSource to fetch()-based SSE with `Authorization: Bearer` header |
 | 2.2  | Optimistic update ID mismatch window              | Open         | Could be helped by backend `client_request_id` echo in SSE events               |
 | 2.3  | No message size validation on frontend            | Open         | Add char limit to chat input; backend enforcement needed too (backend SDR 2.10)  |
 | 2.4  | No pagination for room messages                   | Open         | Design doc exists: `MESSAGE_PAGINATION_DESIGN.md`                                |
