@@ -285,11 +285,12 @@ class DatabaseService:
 
         # Exclude agents with repeated capability issues
         if excluded_agent_ids:
-            nin_filter = {"agent_id": {"$nin": list(excluded_agent_ids)}}
-            if pinecone_filter:
-                pinecone_filter = {"$and": [pinecone_filter, nin_filter]}
+            excluded_strs = [str(aid) for aid in excluded_agent_ids]
+            if pinecone_filter and "agent_id" in pinecone_filter:
+                pinecone_filter["agent_id"]["$nin"] = excluded_strs
             else:
-                pinecone_filter = nin_filter
+                pinecone_filter = pinecone_filter or {}
+                pinecone_filter["agent_id"] = {"$nin": excluded_strs}
 
         # Then use the embedding with Pinecone - remove the incompatible parameter
         results = self.pinecone.query(
