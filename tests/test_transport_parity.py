@@ -22,6 +22,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_token = AsyncMock()
@@ -88,15 +89,13 @@ class TestMultiEventSequenceWithPersist:
         # Plus one artifact_update -> another send_agent_token
         assert h._sse.send_agent_token.await_count == 3
 
-        # artifact_update persists "working" state
-        # response persists "completed" state
-        assert h._db.update_task_state_on_message.await_count == 2
-        calls = h._db.update_task_state_on_message.call_args_list
-        assert calls[0] == call(
-            "msg-001", "working",
-            message_text="file ready", artifacts=[{"id": "a1"}],
+        # artifact_update uses accumulate_artifact_on_message
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=False,
         )
-        assert calls[1] == call(
+
+        # response persists "completed" state via update_task_state_on_message
+        h._db.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "completed",
             message_text="Hello world", artifacts=None,
         )
@@ -135,6 +134,7 @@ class TestMultiEventSequenceSkipPersist:
 
         # DB writes are skipped
         h._db.update_task_state_on_message.assert_not_awaited()
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
 
         # Orchestration resume still fires
         h._rmc.resume_queue_from_continuation.assert_awaited_once()

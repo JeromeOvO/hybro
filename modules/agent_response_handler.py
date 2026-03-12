@@ -69,12 +69,12 @@ class AgentResponseHandler:
         )
 
     async def _on_artifact(self, e: AgentEvent) -> None:
-        if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+        if not e.skip_persist and e.artifacts:
+            artifact = e.artifacts[0] if e.artifacts else {}
+            await self._db.accumulate_artifact_on_message(
                 e.message_id,
-                "working",
-                message_text=e.text or None,
-                artifacts=e.artifacts,
+                artifact,
+                append=e.append,
             )
         await self._sse.send_agent_token(
             room_id=e.room_id,

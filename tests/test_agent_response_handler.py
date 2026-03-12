@@ -22,6 +22,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_token = AsyncMock()
@@ -85,8 +86,8 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=[{"id": "a1"}],
         )
         await h.handle(event)
-        h._db.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "working", message_text="chunk", artifacts=[{"id": "a1"}],
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=False,
         )
         h._sse.send_agent_token.assert_awaited_once()
 
@@ -98,7 +99,30 @@ class TestArtifactUpdateEvent:
             text="chunk", skip_persist=True,
         )
         await h.handle(event)
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._sse.send_agent_token.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_append_flag_passed(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=[{"id": "a1"}], append=True,
+        )
+        await h.handle(event)
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_artifacts_skips_persist(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=None,
+        )
+        await h.handle(event)
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
         h._sse.send_agent_token.assert_awaited_once()
 
 

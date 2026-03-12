@@ -265,11 +265,15 @@ class RelayTransport(AgentTransport):
             raw = data.get("raw", {})
             artifact_data = raw.get("artifact", data.get("artifact", {}))
             text = data.get("text", "")
+            append = data.get("append", False)
+            last_chunk = data.get("last_chunk", False)
             return AgentEvent(
                 kind="artifact_update",
                 **base,
                 text=text,
                 artifacts=[artifact_data] if artifact_data else None,
+                append=append,
+                last_chunk=last_chunk,
             )
 
         if event_type == "task_status":

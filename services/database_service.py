@@ -1501,6 +1501,99 @@ class DatabaseService:
             )
             return False
 
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict,
+        append: bool = False,
+    ) -> bool:
+        """Accumulate an artifact chunk per A2A streaming semantics.
+
+        This method properly handles the A2A artifact streaming protocol:
+        - If append=False: Create new artifact or replace existing with same artifactId
+        - If append=True: Extend parts of existing artifact with same artifactId
+
+        Also updates task state to 'working' and accumulates message_text.
+
+        Args:
+            message_id: The message ID.
+            artifact: The artifact dict to accumulate.
+            append: If True, extend parts of existing artifact.
+
+        Returns:
+            True if updated successfully.
+        """
+        try:
+            from common.utils.a2a_helpers import append_artifact_to_task_dict
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+
+            doc = await self.mongo.room_agent_messages_collection.find_one(
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
+                },
+                {"message_content.message_task.artifacts": 1, "message_content.message_text": 1},
+            )
+
+            if not doc:
+                logger.debug(
+                    "accumulate_artifact_on_message: skipped %s (already terminal or not found)",
+                    message_id,
+                )
+                return False
+
+            existing_artifacts = (
+                doc.get("message_content", {})
+                .get("message_task", {})
+                .get("artifacts")
+            )
+            existing_text = doc.get("message_content", {}).get("message_text", "")
+
+            new_artifacts = append_artifact_to_task_dict(
+                existing_artifacts, artifact, append=append
+            )
+
+            artifact_text = ""
+            for part in artifact.get("parts", []):
+                root = part.get("root", part)
+                if "text" in root:
+                    artifact_text += root["text"]
+
+            if append and artifact_text:
+                new_text = (existing_text or "") + artifact_text
+            elif artifact_text:
+                new_text = artifact_text
+            else:
+                new_text = existing_text
+
+            set_fields: dict = {
+                "message_content.message_task.status.state": "working",
+                "message_content.message_task.artifacts": new_artifacts,
+                "task_updated_at": utcnow(),
+            }
+            if new_text:
+                set_fields["message_content.message_text"] = new_text
+
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
+                },
+                {"$set": set_fields},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to accumulate artifact on message %s: %s", message_id, e
+            )
+            return False
+
     # room memory management
     async def add_room_memory(self, room_memory: RoomMemory) -> bool:
         """
