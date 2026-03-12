@@ -300,7 +300,7 @@ class RelayService:
                     "agent_card": ag.agent_card,
                     "normalized_url": normalized,
                     "agent_status": "active",
-                    "is_public": True,
+                    "is_public": False,
                 }
                 stored_id = await self._mongo.upsert_hub_agent(
                     hub_id, ag.local_agent_id, agent_data
