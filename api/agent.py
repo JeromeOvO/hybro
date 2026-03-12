@@ -168,10 +168,12 @@ async def update_agent(
 # ============= CAPABILITY ISSUE ENDPOINTS (Auth Required) =============
 
 
-@router.get("/agent/capability-issues/{agent_id}")
+@router.get("/agent/{agent_id}/capability-issues")
 async def get_capability_issues(
     agent_id: str,
     status: str | None = Query(None, description="Filter by status: open or resolved"),
+    limit: int = Query(100, ge=1, le=500, description="Max issues to return"),
+    offset: int = Query(0, ge=0, description="Number of issues to skip"),
     user: ClerkUser = Depends(get_current_user),
 ):
     """Get capability issues for an agent - PROTECTED (requires ownership)"""
@@ -194,42 +196,12 @@ async def get_capability_issues(
             ) from None
 
     issues = await capability_issue_service.get_issues_for_agent(
-        agent_id, status=issue_status
+        agent_id, status=issue_status, limit=limit, offset=offset
     )
     return {"issues": [issue.model_dump(mode="json") for issue in issues]}
 
 
-@router.post("/agent/capability-issues/{issue_id}/resolve")
-async def resolve_capability_issue(
-    issue_id: str,
-    user: ClerkUser = Depends(get_current_user),
-):
-    """Resolve a single capability issue - PROTECTED (requires ownership)"""
-    # Find the issue first to verify ownership
-    from database.mongodb import mongodb
-
-    doc = await mongodb.agent_capability_issues_collection.find_one(
-        {"issue_id": issue_id}
-    )
-    if not doc:
-        raise HTTPException(status_code=404, detail="Issue not found")
-
-    agent = await agent_service.get_agent_by_agent_id(doc["agent_id"])
-    if not agent or agent.provider_id != user.user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="You do not have permission to resolve this issue",
-        )
-
-    result = await capability_issue_service.resolve_issue(issue_id, user.user_id)
-    if not result:
-        raise HTTPException(
-            status_code=400, detail="Issue is already resolved or not found"
-        )
-    return {"issue": result.model_dump(mode="json")}
-
-
-@router.post("/agent/capability-issues/{agent_id}/resolve-all")
+@router.post("/agent/{agent_id}/capability-issues/resolve-all")
 async def resolve_all_capability_issues(
     agent_id: str,
     user: ClerkUser = Depends(get_current_user),
@@ -248,6 +220,31 @@ async def resolve_all_capability_issues(
         agent_id, user.user_id
     )
     return {"resolved_count": count}
+
+
+@router.post("/agent/capability-issues/{issue_id}/resolve")
+async def resolve_capability_issue(
+    issue_id: str,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """Resolve a single capability issue - PROTECTED (requires ownership)"""
+    issue = await capability_issue_service.get_issue_by_id(issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+
+    agent = await agent_service.get_agent_by_agent_id(issue.agent_id)
+    if not agent or agent.provider_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to resolve this issue",
+        )
+
+    result = await capability_issue_service.resolve_issue(issue_id, user.user_id)
+    if not result:
+        raise HTTPException(
+            status_code=400, detail="Issue is already resolved or not found"
+        )
+    return {"issue": result.model_dump(mode="json")}
 
 
 # ============= PUBLIC ENDPOINTS (No Auth Required) =============
