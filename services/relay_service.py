@@ -19,10 +19,6 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from common.utils.connection_token import (
-    create_connection_token,
-    verify_connection_token,
-)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
@@ -146,16 +142,11 @@ class RelayService:
         if not hub_doc or hub_doc["user_id"] != api_key.user_id:
             raise PermissionError("Hub not owned by this API key")
 
-        # Issue connection token
-        token = create_connection_token(
-            hub_id, settings.relay_connection_token_secret
-        )
         connection_id = str(uuid4())
         await self._mongo.update_hub_status(
             hub_id,
             is_online=True,
             last_connected_at=utcnow(),
-            connection_token=token,
             connection_id=connection_id,
         )
 
@@ -170,8 +161,8 @@ class RelayService:
         self._last_hub_heartbeat[hub_id] = time.monotonic()
         self._hub_disconnected_at.pop(hub_id, None)
 
-        # Deliver connection token first
-        yield {"type": "connection_token", "connection_token": token}
+        # Signal the hub that the connection is ready
+        yield {"type": "connection_ready"}
 
         # Flush offline queue
         offline = self._offline_queues.pop(hub_id, deque())
@@ -558,20 +549,17 @@ class RelayService:
         self,
         hub_id: str,
         request: HubPublishRequest,
-        connection_token: str,
+        api_key: APIKey,
     ) -> None:
         """Process events published by a hub daemon."""
-        # 1. Verify JWT
-        if not verify_connection_token(
-            connection_token, hub_id, settings.relay_connection_token_secret
-        ):
-            raise PermissionError("Invalid or expired connection token")
-
-        # 2. Verify room ownership
+        # 1. Verify hub ownership via API key
         hub_doc = await self._mongo.get_hub(hub_id)
         if not hub_doc:
             raise PermissionError("Unknown hub")
+        if hub_doc["user_id"] != api_key.user_id:
+            raise PermissionError("Hub not owned by this API key")
 
+        # 2. Verify room ownership
         room = await self._db.get_room_by_room_id(request.room_id)
         if not room:
             raise ValueError(f"Room {request.room_id} not found")
@@ -728,11 +716,6 @@ def init_relay_service(
     room_message_center: object,
 ) -> RelayService:
     global relay_service
-    if not settings.relay_connection_token_secret:
-        logger.warning(
-            "RELAY_CONNECTION_TOKEN_SECRET is empty — hub /publish "
-            "authentication will reject all requests until a secret is set"
-        )
     svc = RelayService(
         mongo=mongo,
         database_service=database_service,

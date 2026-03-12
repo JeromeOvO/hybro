@@ -1,14 +1,13 @@
 """Relay API Router — hub registration, SSE events, publish, agent sync, status.
 
-All endpoints require X-API-Key authentication (reuses common.api_key_auth)
-except /publish which uses a connection-scoped JWT.
+All endpoints require X-API-Key authentication (reuses common.api_key_auth).
 """
 
 from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -98,20 +97,12 @@ async def relay_events(
 async def relay_publish(
     hub_id: str,
     body: HubPublishRequest,
-    authorization: str = Header(..., alias="Authorization"),
+    api_key: APIKey = Depends(get_api_key),
 ):
     svc = _get_relay_service()
 
-    # Extract bearer token
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header must be Bearer <token>",
-        )
-    token = authorization[len("Bearer "):]
-
     try:
-        await svc.process_publish(hub_id, body, token)
+        await svc.process_publish(hub_id, body, api_key)
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)

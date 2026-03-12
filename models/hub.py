@@ -42,7 +42,6 @@ class Hub(BaseModel):
     registered_at: datetime = Field(default_factory=utcnow)
     last_connected_at: datetime | None = None
     is_online: bool = False
-    connection_token: str | None = None
     connection_id: str | None = None
 
 
