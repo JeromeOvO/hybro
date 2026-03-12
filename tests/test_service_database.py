@@ -375,3 +375,230 @@ class TestContinuation:
 
         db_svc.mongo.has_continuation_on_message.assert_awaited_once_with("msg-1")
         assert result is True
+
+
+# =============================================================================
+# Atomic Artifact Accumulation Tests
+# =============================================================================
+
+
+class TestAccumulateArtifactOnMessage:
+    """Tests for atomic artifact accumulation (accumulate_artifact_on_message)."""
+
+    @pytest.mark.asyncio
+    async def test_missing_artifact_id_pushes_new_artifact(self, db_svc):
+        """Artifact without artifactId is pushed as new."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"parts": [{"text": "hello"}]}
+        result = await db_svc.accumulate_artifact_on_message("msg-1", artifact)
+
+        assert result is True
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        update_doc = call_args[0][1]
+        assert "$push" in update_doc
+        assert "message_content.message_task.artifacts" in update_doc["$push"]
+
+    @pytest.mark.asyncio
+    async def test_append_false_replaces_existing_artifact(self, db_svc):
+        """append=False replaces artifact with matching artifactId."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": "new content"}]}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=False
+        )
+
+        assert result is True
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        update_doc = call_args[0][1]
+        assert "$set" in update_doc
+        assert "message_content.message_task.artifacts.$" in update_doc["$set"]
+
+    @pytest.mark.asyncio
+    async def test_append_false_inserts_when_not_found(self, db_svc):
+        """append=False inserts new artifact if artifactId not found."""
+        mock_result_not_found = MagicMock(modified_count=0)
+        mock_result_inserted = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            side_effect=[mock_result_not_found, mock_result_inserted]
+        )
+
+        artifact = {"artifactId": "art-new", "parts": [{"text": "content"}]}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=False
+        )
+
+        assert result is True
+        assert db_svc.mongo.room_agent_messages_collection.update_one.await_count == 2
+        second_call = db_svc.mongo.room_agent_messages_collection.update_one.call_args_list[1]
+        update_doc = second_call[0][1]
+        assert "$push" in update_doc
+
+    @pytest.mark.asyncio
+    async def test_append_true_extends_parts_atomically(self, db_svc):
+        """append=True extends parts of existing artifact."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": " more"}]}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=True
+        )
+
+        assert result is True
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        filter_doc = call_args[0][0]
+        assert "message_content.message_task.artifacts" in filter_doc
+        assert "$elemMatch" in filter_doc["message_content.message_task.artifacts"]
+
+    @pytest.mark.asyncio
+    async def test_append_true_with_text_uses_pipeline_for_concat(self, db_svc):
+        """append=True with text uses aggregation pipeline for atomic concat."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": " appended"}]}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=True
+        )
+
+        assert result is True
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        update_doc = call_args[0][1]
+        assert isinstance(update_doc, list)
+        assert "$set" in update_doc[0]
+        set_stage = update_doc[0]["$set"]
+        assert "message_content.message_text" in set_stage
+        assert "$concat" in set_stage["message_content.message_text"]
+
+    @pytest.mark.asyncio
+    async def test_append_true_inserts_when_artifact_not_found(self, db_svc):
+        """append=True inserts new artifact if artifactId doesn't exist."""
+        mock_result_not_found = MagicMock(modified_count=0)
+        mock_result_inserted = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            side_effect=[mock_result_not_found, mock_result_inserted]
+        )
+
+        artifact = {"artifactId": "art-new", "parts": [{"text": "first chunk"}]}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=True
+        )
+
+        assert result is True
+        assert db_svc.mongo.room_agent_messages_collection.update_one.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_parts_with_append_returns_false(self, db_svc):
+        """append=True with empty parts returns False."""
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock()
+
+        artifact = {"artifactId": "art-1", "parts": []}
+        result = await db_svc.accumulate_artifact_on_message(
+            "msg-1", artifact, append=True
+        )
+
+        assert result is False
+        db_svc.mongo.room_agent_messages_collection.update_one.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_terminal_state_filter_applied(self, db_svc):
+        """Filter excludes documents in terminal states."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": "x"}]}
+        await db_svc.accumulate_artifact_on_message("msg-1", artifact)
+
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        filter_doc = call_args[0][0]
+        assert "message_content.message_task.status.state" in filter_doc
+        assert "$nin" in filter_doc["message_content.message_task.status.state"]
+
+    @pytest.mark.asyncio
+    async def test_sets_working_state(self, db_svc):
+        """Accumulation sets task state to 'working'."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": "x"}]}
+        await db_svc.accumulate_artifact_on_message("msg-1", artifact, append=False)
+
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        update_doc = call_args[0][1]
+        assert update_doc["$set"]["message_content.message_task.status.state"] == "working"
+
+    @pytest.mark.asyncio
+    async def test_handles_artifact_id_snake_case(self, db_svc):
+        """Handles artifact_id (snake_case) as well as artifactId."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {"artifact_id": "art-snake", "parts": [{"text": "x"}]}
+        result = await db_svc.accumulate_artifact_on_message("msg-1", artifact)
+
+        assert result is True
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        filter_doc = call_args[0][0]
+        elem_match = filter_doc["message_content.message_task.artifacts"]["$elemMatch"]
+        or_conditions = elem_match["$or"]
+        assert {"artifact_id": "art-snake"} in or_conditions
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_false(self, db_svc):
+        """Exception during update returns False."""
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            side_effect=RuntimeError("connection lost")
+        )
+
+        artifact = {"artifactId": "art-1", "parts": [{"text": "x"}]}
+        result = await db_svc.accumulate_artifact_on_message("msg-1", artifact)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_extracts_text_from_nested_root(self, db_svc):
+        """Extracts text from part.root.text structure."""
+        mock_result = MagicMock(modified_count=1)
+        db_svc.mongo.room_agent_messages_collection = MagicMock()
+        db_svc.mongo.room_agent_messages_collection.update_one = AsyncMock(
+            return_value=mock_result
+        )
+
+        artifact = {
+            "artifactId": "art-1",
+            "parts": [{"root": {"text": "nested text"}}],
+        }
+        await db_svc.accumulate_artifact_on_message("msg-1", artifact, append=False)
+
+        call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
+        update_doc = call_args[0][1]
+        assert update_doc["$set"]["message_content.message_text"] == "nested text"
