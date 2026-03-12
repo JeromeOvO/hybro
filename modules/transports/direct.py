@@ -210,6 +210,29 @@ class DirectTransport(AgentTransport):
                     fallback_ctx, TaskState.failed,
                     error=f"Agent streaming failed: {exc}",
                 )
+
+                # Record capability issue for the agent
+                try:
+                    from services.agent_capability_issue_service import (
+                        capability_issue_service,
+                    )
+
+                    await capability_issue_service.record_issue(
+                        agent_id=message.agent_id,
+                        error_message=f"Agent streaming failed: {exc}",
+                        query_text=(
+                            message.task_content
+                            or (message.message_content.message_text or "")
+                        ),
+                        room_id=room_id,
+                        message_id=message.message_id,
+                    )
+                except Exception as rec_exc:  # noqa: BLE001
+                    logger.warning(
+                        "DirectTransport: Failed to record capability issue: %s",
+                        rec_exc,
+                    )
+
                 return ProcessingResult(ProcessingStatus.FAILED, "")
             if status != ProcessingStatus.SUCCESS:
                 return ProcessingResult(status, full_response_text)
