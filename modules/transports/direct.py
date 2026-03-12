@@ -773,7 +773,7 @@ class DirectTransport(AgentTransport):
             )
         except Exception as rec_exc:  # noqa: BLE001
             logger.warning(
-                "ResponseProcessor: Failed to record capability issue: %s",
+                "DirectTransport: Failed to record capability issue: %s",
                 rec_exc,
             )
 
@@ -1342,7 +1342,7 @@ class DirectTransport(AgentTransport):
                 )
             except Exception as rec_exc:  # noqa: BLE001
                 logger.warning(
-                    "ResponseProcessor: Failed to record capability issue: %s",
+                    "DirectTransport: Failed to record capability issue: %s",
                     rec_exc,
                 )
 

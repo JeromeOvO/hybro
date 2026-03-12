@@ -94,9 +94,3 @@ class AgentCapabilityIssue(BaseModel):
     created_at: datetime
     resolved_at: datetime | None = None
     resolved_by: str | None = None  # provider_id who resolved it
-
-    @field_serializer("status")
-    def serialize_issue_status(self, value: IssueStatus) -> str:
-        if value is None:
-            return None
-        return value.value if isinstance(value, IssueStatus) else value

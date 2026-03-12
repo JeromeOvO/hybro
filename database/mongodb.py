@@ -2449,10 +2449,24 @@ class MongoDB:
                 name="agent_id_status",
             )
 
+            # Compound index for the exclusion aggregation pipeline
+            # (matches on status first, then groups by agent_id)
+            await collection.create_index(
+                [("status", 1), ("agent_id", 1)],
+                name="status_agent_id",
+            )
+
             # Index for listing/sorting by creation time
             await collection.create_index(
                 "created_at",
                 name="created_at",
+            )
+
+            # Unique index for single-issue lookups
+            await collection.create_index(
+                "issue_id",
+                name="issue_id_unique",
+                unique=True,
             )
 
             logger.info(
