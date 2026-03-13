@@ -22,10 +22,12 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_token = AsyncMock()
         sse.send_agent_response = AsyncMock()
+        sse.send_artifact_update = AsyncMock()
         sse.send_task_submitted = AsyncMock()
         sse.send_processing_status = AsyncMock()
         sse.send_error = AsyncMock()
@@ -85,21 +87,129 @@ class TestArtifactUpdateEvent:
             text="chunk", artifacts=[{"id": "a1"}],
         )
         await h.handle(event)
-        h._db.update_task_state_on_message.assert_awaited_once_with(
-            "msg-001", "working", message_text="chunk", artifacts=[{"id": "a1"}],
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=False,
         )
-        h._sse.send_agent_token.assert_awaited_once()
+        h._sse.send_artifact_update.assert_awaited_once_with(
+            room_id="room-001",
+            message_id="msg-001",
+            agent_id="agent-001",
+            artifact={"id": "a1"},
+            append=False,
+            last_chunk=False,
+        )
+        h._sse.send_agent_token.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_skip_persist(self):
+    async def test_skip_persist_still_broadcasts(self):
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update", **_base_event(),
-            text="chunk", skip_persist=True,
+            text="chunk", artifacts=[{"id": "a1"}], skip_persist=True,
         )
         await h.handle(event)
-        h._db.update_task_state_on_message.assert_not_awaited()
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._sse.send_artifact_update.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_append_flag_passed(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=[{"id": "a1"}], append=True,
+        )
+        await h.handle(event)
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=True,
+        )
+        h._sse.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        assert call_kwargs["append"] is True
+
+    @pytest.mark.asyncio
+    async def test_last_chunk_flag_passed(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            artifacts=[{"id": "a1"}], append=True, last_chunk=True,
+        )
+        await h.handle(event)
+        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        assert call_kwargs["last_chunk"] is True
+
+    @pytest.mark.asyncio
+    async def test_no_artifacts_sends_token_for_text(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=None,
+        )
+        await h.handle(event)
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._sse.send_artifact_update.assert_not_awaited()
         h._sse.send_agent_token.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_artifacts_no_text_sends_nothing(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="", artifacts=None,
+        )
+        await h.handle(event)
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
+        h._sse.send_artifact_update.assert_not_awaited()
+        h._sse.send_agent_token.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_with_file_parts_broadcasts(self):
+        """Artifact with file parts is broadcast via send_artifact_update."""
+        h = _make_handler()
+        artifact = {
+            "artifactId": "a1",
+            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+        }
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            artifacts=[artifact],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            # Patch S3 conversion to avoid actual S3 calls
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                AsyncMock(return_value=1),
+            )
+            await h.handle(event)
+
+        h._sse.send_artifact_update.assert_awaited_once()
+        h._db.accumulate_artifact_on_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_s3_conversion_failure_does_not_block_sse(self):
+        """S3 conversion failure should not prevent SSE broadcast or DB persist."""
+        h = _make_handler()
+        artifact = {
+            "artifactId": "a1",
+            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+        }
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            artifacts=[artifact],
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_convert = AsyncMock(side_effect=RuntimeError("S3 unavailable"))
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                mock_convert,
+            )
+            await h.handle(event)
+
+        # SSE should still be sent despite S3 failure
+        h._sse.send_artifact_update.assert_awaited_once()
+        # DB persist should still happen
+        h._db.accumulate_artifact_on_message.assert_awaited_once()
 
 
 # =============================================================================

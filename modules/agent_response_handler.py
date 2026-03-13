@@ -69,19 +69,60 @@ class AgentResponseHandler:
         )
 
     async def _on_artifact(self, e: AgentEvent) -> None:
-        if not e.skip_persist:
-            await self._db.update_task_state_on_message(
+        artifact = e.artifacts[0] if e.artifacts else None
+
+        # Convert inline bytes to S3 before persisting AND broadcasting
+        if artifact:
+            artifact_parts = artifact.get("parts", [])
+            if artifact_parts:
+                try:
+                    from common.utils.a2a_helpers import convert_inline_bytes_to_s3
+
+                    await convert_inline_bytes_to_s3(
+                        artifact_parts, e.room_id, e.message_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "S3 conversion failed for artifact on message %s, broadcasting raw",
+                        e.message_id,
+                        exc_info=True,
+                    )
+
+        # Persist to DB (respects skip_persist)
+        if not e.skip_persist and artifact:
+            logger.debug(
+                "Persisting artifact %s on message %s (append=%s)",
+                artifact.get("artifactId") or artifact.get("artifact_id"),
                 e.message_id,
-                "working",
-                message_text=e.text or None,
-                artifacts=e.artifacts,
+                e.append,
             )
-        await self._sse.send_agent_token(
-            room_id=e.room_id,
-            message_id=e.message_id,
-            agent_id=e.agent_id,
-            token=e.text or "",
-        )
+            await self._db.accumulate_artifact_on_message(
+                e.message_id, artifact, append=e.append,
+            )
+
+        # SSE emission: artifact_update for artifacts, token for text-only
+        if artifact:
+            logger.debug(
+                "Sending artifact_update SSE for message %s (append=%s, last_chunk=%s)",
+                e.message_id,
+                e.append,
+                e.last_chunk,
+            )
+            await self._sse.send_artifact_update(
+                room_id=e.room_id,
+                message_id=e.message_id,
+                agent_id=e.agent_id,
+                artifact=artifact,
+                append=e.append,
+                last_chunk=e.last_chunk,
+            )
+        elif e.text:
+            await self._sse.send_agent_token(
+                room_id=e.room_id,
+                message_id=e.message_id,
+                agent_id=e.agent_id,
+                token=e.text,
+            )
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
