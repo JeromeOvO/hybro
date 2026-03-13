@@ -55,7 +55,7 @@ These patterns in our codebase **already align** with the published v1.0 spec an
 - `SendMessageConfiguration.blocking` field (`a2a_service.py:376, 1001`)
 - `TaskPushNotificationConfig` as a separate type
 - `AgentCapabilities.stateTransitionHistory` field
-- `/.well-known/agent.json` as discovery path (primary), `/.well-known/agent-card.json` (additional)
+- `/.well-known/agent-card.json` as discovery path (v1.0 only supports this path; v0.3 supports both `agent.json` and `agent-card.json`)
 
 ---
 
@@ -96,6 +96,18 @@ The v1.0 spec is designed for progressive migration, not a hard cutover:
 ## Changes Analysis
 
 Each change is categorized as Breaking, Additive, or Cleanup and mapped to its impact on our codebase.
+
+### C-0: Discovery Path Consolidated to `agent-card.json`
+
+**Type: BREAKING (for agents still only serving `agent.json`)**
+
+**Spec change**: v1.0 only supports `/.well-known/agent-card.json`. The legacy `/.well-known/agent.json` path is no longer part of the spec. v0.3 agents may still serve both.
+
+**Our current behavior**: `a2a_service.py:103-139` (`_fetch_agent_card_with_fallback`) tries `agent-card.json` first, then falls back to `agent.json`. This is already correct for talking to both v0.3 and v1.0 agents.
+
+**Our server behavior**: `common/server/server.py:53-65` serves both paths. The `agent.json` route can be removed once all clients have upgraded, but keeping it is harmless for backward compatibility.
+
+**Impact: LOW** — our client-side fallback already handles this correctly
 
 ### C-1: `supportedInterfaces` Added to AgentCard
 
@@ -328,7 +340,8 @@ The v1.0 spec has first-class support for progressive migration:
         agent_card.url              agent_card.url + supportedInterfaces
         message/send                message/send
         kind-based responses        kind-based responses
-        /.well-known/agent.json     /.well-known/agent.json
+        /.well-known/agent.json     /.well-known/agent-card.json
+        OR agent-card.json          (agent.json no longer supported)
 ```
 
 ---
