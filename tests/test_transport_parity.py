@@ -22,10 +22,12 @@ def _make_handler(*, db=None, sse=None, rmc=None):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_token = AsyncMock()
         sse.send_agent_response = AsyncMock()
+        sse.send_artifact_update = AsyncMock()
         sse.send_task_submitted = AsyncMock()
         sse.send_processing_status = AsyncMock()
         sse.send_error = AsyncMock()
@@ -85,18 +87,19 @@ class TestMultiEventSequenceWithPersist:
                 await h.handle(event)
 
         # Two token events -> two send_agent_token calls
-        # Plus one artifact_update -> another send_agent_token
-        assert h._sse.send_agent_token.await_count == 3
+        # artifact_update now uses send_artifact_update instead of send_agent_token
+        assert h._sse.send_agent_token.await_count == 2
 
-        # artifact_update persists "working" state
-        # response persists "completed" state
-        assert h._db.update_task_state_on_message.await_count == 2
-        calls = h._db.update_task_state_on_message.call_args_list
-        assert calls[0] == call(
-            "msg-001", "working",
-            message_text="file ready", artifacts=[{"id": "a1"}],
+        # artifact_update uses send_artifact_update
+        h._sse.send_artifact_update.assert_awaited_once()
+
+        # artifact_update uses accumulate_artifact_on_message
+        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-001", {"id": "a1"}, append=False,
         )
-        assert calls[1] == call(
+
+        # response persists "completed" state via update_task_state_on_message
+        h._db.update_task_state_on_message.assert_awaited_once_with(
             "msg-001", "completed",
             message_text="Hello world", artifacts=None,
         )
@@ -130,11 +133,14 @@ class TestMultiEventSequenceSkipPersist:
                 await h.handle(event)
 
         # SSE emissions are identical regardless of skip_persist
-        assert h._sse.send_agent_token.await_count == 3
+        # Two tokens + one artifact_update + one agent_response
+        assert h._sse.send_agent_token.await_count == 2
+        h._sse.send_artifact_update.assert_awaited_once()
         h._sse.send_agent_response.assert_awaited_once()
 
         # DB writes are skipped
         h._db.update_task_state_on_message.assert_not_awaited()
+        h._db.accumulate_artifact_on_message.assert_not_awaited()
 
         # Orchestration resume still fires
         h._rmc.resume_queue_from_continuation.assert_awaited_once()
@@ -163,12 +169,16 @@ class TestSSEParity:
             results[skip] = {
                 "token_count": h._sse.send_agent_token.await_count,
                 "token_calls": h._sse.send_agent_token.call_args_list,
+                "artifact_count": h._sse.send_artifact_update.await_count,
+                "artifact_calls": h._sse.send_artifact_update.call_args_list,
                 "response_count": h._sse.send_agent_response.await_count,
                 "response_calls": h._sse.send_agent_response.call_args_list,
             }
 
         assert results[True]["token_count"] == results[False]["token_count"]
         assert results[True]["token_calls"] == results[False]["token_calls"]
+        assert results[True]["artifact_count"] == results[False]["artifact_count"]
+        assert results[True]["artifact_calls"] == results[False]["artifact_calls"]
         assert results[True]["response_count"] == results[False]["response_count"]
         assert results[True]["response_calls"] == results[False]["response_calls"]
 

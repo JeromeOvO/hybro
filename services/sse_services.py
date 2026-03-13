@@ -140,9 +140,10 @@ class SSEManager:
         """broadcast message to room"""
         async with self.lock:
             if room_id not in self.room_connections:
-                logger.warning(
-                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
-                )
+                if message_type != "agent_token":
+                    logger.warning(
+                        f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
+                    )
                 return
 
             disconnected_connections = []
@@ -158,9 +159,14 @@ class SSEManager:
                     del self.room_connections[room_id][connection_id]
 
             active_connections = len(self.room_connections[room_id])
-            logger.info(
-                f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
-            )
+            if message_type == "agent_token":
+                logger.debug(
+                    f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
+                )
+            else:
+                logger.info(
+                    f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
+                )
 
     async def send_user_message(
         self, room_id: str, message_id: str, user_id: str, content: str

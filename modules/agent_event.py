@@ -43,6 +43,10 @@ class AgentEvent:
     related_message_id: str | None = None
     user_id: str | None = None
 
+    # Artifact streaming flags (A2A spec)
+    append: bool = False
+    last_chunk: bool = False
+
     # Metadata
     is_final: bool = False
     agent_name: str | None = None

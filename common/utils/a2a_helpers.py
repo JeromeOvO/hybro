@@ -164,6 +164,63 @@ def extract_status_message(task: Task) -> str | None:
     return extract_error_message(task)  # Same extraction logic
 
 
+def append_artifact_to_task_dict(
+    existing_artifacts: list[dict] | None,
+    new_artifact: dict,
+    append: bool = False,
+) -> list[dict]:
+    """Append or merge an artifact into an existing artifacts list per A2A spec.
+
+    Implements the A2A artifact streaming semantics:
+    - If append=False: Create new artifact or replace existing with same artifactId
+    - If append=True: Extend parts of existing artifact with same artifactId
+
+    Args:
+        existing_artifacts: Current list of artifact dicts (may be None)
+        new_artifact: The new artifact dict to add/merge
+        append: If True, extend parts of existing artifact; if False, replace/create
+
+    Returns:
+        Updated list of artifact dicts
+    """
+    if existing_artifacts is None:
+        existing_artifacts = []
+
+    artifact_id = new_artifact.get("artifactId") or new_artifact.get("artifact_id")
+    if not artifact_id:
+        logger.warning("Artifact missing artifactId, appending as new artifact")
+        existing_artifacts.append(new_artifact)
+        return existing_artifacts
+
+    existing_index = None
+    for i, art in enumerate(existing_artifacts):
+        art_id = art.get("artifactId") or art.get("artifact_id")
+        if art_id == artifact_id:
+            existing_index = i
+            break
+
+    if not append:
+        if existing_index is not None:
+            logger.debug("Replacing artifact at id %s", artifact_id)
+            existing_artifacts[existing_index] = new_artifact
+        else:
+            logger.debug("Adding new artifact with id %s", artifact_id)
+            existing_artifacts.append(new_artifact)
+    elif existing_index is not None:
+        logger.debug("Appending parts to artifact id %s", artifact_id)
+        existing_parts = existing_artifacts[existing_index].get("parts", [])
+        new_parts = new_artifact.get("parts", [])
+        existing_artifacts[existing_index]["parts"] = existing_parts + new_parts
+    else:
+        logger.warning(
+            "Received append=True for nonexistent artifact id %s. Creating new artifact.",
+            artifact_id,
+        )
+        existing_artifacts.append(new_artifact)
+
+    return existing_artifacts
+
+
 def _is_own_s3_url(uri: str) -> bool:
     """Return True if *uri* already points to our own S3 bucket."""
     from urllib.parse import urlparse

@@ -1501,6 +1501,244 @@ class DatabaseService:
             )
             return False
 
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict,
+        append: bool = False,
+    ) -> bool:
+        """Accumulate an artifact chunk per A2A streaming semantics using atomic ops.
+
+        This method properly handles the A2A artifact streaming protocol:
+        - If append=False: Create new artifact or replace existing with same artifactId
+        - If append=True: Extend parts of existing artifact with same artifactId
+
+        Uses atomic MongoDB operations to avoid race conditions under concurrent
+        delivery. No read-modify-write cycle means concurrent writers don't
+        overwrite each other's artifacts.
+
+        Args:
+            message_id: The message ID.
+            artifact: The artifact dict to accumulate.
+            append: If True, extend parts of existing artifact.
+
+        Returns:
+            True if updated successfully.
+        """
+        try:
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+            artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
+
+            artifact_text = ""
+            for part in artifact.get("parts", []):
+                root = part.get("root", part)
+                if "text" in root:
+                    artifact_text += root["text"]
+
+            base_filter = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {"$nin": terminal_values},
+            }
+
+            if not artifact_id:
+                logger.warning(
+                    "Artifact missing artifactId for message %s, pushing as new",
+                    message_id,
+                )
+                update: dict = {
+                    "$push": {"message_content.message_task.artifacts": artifact},
+                    "$set": {
+                        "message_content.message_task.status.state": "working",
+                        "task_updated_at": utcnow(),
+                    },
+                }
+                if artifact_text:
+                    update["$set"]["message_content.message_text"] = artifact_text
+                result = await self.mongo.room_agent_messages_collection.update_one(
+                    base_filter, update
+                )
+                return result.modified_count > 0
+
+            if append:
+                return await self._append_parts_to_artifact(
+                    message_id, artifact_id, artifact, artifact_text, base_filter
+                )
+            else:
+                return await self._replace_or_insert_artifact(
+                    message_id, artifact_id, artifact, artifact_text, base_filter
+                )
+
+        except Exception as e:
+            logger.error(
+                "Failed to accumulate artifact on message %s: %s", message_id, e
+            )
+            return False
+
+    async def _append_parts_to_artifact(
+        self,
+        message_id: str,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        """Atomically append parts to an existing artifact by artifactId."""
+        new_parts = artifact.get("parts", [])
+        if not new_parts:
+            return False
+
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+
+        if artifact_text:
+            pipeline: list = [
+                {
+                    "$set": {
+                        "message_content.message_task.artifacts": {
+                            "$map": {
+                                "input": "$message_content.message_task.artifacts",
+                                "as": "art",
+                                "in": {
+                                    "$cond": {
+                                        "if": {
+                                            "$or": [
+                                                {"$eq": ["$$art.artifactId", artifact_id]},
+                                                {"$eq": ["$$art.artifact_id", artifact_id]},
+                                            ]
+                                        },
+                                        "then": {
+                                            "$mergeObjects": [
+                                                "$$art",
+                                                {
+                                                    "parts": {
+                                                        "$concatArrays": [
+                                                            {"$ifNull": ["$$art.parts", []]},
+                                                            new_parts,
+                                                        ]
+                                                    }
+                                                },
+                                            ]
+                                        },
+                                        "else": "$$art",
+                                    }
+                                },
+                            }
+                        },
+                        "message_content.message_task.status.state": "working",
+                        "message_content.message_text": {
+                            "$concat": [
+                                {"$ifNull": ["$message_content.message_text", ""]},
+                                artifact_text,
+                            ]
+                        },
+                        "task_updated_at": utcnow(),
+                    }
+                }
+            ]
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                filter_with_artifact, pipeline
+            )
+        else:
+            update: dict = {
+                "$push": {
+                    "message_content.message_task.artifacts.$.parts": {"$each": new_parts}
+                },
+                "$set": {
+                    "message_content.message_task.status.state": "working",
+                    "task_updated_at": utcnow(),
+                },
+            }
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                filter_with_artifact, update
+            )
+
+        if result.modified_count > 0:
+            return True
+
+        logger.warning(
+            "append=True for nonexistent artifact %s on message %s, inserting new",
+            artifact_id,
+            message_id,
+        )
+        insert_update: dict = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            base_filter, insert_update
+        )
+        return result.modified_count > 0
+
+    async def _replace_or_insert_artifact(
+        self,
+        message_id: str,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        """Atomically replace artifact by artifactId, or insert if not found."""
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+
+        update: dict = {
+            "$set": {
+                "message_content.message_task.artifacts.$": artifact,
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            filter_with_artifact, update
+        )
+
+        if result.modified_count > 0:
+            return True
+
+        insert_update: dict = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            base_filter, insert_update
+        )
+        return result.modified_count > 0
+
     # room memory management
     async def add_room_memory(self, room_memory: RoomMemory) -> bool:
         """
