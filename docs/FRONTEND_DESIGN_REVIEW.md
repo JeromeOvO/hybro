@@ -287,7 +287,7 @@ Major refactoring of the frontend message state management.
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
 | 2.1  | SSE auth token in URL query parameter             | Resolved     | Migrated from EventSource to fetch()-based SSE with `Authorization: Bearer` header |
 | 2.2  | Optimistic update ID mismatch window              | Open         | Could be helped by backend `client_request_id` echo in SSE events               |
-| 2.3  | No message size validation on frontend            | Open         | Add char limit to chat input; backend enforcement needed too (backend SDR 2.10)  |
+| 2.3  | No message size validation on frontend            | Resolved     | 10k-char limit with visible counter, paste truncation, and submit guard in `room-chat-input.tsx` |
 | 2.4  | No pagination for room messages                   | Open         | Design doc exists: `MESSAGE_PAGINATION_DESIGN.md`                                |
 | 2.5  | `useRoomWebhook` god hook                         | Open         | Decomposition planned; see `architecture.md` issue 15.1                          |
 | 2.6  | `useRoomUiStore` global singleton                 | Open         | Low priority; only a risk with multi-room views                                  |
