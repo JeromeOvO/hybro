@@ -80,7 +80,7 @@ uses or will need to support.
 | **TaskState values** | Lowercase strings: `"submitted"`, `"working"`, `"input-required"`, `"auth-required"`, `"completed"`, `"failed"`, `"canceled"`, `"rejected"` | Matches. `sse.ts:83` hardcodes these. Stable. |
 | **Role values** | `"user"`, `"agent"` | Matches. Used in SSE and type definitions. Stable. |
 | **JSON-RPC methods** | `message/send`, `tasks/get`, `tasks/cancel`, etc. | Frontend doesn't call directly (backend handles). Stable. |
-| **Discovery** | Primary: `/.well-known/agent.json`; fallback: `/.well-known/agent-card.json` | Frontend doesn't fetch directly (backend handles). Stable. |
+| **Discovery** | Primary: `/.well-known/agent-card.json`; fallback: `/.well-known/agent.json` | Frontend doesn't fetch directly (backend handles). Stable. |
 
 ### Watch List: Announced but Not Yet in Published Spec
 
