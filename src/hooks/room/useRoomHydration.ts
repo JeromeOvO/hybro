@@ -1,0 +1,147 @@
+import { useCallback, useEffect, useRef } from 'react'
+import type { MutableRefObject } from 'react'
+import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
+import { fetchPendingHitlRequests } from '@/lib/api/hitl'
+import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import { overlayPendingHitlRequests } from './overlay-pending-hitl'
+
+export function useRoomHydration(
+  roomId: string,
+  userId: string | undefined,
+  userName: string | undefined,
+  getToken: (() => Promise<string | null>) | undefined,
+  room: unknown,
+  hitlRequestIndex: MutableRefObject<Map<string, string>>,
+  getAgentName: (agentId: string) => Promise<string>,
+  getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined,
+) {
+  const hydrationStartedRef = useRef<string | null>(null)
+
+  const hydrateFromDb = useCallback(async (targetRoomId: string) => {
+    const store = useMessageStore.getState()
+    if (store.hydratedFromDb && store.roomId === targetRoomId) return
+
+    console.log(`🔍 Loading messages for room: ${targetRoomId}`)
+    const startTime = Date.now()
+
+    try {
+      const response = await inquiryRoomMessagesByRoomId(targetRoomId, getToken)
+      if (!response.success || !response.message_list) {
+        console.error(`❌ Failed to load messages for room ${targetRoomId}`)
+        // Mark as hydrated even on failure so we don't stay in loading forever
+        const s = useMessageStore.getState()
+        if (s.roomId === targetRoomId) s.markDbSynced()
+        return
+      }
+
+      console.log(`✅ Loaded ${response.message_list.length} messages in ${Date.now() - startTime}ms`)
+
+      const incomingMessages = await Promise.all(
+        response.message_list.map(msg =>
+          convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
+        )
+      )
+      const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
+      const filtered = filterHydrationMessages(withStaleDetection)
+
+      const msgStore = useMessageStore.getState()
+      if (msgStore.roomId === targetRoomId) {
+        msgStore.upsertMany(filtered, 'db')
+        msgStore.markDbSynced()
+        console.log(
+          `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
+          `(${response.message_list.length} raw, ${incomingMessages.length} converted, ` +
+          `${incomingMessages.length - filtered.length} filtered)`
+        )
+      }
+
+      // Overlay HITL state after DB hydration to avoid race with SSE reconnect.
+      // Pending requests get hitlResolved=false; input-required messages NOT in
+      // the pending set are already resolved and get hitlResolved=true.
+      try {
+        const hitlRes = await fetchPendingHitlRequests(targetRoomId, getToken)
+        const hitlStore = useMessageStore.getState()
+        if (hitlStore.roomId !== targetRoomId) return
+
+        let pendingMessageIds = new Set<string>()
+        if (hitlRes.requests?.length) {
+          console.log(`🔔 Hydration: overlaying ${hitlRes.requests.length} pending HITL request(s)`)
+          pendingMessageIds = await overlayPendingHitlRequests(
+            targetRoomId, hitlRes.requests,
+            { getAgentName, getAgentSource, hitlRequestIndex },
+          )
+        }
+
+        // Mark input-required messages from DB hydration that are NOT pending as already resolved.
+        // Only check messages that came from this hydration batch, not SSE-created entities.
+        const hydratedIds = new Set(filtered.map(m => m.id))
+        for (const entity of Object.values(hitlStore.entities)) {
+          if (
+            entity.roomId === targetRoomId &&
+            entity.taskStatus === 'input-required' &&
+            hydratedIds.has(entity.id) &&
+            !pendingMessageIds.has(entity.id)
+          ) {
+            hitlStore.upsertMessage({
+              id: entity.id,
+              roomId: targetRoomId,
+              messageType: 'agent',
+              content: entity.content,
+              senderName: entity.senderName,
+              timestamp: entity.timestamp,
+              hitlResolved: true,
+            }, 'sse')
+          }
+        }
+      } catch (hitlErr) {
+        console.error('[HITL] Failed to overlay HITL state during hydration:', hitlErr)
+      }
+    } catch (error) {
+      console.error(`❌ Failed to load messages for room ${targetRoomId}:`, error)
+      // Mark as hydrated on error to avoid infinite loading
+      const s = useMessageStore.getState()
+      if (s.roomId === targetRoomId) s.markDbSynced()
+    }
+  }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
+
+  const reconcileWithDb = useCallback(async (targetRoomId: string) => {
+    try {
+      const response = await inquiryRoomMessagesByRoomId(targetRoomId, getToken)
+      if (!response.success || !response.message_list) return
+
+      const incomingMessages = await Promise.all(
+        response.message_list.map(msg =>
+          convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
+        )
+      )
+      const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
+      const filtered = filterHydrationMessages(withStaleDetection)
+
+      const store = useMessageStore.getState()
+      if (store.roomId === targetRoomId) {
+        store.upsertMany(filtered, 'db')
+        store.markDbSynced()
+      }
+    } catch (error) {
+      console.error('[NormalizedStore] Reconciliation failed:', error)
+    }
+  }, [getToken, userId, userName, getAgentName, getAgentSource])
+
+  // Reset hydration gate on room switch
+  useEffect(() => {
+    hydrationStartedRef.current = null
+  }, [roomId])
+
+  // Hydrate from DB once room data is available.
+  // Gating on `room` ensures the room query has completed and pre-populated
+  // agentNameCache from room_agent_set, so agent names resolve correctly
+  // instead of falling back to "Agent <id>" on page refresh.
+  useEffect(() => {
+    if (!roomId || !userName || !room) return
+    if (hydrationStartedRef.current === roomId) return
+    hydrationStartedRef.current = roomId
+    hydrateFromDb(roomId)
+  }, [roomId, userName, room, hydrateFromDb])
+
+  return { hydrateFromDb, reconcileWithDb }
+}
