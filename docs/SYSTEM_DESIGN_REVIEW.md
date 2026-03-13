@@ -122,17 +122,17 @@ background_tasks.add_task(
 
 ---
 
-### 2.3 ~~HIGH~~ ~~PARTIAL~~ FIXED: httpx Client Leak — All Methods Now Properly Close Connections
+### 2.3 ~~HIGH~~ ~~PARTIAL~~ RESOLVED: httpx Client Leak — All Methods Now Properly Close Connections
 
-**Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_a2a_client`, `get_agent_card_from_url`)
+**Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_agent_card_from_url`)
 
 **Previous state**: Every A2A interaction created a new `httpx.AsyncClient` with a 600-second timeout that was never explicitly closed.
 
-**Current state (Mar 10)**: All three methods now properly manage httpx client lifecycle:
+**Current state (Mar 13)**: All methods now properly manage httpx client lifecycle:
 
-- `create_a2a_client()` — `@asynccontextmanager` with `await httpx_client.aclose()` in `finally`. All 4 primary call sites (`send_message_streaming`, `send_message_sync`, `reply_to_task`, `cancel_task`) use `async with self.create_a2a_client()`.
-- `get_a2a_client()` — converted to `@asynccontextmanager` with the same `yield` / `finally: aclose()` pattern as `create_a2a_client()`.
+- `create_a2a_client()` — `@asynccontextmanager` with `await httpx_client.aclose()` in `finally`. Used by `send_message_streaming`, `send_message_sync`, and `cancel_task` via `async with self.create_a2a_client()`. `reply_to_task()` uses its own scoped `async with httpx.AsyncClient()` (skips agent card resolution since it already has the URL).
 - `get_agent_card_from_url()` — now uses `async with httpx.AsyncClient()` so the transport is closed after the card fetch completes.
+- `get_a2a_client()` — **removed** (dead code with zero callers).
 
 **Downstream dependency**: The HITL `reply_to_task()` method properly uses `async with httpx.AsyncClient()` for cleanup — this blocker is resolved.
 
@@ -366,25 +366,15 @@ self._offline_queues: dict[str, deque] = {}  # bounded deque with TTL
 
 ---
 
-### 2.16 LOW-MEDIUM: Remaining httpx Leak in Agent Card Fetching
+### 2.16 ~~LOW-MEDIUM~~ RESOLVED: Remaining httpx Leak in Agent Card Fetching
 
-**Location**: `services/a2a_service.py` (`get_agent_card_from_url`, `get_a2a_client`)
+**Location**: `services/a2a_service.py` (`get_agent_card_from_url`; `get_a2a_client` removed)
 
-While `create_a2a_client()` was fixed (see 2.3), two methods still create `httpx.AsyncClient` instances without closing them:
+**Previous state**: While `create_a2a_client()` was fixed (see 2.3), two methods still created `httpx.AsyncClient` instances without closing them.
 
-```python
-async def get_agent_card_from_url(self, url: str) -> AgentCard:
-    httpx_client = httpx.AsyncClient(timeout=30.0)  # never closed
-    ...
-
-async def get_a2a_client(self, agent_url: str) -> A2AClient:
-    httpx_client = httpx.AsyncClient(timeout=600.0)  # never closed
-    ...
-```
-
-**Impact**: Lower traffic than the main `create_a2a_client()` path (card fetching during discovery and health checks), but still a leak per invocation. Under high agent discovery traffic, this can accumulate.
-
-**Recommendation**: Convert to `@asynccontextmanager` pattern consistent with `create_a2a_client()`, or use a shared `httpx.AsyncClient` connection pool.
+**Current state (Mar 13)**: Both methods are resolved:
+- `get_agent_card_from_url()` — now uses `async with httpx.AsyncClient()` for proper cleanup.
+- `get_a2a_client()` — **removed** as dead code (zero callers).
 
 ---
 
@@ -407,7 +397,7 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 | 2.13 | Low        | Unbounded orphan recovery tasks                    | Event loop saturation      |
 | 2.14 | Low        | No circuit breaker for external agents             | Cascading failures         |
 | 2.15 | Medium     | Hub relay in-memory SSE queue (SPOF)               | Hub disconnect on crash    |
-| 2.16 | Low-Medium | `get_agent_card_from_url`/`get_a2a_client` httpx leak | Minor resource leak     |
+| 2.16 | ~~Low-Medium~~ | ~~`get_agent_card_from_url`/`get_a2a_client` httpx leak~~ | ✅ Resolved            |
 
 ### Priority Recommendations
 
@@ -416,7 +406,7 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 - Introduce a durable task queue (Celery/Dramatiq/arq) for agent message processing.
 
 **Phase 2 — Reliability** (Issues 2.3, 2.5, 2.6, 2.8):
-- Complete httpx client lifecycle fix (2 remaining methods: `get_agent_card_from_url`, `get_a2a_client`).
+- ~~Complete httpx client lifecycle fix (2 remaining methods: `get_agent_card_from_url`, `get_a2a_client`).~~ ✅ Resolved
 - Remove duplicate `processRoomUserMessage` call or add backend idempotency.
 - Replace SSE JWT query param with short-lived nonce.
 - Wrap multi-document writes in MongoDB transactions.
@@ -432,7 +422,7 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 - Improve optimistic update deduplication.
 - Tighten CORS configuration.
 - Cap concurrent orphan recovery tasks.
-- Fix remaining httpx leak in card fetching (2.16).
+- ~~Fix remaining httpx leak in card fetching (2.16).~~ ✅ Resolved
 
 ---
 
@@ -444,7 +434,7 @@ This section tracks the resolution status of each identified issue. Updated as f
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
 | 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — MongoDB Change Stream covers cancellation cross-instance; core SSE fan-out still needs Redis/NATS |
 | 2.2  | No durable task queue, all in-process             | 🔴 Open      | Production blocker; no work started                                              |
-| 2.3  | httpx client leak (connections never closed)       | 🟡 Partial   | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`. `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16). HITL `reply_to_task()` unblocked. |
+| 2.3  | httpx client leak (connections never closed)       | 🟢 Resolved  | All methods fixed: `create_a2a_client()` uses `@asynccontextmanager`; `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code). |
 | 2.4  | Sequential agent processing                       | 🟡 Partial   | V2 Supervisor supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
 | 2.5  | Potential double-processing race condition         | 🟡 Partial   | `sendMessage` now auto-triggers processing; legacy `processRoomUserMessage` endpoint still exists |
 | 2.6  | JWT token in SSE query parameter                   | 🔴 Open      | Security risk; no work started                                                   |
@@ -457,7 +447,7 @@ This section tracks the resolution status of each identified issue. Updated as f
 | 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
 | 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
 | 2.15 | Hub relay in-memory SSE queue (SPOF)               | 🔴 Open      | New issue (Mar 9) — relay cannot scale horizontally; hub bound to single instance |
-| 2.16 | Remaining httpx leak in card fetching              | 🔴 Open      | New issue (Mar 9) — split from 2.3; `get_agent_card_from_url` + `get_a2a_client` |
+| 2.16 | Remaining httpx leak in card fetching              | 🟢 Resolved  | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
 
 **Legend:**
 - 🔴 Open — Not started or blocked
@@ -1260,7 +1250,7 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 |-------|--------|------|-------|
 | SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker; MongoDB Change Stream covers cancellation only |
 | SDR 2.2: Durable Task Queue | 🔲 NOT STARTED | - | |
-| SDR 2.3: httpx client fix | 🟡 PARTIAL | 2026-03-09 | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`; `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16) |
+| SDR 2.3: httpx client fix | ✅ RESOLVED | 2026-03-13 | All methods fixed: `create_a2a_client()` uses `@asynccontextmanager`; `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
 | SDR 2.5: Double-Processing Guard | 🟡 PARTIAL | 2026-02-25 | `sendMessage` auto-triggers; legacy endpoint still exists |
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
 | SDR 2.7: TTL for cancelled_messages | ✅ RESOLVED | 2026-02-25 | `TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
@@ -1268,7 +1258,7 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 | SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |
 | SDR 2.15: Hub Relay SPOF | 🔴 Open | 2026-03-09 | New issue — in-memory SSE queue per hub; no cross-instance fan-out |
-| SDR 2.16: Remaining httpx leak | 🔴 Open | 2026-03-09 | New issue — `get_agent_card_from_url` + `get_a2a_client` (split from 2.3) |
+| SDR 2.16: Remaining httpx leak | ✅ RESOLVED | 2026-03-13 | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
 
 ### 6.6 Hybro Hub Integration (Phase 2a — Completed 2026-03-09)
 
