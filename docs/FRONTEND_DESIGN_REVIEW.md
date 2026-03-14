@@ -286,7 +286,7 @@ Major refactoring of the frontend message state management.
 | #    | Issue                                            | Status       | Resolution Notes                                                                 |
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
 | 2.1  | SSE auth token in URL query parameter             | Resolved     | Migrated from EventSource to fetch()-based SSE with `Authorization: Bearer` header |
-| 2.2  | Optimistic update ID mismatch window              | Open         | Could be helped by backend `client_request_id` echo in SSE events               |
+| 2.2  | Optimistic update ID mismatch window              | Resolved     | `client_request_id` correlation with atomic temp→real ID swap via `processing_status` SSE event (commit `692acfc`) |
 | 2.3  | No message size validation on frontend            | Resolved     | 10k-char limit with visible counter, paste truncation, and submit guard in `room-chat-input.tsx` |
 | 2.4  | No pagination for room messages                   | Open         | Design doc exists: `MESSAGE_PAGINATION_DESIGN.md`                                |
 | 2.5  | `useRoomWebhook` god hook                         | Resolved     | Decomposed into 15 focused files in `src/hooks/room/` with ~130-line orchestrator; characterization + contract tests added (commit `e0e040e`) |
