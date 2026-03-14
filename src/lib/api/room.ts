@@ -243,6 +243,7 @@ export async function SendMessage(
   quoted_text?: string | null,
   attachments?: Array<{ file_id: string }>,
   dispatch?: MessageDispatchInput,
+  clientRequestId?: string,
 ): Promise<RoomCenterUserMessageResponse> {
   const requestData: Record<string, unknown> = {
     room_id,
@@ -276,6 +277,10 @@ export async function SendMessage(
         requestData.target_group_id = dispatch.target_group_id
       }
     }
+  }
+
+  if (clientRequestId) {
+    requestData.client_request_id = clientRequestId
   }
 
   if (attachments && attachments.length > 0) {

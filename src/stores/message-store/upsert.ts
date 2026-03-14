@@ -142,6 +142,7 @@ function mergeIncoming(
       hitlGroupTotal: incoming.hitlGroupTotal,
       hitlGroupIndex: incoming.hitlGroupIndex,
       hitlUserAnswer: incoming.hitlUserAnswer,
+      clientRequestId: incoming.clientRequestId,
       artifacts: incoming.artifacts,
       attachments: incoming.attachments,
     }
@@ -180,6 +181,7 @@ function mergeIncoming(
     hitlGroupTotal: incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
     hitlUserAnswer: incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : existing.hitlUserAnswer,
+    clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
   }
@@ -247,6 +249,7 @@ export function isNoOpUpdate(
     existing.hitlGroupTotal    === coalesce(incoming.hitlGroupTotal, existing.hitlGroupTotal) &&
     existing.hitlGroupIndex    === coalesce(incoming.hitlGroupIndex, existing.hitlGroupIndex) &&
     existing.hitlUserAnswer    === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
+    existing.clientRequestId   === coalesce(incoming.clientRequestId, existing.clientRequestId) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
     existing.displayType       === incomingDisplayType &&
     existing.artifacts         === coalesce(incoming.artifacts, existing.artifacts) &&

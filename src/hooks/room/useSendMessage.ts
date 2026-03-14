@@ -34,6 +34,7 @@ export function useSendMessage(
 
     // Generate temporary message ID for optimistic update
     const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const clientRequestId = crypto.randomUUID()
     const currentTime = new Date().toISOString()
 
     // Reset placeholder dismissed flag so SSE processing_status events
@@ -52,6 +53,7 @@ export function useSendMessage(
       senderName: userName,
       userId,
       timestamp: currentTime,
+      clientRequestId,
       attachments: pendingAttachments?.map(att => ({
         fileId: att.id,
         fileUrl: att.previewUrl || undefined,
@@ -105,6 +107,7 @@ export function useSendMessage(
         quoteData?.content ?? null,
         uploadedAttachments,
         dispatch,
+        clientRequestId,
       )
 
       if (!createResponse.success) {
@@ -141,10 +144,9 @@ export function useSendMessage(
         return false
       }
 
-      // Step 2: Swap temp ID to real ID in normalized store
+      // Step 2: Atomic swap temp ID → real ID in normalized store
       const msgStoreSwap = useMessageStore.getState()
-      msgStoreSwap.removeMessage(tempMessageId)
-      msgStoreSwap.upsertMessage({
+      msgStoreSwap.replaceMessageId(tempMessageId, messageId, {
         id: messageId,
         roomId,
         messageType: 'user',
@@ -152,6 +154,7 @@ export function useSendMessage(
         senderName: userName,
         userId,
         timestamp: currentTime,
+        clientRequestId,
         attachments: pendingAttachments?.map(att => {
           const uploaded = uploadResponses?.get(att.id)
           return {
@@ -162,7 +165,7 @@ export function useSendMessage(
             sizeBytes: uploaded?.sizeBytes || att.file.size,
           }
         }),
-      }, 'optimistic')
+      })
 
       // Blob preview URLs are no longer needed now that server URLs are in
       // the store.  Revoke them to free browser blob memory.

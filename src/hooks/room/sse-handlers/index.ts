@@ -139,6 +139,19 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           const status = sseMessage.data.status
 
           if (status === PROCESSING_STATUS.PROCESSING) {
+            // Correlate via client_request_id: swap temp→real atomically.
+            // Only processing_status PROCESSING carries client_request_id —
+            // if the backend ever sends a user_message SSE event before this,
+            // correlation would need to be added there too.
+            const clientReqId = sseMessage.data.client_request_id
+            const realMessageId = sseMessage.data.message_id
+            if (clientReqId && realMessageId) {
+              const pending = store.findByClientRequestId(clientReqId)
+              if (pending && pending.id !== realMessageId && pending.id.startsWith('temp-')) {
+                store.replaceMessageId(pending.id, realMessageId)
+              }
+            }
+
             lifecycle.setProcessing(true)
             if (!lifecycle.getMessageId() && sseMessage.data.message_id) {
               lifecycle.setMessageId(sseMessage.data.message_id)

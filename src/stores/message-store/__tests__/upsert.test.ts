@@ -349,6 +349,42 @@ describe('isNoOpUpdate', () => {
     const incoming = makeIncoming({ stepNumber: 2, taskStatus: 'working' })
     expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
   })
+
+  it('detects clientRequestId-only change as non-no-op', () => {
+    const existing = makeEntity({
+      content: 'Hello',
+      displayType: 'agent-bubble',
+    })
+    const incoming = makeIncoming({ content: 'Hello', clientRequestId: 'cr-new' })
+    expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
+  })
+})
+
+// ── mergeIncoming clientRequestId ─────────────────────────────
+
+describe('applyUpsert clientRequestId merging', () => {
+  it('preserves clientRequestId from incoming on new entity', () => {
+    const result = applyUpsert(
+      {}, [],
+      makeIncoming({ clientRequestId: 'cr-123' }),
+      'optimistic',
+    )
+    expect(result).not.toBeNull()
+    expect(result!.entities['msg-1'].clientRequestId).toBe('cr-123')
+  })
+
+  it('preserves clientRequestId from existing when incoming is undefined', () => {
+    const entities = {
+      'msg-1': makeEntity({ clientRequestId: 'cr-existing', content: 'old' }),
+    }
+    const result = applyUpsert(
+      entities, ['msg-1'],
+      makeIncoming({ content: 'updated' }),
+      'sse',
+    )
+    expect(result).not.toBeNull()
+    expect(result!.entities['msg-1'].clientRequestId).toBe('cr-existing')
+  })
 })
 
 // ── buildSortedIds ───────────────────────────────────────────

@@ -43,6 +43,7 @@ export interface MessageEntity {
   agentId?: string
   agentSource?: 'cloud' | 'hub'
   userId?: string
+  clientRequestId?: string
 
   // ── Task state (agent messages backed by A2A tasks) ───────
   taskStatus?: TaskState
@@ -104,6 +105,7 @@ export interface IncomingMessage {
   agentId?: string
   agentSource?: 'cloud' | 'hub'
   userId?: string
+  clientRequestId?: string
   taskStatus?: TaskState | null
   taskError?: string | null
   taskStatusMessage?: string | null

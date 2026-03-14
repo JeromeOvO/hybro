@@ -402,6 +402,7 @@ export interface RoomCenterUserMessageRequest {
     [k: string]: unknown;
   } | null;
   message?: RoomUserMessage | null;
+  client_request_id?: string | null;
 }
 export interface RoomUserMessage {
   room_id: string;

@@ -214,6 +214,39 @@ describe('Room API', () => {
       expect(capturedBody).not.toHaveProperty('mentioned_agent_ids')
     })
 
+    it('should include client_request_id in request body when provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage(
+        'room-1', 'Hello', undefined, 'user-1', 'Test User',
+        'all_agents', null, null, undefined, undefined,
+        'cr-uuid-123',
+      )
+
+      expect(capturedBody).toHaveProperty('client_request_id', 'cr-uuid-123')
+    })
+
+    it('should include client_request_id as undefined when not provided', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/sendMessage`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({ success: true, message_id: 'msg-1' })
+        })
+      )
+
+      await SendMessage('room-1', 'Hello', undefined, 'user-1', 'Test User')
+
+      // client_request_id should not be present when not provided
+      expect(capturedBody!['client_request_id']).toBeUndefined()
+    })
+
     it('should include target_group_id for saved_group dispatch', async () => {
       let capturedBody: Record<string, unknown> | null = null
       server.use(
