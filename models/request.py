@@ -266,6 +266,7 @@ class RoomCenterUserMessageRequest(BaseModel):
     message: RoomUserMessage | None = None
     attachments: list[UserAttachmentRequest] | None = None
     inline_file_ids: list[str] | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RoomCenterAgentMessageRequest(BaseModel):

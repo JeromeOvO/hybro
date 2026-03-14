@@ -1864,7 +1864,7 @@ class RoomServices:
                 status_code=500,
             )
 
-        await self._send_processing_status(request.room_id, user_message.message_id)
+        await self._send_processing_status(request.room_id, user_message.message_id, request.client_request_id)
 
         # Create a CancellationToken early in the pipeline so the parse step
         # (and later the queue step in RoomMessageCenter) can detect cancels
@@ -2094,14 +2094,20 @@ class RoomServices:
         """Persist user message to the database."""
         return await self.database_service.add_room_user_message(user_message)
 
-    async def _send_processing_status(self, room_id: str, message_id: str) -> None:
-        """Notify client that processing has started."""
+    async def _send_processing_status(self, room_id: str, message_id: str, client_request_id: str | None = None) -> None:
+        """Notify client that processing has started.
+
+        Args:
+            room_id: The room ID.
+            message_id: The persisted user message ID.
+            client_request_id: Pass-through correlation ID from the frontend request.
+        """
         logger.info(
             "RoomServices: Sending processing status to room %s for message %s",
             room_id,
             message_id,
         )
-        await sse_manager.send_processing_status(room_id, SSEProcessingStatus.PROCESSING, message_id)
+        await sse_manager.send_processing_status(room_id, SSEProcessingStatus.PROCESSING, message_id, client_request_id=client_request_id)
 
     async def _initialize_room_memory(
         self, request: RoomCenterUserMessageRequest, user_message: RoomUserMessage

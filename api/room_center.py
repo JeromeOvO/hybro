@@ -274,6 +274,7 @@ async def send_message(
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
+    client_request_id = request_data.get("client_request_id")
 
     # Canonical field takes precedence; legacy target_group is fallback only.
     message_target_mode = request_data.get("message_target_mode")
@@ -316,6 +317,7 @@ async def send_message(
         message=message,
         attachments=attachments,
         inline_file_ids=inline_file_ids,
+        client_request_id=client_request_id,
     )
     room_center_response = await room_center.send_message_to_room(
         room_center_request, target_group, mentioned_agent_ids
