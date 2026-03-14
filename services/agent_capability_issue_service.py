@@ -83,6 +83,7 @@ class AgentCapabilityIssueService:
             created_at=utcnow(),
         )
         await self._collection.insert_one(issue.model_dump(mode="json"))
+        self._cache.clear()
         logger.info(
             "Recorded capability issue %s for agent %s",
             issue.issue_id,
