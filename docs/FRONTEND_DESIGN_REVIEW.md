@@ -289,5 +289,36 @@ Major refactoring of the frontend message state management.
 | 2.2  | Optimistic update ID mismatch window              | Open         | Could be helped by backend `client_request_id` echo in SSE events               |
 | 2.3  | No message size validation on frontend            | Resolved     | 10k-char limit with visible counter, paste truncation, and submit guard in `room-chat-input.tsx` |
 | 2.4  | No pagination for room messages                   | Open         | Design doc exists: `MESSAGE_PAGINATION_DESIGN.md`                                |
-| 2.5  | `useRoomWebhook` god hook                         | Open         | Decomposition planned; see `architecture.md` issue 15.1                          |
+| 2.5  | `useRoomWebhook` god hook                         | Resolved     | Decomposed into 15 focused files in `src/hooks/room/` with ~130-line orchestrator; characterization + contract tests added (commit `e0e040e`) |
 | 2.6  | `useRoomUiStore` global singleton                 | Open         | Low priority; only a risk with multi-room views                                  |
+
+---
+
+## 6. Cross-Repo Frontend Requirements (From Backend Docs)
+
+Issues requiring frontend work that originate from backend design docs. Tracked here for visibility.
+
+### 6.1 Hub Portal UI
+
+> **Source**: `hybro-multi-agents-backend/docs/HYBRO_HUB_DESIGN.md` Phase 1 & 3
+
+**Phase 1**: Register/manage local agents, pair hub with cloud account, view agent status dashboard, configure privacy policies.
+**Phase 3**: Multi-org UI, org-level settings, policy admin panel.
+
+**Status**: Not Started. Backend hub integration (Phase 2a) completed 2026-03-09.
+
+### 6.2 Trust Layer UI
+
+> **Source**: `hybro-multi-agents-backend/docs/HYBRO_TRUST_LAYER_DESIGN.md` Phase 5
+
+Task trace viewer (agent call graph visualization), policy admin panel (create/edit/test Cedar policies), verification badges (agent identity status), data flow indicators (local vs cloud vs cross-org).
+
+**Status**: Not Started. Backend trust layer design is in Phase 0 (preparation).
+
+### 6.3 Interactive Task States (input_required / auth_required)
+
+> **Source**: `hybro-multi-agents-backend/docs/LONG_RUNNING_TASKS_DESIGN.md` item #5
+
+Frontend must handle A2A `input_required` states (render input form for agents needing user input) and `auth_required` states (handle OAuth redirect flows). Currently `STALE_TASK_DETECTION.md` only covers stale detection; `HITL_FRONTEND_DESIGN.md` covers the supervisor HITL case but not the generic agent interactive state UI.
+
+**Status**: Partially covered by HITL frontend (supervisor-initiated input requests). Generic agent `input_required` / `auth_required` not yet designed.
