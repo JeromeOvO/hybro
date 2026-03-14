@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from a2a.types import AgentCard, Task, TaskState
@@ -787,6 +787,40 @@ class MongoDB:
             {"$set": {"processing_message_id": processing_message_id}},
         )
         return result.modified_count >= 0
+
+    async def clear_room_processing_status_if_matches(
+        self, room_id: str, message_id: str
+    ) -> bool:
+        """CAS clear: only clear processing_message_id if it matches the given message_id."""
+        result = await self.rooms_collection.update_one(
+            {"room_id": room_id, "processing_message_id": message_id},
+            {"$set": {"processing_message_id": None}},
+        )
+        return result.modified_count > 0
+
+    async def claim_user_message_for_processing(self, message_id: str) -> bool:
+        """Atomically claim a user message for processing. Returns True if this call claimed it."""
+        result = await self.room_user_messages_collection.find_one_and_update(
+            {"message_id": message_id, "processing_claimed_at": None},
+            {"$set": {"processing_claimed_at": utcnow()}},
+        )
+        return result is not None
+
+    async def claim_or_reclaim_user_message(
+        self, message_id: str, stale_threshold: datetime
+    ) -> bool:
+        """Claim a never-claimed message OR reclaim a stale one (>stale_threshold)."""
+        result = await self.room_user_messages_collection.find_one_and_update(
+            {
+                "message_id": message_id,
+                "$or": [
+                    {"processing_claimed_at": None},
+                    {"processing_claimed_at": {"$lt": stale_threshold}},
+                ],
+            },
+            {"$set": {"processing_claimed_at": utcnow()}},
+        )
+        return result is not None
 
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """

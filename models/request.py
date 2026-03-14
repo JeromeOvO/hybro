@@ -117,6 +117,7 @@ class OrchestrationRequest(BaseModel):
     room_agent_message_id: str | None = None
     room_related_message_id: str | None = None
     user_id: str | None = None
+    is_recovery: bool = False
 
 
 class DebatationCenterRequest(BaseModel):

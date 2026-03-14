@@ -47,6 +47,7 @@ from models.response import (
     ScopeResolutionError,
 )
 from models.room import (
+    MAX_MESSAGE_LENGTH,
     CoordinatorAgentId,
     MembershipOrigin,
     MembershipOriginStatus,
@@ -2042,6 +2043,25 @@ class RoomServices:
             status_code=200,
         )
 
+    def _check_message_text_length(
+        self, message: RoomUserMessage | None
+    ) -> RoomCenterUserMessageResponse | None:
+        """Reject messages exceeding MAX_MESSAGE_LENGTH (SDR 2.10)."""
+        if (
+            message
+            and message.message_content
+            and message.message_content.message_text
+            and len(message.message_content.message_text) > MAX_MESSAGE_LENGTH
+        ):
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=f"Message text exceeds maximum length of {MAX_MESSAGE_LENGTH} characters",
+                status_code=400,
+            )
+        return None
+
     def _validate_send_message_request(
         self, request: RoomCenterUserMessageRequest
     ) -> RoomCenterUserMessageResponse | None:
@@ -2063,6 +2083,10 @@ class RoomServices:
                 error="Message is required",
                 status_code=400,
             )
+
+        size_err = self._check_message_text_length(request.message)
+        if size_err:
+            return size_err
 
         return None
 
@@ -2442,6 +2466,10 @@ class RoomServices:
                 error="Message is required",
                 status_code=400,
             )
+
+        size_err = self._check_message_text_length(message)
+        if size_err:
+            return size_err
 
         # Resolve attachments before persistence
         att_err = await self._resolve_and_apply_attachments(request, message)

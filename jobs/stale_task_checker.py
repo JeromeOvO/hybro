@@ -34,6 +34,8 @@ from services.database_service import db_service
 
 logger = get_logger(__name__)
 
+MAX_CONCURRENT_RECOVERIES = 5
+
 
 class StaleTaskChecker:
     """
@@ -76,6 +78,7 @@ class StaleTaskChecker:
         self.processing_status_expiry_minutes = processing_status_expiry_minutes
         self._running = False
         self._task: asyncio.Task | None = None
+        self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -579,17 +582,33 @@ class StaleTaskChecker:
                     room_id=room_id,
                     room_user_message_id=user_message_id,
                     room_related_message_id="",
+                    is_recovery=True,
                 )
 
-                # Process in background to not block the checker
+                # Process in background with bounded concurrency (SDR 2.13).
+                # Non-blocking: if all slots are occupied, defer remaining
+                # to the next checker cycle so steps 4-7 aren't starved.
+                if self._recovery_semaphore.locked():
+                    logger.info(
+                        "Recovery slots full, deferring remaining orphan recoveries to next cycle"
+                    )
+                    break
+                await self._recovery_semaphore.acquire()
                 asyncio.create_task(
-                    self._process_orphaned_user_message(room_message_center, request)
+                    self._guarded_orphan_recovery(room_message_center, request)
                 )
 
             except Exception as e:
                 logger.error(
                     f"Failed to trigger recovery for user message {user_message_id}: {e}"
                 )
+
+    async def _guarded_orphan_recovery(self, room_message_center, request):
+        """Wrapper that releases the recovery semaphore after processing."""
+        try:
+            await self._process_orphaned_user_message(room_message_center, request)
+        finally:
+            self._recovery_semaphore.release()
 
     async def _process_orphaned_user_message(
         self,
@@ -642,22 +661,30 @@ class StaleTaskChecker:
             if not message_id or not room_id:
                 continue
 
+            # Check capacity BEFORE claiming — claiming mutates state
+            # (RUNNING → RECOVERING) so we must not claim if we can't schedule.
+            if self._recovery_semaphore.locked():
+                logger.info(
+                    "Recovery slots full, deferring remaining supervisor recoveries to next cycle"
+                )
+                break
+
+            # Respect persistent cancellation before claiming: if the user
+            # canceled during the crash window, the in-memory token was lost
+            # but the cancelled_messages DB record survives.
+            if await db_service.is_message_cancelled(message_id):
+                logger.info(
+                    "supervisor_recovery: skipping message %s — cancelled by user",
+                    message_id,
+                )
+                continue
+
             # Atomically claim this trajectory so no other worker (or
             # subsequent check cycle) can recover it concurrently.
             claimed = await db_service.claim_stuck_supervisor_trajectory(message_id)
             if not claimed:
                 logger.info(
                     "supervisor_recovery: message %s already claimed by another worker",
-                    message_id,
-                )
-                continue
-
-            # Respect persistent cancellation: if the user canceled during
-            # the crash window, the in-memory token was lost but the
-            # cancelled_messages DB record survives.
-            if await db_service.is_message_cancelled(message_id):
-                logger.info(
-                    "supervisor_recovery: skipping message %s — cancelled by user",
                     message_id,
                 )
                 continue
@@ -672,9 +699,11 @@ class StaleTaskChecker:
                     room_id=room_id,
                     room_user_message_id=message_id,
                     room_related_message_id="",
+                    is_recovery=True,
                 )
+                await self._recovery_semaphore.acquire()
                 asyncio.create_task(
-                    self._process_recovered_supervisor_message(request, message_id)
+                    self._guarded_supervisor_recovery(request, message_id)
                 )
             except Exception as e:
                 logger.error(
@@ -682,6 +711,13 @@ class StaleTaskChecker:
                     message_id,
                     e,
                 )
+
+    async def _guarded_supervisor_recovery(self, request, message_id):
+        """Wrapper that releases the recovery semaphore after processing."""
+        try:
+            await self._process_recovered_supervisor_message(request, message_id)
+        finally:
+            self._recovery_semaphore.release()
 
     async def _process_recovered_supervisor_message(
         self,

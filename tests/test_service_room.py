@@ -205,3 +205,36 @@ class TestValidateSendMessageRequest:
         assert result is not None
         assert result.success is False
         assert result.status_code == 400
+
+    def test_returns_error_when_message_text_exceeds_max_length(self, room_center):
+        """SDR 2.10: Messages exceeding MAX_MESSAGE_LENGTH should be rejected."""
+        from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
+
+        oversized_message = RoomUserMessage(
+            room_id="room-001",
+            message_id="msg-001",
+            message_content=MessageContent(message_text="x" * (MAX_MESSAGE_LENGTH + 1)),
+        )
+        req = MagicMock()
+        req.room_id = "room-001"
+        req.message = oversized_message
+        result = room_center._validate_send_message_request(req)
+        assert result is not None
+        assert result.success is False
+        assert result.status_code == 400
+        assert "maximum length" in result.error.lower()
+
+    def test_accepts_message_at_max_length(self, room_center):
+        """Messages exactly at MAX_MESSAGE_LENGTH should be accepted."""
+        from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
+
+        ok_message = RoomUserMessage(
+            room_id="room-001",
+            message_id="msg-002",
+            message_content=MessageContent(message_text="x" * MAX_MESSAGE_LENGTH),
+        )
+        req = MagicMock()
+        req.room_id = "room-001"
+        req.message = ok_message
+        result = room_center._validate_send_message_request(req)
+        assert result is None

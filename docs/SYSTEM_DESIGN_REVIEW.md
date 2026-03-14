@@ -162,30 +162,17 @@ while len(message_queue) > 0:
 
 ---
 
-### 2.5 HIGH: Potential Double-Processing Race Condition
+### 2.5 ~~HIGH~~ RESOLVED: Potential Double-Processing Race Condition
 
 **Location**: `api/room_center.py` (`sendMessage`), `api/orchestration_center.py` (`processRoomUserMessage`)
 
-The `sendMessage` endpoint now auto-triggers processing via `background_tasks.add_task()`:
+**Status**: ✅ **RESOLVED**
 
-```python
-# room_center.py — sendMessage endpoint
-# Processing happens atomically to prevent orphaned messages on page refresh.
-if room_center_response.success and room_center_response.message_id:
-    background_tasks.add_task(
-        room_message_center.process_room_user_message, orchestration_request
-    )
-```
-
-However, the legacy `POST /api/v1/orchestrationCenter/processRoomUserMessage` endpoint **still exists** and performs the same processing. If the frontend still calls both, or if an external client calls the legacy endpoint, the same message is processed twice.
-
-**Impact**:
-- If both paths trigger for the same user message, duplicate agent calls, duplicate SSE events, and confused UI state result.
-- The backend's `process_room_user_message` does not have an idempotency guard against concurrent invocations for the same user message.
-
-**Recommendation**:
-- **Option A (quick)**: Remove or deprecate the legacy `processRoomUserMessage` endpoint. Add a `processing_started_at` timestamp on the user message document and check it atomically before starting work.
-- **Option B (robust)**: Add an idempotency guard via an atomic `findOneAndUpdate` that sets a `processing_started` flag, returning the previous value. Only proceed if the flag was not already set.
+**Resolution (Mar 13)**:
+- Legacy `processRoomUserMessage` endpoint now returns HTTP 410 Gone (deprecated).
+- Atomic idempotency guard via `processing_claimed_at` field on `RoomUserMessage`. Normal path uses `claim_user_message_for_processing` (only claims unclaimed). Recovery path uses `claim_or_reclaim_user_message` (claims unclaimed or stale >30min).
+- CAS release for room-level `processing_message_id` (only clears if it matches the completing message).
+- Migration script: `database/migration/add_user_message_id_unique_index.py` (must run before deploying claim logic).
 
 ---
 
@@ -258,18 +245,16 @@ The `SendMessage` flow creates a user message plus N agent messages across separ
 
 ---
 
-### 2.10 MEDIUM: No Input Validation or Size Limits on User Messages
+### 2.10 ~~MEDIUM~~ RESOLVED: No Input Validation or Size Limits on User Messages
 
 **Location**: `api/room_center.py` (`sendMessage` endpoint)
 
-No explicit validation on user message content size exists on the backend `SendMessage` endpoint.
+**Status**: ✅ **RESOLVED**
 
-**Impact**:
-- A malicious or accidental extremely large message can bloat MongoDB documents (which have a 16MB BSON limit).
-- Large messages cause OOM when building conversation history context.
-- LLM token limits can overflow when the message is passed as context, leading to unexpected errors or truncation.
-
-**Recommendation**: Add message size validation (e.g., max 10,000 characters) as authoritative enforcement on the backend `SendMessage` endpoint. The frontend should also enforce this for immediate user feedback (see frontend review).
+**Resolution (Mar 13)**:
+- Added `MAX_MESSAGE_LENGTH = 10_000` constant in `models/room.py`.
+- Service-level `_check_message_text_length()` validation in `room_services.py`, wired into both `_validate_send_message_request()` and `create_and_parse_user_message()` paths.
+- Returns clean 400 error for oversized messages.
 
 ---
 
@@ -290,43 +275,32 @@ Room memory accumulates the full conversation history. As rooms have longer conv
 
 ---
 
-### 2.12 LOW-MEDIUM: Overly Permissive CORS Configuration
+### 2.12 ~~LOW-MEDIUM~~ RESOLVED: Overly Permissive CORS Configuration
 
 **Location**: `main.py`
 
+**Status**: ✅ **RESOLVED**
+
+**Resolution (Mar 13)**:
+Main CORS now uses explicit allow lists:
 ```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.frontend_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
+allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+allow_headers=["Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"]
 ```
 
-**Impact**: While `allow_origins` is configurable, `allow_methods=["*"]` and `allow_headers=["*"]` combined with `allow_credentials=True` expands the attack surface unnecessarily. Any origin in the allowed list can send any HTTP method with any header.
-
-**Additional surface (Mar 9)**: `DiscoveryCORSMiddleware` (`common/middleware/discovery_cors_middleware.py`) now applies fully permissive CORS (all origins, all methods, all headers) to `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` paths. This is by design for external API/Hub access, but increases the surface area that must be protected by API key authentication and rate limiting.
-
-**Recommendation**: Restrict the main CORS policy to the specific methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`) and headers (`Authorization`, `Content-Type`, `X-API-Key`) actually used by the frontend. Ensure the permissive discovery/gateway/relay CORS paths have adequate API key auth and rate limiting (currently in place via `gateway_rate_limit_service.py` with MongoDB-backed sliding window).
+**Note**: `DiscoveryCORSMiddleware` for `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` remains intentionally permissive for external API/Hub access, protected by API key auth and rate limiting.
 
 ---
 
-### 2.13 LOW: Stale Task Checker Creates Unbounded Background Tasks
+### 2.13 ~~LOW~~ RESOLVED: Stale Task Checker Creates Unbounded Background Tasks
 
 **Location**: `jobs/stale_task_checker.py` (`_recover_orphaned_messages`)
 
-```python
-asyncio.create_task(
-    self._process_orphaned_user_message(room_message_center, request)
-)
-```
+**Status**: ✅ **RESOLVED**
 
-Orphaned message recovery spawns fire-and-forget `asyncio.create_task` calls with no concurrency limit.
-
-**Impact**: If a large backlog of orphaned messages accumulates (e.g., after a prolonged outage), the checker spawns many concurrent processing tasks, potentially saturating the event loop and starving normal request handling.
-
-**Recommendation**: Use an `asyncio.Semaphore` to cap concurrent recovery tasks (e.g., max 5 at a time).
+**Resolution (Mar 13)**:
+- Added `MAX_CONCURRENT_RECOVERIES = 5` and `_recovery_semaphore = asyncio.Semaphore(5)` to `StaleTaskChecker`.
+- Both `_recover_orphaned_messages` and `_recover_stuck_supervisor_trajectories` now acquire the semaphore before `create_task`, with guarded wrappers that release in `finally`. The scheduling loop blocks when all slots are full, providing natural backpressure.
 
 ---
 

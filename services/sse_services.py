@@ -345,8 +345,8 @@ class SSEManager:
         # Set processing_message_id when processing starts, clear it when done
         if status == SSEProcessingStatus.PROCESSING and message_id:
             await db_service.update_room_processing_status(room_id, message_id)
-        elif status in PROCESSING_DONE_STATUSES:
-            await db_service.update_room_processing_status(room_id, None)
+        elif status in PROCESSING_DONE_STATUSES and message_id:
+            await db_service.clear_room_processing_status_if_matches(room_id, message_id)
 
         # Send SSE event to connected clients
         data = {

@@ -89,6 +89,9 @@ class MessageContent(BaseModel):
     content_summary: dict | None = None
 
 
+MAX_MESSAGE_LENGTH = 10_000
+
+
 class RoomMessage(Message):
     """Unified room message format for both user and agent messages"""
 
@@ -109,6 +112,7 @@ class RoomMessage(Message):
 class RoomUserMessage(RoomMessage):
     message_type: str = "user"
     extend_info: Any | None = None
+    processing_claimed_at: datetime | None = None
 
 
 class RoomAgentMessage(RoomMessage):
