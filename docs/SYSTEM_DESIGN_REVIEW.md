@@ -239,9 +239,11 @@ The `SendMessage` flow creates a user message plus N agent messages across separ
 
 ### 2.9 MEDIUM: Frontend Optimistic Update ID Mismatch Window
 
-> **This is a frontend-only issue.** See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.2 for full details.
+> **This is primarily a frontend issue with an optional backend contribution.** See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.2 for full details.
 
 **Summary**: If the SSE `user_message` event arrives before the frontend replaces its optimistic temp ID with the real server-assigned ID, duplicate user messages briefly appear. The backend could help by supporting a `client_request_id` field on `sendMessage` that is echoed in the SSE `user_message` event, allowing the frontend to correlate without relying on timing.
+
+> **Note**: The `client_request_id` echo requirement is also tracked in issue 2.18 (Task Retry Backend Support).
 
 ---
 
@@ -352,6 +354,40 @@ self._offline_queues: dict[str, deque] = {}  # bounded deque with TTL
 
 ---
 
+### 2.17 MEDIUM: No Pagination API for Room Messages
+
+> **Cross-repo**: See `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md` for the full frontend design.
+
+**Location**: `api/room_center.py` (`inquiryRoomMessagesByRoomId`)
+
+The room messages endpoint returns all messages in a single response with no pagination support.
+
+**Backend requirements**:
+- Add query parameters: `limit` (default 50, max 200), `before` (ISO datetime cursor)
+- Add response fields: `has_more`, `total_count`, `oldest_timestamp`
+- Add MongoDB index on `(room_id, created_at)` for efficient cursor queries
+- Maintain backward compatibility (no params = current behavior)
+
+**Status**: Open
+
+---
+
+### 2.18 MEDIUM: Task Retry Backend Support
+
+> **Cross-repo**: See `hybro-frontend/docs/TASK_RETRY_DESIGN.md` for the full frontend design.
+
+**Location**: `modules/RoomMessageCenter.py` (SSE emission), `models/room.py` (RoomMessage)
+
+The frontend retry feature requires three backend changes:
+
+1. **Echo `client_request_id` in SSE events** — Accept optional `client_request_id` in `sendMessage` request, echo it in `user_message` SSE event for frontend correlation (also helps issue 2.9)
+2. **Persist `target_group` on RoomMessage** — Currently lost after dispatch; needed for retry
+3. **Persist `attachments` on RoomMessage** — Currently not stored; needed for retry with files
+
+**Status**: Open
+
+---
+
 ## 3. Summary
 
 | #    | Severity   | Issue                                            | Impact                     |
@@ -365,13 +401,15 @@ self._offline_queues: dict[str, deque] = {}  # bounded deque with TTL
 | 2.7  | ~~Medium~~ | ~~Unbounded `cancelled_messages` set~~             | ✅ Resolved (TTLCache)     |
 | 2.8  | Medium     | No MongoDB transactions for multi-step ops         | Inconsistent state         |
 | 2.9  | Medium     | Optimistic update ID mismatch window               | Duplicate UI messages      |
-| 2.10 | Medium     | No message size validation                         | DoS / OOM risk             |
+| 2.10 | ~~Medium~~ | ~~No message size validation~~                     | ✅ Resolved (MAX_MESSAGE_LENGTH) |
 | 2.11 | ~~Medium~~ | ~~Unbounded conversation memory~~                  | ✅ Resolved (CM Phases 1–5)|
-| 2.12 | Low-Medium | Overly permissive CORS                             | Attack surface             |
+| 2.12 | ~~Low-Medium~~ | ~~Overly permissive CORS~~                     | ✅ Resolved (explicit allow lists) |
 | 2.13 | Low        | Unbounded orphan recovery tasks                    | Event loop saturation      |
 | 2.14 | Low        | No circuit breaker for external agents             | Cascading failures         |
 | 2.15 | Medium     | Hub relay in-memory SSE queue (SPOF)               | Hub disconnect on crash    |
 | 2.16 | ~~Low-Medium~~ | ~~`get_agent_card_from_url`/`get_a2a_client` httpx leak~~ | ✅ Resolved            |
+| 2.17 | Medium     | No pagination API for room messages                | Slow load, unbounded response |
+| 2.18 | Medium     | Task retry backend support                         | Blocks frontend retry feature |
 
 ### Priority Recommendations
 
@@ -415,13 +453,15 @@ This section tracks the resolution status of each identified issue. Updated as f
 | 2.7  | Unbounded `cancelled_messages` set                 | 🟢 Resolved  | Migrated to `cachetools.TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | 2.8  | No MongoDB transactions for multi-step ops         | 🔴 Open      | Consistency risk; no work started                                                |
 | 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
-| 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
+| 2.10 | No message size validation                         | 🟢 Resolved  | MAX_MESSAGE_LENGTH + service-level validation (Mar 13)                           |
 | 2.11 | Unbounded conversation memory                      | 🟢 Resolved  | Context Memory Phases 1–5 complete (token budgets, lossless compaction, memory search) |
-| 2.12 | Overly permissive CORS                             | 🔴 Open      | `DiscoveryCORSMiddleware` adds permissive CORS for gateway/relay paths; main CORS still `["*"]` methods/headers |
+| 2.12 | Overly permissive CORS                             | 🟢 Resolved  | Explicit allow lists for methods/headers (Mar 13)                                |
 | 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
 | 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
 | 2.15 | Hub relay in-memory SSE queue (SPOF)               | 🔴 Open      | New issue (Mar 9) — relay cannot scale horizontally; hub bound to single instance |
 | 2.16 | Remaining httpx leak in card fetching              | 🟢 Resolved  | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
+| 2.17 | No pagination API for room messages                | 🔴 Open      | Cross-repo: see `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md`               |
+| 2.18 | Task retry backend support                         | 🔴 Open      | Cross-repo: see `hybro-frontend/docs/TASK_RETRY_DESIGN.md`                       |
 
 **Legend:**
 - 🔴 Open — Not started or blocked
@@ -1229,10 +1269,14 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
 | SDR 2.7: TTL for cancelled_messages | ✅ RESOLVED | 2026-02-25 | `TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
+| SDR 2.10: No message size validation | ✅ RESOLVED | 2026-03-13 | MAX_MESSAGE_LENGTH + service-level validation |
 | SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
+| SDR 2.12: Overly permissive CORS | ✅ RESOLVED | 2026-03-13 | Explicit allow lists for methods/headers |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |
 | SDR 2.15: Hub Relay SPOF | 🔴 Open | 2026-03-09 | New issue — in-memory SSE queue per hub; no cross-instance fan-out |
 | SDR 2.16: Remaining httpx leak | ✅ RESOLVED | 2026-03-13 | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
+| SDR 2.17: Pagination API | 🔲 NOT STARTED | - | Cross-repo: see `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md` |
+| SDR 2.18: Task Retry Backend | 🔲 NOT STARTED | - | Cross-repo: see `hybro-frontend/docs/TASK_RETRY_DESIGN.md` |
 
 ### 6.6 Hybro Hub Integration (Phase 2a — Completed 2026-03-09)
 
