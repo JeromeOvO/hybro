@@ -137,6 +137,14 @@ class TestResolve:
         svc._health_cache = _HealthCache(ttl=60.0)
         return svc
 
+    @pytest.fixture(autouse=True)
+    def _mock_capability_issues(self):
+        with patch(
+            "services.agent_resolver_service.capability_issue_service"
+        ) as mock_svc:
+            mock_svc.get_excluded_agent_ids = AsyncMock(return_value=set())
+            yield mock_svc
+
     @pytest.mark.asyncio
     async def test_returns_failure_when_no_candidates(self, resolver):
         resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
@@ -183,3 +191,22 @@ class TestResolve:
 
         assert result.agent is a1
         resolver._pick_first_healthy.assert_called_once_with([a1])
+
+    @pytest.mark.asyncio
+    async def test_passes_excluded_ids_to_query(
+        self, resolver, _mock_capability_issues
+    ):
+        _mock_capability_issues.get_excluded_agent_ids = AsyncMock(
+            return_value={"bad-agent"}
+        )
+        a1 = _make_agent("a1", "Alpha")
+        resolver._sanitize_allowed_ids = AsyncMock(return_value=None)
+        resolver.database_service.query_similar_agents = AsyncMock(return_value=[a1])
+
+        with patch("services.agent_resolver_service.settings") as mock_settings:
+            mock_settings.agent_health_check_enabled = False
+            result = await resolver.resolve("test query")
+
+        assert result.agent is a1
+        call_kwargs = resolver.database_service.query_similar_agents.call_args
+        assert call_kwargs.kwargs["excluded_agent_ids"] == {"bad-agent"}

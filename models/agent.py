@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import ClassVar
 
@@ -9,6 +10,11 @@ class AgentStatus(Enum):
     active = "active"
     inactive = "inactive"
     deleted = "deleted"
+
+
+class IssueStatus(str, Enum):
+    open = "open"
+    resolved = "resolved"
 
 
 class Agent(BaseModel):
@@ -75,3 +81,16 @@ class Agent(BaseModel):
         if value is None:
             return None
         return value.value if isinstance(value, AgentStatus) else value
+
+
+class AgentCapabilityIssue(BaseModel):
+    issue_id: str  # UUID
+    agent_id: str
+    error_message: str
+    query_text: str  # What was asked (for context)
+    room_id: str | None = None
+    message_id: str | None = None
+    status: IssueStatus = IssueStatus.open
+    created_at: datetime
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None  # provider_id who resolved it

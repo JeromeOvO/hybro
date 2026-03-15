@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
     cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
 
+    # Agent Capability Issue Tracking
+    capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
+
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
     discovery_default_limit: int = 5  # Default number of agents to return

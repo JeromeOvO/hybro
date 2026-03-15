@@ -11,6 +11,7 @@ from enum import Enum
 
 from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
+from services.agent_capability_issue_service import capability_issue_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 
@@ -79,9 +80,12 @@ class AgentSelectionService:
             len(message_text)
         )
 
+        # Step 0.5: Get agents with open capability issues to exclude
+        excluded = await capability_issue_service.get_excluded_agent_ids()
+
         # Step 1: Vector search for candidate agents (active only)
         candidates = await self.database_service.query_similar_agents(
-            message_text, count=top_k, active_only=True, user_id=user_id,
+            message_text, count=top_k, excluded_agent_ids=excluded, active_only=True, user_id=user_id,
         )
 
         if not candidates:

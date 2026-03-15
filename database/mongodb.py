@@ -309,6 +309,15 @@ class MongoDB:
             )
         return self.db.file_uploads
 
+    @property
+    def agent_capability_issues_collection(self):
+        """Get agent_capability_issues collection for tracking capability errors."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_capability_issues
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -2458,6 +2467,47 @@ class MongoDB:
                 f"Critical unique index creation failed: {failed}. "
                 "Duplicate documents likely exist. Resolve before proceeding."
             )
+
+
+    async def create_capability_issue_indexes(self) -> None:
+        """Create indexes for agent_capability_issues collection.
+
+        Should be called on application startup.
+        """
+        try:
+            collection = self.agent_capability_issues_collection
+
+            # Compound index for fast lookup of open issues per agent
+            await collection.create_index(
+                [("agent_id", 1), ("status", 1)],
+                name="agent_id_status",
+            )
+
+            # Compound index for the exclusion aggregation pipeline
+            # (matches on status first, then groups by agent_id)
+            await collection.create_index(
+                [("status", 1), ("agent_id", 1)],
+                name="status_agent_id",
+            )
+
+            # Index for listing/sorting by creation time
+            await collection.create_index(
+                "created_at",
+                name="created_at",
+            )
+
+            # Unique index for single-issue lookups
+            await collection.create_index(
+                "issue_id",
+                name="issue_id_unique",
+                unique=True,
+            )
+
+            logger.info(
+                "Capability issue indexes created on agent_capability_issues"
+            )
+        except Exception as e:
+            logger.error("Error creating capability issue indexes: %s", e)
 
 
 mongodb = MongoDB()
