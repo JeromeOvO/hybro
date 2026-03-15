@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     use_bedrock_supervisor: bool = False
 
+    # Streaming: emit artifact_update instead of agent_token (Phase 1 migration)
+    stream_via_artifact: bool = True
+
     class Config:
         env_file = ".env"
         extra = "ignore"

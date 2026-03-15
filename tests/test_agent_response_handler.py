@@ -29,6 +29,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         sse.send_agent_response = AsyncMock()
         sse.send_artifact_update = AsyncMock()
         sse.send_task_submitted = AsyncMock()
+        sse.send_task_update = AsyncMock()
         sse.send_processing_status = AsyncMock()
         sse.send_error = AsyncMock()
     if rmc is None:
@@ -138,7 +139,8 @@ class TestArtifactUpdateEvent:
         assert call_kwargs["last_chunk"] is True
 
     @pytest.mark.asyncio
-    async def test_no_artifacts_sends_token_for_text(self):
+    async def test_no_artifacts_sends_token_for_text(self, monkeypatch):
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update", **_base_event(),
@@ -394,7 +396,8 @@ class TestSubmittedEvent:
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
-    async def test_sends_token_for_text(self):
+    async def test_sends_token_for_text(self, monkeypatch):
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
         h = _make_handler()
         event = AgentEvent(
             kind="status_update", **_base_event(), text="still working",
@@ -410,6 +413,7 @@ class TestStatusUpdateEvent:
         )
         await h.handle(event)
         h._sse.send_agent_token.assert_not_awaited()
+        h._sse.send_task_update.assert_not_awaited()
 
 
 class TestProcessingStatusEvent:
@@ -448,3 +452,61 @@ class TestResumeOrchestrationErrorHandling:
             )
             # Should not raise despite resume failure
             await h.handle(event)
+
+
+# =============================================================================
+# Phase 1: stream_via_artifact flag tests
+# =============================================================================
+
+
+class TestArtifactTextFallbackWithFlag:
+    """When stream_via_artifact=True, _on_artifact with text-only (no artifact)
+    wraps text as artifact_update instead of agent_token."""
+
+    @pytest.mark.asyncio
+    async def test_text_only_uses_artifact_update(self, monkeypatch):
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=None, append=True, last_chunk=False,
+        )
+        await h.handle(event)
+        h._sse.send_agent_token.assert_not_awaited()
+        h._sse.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
+        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
+        assert call_kwargs["append"] is True
+        assert call_kwargs["last_chunk"] is False
+
+
+class TestStatusUpdateWithFlag:
+    """When stream_via_artifact=True, _on_status sends task_update
+    instead of agent_token."""
+
+    @pytest.mark.asyncio
+    async def test_status_uses_task_update(self, monkeypatch):
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+        h = _make_handler()
+        event = AgentEvent(
+            kind="status_update", **_base_event(), text="Searching the web...",
+        )
+        await h.handle(event)
+        h._sse.send_agent_token.assert_not_awaited()
+        h._sse.send_task_update.assert_awaited_once()
+        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        assert call_kwargs["status"] == "working"
+        assert call_kwargs["status_message"] == "Searching the web..."
+        assert call_kwargs["message_id"] == "msg-001"
+
+    @pytest.mark.asyncio
+    async def test_status_fallback_to_token(self, monkeypatch):
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
+        h = _make_handler()
+        event = AgentEvent(
+            kind="status_update", **_base_event(), text="Searching...",
+        )
+        await h.handle(event)
+        h._sse.send_agent_token.assert_awaited_once()
+        h._sse.send_task_update.assert_not_awaited()

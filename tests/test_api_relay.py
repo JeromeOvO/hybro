@@ -605,13 +605,42 @@ def _make_msg(
 
 
 class TestRelayTransportNormalize:
-    def test_agent_token(self):
+    def test_agent_token_fallback(self, monkeypatch):
+        """With stream_via_artifact=False, agent_token normalizes to kind='token'."""
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
         rt = _make_relay_transport()
         msg = _make_msg()
         event = rt._normalize("agent_token", "amsg-001", {"token": "hi"}, msg)
         assert event is not None
         assert event.kind == "token"
         assert event.text == "hi"
+
+    def test_agent_token_normalizes_to_artifact_update(self, monkeypatch):
+        """With stream_via_artifact=True, agent_token normalizes to kind='artifact_update'."""
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("agent_token", "amsg-001", {"token": "hello"}, msg)
+        assert event is not None
+        assert event.kind == "artifact_update"
+        assert event.text == "hello"
+        assert event.append is True
+        assert event.last_chunk is False
+        assert event.skip_persist is True
+        assert event.artifacts is not None
+        assert len(event.artifacts) == 1
+        assert event.artifacts[0]["artifact_id"] == "amsg-001-stream"
+        assert event.artifacts[0]["parts"] == [{"kind": "text", "text": "hello"}]
+
+    def test_agent_token_empty_text_no_artifacts(self, monkeypatch):
+        """With stream_via_artifact=True and empty token, artifacts should be None."""
+        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize("agent_token", "amsg-001", {"token": ""}, msg)
+        assert event is not None
+        assert event.kind == "artifact_update"
+        assert event.artifacts is None
 
     def test_agent_response(self):
         rt = _make_relay_transport()
