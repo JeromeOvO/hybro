@@ -1,5 +1,3 @@
-/Users/caijiangnan/Desktop/Hybro/hybro-multi-agents-backend/.venv/lib/python3.13/site-packages/google/protobuf/runtime_version.py:98: UserWarning: Protobuf gencode version 5.29.3 is exactly one major version older than the runtime version 6.31.1 at a2a.proto. Please update the gencode to avoid compatibility violations in the next runtime release.
-  warnings.warn(
 {
   "openapi": "3.1.0",
   "info": {
