@@ -11,7 +11,7 @@ Tests cover:
 import asyncio
 import json
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from services.sse_services import SSEConnection, SSEManager
 
@@ -164,3 +164,47 @@ class TestSSEManagerConnections:
     async def test_broadcast_to_empty_room_is_noop(self):
         mgr = SSEManager()
         await mgr.broadcast_to_room("nonexistent", "event", {})
+
+
+# =============================================================================
+# send_processing_status client_request_id Tests
+# =============================================================================
+
+
+class TestSendProcessingStatusClientRequestId:
+    """Tests that client_request_id is included/omitted correctly in SSE payload."""
+
+    @pytest.mark.asyncio
+    async def test_send_processing_status_includes_client_request_id(self):
+        mgr = SSEManager()
+        conn = await mgr.add_connection("room-1")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("services.sse_services.db_service.update_room_processing_status", AsyncMock())
+
+            await mgr.send_processing_status(
+                "room-1", "processing", "msg-1", client_request_id="cr-abc"
+            )
+
+        msg = await conn.queue.get()
+        parsed = json.loads(msg)
+        assert parsed["type"] == "processing_status"
+        assert parsed["data"]["client_request_id"] == "cr-abc"
+        assert parsed["data"]["message_id"] == "msg-1"
+
+    @pytest.mark.asyncio
+    async def test_send_processing_status_omits_client_request_id_when_none(self):
+        mgr = SSEManager()
+        conn = await mgr.add_connection("room-1")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("services.sse_services.db_service.update_room_processing_status", AsyncMock())
+
+            await mgr.send_processing_status(
+                "room-1", "processing", "msg-1"
+            )
+
+        msg = await conn.queue.get()
+        parsed = json.loads(msg)
+        assert parsed["type"] == "processing_status"
+        assert "client_request_id" not in parsed["data"]

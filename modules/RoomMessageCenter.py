@@ -1,11 +1,14 @@
 import asyncio
 from collections import deque
+from datetime import timedelta
 from uuid import uuid4
 
 from a2a.types import TaskState
 
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
+from config.settings import settings
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId
@@ -139,6 +142,32 @@ class RoomMessageCenter:
         validation_response = self._validate_room_message_request(request)
         if validation_response:
             return validation_response
+
+        # Idempotency guard (SDR 2.5)
+        if request.is_recovery:
+            stale_threshold = utcnow() - timedelta(
+                minutes=settings.orphan_threshold_minutes
+            )
+            claimed = await self.database_service.claim_or_reclaim_user_message(
+                request.room_user_message_id, stale_threshold
+            )
+        else:
+            claimed = await self.database_service.claim_user_message_for_processing(
+                request.room_user_message_id
+            )
+
+        if not claimed:
+            logger.warning(
+                "Message %s: claim failed (is_recovery=%s), skipping",
+                request.room_user_message_id,
+                request.is_recovery,
+            )
+            return OrchestrationResponse(
+                room_id=request.room_id,
+                success=False,
+                error="Message is already being processed",
+                status_code=409,
+            )
 
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from common.auth import ClerkUser, get_current_user
 from models.request import OrchestrationRequest
@@ -62,54 +63,23 @@ async def summarize_meta_task_for_base_task(
     return await workflow_center.summarize_meta_task_for_base_task(req)
 
 
-@router.post("/orchestrationCenter/processRoomUserMessage")
+@router.post(
+    "/orchestrationCenter/processRoomUserMessage",
+    deprecated=True,
+)
 async def process_room_user_message(
     request: Request,
     background_tasks: BackgroundTasks,
     user: ClerkUser = Depends(get_current_user),
 ):
     """
-    Process a room user message asynchronously.
-
-    This endpoint returns immediately after validation and queues the actual
-    processing as a background task. Agent responses are delivered via SSE.
+    **Deprecated.** Message processing is now triggered internally by sendMessage.
+    This endpoint returns HTTP 410 Gone.
     """
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-    room_user_message_id = request_data.get("room_user_message_id")
-    room_related_message_id = request_data.get("room_related_message_id")
-
-    # Validate required fields early
-    if not room_id:
-        return OrchestrationResponse(
-            success=False,
-            error="Room id is required",
-            status_code=400,
-        )
-    if not room_user_message_id:
-        return OrchestrationResponse(
-            success=False,
-            error="Room user message id is required",
-            status_code=400,
-        )
-
-    orchestration_request = OrchestrationRequest(
-        room_id=room_id,
-        room_user_message_id=room_user_message_id,
-        room_related_message_id=room_related_message_id,
-        user_id=user.user_id,
-    )
-
-    # Queue the actual processing as a background task.
-    # This returns immediately while agents process in the background.
-    background_tasks.add_task(
-        room_message_center.process_room_user_message, orchestration_request
-    )
-
-    # Return success immediately - actual results come via SSE
-    return OrchestrationResponse(
-        room_id=room_id,
-        success=True,
-        error=None,
-        status_code=202,  # 202 Accepted - processing started
+    return JSONResponse(
+        status_code=410,
+        content={
+            "success": False,
+            "error": "This endpoint is deprecated. Message processing is triggered by sendMessage.",
+        },
     )

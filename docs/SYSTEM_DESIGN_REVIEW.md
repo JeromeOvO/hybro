@@ -122,17 +122,17 @@ background_tasks.add_task(
 
 ---
 
-### 2.3 ~~HIGH~~ ~~PARTIAL~~ FIXED: httpx Client Leak — All Methods Now Properly Close Connections
+### 2.3 ~~HIGH~~ ~~PARTIAL~~ RESOLVED: httpx Client Leak — All Methods Now Properly Close Connections
 
-**Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_a2a_client`, `get_agent_card_from_url`)
+**Location**: `services/a2a_service.py` (`A2AService.create_a2a_client`, `get_agent_card_from_url`)
 
 **Previous state**: Every A2A interaction created a new `httpx.AsyncClient` with a 600-second timeout that was never explicitly closed.
 
-**Current state (Mar 10)**: All three methods now properly manage httpx client lifecycle:
+**Current state (Mar 13)**: All methods now properly manage httpx client lifecycle:
 
-- `create_a2a_client()` — `@asynccontextmanager` with `await httpx_client.aclose()` in `finally`. All 4 primary call sites (`send_message_streaming`, `send_message_sync`, `reply_to_task`, `cancel_task`) use `async with self.create_a2a_client()`.
-- `get_a2a_client()` — converted to `@asynccontextmanager` with the same `yield` / `finally: aclose()` pattern as `create_a2a_client()`.
+- `create_a2a_client()` — `@asynccontextmanager` with `await httpx_client.aclose()` in `finally`. Used by `send_message_streaming`, `send_message_sync`, and `cancel_task` via `async with self.create_a2a_client()`. `reply_to_task()` uses its own scoped `async with httpx.AsyncClient()` (skips agent card resolution since it already has the URL).
 - `get_agent_card_from_url()` — now uses `async with httpx.AsyncClient()` so the transport is closed after the card fetch completes.
+- `get_a2a_client()` — **removed** (dead code with zero callers).
 
 **Downstream dependency**: The HITL `reply_to_task()` method properly uses `async with httpx.AsyncClient()` for cleanup — this blocker is resolved.
 
@@ -162,30 +162,17 @@ while len(message_queue) > 0:
 
 ---
 
-### 2.5 HIGH: Potential Double-Processing Race Condition
+### 2.5 ~~HIGH~~ RESOLVED: Potential Double-Processing Race Condition
 
 **Location**: `api/room_center.py` (`sendMessage`), `api/orchestration_center.py` (`processRoomUserMessage`)
 
-The `sendMessage` endpoint now auto-triggers processing via `background_tasks.add_task()`:
+**Status**: ✅ **RESOLVED**
 
-```python
-# room_center.py — sendMessage endpoint
-# Processing happens atomically to prevent orphaned messages on page refresh.
-if room_center_response.success and room_center_response.message_id:
-    background_tasks.add_task(
-        room_message_center.process_room_user_message, orchestration_request
-    )
-```
-
-However, the legacy `POST /api/v1/orchestrationCenter/processRoomUserMessage` endpoint **still exists** and performs the same processing. If the frontend still calls both, or if an external client calls the legacy endpoint, the same message is processed twice.
-
-**Impact**:
-- If both paths trigger for the same user message, duplicate agent calls, duplicate SSE events, and confused UI state result.
-- The backend's `process_room_user_message` does not have an idempotency guard against concurrent invocations for the same user message.
-
-**Recommendation**:
-- **Option A (quick)**: Remove or deprecate the legacy `processRoomUserMessage` endpoint. Add a `processing_started_at` timestamp on the user message document and check it atomically before starting work.
-- **Option B (robust)**: Add an idempotency guard via an atomic `findOneAndUpdate` that sets a `processing_started` flag, returning the previous value. Only proceed if the flag was not already set.
+**Resolution (Mar 13)**:
+- Legacy `processRoomUserMessage` endpoint now returns HTTP 410 Gone (deprecated).
+- Atomic idempotency guard via `processing_claimed_at` field on `RoomUserMessage`. Normal path uses `claim_user_message_for_processing` (only claims unclaimed). Recovery path uses `claim_or_reclaim_user_message` (claims unclaimed or stale >30min).
+- CAS release for room-level `processing_message_id` (only clears if it matches the completing message).
+- Migration script: `database/migration/add_user_message_id_unique_index.py` (must run before deploying claim logic).
 
 ---
 
@@ -252,24 +239,24 @@ The `SendMessage` flow creates a user message plus N agent messages across separ
 
 ### 2.9 MEDIUM: Frontend Optimistic Update ID Mismatch Window
 
-> **This is a frontend-only issue.** See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.2 for full details.
+> **This is primarily a frontend issue with an optional backend contribution.** See `hybro-frontend/docs/FRONTEND_DESIGN_REVIEW.md` §2.2 for full details.
 
 **Summary**: If the SSE `user_message` event arrives before the frontend replaces its optimistic temp ID with the real server-assigned ID, duplicate user messages briefly appear. The backend could help by supporting a `client_request_id` field on `sendMessage` that is echoed in the SSE `user_message` event, allowing the frontend to correlate without relying on timing.
 
+> **Note**: The `client_request_id` echo requirement is also tracked in issue 2.18 (Task Retry Backend Support).
+
 ---
 
-### 2.10 MEDIUM: No Input Validation or Size Limits on User Messages
+### 2.10 ~~MEDIUM~~ RESOLVED: No Input Validation or Size Limits on User Messages
 
 **Location**: `api/room_center.py` (`sendMessage` endpoint)
 
-No explicit validation on user message content size exists on the backend `SendMessage` endpoint.
+**Status**: ✅ **RESOLVED**
 
-**Impact**:
-- A malicious or accidental extremely large message can bloat MongoDB documents (which have a 16MB BSON limit).
-- Large messages cause OOM when building conversation history context.
-- LLM token limits can overflow when the message is passed as context, leading to unexpected errors or truncation.
-
-**Recommendation**: Add message size validation (e.g., max 10,000 characters) as authoritative enforcement on the backend `SendMessage` endpoint. The frontend should also enforce this for immediate user feedback (see frontend review).
+**Resolution (Mar 13)**:
+- Added `MAX_MESSAGE_LENGTH = 10_000` constant in `models/room.py`.
+- Service-level `_check_message_text_length()` validation in `room_services.py`, wired into both `_validate_send_message_request()` and `create_and_parse_user_message()` paths.
+- Returns clean 400 error for oversized messages.
 
 ---
 
@@ -290,43 +277,32 @@ Room memory accumulates the full conversation history. As rooms have longer conv
 
 ---
 
-### 2.12 LOW-MEDIUM: Overly Permissive CORS Configuration
+### 2.12 ~~LOW-MEDIUM~~ RESOLVED: Overly Permissive CORS Configuration
 
 **Location**: `main.py`
 
+**Status**: ✅ **RESOLVED**
+
+**Resolution (Mar 13)**:
+Main CORS now uses explicit allow lists:
 ```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.frontend_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
+allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+allow_headers=["Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"]
 ```
 
-**Impact**: While `allow_origins` is configurable, `allow_methods=["*"]` and `allow_headers=["*"]` combined with `allow_credentials=True` expands the attack surface unnecessarily. Any origin in the allowed list can send any HTTP method with any header.
-
-**Additional surface (Mar 9)**: `DiscoveryCORSMiddleware` (`common/middleware/discovery_cors_middleware.py`) now applies fully permissive CORS (all origins, all methods, all headers) to `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` paths. This is by design for external API/Hub access, but increases the surface area that must be protected by API key authentication and rate limiting.
-
-**Recommendation**: Restrict the main CORS policy to the specific methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`) and headers (`Authorization`, `Content-Type`, `X-API-Key`) actually used by the frontend. Ensure the permissive discovery/gateway/relay CORS paths have adequate API key auth and rate limiting (currently in place via `gateway_rate_limit_service.py` with MongoDB-backed sliding window).
+**Note**: `DiscoveryCORSMiddleware` for `/api/v1/discovery/*`, `/api/v1/gateway/*`, and `/api/v1/relay/*` remains intentionally permissive for external API/Hub access, protected by API key auth and rate limiting.
 
 ---
 
-### 2.13 LOW: Stale Task Checker Creates Unbounded Background Tasks
+### 2.13 ~~LOW~~ RESOLVED: Stale Task Checker Creates Unbounded Background Tasks
 
 **Location**: `jobs/stale_task_checker.py` (`_recover_orphaned_messages`)
 
-```python
-asyncio.create_task(
-    self._process_orphaned_user_message(room_message_center, request)
-)
-```
+**Status**: ✅ **RESOLVED**
 
-Orphaned message recovery spawns fire-and-forget `asyncio.create_task` calls with no concurrency limit.
-
-**Impact**: If a large backlog of orphaned messages accumulates (e.g., after a prolonged outage), the checker spawns many concurrent processing tasks, potentially saturating the event loop and starving normal request handling.
-
-**Recommendation**: Use an `asyncio.Semaphore` to cap concurrent recovery tasks (e.g., max 5 at a time).
+**Resolution (Mar 13)**:
+- Added `MAX_CONCURRENT_RECOVERIES = 5` and `_recovery_semaphore = asyncio.Semaphore(5)` to `StaleTaskChecker`.
+- Both `_recover_orphaned_messages` and `_recover_stuck_supervisor_trajectories` now acquire the semaphore before `create_task`, with guarded wrappers that release in `finally`. The scheduling loop blocks when all slots are full, providing natural backpressure.
 
 ---
 
@@ -366,25 +342,49 @@ self._offline_queues: dict[str, deque] = {}  # bounded deque with TTL
 
 ---
 
-### 2.16 LOW-MEDIUM: Remaining httpx Leak in Agent Card Fetching
+### 2.16 ~~LOW-MEDIUM~~ RESOLVED: Remaining httpx Leak in Agent Card Fetching
 
-**Location**: `services/a2a_service.py` (`get_agent_card_from_url`, `get_a2a_client`)
+**Location**: `services/a2a_service.py` (`get_agent_card_from_url`; `get_a2a_client` removed)
 
-While `create_a2a_client()` was fixed (see 2.3), two methods still create `httpx.AsyncClient` instances without closing them:
+**Previous state**: While `create_a2a_client()` was fixed (see 2.3), two methods still created `httpx.AsyncClient` instances without closing them.
 
-```python
-async def get_agent_card_from_url(self, url: str) -> AgentCard:
-    httpx_client = httpx.AsyncClient(timeout=30.0)  # never closed
-    ...
+**Current state (Mar 13)**: Both methods are resolved:
+- `get_agent_card_from_url()` — now uses `async with httpx.AsyncClient()` for proper cleanup.
+- `get_a2a_client()` — **removed** as dead code (zero callers).
 
-async def get_a2a_client(self, agent_url: str) -> A2AClient:
-    httpx_client = httpx.AsyncClient(timeout=600.0)  # never closed
-    ...
-```
+---
 
-**Impact**: Lower traffic than the main `create_a2a_client()` path (card fetching during discovery and health checks), but still a leak per invocation. Under high agent discovery traffic, this can accumulate.
+### 2.17 MEDIUM: No Pagination API for Room Messages
 
-**Recommendation**: Convert to `@asynccontextmanager` pattern consistent with `create_a2a_client()`, or use a shared `httpx.AsyncClient` connection pool.
+> **Cross-repo**: See `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md` for the full frontend design.
+
+**Location**: `api/room_center.py` (`inquiryRoomMessagesByRoomId`)
+
+The room messages endpoint returns all messages in a single response with no pagination support.
+
+**Backend requirements**:
+- Add query parameters: `limit` (default 50, max 200), `before` (ISO datetime cursor)
+- Add response fields: `has_more`, `total_count`, `oldest_timestamp`
+- Add MongoDB index on `(room_id, created_at)` for efficient cursor queries
+- Maintain backward compatibility (no params = current behavior)
+
+**Status**: Open
+
+---
+
+### 2.18 MEDIUM: Task Retry Backend Support
+
+> **Cross-repo**: See `hybro-frontend/docs/TASK_RETRY_DESIGN.md` for the full frontend design.
+
+**Location**: `modules/RoomMessageCenter.py` (SSE emission), `models/room.py` (RoomMessage)
+
+The frontend retry feature requires three backend changes:
+
+1. **Echo `client_request_id` in SSE events** — Accept optional `client_request_id` in `sendMessage` request, echo it in `user_message` SSE event for frontend correlation (also helps issue 2.9)
+2. **Persist `target_group` on RoomMessage** — Currently lost after dispatch; needed for retry
+3. **Persist `attachments` on RoomMessage** — Currently not stored; needed for retry with files
+
+**Status**: Open
 
 ---
 
@@ -401,13 +401,15 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 | 2.7  | ~~Medium~~ | ~~Unbounded `cancelled_messages` set~~             | ✅ Resolved (TTLCache)     |
 | 2.8  | Medium     | No MongoDB transactions for multi-step ops         | Inconsistent state         |
 | 2.9  | Medium     | Optimistic update ID mismatch window               | Duplicate UI messages      |
-| 2.10 | Medium     | No message size validation                         | DoS / OOM risk             |
+| 2.10 | ~~Medium~~ | ~~No message size validation~~                     | ✅ Resolved (MAX_MESSAGE_LENGTH) |
 | 2.11 | ~~Medium~~ | ~~Unbounded conversation memory~~                  | ✅ Resolved (CM Phases 1–5)|
-| 2.12 | Low-Medium | Overly permissive CORS                             | Attack surface             |
+| 2.12 | ~~Low-Medium~~ | ~~Overly permissive CORS~~                     | ✅ Resolved (explicit allow lists) |
 | 2.13 | Low        | Unbounded orphan recovery tasks                    | Event loop saturation      |
 | 2.14 | Low        | No circuit breaker for external agents             | Cascading failures         |
 | 2.15 | Medium     | Hub relay in-memory SSE queue (SPOF)               | Hub disconnect on crash    |
-| 2.16 | Low-Medium | `get_agent_card_from_url`/`get_a2a_client` httpx leak | Minor resource leak     |
+| 2.16 | ~~Low-Medium~~ | ~~`get_agent_card_from_url`/`get_a2a_client` httpx leak~~ | ✅ Resolved            |
+| 2.17 | Medium     | No pagination API for room messages                | Slow load, unbounded response |
+| 2.18 | Medium     | Task retry backend support                         | Blocks frontend retry feature |
 
 ### Priority Recommendations
 
@@ -416,7 +418,7 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 - Introduce a durable task queue (Celery/Dramatiq/arq) for agent message processing.
 
 **Phase 2 — Reliability** (Issues 2.3, 2.5, 2.6, 2.8):
-- Complete httpx client lifecycle fix (2 remaining methods: `get_agent_card_from_url`, `get_a2a_client`).
+- ~~Complete httpx client lifecycle fix (2 remaining methods: `get_agent_card_from_url`, `get_a2a_client`).~~ ✅ Resolved
 - Remove duplicate `processRoomUserMessage` call or add backend idempotency.
 - Replace SSE JWT query param with short-lived nonce.
 - Wrap multi-document writes in MongoDB transactions.
@@ -432,7 +434,7 @@ async def get_a2a_client(self, agent_url: str) -> A2AClient:
 - Improve optimistic update deduplication.
 - Tighten CORS configuration.
 - Cap concurrent orphan recovery tasks.
-- Fix remaining httpx leak in card fetching (2.16).
+- ~~Fix remaining httpx leak in card fetching (2.16).~~ ✅ Resolved
 
 ---
 
@@ -444,20 +446,22 @@ This section tracks the resolution status of each identified issue. Updated as f
 | ---- | ------------------------------------------------ | ------------ | -------------------------------------------------------------------------------- |
 | 2.1  | In-memory SSE state prevents horizontal scaling   | 🔴 Open      | **Blocker for HITL** — MongoDB Change Stream covers cancellation cross-instance; core SSE fan-out still needs Redis/NATS |
 | 2.2  | No durable task queue, all in-process             | 🔴 Open      | Production blocker; no work started                                              |
-| 2.3  | httpx client leak (connections never closed)       | 🟡 Partial   | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`. `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16). HITL `reply_to_task()` unblocked. |
+| 2.3  | httpx client leak (connections never closed)       | 🟢 Resolved  | All methods fixed: `create_a2a_client()` uses `@asynccontextmanager`; `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code). |
 | 2.4  | Sequential agent processing                       | 🟡 Partial   | V2 Supervisor supports parallel dispatch via `asyncio.gather`; V1 queue still sequential |
 | 2.5  | Potential double-processing race condition         | 🟡 Partial   | `sendMessage` now auto-triggers processing; legacy `processRoomUserMessage` endpoint still exists |
 | 2.6  | JWT token in SSE query parameter                   | 🔴 Open      | Security risk; no work started                                                   |
 | 2.7  | Unbounded `cancelled_messages` set                 | 🟢 Resolved  | Migrated to `cachetools.TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | 2.8  | No MongoDB transactions for multi-step ops         | 🔴 Open      | Consistency risk; no work started                                                |
 | 2.9  | Optimistic update ID mismatch window               | 🔴 Open      | Frontend deduplication issue; no work started                                    |
-| 2.10 | No message size validation                         | 🔴 Open      | DoS risk; no validation implemented                                              |
+| 2.10 | No message size validation                         | 🟢 Resolved  | MAX_MESSAGE_LENGTH + service-level validation (Mar 13)                           |
 | 2.11 | Unbounded conversation memory                      | 🟢 Resolved  | Context Memory Phases 1–5 complete (token budgets, lossless compaction, memory search) |
-| 2.12 | Overly permissive CORS                             | 🔴 Open      | `DiscoveryCORSMiddleware` adds permissive CORS for gateway/relay paths; main CORS still `["*"]` methods/headers |
+| 2.12 | Overly permissive CORS                             | 🟢 Resolved  | Explicit allow lists for methods/headers (Mar 13)                                |
 | 2.13 | Unbounded orphan recovery tasks                    | 🔴 Open      | No semaphore implemented                                                         |
 | 2.14 | No circuit breaker for external agents             | 🔴 Open      | No circuit breaker implemented                                                   |
 | 2.15 | Hub relay in-memory SSE queue (SPOF)               | 🔴 Open      | New issue (Mar 9) — relay cannot scale horizontally; hub bound to single instance |
-| 2.16 | Remaining httpx leak in card fetching              | 🔴 Open      | New issue (Mar 9) — split from 2.3; `get_agent_card_from_url` + `get_a2a_client` |
+| 2.16 | Remaining httpx leak in card fetching              | 🟢 Resolved  | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
+| 2.17 | No pagination API for room messages                | 🔴 Open      | Cross-repo: see `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md`               |
+| 2.18 | Task retry backend support                         | 🔴 Open      | Cross-repo: see `hybro-frontend/docs/TASK_RETRY_DESIGN.md`                       |
 
 **Legend:**
 - 🔴 Open — Not started or blocked
@@ -1260,15 +1264,19 @@ Per-room and per-endpoint rate limiting to prevent abuse. Discovery API has sepa
 |-------|--------|------|-------|
 | SDR 2.1: Redis Pub/Sub | 🔲 NOT STARTED | - | P0 blocker; MongoDB Change Stream covers cancellation only |
 | SDR 2.2: Durable Task Queue | 🔲 NOT STARTED | - | |
-| SDR 2.3: httpx client fix | 🟡 PARTIAL | 2026-03-09 | `create_a2a_client()` fixed with `@asynccontextmanager`; 4 call sites use `async with`; `get_agent_card_from_url` + `get_a2a_client` still leak (see 2.16) |
+| SDR 2.3: httpx client fix | ✅ RESOLVED | 2026-03-13 | All methods fixed: `create_a2a_client()` uses `@asynccontextmanager`; `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
 | SDR 2.5: Double-Processing Guard | 🟡 PARTIAL | 2026-02-25 | `sendMessage` auto-triggers; legacy endpoint still exists |
 | SDR 2.6: SSE JWT Token Security | 🔲 NOT STARTED | - | |
 | SDR 2.7: TTL for cancelled_messages | ✅ RESOLVED | 2026-02-25 | `TTLCache(maxsize=10_000, ttl=3600)` + CancellationToken TTL cache |
 | SDR 2.8: MongoDB Transactions | 🔲 NOT STARTED | - | |
+| SDR 2.10: No message size validation | ✅ RESOLVED | 2026-03-13 | MAX_MESSAGE_LENGTH + service-level validation |
 | SDR 2.11: Unbounded Memory | ✅ RESOLVED | 2026-02-25 | Via CM Phases 1–5 (token budgets + lossless compaction + memory search) |
+| SDR 2.12: Overly permissive CORS | ✅ RESOLVED | 2026-03-13 | Explicit allow lists for methods/headers |
 | SDR 2.14: Circuit Breaker | 🔲 NOT STARTED | - | |
 | SDR 2.15: Hub Relay SPOF | 🔴 Open | 2026-03-09 | New issue — in-memory SSE queue per hub; no cross-instance fan-out |
-| SDR 2.16: Remaining httpx leak | 🔴 Open | 2026-03-09 | New issue — `get_agent_card_from_url` + `get_a2a_client` (split from 2.3) |
+| SDR 2.16: Remaining httpx leak | ✅ RESOLVED | 2026-03-13 | Both methods fixed: `get_agent_card_from_url()` uses `async with`; `get_a2a_client()` removed (dead code) |
+| SDR 2.17: Pagination API | 🔲 NOT STARTED | - | Cross-repo: see `hybro-frontend/docs/MESSAGE_PAGINATION_DESIGN.md` |
+| SDR 2.18: Task Retry Backend | 🔲 NOT STARTED | - | Cross-repo: see `hybro-frontend/docs/TASK_RETRY_DESIGN.md` |
 
 ### 6.6 Hybro Hub Integration (Phase 2a — Completed 2026-03-09)
 

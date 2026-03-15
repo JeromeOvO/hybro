@@ -97,3 +97,37 @@ class TestExtractAttachments:
         request_data = {"attachments": top}
         _, _, err = _extract_attachments(request_data, message)
         assert err is not None
+
+
+class TestCreateAndParseOversizedMessage:
+    """SDR 2.10: Oversized message rejection in create_and_parse_user_message."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_message_text(self):
+        """create_and_parse_user_message should reject messages > MAX_MESSAGE_LENGTH."""
+        from unittest.mock import MagicMock
+        from models.room import MAX_MESSAGE_LENGTH, MessageContent, RoomUserMessage
+        from services.room_services import RoomServices
+
+        rc = object.__new__(RoomServices)
+        rc.database_service = MagicMock()
+        rc.agent_service = MagicMock()
+        rc.openai_service = MagicMock()
+        rc.a2a_service = MagicMock()
+        rc.room_memory_service = MagicMock()
+        rc.sse_manager = MagicMock()
+        rc.task_service = MagicMock()
+
+        oversized = RoomUserMessage(
+            room_id="room-001",
+            message_id="msg-oversized",
+            message_content=MessageContent(message_text="x" * (MAX_MESSAGE_LENGTH + 1)),
+        )
+        request = MagicMock()
+        request.room_id = "room-001"
+        request.message = oversized
+
+        result = await rc.create_and_parse_user_message(request)
+        assert result.success is False
+        assert result.status_code == 400
+        assert "maximum length" in result.error.lower()

@@ -156,21 +156,6 @@ class A2AService:
             raise A2AServiceError() from e
 
     @asynccontextmanager
-    async def get_a2a_client(self, agent_url: str):
-        if not agent_url:
-            raise IllgalParameterError()
-
-        httpx_client = httpx.AsyncClient(timeout=self.AGENT_CARD_FETCH_TIMEOUT)
-        try:
-            card = await self._fetch_agent_card_with_fallback(httpx_client, agent_url)
-            yield A2AClient(httpx_client, agent_card=card)
-        except Exception as e:
-            logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
-            raise A2AServiceError() from e
-        finally:
-            await httpx_client.aclose()
-
-    @asynccontextmanager
     async def create_a2a_client(
         self, agent_card: AgentCard, timeout: float = DEFAULT_REQUEST_TIMEOUT
     ):
@@ -1002,10 +987,9 @@ class A2AService:
             ),
         )
 
-        # Use a scoped httpx client with `async with` to ensure cleanup.
-        # Unlike get_a2a_client() which leaks connections, this properly
-        # closes the transport. Agent card resolution is skipped since we
-        # already have the agent_url from the stored RoomAgentMessage.
+        # Use a scoped httpx client with async with to ensure cleanup.
+        # Agent card resolution is skipped since we already have the
+        # agent_url.
         async with httpx.AsyncClient(timeout=120.0) as client:
             a2a_client = A2AClient(
                 httpx_client=client,

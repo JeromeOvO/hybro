@@ -679,6 +679,44 @@ class DatabaseService:
             )
             return False
 
+    async def clear_room_processing_status_if_matches(
+        self, room_id: str, message_id: str
+    ) -> bool:
+        """CAS clear: only clear processing_message_id if it matches the given message_id."""
+        try:
+            return await self.mongo.clear_room_processing_status_if_matches(
+                room_id, message_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to CAS-clear processing status for room {room_id}: {str(e)}"
+            )
+            return False
+
+    async def claim_user_message_for_processing(self, message_id: str) -> bool:
+        """Atomically claim a user message for processing."""
+        try:
+            return await self.mongo.claim_user_message_for_processing(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to claim user message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def claim_or_reclaim_user_message(
+        self, message_id: str, stale_threshold: datetime
+    ) -> bool:
+        """Claim a never-claimed message OR reclaim a stale one."""
+        try:
+            return await self.mongo.claim_or_reclaim_user_message(
+                message_id, stale_threshold
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to claim/reclaim user message {message_id}: {str(e)}"
+            )
+            return False
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
