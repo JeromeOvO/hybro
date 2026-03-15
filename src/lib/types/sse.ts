@@ -39,6 +39,8 @@ export interface SSEMessage {
     total_steps?: number // Total number of steps in the workflow
     // Task content (the description of what the agent is working on)
     task_content?: string
+    // Correlation field (for processing_status events — ties SSE to HTTP request)
+    client_request_id?: string
     // Token streaming field (for agent_token events)
     token?: string
     // HITL fields (for hitl_input_requested)

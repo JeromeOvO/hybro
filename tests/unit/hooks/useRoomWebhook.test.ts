@@ -50,6 +50,11 @@ vi.mock('@/lib/api/sse', () => ({
   SSEConnection: vi.fn(),
 }))
 
+vi.mock('@/lib/api/hitl', () => ({
+  respondToHitl: vi.fn().mockResolvedValue({ status: 'ok', request_id: 'req-1' }),
+  fetchPendingHitlRequests: vi.fn().mockResolvedValue({ requests: [] }),
+}))
+
 vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))

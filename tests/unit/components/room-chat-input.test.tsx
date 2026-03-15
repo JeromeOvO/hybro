@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { RoomChatInput } from '@/components/room-chat-input'
+import { RoomChatInput, MAX_MESSAGE_LENGTH } from '@/components/room-chat-input'
 
 vi.mock('@/components/group-selector', () => ({
   GroupSelector: () => <div data-testid="group-selector" />,
@@ -141,6 +141,54 @@ describe('RoomChatInput', () => {
     it('should not show expand button when content is not overflowing', () => {
       const { container } = renderInput()
       expect(container.querySelector('[title="Expand editor"]')).toBeNull()
+    })
+  })
+
+  describe('message size validation', () => {
+    function setEditorText(container: HTMLElement, text: string) {
+      const editor = container.querySelector('[contenteditable]') as HTMLElement
+      editor.textContent = text
+      fireEvent.input(editor)
+      return editor
+    }
+
+    it('should not show counter for short messages', () => {
+      const { container } = renderInput()
+      setEditorText(container, 'Hello world')
+      expect(screen.queryByTestId('char-counter')).toBeNull()
+    })
+
+    it('should show counter when approaching limit', () => {
+      const { container } = renderInput()
+      const text = 'a'.repeat(MAX_MESSAGE_LENGTH - 400)
+      setEditorText(container, text)
+      const counter = screen.getByTestId('char-counter')
+      expect(counter).toBeTruthy()
+      expect(counter.textContent).toContain(MAX_MESSAGE_LENGTH.toLocaleString())
+    })
+
+    it('should disable send button when over limit', () => {
+      const { container } = renderInput()
+      const text = 'a'.repeat(MAX_MESSAGE_LENGTH + 1)
+      setEditorText(container, text)
+      const sendBtn = screen.getByTitle('Send message (Enter)')
+      expect(sendBtn.hasAttribute('disabled')).toBe(true)
+    })
+
+    it('should apply red styling when over limit', () => {
+      const { container } = renderInput()
+      const text = 'a'.repeat(MAX_MESSAGE_LENGTH + 1)
+      setEditorText(container, text)
+      const counter = screen.getByTestId('char-counter')
+      expect(counter.className).toContain('text-red-600')
+    })
+
+    it('should apply amber styling when near but under warning threshold', () => {
+      const { container } = renderInput()
+      const text = 'a'.repeat(MAX_MESSAGE_LENGTH - 400)
+      setEditorText(container, text)
+      const counter = screen.getByTestId('char-counter')
+      expect(counter.className).toContain('text-amber-600')
     })
   })
 

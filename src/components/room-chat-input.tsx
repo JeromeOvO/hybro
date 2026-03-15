@@ -20,6 +20,11 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
 import { AttachmentPreview } from './attachment-preview'
 
+const _parsed = parseInt(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || '10000', 10)
+export const MAX_MESSAGE_LENGTH = Number.isNaN(_parsed) || _parsed < 1 ? 10000 : _parsed
+const COUNTER_VISIBLE_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.95)
+const WARNING_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.99)
+
 interface Agent {
   id: string
   name: string
@@ -136,6 +141,7 @@ export function RoomChatInput({
   const [isEditorExpanded, setIsEditorExpanded] = useState(false)
   const [isOverflowing, setIsOverflowing] = useState(false)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [plainTextLength, setPlainTextLength] = useState(0)
   const attachmentsRef = useRef<PendingAttachment[]>([])
   const editorRef = useRef<HTMLDivElement>(null)
   const suggestionsRef = useRef<HTMLDivElement>(null)
@@ -284,6 +290,8 @@ export function RoomChatInput({
   useEffect(() => {
     if (externalValue && externalValue !== message) {
       setMessage(externalValue)
+      const displayLength = externalValue.replace(/<@[^|]+\|([^>]+)>/g, '@$1').length
+      setPlainTextLength(displayLength)
       if (editorRef.current) {
         editorRef.current.innerHTML = convertToDisplayHTML(externalValue)
         // Set cursor at the end
@@ -455,6 +463,7 @@ export function RoomChatInput({
 
     // Get text for mention detection
     const text = getEditorText()
+    setPlainTextLength(text.length)
 
     // Check for @ mentions
     const beforeCursor = text.slice(0, cursorPos)
@@ -493,6 +502,23 @@ export function RoomChatInput({
     const text = e.clipboardData.getData('text/plain')
     if (!editorRef.current) return
 
+    // Enforce message size limit on paste
+    const currentText = getEditorText()
+    const selectionLength = window.getSelection()?.toString().length ?? 0
+    const availableChars = MAX_MESSAGE_LENGTH - (currentText.length - selectionLength)
+
+    if (availableChars <= 0) {
+      toast.warning(`Message is at the ${MAX_MESSAGE_LENGTH.toLocaleString()} character limit`)
+      return
+    }
+
+    let textToInsert = text
+    if (text.length > availableChars) {
+      textToInsert = text.slice(0, availableChars)
+      const truncated = text.length - availableChars
+      toast.warning(`Pasted text truncated: ${truncated.toLocaleString()} characters removed to stay within the ${MAX_MESSAGE_LENGTH.toLocaleString()} character limit`)
+    }
+
     const selection = window.getSelection()
     if (!selection || selection.rangeCount === 0) return
 
@@ -502,7 +528,7 @@ export function RoomChatInput({
     const range = selection.getRangeAt(0)
 
     // Split by newlines and insert text nodes with <br> elements between them
-    const lines = text.split('\n')
+    const lines = textToInsert.split('\n')
     let lastNode: Node | null = null
 
     lines.forEach((line, index) => {
@@ -633,6 +659,8 @@ export function RoomChatInput({
     const newStorage = storageBeforeMention + `<@${agent.id}|${agent.name}> ` + storageAfterCursor
 
     setMessage(newStorage)
+    const displayLength = newStorage.replace(/<@[^|]+\|([^>]+)>/g, '@$1').length
+    setPlainTextLength(displayLength)
 
     // Update editor HTML
     editorRef.current.innerHTML = convertToDisplayHTML(newStorage)
@@ -726,6 +754,11 @@ export function RoomChatInput({
       return
     }
 
+    if (trimmedMessage.length > MAX_MESSAGE_LENGTH || getEditorText().length > MAX_MESSAGE_LENGTH) {
+      toast.warning(`Message exceeds the ${MAX_MESSAGE_LENGTH.toLocaleString()} character limit`)
+      return
+    }
+
     if (trimmedMessage || attachments.length > 0) {
       const targetGroup = mentionedAgents.length > 0 ? undefined : (selectedGroup ?? undefined)
       const submittedAttachments = attachments.length > 0 ? attachments : undefined
@@ -733,6 +766,7 @@ export function RoomChatInput({
       console.log('🚀 Submitting message (storage format):', trimmedMessage, 'targetGroup:', targetGroup, 'attachments:', attachments.length)
 
       setMessage('')
+      setPlainTextLength(0)
       setAttachments([])
       attachmentsRef.current = []
 
@@ -751,8 +785,13 @@ export function RoomChatInput({
     }
   }
 
-  // Determine if message is ready to send
-  const isReadyToSend = (message.trim() || attachments.length > 0) && !disableSend && !disabled
+  // Determine if message is ready to send — gate on trimmed storage format length
+  // (onSubmit receives message.trim(), so measure the same string everywhere)
+  const trimmedStorageLength = message.trim().length
+  const isDisplayOverLimit = plainTextLength > MAX_MESSAGE_LENGTH
+  const isStorageOverLimit = trimmedStorageLength > MAX_MESSAGE_LENGTH
+  const isOverLimit = isDisplayOverLimit || isStorageOverLimit
+  const isReadyToSend = (message.trim() || attachments.length > 0) && !disableSend && !disabled && !isOverLimit
 
   return (
     <div className="relative">
@@ -1023,6 +1062,28 @@ export function RoomChatInput({
 
             {/* Send / Stop button (right) */}
             <div className="flex items-center gap-1">
+              {isStorageOverLimit && !isDisplayOverLimit && plainTextLength < COUNTER_VISIBLE_THRESHOLD ? (
+                <span
+                  className="text-xs font-medium text-red-600 dark:text-red-400 transition-colors duration-200 mr-1"
+                  data-testid="char-counter"
+                >
+                  Message too large (mentions)
+                </span>
+              ) : plainTextLength >= COUNTER_VISIBLE_THRESHOLD ? (
+                <span
+                  className={cn(
+                    "text-xs font-medium tabular-nums transition-colors duration-200 mr-1",
+                    isOverLimit
+                      ? "text-red-600 dark:text-red-400"
+                      : plainTextLength >= WARNING_THRESHOLD
+                        ? "text-red-500/80 dark:text-red-400/80"
+                        : "text-amber-600 dark:text-amber-400"
+                  )}
+                  data-testid="char-counter"
+                >
+                  {plainTextLength.toLocaleString()}/{MAX_MESSAGE_LENGTH.toLocaleString()}
+                </span>
+              ) : null}
             {sending ? (
               <div className="relative">
                 <Button
