@@ -64,16 +64,11 @@ export function applyUpsert(
 
   // For displayType resolution:
   // - If incoming explicitly provides taskStatus (including null to clear), use it.
-  // - If incoming sets isEphemeral=true without taskStatus, this is a streaming
-  //   transition (agent_token) — use undefined so resolveDisplayType sees
-  //   ephemeral-without-task → agent-bubble.
   // - Otherwise, use the merged (existing) taskStatus to preserve the current
   //   display card (e.g. HITL answered entities keep their task-status card).
   let displayTaskStatus = merged.taskStatus
   if (incoming.taskStatus !== undefined) {
     displayTaskStatus = incoming.taskStatus ?? undefined
-  } else if (incoming.isEphemeral === true) {
-    displayTaskStatus = undefined
   }
 
   const displayType = resolveDisplayType({

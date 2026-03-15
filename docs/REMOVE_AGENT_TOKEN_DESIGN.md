@@ -1,6 +1,6 @@
 # Remove `agent_token` — Unify Streaming on A2A Protocol
 
-> **Status: Proposed** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
+> **Status: Phase 2 Implemented** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
 
 **Target A2A version**: v0.3 (current Hybro SDK: `@a2a-js/sdk ^0.3.10`)
 **v1.0 readiness**: Design is forward-compatible with A2A v1.0; v1.0-only features are flagged as future enhancements.
@@ -198,14 +198,15 @@ SSE events arrive
 
 #### Backend — Files to MODIFY
 
-| File | Changes |
-|------|---------|
-| `modules/transports/direct.py` | `_handle_stream_message_chunk`: emit `send_artifact_update` instead of `send_agent_token` |
-| `modules/transports/relay.py` | Remove `"agent_token" → "token"` normalization; convert inbound `agent_token` hub events to `artifact_update` AgentEvents |
-| `modules/agent_response_handler.py` | Remove `_on_token` method and `case "token"` branch; remove fallback `send_agent_token` in `_on_artifact`; **remove `send_agent_token` call in `_on_status` — replace with `send_artifact_update` or `send_task_update` depending on semantics** |
-| `services/sse_services.py` | Remove `send_agent_token` method; remove `agent_token` special-casing in `broadcast_to_room` |
-| `modules/agent_event.py` | Remove `"token"` from `kind` Literal union |
-| `models/hub.py` | Remove `"agent_token"` from `HubPublishEventType` |
+| File | Changes | Phase 1 |
+|------|---------|---------|
+| `config/settings.py` | Add `stream_via_artifact: bool = True` feature flag | ✅ Done |
+| `modules/transports/direct.py` | `_handle_stream_message_chunk`: emit `send_artifact_update` instead of `send_agent_token` | ✅ Done (flag-gated) |
+| `modules/transports/relay.py` | Remove `"agent_token" → "token"` normalization; convert inbound `agent_token` hub events to `artifact_update` AgentEvents | ✅ Done (flag-gated) |
+| `modules/agent_response_handler.py` | Remove `_on_token` method and `case "token"` branch; remove fallback `send_agent_token` in `_on_artifact`; **remove `send_agent_token` call in `_on_status` — replace with `send_artifact_update` or `send_task_update` depending on semantics** | ✅ Partial (flag-gated; dead code removal deferred to Phase 4) |
+| `services/sse_services.py` | Remove `send_agent_token` method; remove `agent_token` special-casing in `broadcast_to_room` | Phase 4 |
+| `modules/agent_event.py` | Remove `"token"` from `kind` Literal union | Phase 4 |
+| `models/hub.py` | Remove `"agent_token"` from `HubPublishEventType` | Phase 4 |
 
 #### Hybro-Hub — Files to MODIFY
 
@@ -461,32 +462,56 @@ EntityAgentBubble
 
 ## 6. Migration Plan
 
-### Phase 1: Backend — Emit artifact_update instead of agent_token
+### Phase 1: Backend — Emit artifact_update instead of agent_token ✅
+
+**Status**: Implemented. All changes gated behind `STREAM_VIA_ARTIFACT=true` (default: on).
 
 **Scope**: `multi-agents-backend` only. Frontend continues to handle both event types.
 
-1. In `DirectTransport._handle_stream_message_chunk`, replace `send_agent_token` with `send_artifact_update` wrapping text as an artifact with `append=true`.
-2. In `DirectTransport._finalize_streaming`, emit a final `artifact_update` with `last_chunk=true` and empty parts.
-3. In `RelayTransport`, normalize inbound `"agent_token"` hub events to `AgentEvent(kind="artifact_update")` with text wrapped as artifact.
-4. In `AgentResponseHandler._on_artifact`, remove the `elif e.text: send_agent_token(...)` fallback.
-5. In `AgentResponseHandler._on_status`, replace `send_agent_token` with `send_task_update` (status text is progress commentary, not primary content — see §2.4).
-6. Add a feature flag (`STREAM_VIA_ARTIFACT=true`) so the old path can be restored if issues arise.
+**What was done:**
 
-**Validation**: Existing frontend handles `artifact_update` already (Phase 2.5 fixes). Cloud agents should now behave like Ollama — content appears as artifacts.
+1. Added `stream_via_artifact: bool = True` feature flag in `config/settings.py` (env var: `STREAM_VIA_ARTIFACT`).
+2. In `DirectTransport._handle_stream_message_chunk`, replaced `send_agent_token` with flag-gated `send_artifact_update` wrapping text as `{artifact_id: "{msg_id}-stream", parts: [{kind: "text", text}]}` with `append=True, last_chunk=False`. Added content truthiness check to skip empty events.
+3. In `DirectTransport._finalize_streaming`, added `send_artifact_update` with `last_chunk=True` and empty parts at the start of finalization.
+4. In `RelayTransport._normalize`, hub `agent_token` events are converted to `AgentEvent(kind="artifact_update")` with text wrapped as artifact parts, `append=True`, `skip_persist=True`.
+5. In `AgentResponseHandler._on_artifact`, text-only fallback (no artifact object) wraps text as artifact and calls `send_artifact_update` instead of `send_agent_token`.
+6. In `AgentResponseHandler._on_status`, replaced `send_agent_token` with `send_task_update(status="working", status_message=text)` — status text is progress commentary per A2A spec §2.4, not primary content.
+
+All changes retain the legacy `agent_token` path behind the flag for rollback (`STREAM_VIA_ARTIFACT=false`).
+
+**Tests added/updated:**
+- `tests/test_direct_transport.py`: 5 new tests (artifact_update emission, flag-off fallback, empty content skip, last_chunk finalization, no-last-chunk when flag off).
+- `tests/test_agent_response_handler.py`: 3 new tests (artifact text fallback, status task_update, status fallback) + 2 updated (set flag=False for legacy assertions).
+- `tests/test_api_relay.py`: 3 new tests replacing 1 (flag-off fallback, flag-on normalization, empty-text edge case).
+
+**Known visual considerations (deferred to Phase 2):**
+- Streaming text renders via `TextPartView` (`<p>` tag) instead of `MarkdownContent` (Streamdown). This means no markdown formatting during streaming. The design doc §4.5 addresses this for Phase 2.
+- `ArtifactRenderer` wraps streaming text in a bordered card with a spinner icon. Phase 2 should suppress this chrome for `*-stream` text-only artifacts.
+- Processing placeholder is already dismissed by `task_submitted` (sent before streaming starts in the direct path). Relay path should be monitored.
+
+**Validation**: Existing frontend handles `artifact_update` already. Cloud agents now behave like Ollama — content appears as artifacts.
 
 ### Phase 2: Frontend — Remove agent_token infrastructure
 
+**Status**: Implemented.
+
 **Scope**: `hybro-frontend` only. Backend no longer emits `agent_token`.
 
-1. Remove `case 'agent_token'` from `useRoomWebhook.ts`.
-2. Remove `streamingBuffer` imports and all usage (room-switch, disconnect, task_update guards).
-3. Remove `TypewriterManager` imports and all usage.
-4. Simplify `EntityAgentBubble`: remove streaming state machine, derive display from entity props only.
-5. Add placeholder dismissal to `case 'artifact_update'`.
-6. Upgrade `TextPartView` to use `MarkdownContent` with `isStreaming` prop.
-7. Remove `isStreaming` prop from `MarkdownContent` (or repurpose it as artifact-local).
-8. Remove `'agent_token'` from `SSEMessage.type` union and `token` field from SSE types.
-9. Audit `isEphemeral` in `upsert.ts` and `resolve-display-type.ts`: remove ephemeral entity creation (previously done by `agent_token` handler) and the `isEphemeral → agent-bubble` fast-path if no other code path creates ephemeral entities.
+**What was done:**
+
+1. Removed `case 'agent_token'` from `sse-handlers/index.ts`.
+2. Removed `streamingBuffer` and `TypewriterManager` imports and usage from SSE handlers, `useRoomSSEConnection.ts`, and `useRoomReset.ts`.
+3. Simplified `EntityAgentBubble`: removed streaming state machine, derived display from entity props only. Removed dead `isStreaming` prop from `AgentMessageBubbleInner`.
+4. Added placeholder dismissal to `case 'artifact_update'`.
+5. Upgraded `TextPartView` to use `MarkdownContent` with `isStreaming` prop for streaming artifacts.
+6. `ArtifactRenderer` suppresses card chrome for `-stream` text-only artifacts; threads `isStreaming` to `PartRenderer`.
+7. Removed `'agent_token'` from `SSEMessage.type` union and `token` field from SSE types.
+8. Removed `agent_token` ephemeral branch from `upsert.ts`. Audited `isEphemeral` — still needed for processing placeholders and cancel confirmations.
+9. Added `agentId`/`agentSource` to `artifact_update` handler to prevent missing avatar when artifact arrives before `task_submitted`.
+10. Added streaming guard to artifact deduplication filter to prevent visual flash when `entity.content` arrives.
+11. Updated tests: removed `agent_token` test cases, `streamingBuffer`/`TypewriterManager` mocks, and `createAgentTokenSSE` helper.
+
+**Dead code still present (deferred to Phase 3):** `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, `streaming-cursor.tsx`, and associated test files. No production code imports them.
 
 ### Phase 3: Delete dead code
 
@@ -580,16 +605,21 @@ Messages already persisted in the database are unaffected. Historical messages t
 
 ### Unit tests to ADD
 
-| Test | Description |
-|------|-------------|
-| `DirectTransport: message chunk emits artifact_update` | Verify `_handle_stream_message_chunk` calls `send_artifact_update` with correct artifact structure |
-| `DirectTransport: finalize emits last_chunk=true` | Verify final artifact_update has `last_chunk=true` |
-| `RelayTransport: agent_token normalized to artifact_update` | Verify hub `agent_token` events are wrapped as artifact AgentEvents |
-| `TextPartView: renders markdown with streaming caret` | Verify Streamdown receives `isStreaming` prop from artifact |
-| `EntityAgentBubble: shows indicator until artifact arrives` | Verify `showIndicator` hides when `entity.artifacts.length > 0` |
-| `artifact_update handler: dismisses processing placeholder` | Verify placeholder removed on first artifact event |
-| `AgentResponseHandler._on_status: no longer emits agent_token` | Verify status_update with text emits `task_update` or `artifact_update`, not `agent_token` |
-| `Hub dispatcher: message kind emits artifact_update` | (Phase 5) Verify A2A `message` events are translated to `DispatchEvent(type="artifact_update")` |
+| Test | Description | Status |
+|------|-------------|--------|
+| `DirectTransport: message chunk emits artifact_update` | Verify `_handle_stream_message_chunk` calls `send_artifact_update` with correct artifact structure | ✅ `test_direct_transport.py` |
+| `DirectTransport: finalize emits last_chunk=true` | Verify final artifact_update has `last_chunk=true` | ✅ `test_direct_transport.py` |
+| `DirectTransport: flag-off falls back to agent_token` | Verify legacy path when `stream_via_artifact=False` | ✅ `test_direct_transport.py` |
+| `DirectTransport: empty content skips SSE` | Verify no event emitted for empty content | ✅ `test_direct_transport.py` |
+| `RelayTransport: agent_token normalized to artifact_update` | Verify hub `agent_token` events are wrapped as artifact AgentEvents | ✅ `test_api_relay.py` |
+| `RelayTransport: empty token produces no artifacts` | Verify `artifacts=None` when token text is empty | ✅ `test_api_relay.py` |
+| `AgentResponseHandler._on_artifact: text-only uses artifact_update` | Verify text fallback wraps as artifact when flag on | ✅ `test_agent_response_handler.py` |
+| `AgentResponseHandler._on_status: emits task_update` | Verify status_update with text emits `send_task_update`, not `agent_token` | ✅ `test_agent_response_handler.py` |
+| `AgentResponseHandler._on_status: fallback to token` | Verify legacy `send_agent_token` path when flag off | ✅ `test_agent_response_handler.py` |
+| `TextPartView: renders markdown with streaming caret` | Verify Streamdown receives `isStreaming` prop from artifact | Phase 2 |
+| `EntityAgentBubble: shows indicator until artifact arrives` | Verify `showIndicator` hides when `entity.artifacts.length > 0` | Phase 2 |
+| `artifact_update handler: dismisses processing placeholder` | Verify placeholder removed on first artifact event | Phase 2 |
+| `Hub dispatcher: message kind emits artifact_update` | (Phase 5) Verify A2A `message` events are translated to `DispatchEvent(type="artifact_update")` | Phase 5 |
 
 ### Unit tests to REMOVE
 
@@ -665,14 +695,14 @@ Messages already persisted in the database are unaffected. Historical messages t
 
 ## 13. Timeline Estimate
 
-| Phase | Effort | Dependencies |
-|-------|--------|-------------|
-| Phase 1: Backend emission change | 1-2 days | None |
-| Phase 2: Frontend cleanup | 2-3 days | Phase 1 deployed |
-| Phase 3: Delete dead code | 0.5 day | Phase 2 merged |
-| Phase 4: Backend cleanup | 0.5 day | Phase 1 stable for ≥1 week |
-| Phase 5: Hub daemon migration | 0.5-1 day | Phase 1 deployed (backend handles both) |
-| **Total** | **5-7 days** | |
+| Phase | Effort | Dependencies | Status |
+|-------|--------|-------------|--------|
+| Phase 1: Backend emission change | 1-2 days | None | ✅ Complete |
+| Phase 2: Frontend cleanup | 2-3 days | Phase 1 deployed | Not started |
+| Phase 3: Delete dead code | 0.5 day | Phase 2 merged | Not started |
+| Phase 4: Backend cleanup | 0.5 day | Phase 1 stable for ≥1 week | Not started |
+| Phase 5: Hub daemon migration | 0.5-1 day | Phase 1 deployed (backend handles both) | Not started |
+| **Total** | **5-7 days** | | |
 
 ---
 

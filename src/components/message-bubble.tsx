@@ -7,7 +7,6 @@ import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { formatTimestamp, elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
-import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
@@ -154,7 +153,6 @@ interface EntityBubbleProps {
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
-  isStreaming?: boolean
   showIndicator?: boolean
   waitingInfo?: {
     taskStatus: string
@@ -240,7 +238,8 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
 
 /**
  * Agent message bubble - internal implementation using BubbleMessage shape.
- * Renders static or typewriter-reveal content via Streamdown.
+ * Renders static content via Streamdown; streaming text is handled by
+ * artifact TextPartViews below the main content area.
  * When showIndicator=true the content area fades out and bouncing dots fade
  * in, all within the same mounted component so there is no layout flash.
  */
@@ -254,7 +253,6 @@ function AgentMessageBubbleInner({
   isUserExpanded = false,
   onUserToggle,
   onQuote,
-  isStreaming = false,
   showIndicator = false,
   waitingInfo,
 }: EntityBubbleProps) {
@@ -530,7 +528,6 @@ function AgentMessageBubbleInner({
           >
             <MarkdownContent
               content={displayContent}
-              isStreaming={isStreaming}
             />
           </div>
         </div>
@@ -611,10 +608,9 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
- * - Shows typing indicator until the first streaming token arrives.
- * - During streaming: shows content live via Streamdown in streaming mode,
- *   with line-buffering from the streaming buffer ensuring stable chunks.
- * - After streaming ends: typewriter-reveals the final content via Streamdown.
+ * - Shows typing indicator until content or artifact arrives.
+ * - Streaming text is rendered via artifacts (artifact_update SSE path).
+ * - Final content appears via entity.content (agent_response / terminal task_update).
  *
  * The typing indicator and content area live inside a single always-mounted
  * AgentMessageBubbleInner so there is never a React mount/unmount between
@@ -641,82 +637,10 @@ export function EntityAgentBubble({
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }) {
-  const { isStreaming, streamingText } = useStreamingContent(entity.id)
-
-  // Typewriter reveal state. After streaming ends we animate the final content
-  // in by progressively slicing entity.content and feeding it to Streamdown.
-  const [revealedChars, setRevealedChars] = useState(0)
-  const [isRevealing, setIsRevealing] = useState(false)
-  const prevIsStreaming = useRef(isStreaming)
-
-  const streamingPreviewText = streamingText
-
-  // Detect the exact render where streaming just ended so we can keep showing
-  // the last preview text until the reveal state becomes active on the next render.
-  const isStartingReveal =
-    prevIsStreaming.current &&
-    !isStreaming &&
-    entity.content.length > 0 &&
-    !isRevealing
-
-  const lastStreamingPreviewRef = useRef('')
-  if (isStreaming && streamingPreviewText) {
-    lastStreamingPreviewRef.current = streamingPreviewText
-  }
-
-  // Detect the streaming→done transition synchronously during render.
-  // Calling setState here schedules the next render with isRevealing=true,
-  // but the CURRENT render still executes with isRevealing=false. The
-  // displayContent ternary below uses lastLiveTextRef to cover that gap.
-  if (prevIsStreaming.current !== isStreaming) {
-    prevIsStreaming.current = isStreaming
-    if (!isStreaming && entity.content.length > 0 && !isRevealing) {
-      const initialRevealChars = lastStreamingPreviewRef.current
-        ? Math.min(entity.content.length, Math.max(10, lastStreamingPreviewRef.current.length))
-        : Math.min(10, entity.content.length)
-      setRevealedChars(initialRevealChars)
-      setIsRevealing(true)
-    }
-  }
-
-  // Advance the reveal at ~60fps (10 chars/frame ≈ 600 chars/sec).
-  useEffect(() => {
-    if (!isRevealing) return
-    const full = entity.content
-    let animId: number
-    let active = true
-
-    const step = () => {
-      if (!active) return
-      setRevealedChars(prev => {
-        const next = prev + 10
-        if (next >= full.length) {
-          setIsRevealing(false)
-          return full.length
-        }
-        return next
-      })
-      animId = requestAnimationFrame(step)
-    }
-
-    animId = requestAnimationFrame(step)
-    return () => {
-      active = false
-      cancelAnimationFrame(animId)
-    }
-  }, [isRevealing, entity.content])
-
-  // Show the typing indicator while no displayable content exists:
-  // - Before streaming starts (~16ms gap before the first rAF flush).
-  // - Once streaming is active but no complete line has arrived yet.
-  // - But NOT when artifacts are present (Ollama streams content as artifacts).
   const hasArtifactContent = (entity.artifacts?.length ?? 0) > 0
-  const showIndicator =
-    ((!isStreaming && !isRevealing && !entity.content) ||
-    (isStreaming && !streamingPreviewText.trim())) &&
-    !hasArtifactContent
+  const showIndicator = !entity.content && !hasArtifactContent
 
-  // WAITING phase: entity has a pending task status but no content/streaming yet.
+  // WAITING phase: entity has a pending task status but no content yet.
   // Pass task metadata to the inner component for a richer waiting indicator.
   const waitingInfo = showIndicator && entity.taskStatus && PENDING_STATES.includes(entity.taskStatus)
     ? {
@@ -727,21 +651,7 @@ export function EntityAgentBubble({
       }
     : undefined
 
-  // displayContent priority:
-  // 1. '' — typing indicator phase
-  // 2. entity.content slice — typewriter reveal
-  // 3. streamingPreviewText — plain-text live preview during streaming
-  // 4. lastStreamingPreviewRef — transition frame: streaming ended, reveal not yet active
-  // 5. entity.content — static / fully revealed
-  const displayContent = showIndicator
-    ? ''
-    : isRevealing
-      ? entity.content.slice(0, revealedChars)
-      : isStreaming
-        ? streamingPreviewText
-        : isStartingReveal
-          ? lastStreamingPreviewRef.current
-          : entity.content
+  const displayContent = entity.content
 
   const bubble: BubbleMessage = {
     id: entity.id,
@@ -764,13 +674,13 @@ export function EntityAgentBubble({
         isUserExpanded={isUserExpanded}
         onUserToggle={onUserToggle}
         onQuote={onQuote}
-        isStreaming={isStreaming || isRevealing}
         showIndicator={showIndicator}
         waitingInfo={waitingInfo}
       />
       {entity.artifacts && entity.artifacts.length > 0 && (() => {
         const messageText = (entity.content || '').trim()
         const nonDuplicate = entity.artifacts.filter((a) => {
+          if (a.isStreaming) return true
           const isTextOnly = a.parts.length > 0 && a.parts.every((p) => p.kind === 'text')
           if (!isTextOnly) return true
           const artifactText = a.parts.map((p) => p.text || '').join('').trim()

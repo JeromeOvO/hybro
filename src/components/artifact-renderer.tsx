@@ -21,6 +21,19 @@ function isDisplayableArtifactName(name: string | undefined): name is string {
 }
 
 export function ArtifactRenderer({ artifact }: ArtifactRendererProps) {
+  const isStreamTextArtifact = artifact.artifactId.endsWith('-stream') &&
+    artifact.parts.length > 0 && artifact.parts.every(p => p.kind === 'text')
+
+  if (isStreamTextArtifact) {
+    return (
+      <div className="space-y-1">
+        {artifact.parts.map((part, i) => (
+          <PartRenderer key={`${artifact.artifactId}-part-${i}`} part={part} isStreaming={artifact.isStreaming} />
+        ))}
+      </div>
+    )
+  }
+
   const displayName = isDisplayableArtifactName(artifact.name) ? artifact.name : undefined
   const showHeader = displayName || artifact.isStreaming
 
@@ -37,7 +50,7 @@ export function ArtifactRenderer({ artifact }: ArtifactRendererProps) {
       )}
       <div className="space-y-1">
         {artifact.parts.map((part, i) => (
-          <PartRenderer key={`${artifact.artifactId}-part-${i}`} part={part} />
+          <PartRenderer key={`${artifact.artifactId}-part-${i}`} part={part} isStreaming={artifact.isStreaming} />
         ))}
       </div>
     </div>

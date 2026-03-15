@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
 import type { ArtifactPart } from '@/stores/message-store/types'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
+import { MarkdownContent } from './markdown-content'
 
 const INTERNAL_NAME_RE = /^(inline|notify|ext)-\d+\.\w+$/
 const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
@@ -27,8 +28,8 @@ function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ cla
   )
 }
 
-function TextPartView({ text }: { text: string }) {
-  return <p className="whitespace-pre-wrap text-sm">{text}</p>
+function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
+  return <MarkdownContent content={text} isStreaming={isStreaming} />
 }
 
 function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
@@ -138,10 +139,10 @@ function DataPartView({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-export function PartRenderer({ part }: { part: ArtifactPart }) {
+export function PartRenderer({ part, isStreaming }: { part: ArtifactPart; isStreaming?: boolean }) {
   switch (part.kind) {
     case 'text':
-      return part.text ? <TextPartView text={part.text} /> : null
+      return part.text ? <TextPartView text={part.text} isStreaming={isStreaming} /> : null
     case 'file':
       return part.file ? <FilePartView file={part.file} /> : null
     case 'data':

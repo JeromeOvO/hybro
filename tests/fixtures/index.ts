@@ -164,13 +164,6 @@ export function createTaskUpdateSSE(
   })
 }
 
-export function createAgentTokenSSE(messageId: string, token: string): SSEMessage {
-  return createSSEMessage('agent_token', {
-    message_id: messageId,
-    token,
-  })
-}
-
 export function createProcessingStatusSSE(
   status: 'processing' | 'completed' | 'canceled' | 'failed'
 ): SSEMessage {

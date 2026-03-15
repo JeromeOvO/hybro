@@ -20,7 +20,7 @@ export function resolveDisplayType(msg: {
 }): DisplayType {
   if (msg.messageType === 'user') return 'user-bubble'
 
-  // Ephemeral agent messages are streaming/typewriter placeholders
+  // Ephemeral agent messages are processing placeholders
   if (msg.isEphemeral) return 'agent-bubble'
 
   // Agent message with no task → regular agent bubble
