@@ -1,0 +1,268 @@
+"""
+Tests for SDR Wave 1 fixes: idempotency guard (2.5), semaphore (2.13), CORS (2.12).
+"""
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from models.request import OrchestrationRequest
+from models.response import OrchestrationResponse
+
+
+# =============================================================================
+# Fix 1 (SDR 2.5): Idempotency claim tests
+# =============================================================================
+
+
+class TestClaimUserMessageForProcessing:
+    """Tests for the atomic claim method in mongodb.py."""
+
+    @pytest.mark.asyncio
+    async def test_claim_succeeds_for_never_claimed(self):
+        """claim_user_message_for_processing returns True for unclaimed messages."""
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
+        db._room_user_messages_collection = mock_collection
+        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+
+        result = await db.claim_user_message_for_processing("m1")
+        assert result is True
+
+        call_args = mock_collection.find_one_and_update.call_args
+        assert call_args[0][0] == {"message_id": "m1", "processing_claimed_at": None}
+
+    @pytest.mark.asyncio
+    async def test_claim_fails_for_already_claimed(self):
+        """claim_user_message_for_processing returns False if already claimed."""
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_collection.find_one_and_update = AsyncMock(return_value=None)
+        db._room_user_messages_collection = mock_collection
+        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+
+        result = await db.claim_user_message_for_processing("m1")
+        assert result is False
+
+
+class TestClaimOrReclaimUserMessage:
+    """Tests for recovery claim method in mongodb.py."""
+
+    @pytest.mark.asyncio
+    async def test_reclaim_succeeds_for_stale(self):
+        """claim_or_reclaim_user_message returns True for stale-claimed messages."""
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_collection.find_one_and_update = AsyncMock(return_value={"message_id": "m1"})
+        db._room_user_messages_collection = mock_collection
+        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+
+        threshold = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        result = await db.claim_or_reclaim_user_message("m1", threshold)
+        assert result is True
+
+        call_args = mock_collection.find_one_and_update.call_args
+        query = call_args[0][0]
+        assert "$or" in query
+        assert {"processing_claimed_at": None} in query["$or"]
+        assert {"processing_claimed_at": {"$lt": threshold}} in query["$or"]
+
+    @pytest.mark.asyncio
+    async def test_reclaim_fails_for_recently_claimed(self):
+        """claim_or_reclaim_user_message returns False if recently claimed."""
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_collection.find_one_and_update = AsyncMock(return_value=None)
+        db._room_user_messages_collection = mock_collection
+        type(db).room_user_messages_collection = property(lambda self: self._room_user_messages_collection)
+
+        threshold = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        result = await db.claim_or_reclaim_user_message("m1", threshold)
+        assert result is False
+
+
+class TestClearRoomProcessingStatusIfMatches:
+    """Tests for CAS clear of processing_message_id."""
+
+    @pytest.mark.asyncio
+    async def test_clears_when_message_id_matches(self):
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.modified_count = 1
+        mock_collection.update_one = AsyncMock(return_value=mock_result)
+        db._rooms_collection = mock_collection
+        type(db).rooms_collection = property(lambda self: self._rooms_collection)
+
+        result = await db.clear_room_processing_status_if_matches("r1", "m1")
+        assert result is True
+
+        call_args = mock_collection.update_one.call_args
+        assert call_args[0][0] == {"room_id": "r1", "processing_message_id": "m1"}
+
+    @pytest.mark.asyncio
+    async def test_noop_when_message_id_does_not_match(self):
+        from database.mongodb import MongoDB
+
+        db = object.__new__(MongoDB)
+        mock_collection = MagicMock()
+        mock_result = MagicMock()
+        mock_result.modified_count = 0
+        mock_collection.update_one = AsyncMock(return_value=mock_result)
+        db._rooms_collection = mock_collection
+        type(db).rooms_collection = property(lambda self: self._rooms_collection)
+
+        result = await db.clear_room_processing_status_if_matches("r1", "wrong-id")
+        assert result is False
+
+
+class TestIdempotencyGuardInRoomMessageCenter:
+    """Tests for the idempotency guard in process_room_user_message."""
+
+    @pytest.mark.asyncio
+    async def test_normal_claim_rejected_returns_409(self):
+        """Second call with same message_id should return 409."""
+        from modules.RoomMessageCenter import RoomMessageCenter
+
+        rmc = object.__new__(RoomMessageCenter)
+        rmc.database_service = MagicMock()
+        rmc.database_service.claim_user_message_for_processing = AsyncMock(return_value=False)
+        rmc.sse_manager = MagicMock()
+
+        request = OrchestrationRequest(
+            room_id="room-1",
+            room_user_message_id="msg-1",
+            room_related_message_id="",
+        )
+
+        result = await rmc.process_room_user_message(request)
+        assert result.success is False
+        assert result.status_code == 409
+        assert "already being processed" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_recovery_uses_reclaim(self):
+        """Recovery path with is_recovery=True should use claim_or_reclaim."""
+        from modules.RoomMessageCenter import RoomMessageCenter
+
+        rmc = object.__new__(RoomMessageCenter)
+        rmc.database_service = MagicMock()
+        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc.sse_manager = MagicMock()
+
+        request = OrchestrationRequest(
+            room_id="room-1",
+            room_user_message_id="msg-1",
+            room_related_message_id="",
+            is_recovery=True,
+        )
+
+        result = await rmc.process_room_user_message(request)
+        assert result.success is False
+        assert result.status_code == 409
+        rmc.database_service.claim_or_reclaim_user_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_recovery_threshold_uses_orphan_threshold(self):
+        """Recovery reclaim threshold must use orphan_threshold_minutes, not processing_status_expiry_minutes."""
+        from modules.RoomMessageCenter import RoomMessageCenter
+        from common.utils.time import utcnow as real_utcnow
+
+        rmc = object.__new__(RoomMessageCenter)
+        rmc.database_service = MagicMock()
+        rmc.database_service.claim_or_reclaim_user_message = AsyncMock(return_value=False)
+        rmc.sse_manager = MagicMock()
+
+        request = OrchestrationRequest(
+            room_id="room-1",
+            room_user_message_id="msg-1",
+            room_related_message_id="",
+            is_recovery=True,
+        )
+
+        with patch("modules.RoomMessageCenter.settings") as mock_settings:
+            mock_settings.orphan_threshold_minutes = 2
+            mock_settings.processing_status_expiry_minutes = 30
+            await rmc.process_room_user_message(request)
+
+        call_args = rmc.database_service.claim_or_reclaim_user_message.call_args
+        threshold_arg = call_args[0][1]
+        now = real_utcnow()
+        # The threshold should be ~2 minutes ago (orphan), not ~30 minutes ago
+        delta = now - threshold_arg
+        assert delta.total_seconds() < 300, (
+            f"Threshold is {delta.total_seconds():.0f}s ago, expected ~120s (orphan_threshold_minutes=2)"
+        )
+
+
+# =============================================================================
+# Fix 3 (SDR 2.13): Semaphore existence test
+# =============================================================================
+
+
+class TestStaleTaskCheckerSemaphore:
+    """Tests for bounded recovery scheduling."""
+
+    def test_recovery_semaphore_exists_with_correct_value(self):
+        from jobs.stale_task_checker import StaleTaskChecker, MAX_CONCURRENT_RECOVERIES
+
+        checker = StaleTaskChecker()
+        assert hasattr(checker, "_recovery_semaphore")
+        assert isinstance(checker._recovery_semaphore, asyncio.Semaphore)
+        assert checker._recovery_semaphore._value == MAX_CONCURRENT_RECOVERIES
+        assert MAX_CONCURRENT_RECOVERIES == 5
+
+
+# =============================================================================
+# Fix 4 (SDR 2.12): CORS configuration test
+# =============================================================================
+
+
+class TestCORSConfiguration:
+    """Tests for tightened CORS headers."""
+
+    def test_cors_returns_explicit_methods_and_headers(self):
+        """OPTIONS preflight should return specific allow_methods and allow_headers."""
+        from main import app
+        from fastapi.testclient import TestClient
+
+        # Patch auth dependency to avoid Clerk calls
+        with patch("common.auth.get_current_user", return_value=MagicMock()):
+            client = TestClient(app)
+            response = client.options(
+                "/api/v1/roomCenter/sendMessage",
+                headers={
+                    "Origin": "http://localhost:3000",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "Authorization,Content-Type",
+                },
+            )
+
+        # CORS middleware should respond to preflight
+        allow_methods = response.headers.get("access-control-allow-methods", "")
+        allow_headers = response.headers.get("access-control-allow-headers", "")
+
+        expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
+        # Our configured headers — the framework may also add CORS-safelisted headers
+        configured_headers = {"Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"}
+
+        actual_methods = {m.strip() for m in allow_methods.split(",")} if allow_methods else set()
+        actual_headers = {h.strip() for h in allow_headers.split(",")} if allow_headers else set()
+
+        assert expected_methods == actual_methods
+        assert configured_headers.issubset(actual_headers)
+        # Wildcard headers should NOT be present
+        assert "*" not in allow_headers

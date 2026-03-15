@@ -117,6 +117,7 @@ class OrchestrationRequest(BaseModel):
     room_agent_message_id: str | None = None
     room_related_message_id: str | None = None
     user_id: str | None = None
+    is_recovery: bool = False
 
 
 class DebatationCenterRequest(BaseModel):
@@ -265,6 +266,7 @@ class RoomCenterUserMessageRequest(BaseModel):
     message: RoomUserMessage | None = None
     attachments: list[UserAttachmentRequest] | None = None
     inline_file_ids: list[str] | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RoomCenterAgentMessageRequest(BaseModel):

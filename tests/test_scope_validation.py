@@ -449,3 +449,57 @@ class TestAllAgentsPostPersistMessageId:
         # The key assertion: message_id should be the real persisted ID, not None
         assert result.message_id == "msg-real-123"
         room_center._persist_user_message.assert_called_once()
+
+
+# =============================================================================
+# client_request_id propagation to _send_processing_status
+# =============================================================================
+
+
+class TestClientRequestIdPropagation:
+    """Verify client_request_id flows from request through to _send_processing_status."""
+
+    @pytest.mark.asyncio
+    async def test_send_message_to_room_propagates_client_request_id_to_processing_status(self, room_center):
+        room = _make_room(agent_set={"a1": "Alpha"})
+        room_center.database_service.get_room_by_room_id.return_value = room
+
+        request = MagicMock()
+        request.room_id = "room-1"
+        request.user_id = "user-1"
+        request.client_request_id = "cr-123"
+        request.message = MagicMock()
+        request.message.message_id = "msg-real-456"
+        request.message.message_content = MagicMock()
+        request.message.message_content.message_text = "hello"
+        request.message.message_content.message_attachments = None
+
+        room_center._validate_send_message_request = MagicMock(return_value=None)
+        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
+        room_center._persist_user_message = AsyncMock(return_value=True)
+        room_center._send_processing_status = AsyncMock()
+        room_center._initialize_room_memory = AsyncMock(return_value=None)
+        room_center.sse_manager.create_token = MagicMock()
+
+        # Make scope resolution return an error so the function returns early
+        # (we only need to verify _send_processing_status was called with client_request_id)
+        error_response = RoomCenterUserMessageResponse(
+            message_id=None, message=None, success=False,
+            error="Agent selection failed.",
+            scope_resolution_error=ScopeResolutionError(
+                code="empty_scope", message="Agent selection failed.",
+            ),
+            status_code=500,
+        )
+        room_center._resolve_explicit_target_scope = AsyncMock(return_value=error_response)
+
+        mock_hitl = MagicMock()
+        mock_hitl.get_pending_requests = AsyncMock(return_value=[])
+        with patch("services.hitl_service.hitl_service", mock_hitl):
+            await room_center.send_message_to_room(
+                request, target_group="all_agents", mentioned_agent_ids=None,
+            )
+
+        room_center._send_processing_status.assert_called_once_with(
+            "room-1", "msg-real-456", "cr-123"
+        )

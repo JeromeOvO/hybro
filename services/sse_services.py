@@ -315,7 +315,8 @@ class SSEManager:
         await self.broadcast_to_room(room_id, "artifact_update", data)
 
     async def send_processing_status(
-        self, room_id: str, status: str, message_id: str = None, details: str = None
+        self, room_id: str, status: str, message_id: str = None, details: str = None,
+        client_request_id: str | None = None,
     ):
         """Send processing status and persist to room for page refresh recovery.
 
@@ -324,6 +325,8 @@ class SSEManager:
             status: An SSEProcessingStatus value or A2A TaskState string
             message_id: The user message ID being processed
             details: Optional details about the status
+            client_request_id: Pass-through correlation ID from the frontend request.
+                Included in the SSE payload so the frontend can map temp→real message IDs.
         """
         # Deduplicate terminal statuses — once a terminal status has been
         # sent for a (room, message) pair, suppress any subsequent terminal
@@ -345,8 +348,8 @@ class SSEManager:
         # Set processing_message_id when processing starts, clear it when done
         if status == SSEProcessingStatus.PROCESSING and message_id:
             await db_service.update_room_processing_status(room_id, message_id)
-        elif status in PROCESSING_DONE_STATUSES:
-            await db_service.update_room_processing_status(room_id, None)
+        elif status in PROCESSING_DONE_STATUSES and message_id:
+            await db_service.clear_room_processing_status_if_matches(room_id, message_id)
 
         # Send SSE event to connected clients
         data = {
@@ -355,6 +358,8 @@ class SSEManager:
             "details": details,
             "timestamp": utcnow().isoformat(),
         }
+        if client_request_id is not None:
+            data["client_request_id"] = client_request_id
         await self.broadcast_to_room(room_id, "processing_status", data)
 
     async def send_task_submitted(
