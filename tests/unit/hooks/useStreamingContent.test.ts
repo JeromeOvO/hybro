@@ -21,7 +21,7 @@ describe('useStreamingContent', () => {
   })
 
   it('should return streaming content when message is streaming', () => {
-    streamingBuffer.append('msg-1', 'Hello ')
+    streamingBuffer.append('msg-1', 'Hello \n')
 
     const { result } = renderHook(() => useStreamingContent('msg-1'))
 
@@ -40,7 +40,7 @@ describe('useStreamingContent', () => {
 
     rerender()
 
-    expect(result.current.streamingText).toBe('Hello')
+    expect(result.current.streamingText).toBe('')
   })
 
   it('should return same object reference when content unchanged', () => {
@@ -54,14 +54,14 @@ describe('useStreamingContent', () => {
   })
 
   it('should return new object when content changes', () => {
-    streamingBuffer.append('msg-1', 'Initial')
+    streamingBuffer.append('msg-1', 'Initial\n')
 
     const { result, rerender } = renderHook(() => useStreamingContent('msg-1'))
 
     const firstResult = result.current
 
     act(() => {
-      streamingBuffer.append('msg-1', ' more content')
+      streamingBuffer.append('msg-1', 'more content\n')
     })
 
     rerender()
@@ -71,7 +71,7 @@ describe('useStreamingContent', () => {
   })
 
   it('should handle message finalization', () => {
-    streamingBuffer.append('msg-1', 'Complete message')
+    streamingBuffer.append('msg-1', 'Complete message\n')
 
     const { result, rerender } = renderHook(() => useStreamingContent('msg-1'))
 
@@ -87,8 +87,8 @@ describe('useStreamingContent', () => {
   })
 
   it('should handle different message IDs independently', () => {
-    streamingBuffer.append('msg-1', 'Message 1')
-    streamingBuffer.append('msg-2', 'Message 2')
+    streamingBuffer.append('msg-1', 'Message 1\n')
+    streamingBuffer.append('msg-2', 'Message 2\n')
 
     const { result: result1 } = renderHook(() => useStreamingContent('msg-1'))
     const { result: result2 } = renderHook(() => useStreamingContent('msg-2'))
@@ -98,7 +98,7 @@ describe('useStreamingContent', () => {
   })
 
   it('should handle clearing streaming buffer', () => {
-    streamingBuffer.append('msg-1', 'Content')
+    streamingBuffer.append('msg-1', 'Content\n')
 
     const { result, rerender } = renderHook(() => useStreamingContent('msg-1'))
 

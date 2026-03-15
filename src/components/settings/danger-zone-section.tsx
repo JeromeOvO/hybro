@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { AlertTriangle } from "lucide-react"
-import type { UserResource } from "@clerk/types"
+import type { UserResource } from "@clerk/shared/types"
 import { useClerk } from "@clerk/nextjs"
 import { toast } from "sonner"
 import { getClerkErrorMessage } from "@/lib/clerk-error"

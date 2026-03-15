@@ -189,7 +189,7 @@ export function TaskStatusMessage({
       return
     }
     processedStates.current.add(stateKey)
-    
+
     setStatus(data.status)
     if (data.content) {
       setContent(data.content)
@@ -435,7 +435,7 @@ export function TaskStatusMessage({
   // Prioritize dynamic status_message from the agent (A2A TaskStatus.message),
   // fall back to a friendly generic message.
   const primaryText = statusMessage || taskContent || 'Working on your request...'
-  
+
   return (
     <div className="flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
       <div className="flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border border-blue-200 dark:border-blue-500/20 bg-blue-50 dark:bg-blue-500/12 message-bubble text-blue-600 dark:text-blue-400">

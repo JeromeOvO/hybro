@@ -101,7 +101,11 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
           agentId={entity.agentId}
           agentName={entity.senderName}
           initialStatus={(entity.taskStatus || TASK_STATE.WORKING) as TaskState}
-          content={entity.content || null}
+          content={
+            entity.taskStatus === TASK_STATE.WORKING || entity.taskStatus === TASK_STATE.SUBMITTED
+              ? null
+              : (entity.content || null)
+          }
           error={entity.taskError}
           statusMessage={entity.taskStatusMessage}
           stepNumber={entity.stepNumber}

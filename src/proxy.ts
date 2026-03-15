@@ -1,9 +1,9 @@
 import { clerkMiddleware } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
+import type { NextRequest, NextFetchEvent } from 'next/server'
 
 /**
- * Subdomain-routing middleware.
+ * Subdomain-routing proxy (formerly middleware).
  *
  * Routes requests based on hostname:
  *   developer.hybro.ai  /  dev.localhost  → /d/* (developer portal)
@@ -75,7 +75,7 @@ function handleSubdomainRewrite(request: NextRequest): NextResponse | null {
 
 export { isDeveloperHost, isSharedPath, isStaticFile, handleSubdomainRewrite }
 
-export default clerkMiddleware(
+const clerkHandler = clerkMiddleware(
   async (_auth, request) => {
     const rewrite = handleSubdomainRewrite(request)
     if (rewrite) return rewrite
@@ -85,6 +85,10 @@ export default clerkMiddleware(
     authorizedParties: AUTHORIZED_PARTIES,
   }
 )
+
+export default function proxy(request: NextRequest, event: NextFetchEvent) {
+  return clerkHandler(request, event)
+}
 
 export const config = {
   matcher: [

@@ -7,15 +7,15 @@ import { streamingBuffer } from './streaming-buffer'
  * text into the StreamingBuffer progressively so the existing streaming UI
  * (cursor, throttled markdown rendering) works transparently.
  *
- * Duration scales with content length but is capped to feel snappy:
- *   - Short  (< 200 chars):  ~400ms
- *   - Medium (200-1000):     ~600-800ms
- *   - Long   (1000+):        ~1000ms max
+ * Duration is intentionally short (~300ms) so the effect feels snappy rather
+ * than slow. Each tick delivers a large chunk so the markdown renderer sees
+ * meaningful increments rather than individual characters, which minimises
+ * intermediate parse-state jank.
  */
 
 const TICK_MS = 16 // ~60fps
-const TARGET_TICKS = 50 // ~800ms at 16ms/tick
-const MIN_CHARS_PER_TICK = 3
+const TARGET_TICKS = 20 // ~320ms at 16ms/tick
+const MIN_CHARS_PER_TICK = 5
 
 export interface TypewriterHandle {
   /** Stop the typewriter, jump to full content, and call onComplete. */
@@ -50,7 +50,7 @@ export function startTypewriter(
     if (done) return
 
     const end = Math.min(offset + charsPerTick, text.length)
-    streamingBuffer.append(messageId, text.slice(offset, end))
+    streamingBuffer.appendTypewriter(messageId, text.slice(offset, end))
     offset = end
 
     if (offset >= text.length) {
@@ -61,14 +61,14 @@ export function startTypewriter(
   }, TICK_MS)
 
   // Seed the buffer so isStreaming(messageId) returns true immediately
-  streamingBuffer.append(messageId, '')
+  streamingBuffer.appendTypewriter(messageId, '')
 
   function finish() {
     if (done) return
     done = true
     clearInterval(timer)
     if (offset < text.length) {
-      streamingBuffer.append(messageId, text.slice(offset))
+      streamingBuffer.appendTypewriter(messageId, text.slice(offset))
     }
     onComplete()
   }

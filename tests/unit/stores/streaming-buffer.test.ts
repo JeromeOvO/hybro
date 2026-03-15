@@ -25,16 +25,16 @@ describe('StreamingBuffer', () => {
   })
 
   describe('append', () => {
-    it('should append tokens to buffer', () => {
+    it('should buffer partial lines until a newline arrives', () => {
       streamingBuffer.append('msg-1', 'Hello')
       streamingBuffer.append('msg-1', ' World')
 
-      expect(streamingBuffer.get('msg-1')).toBe('Hello World')
+      expect(streamingBuffer.get('msg-1')).toBe('')
     })
 
-    it('should create new buffer for new message', () => {
-      streamingBuffer.append('msg-1', 'First')
-      streamingBuffer.append('msg-2', 'Second')
+    it('should expose committed lines for new messages independently', () => {
+      streamingBuffer.append('msg-1', 'First\n')
+      streamingBuffer.append('msg-2', 'Second\n')
 
       expect(streamingBuffer.get('msg-1')).toBe('First')
       expect(streamingBuffer.get('msg-2')).toBe('Second')
@@ -42,18 +42,30 @@ describe('StreamingBuffer', () => {
 
     it('should handle empty tokens', () => {
       streamingBuffer.append('msg-1', '')
-      streamingBuffer.append('msg-1', 'Content')
+      streamingBuffer.append('msg-1', 'Content\n')
       streamingBuffer.append('msg-1', '')
 
       expect(streamingBuffer.get('msg-1')).toBe('Content')
     })
 
-    it('should handle special characters', () => {
+    it('should preserve committed multiline content for later markdown rendering', () => {
       streamingBuffer.append('msg-1', '```python\n')
       streamingBuffer.append('msg-1', 'print("Hello")\n')
       streamingBuffer.append('msg-1', '```')
 
-      expect(streamingBuffer.get('msg-1')).toBe('```python\nprint("Hello")\n```')
+      expect(streamingBuffer.get('msg-1')).toBe('```python\nprint("Hello")')
+    })
+
+    it('should preserve single-newline token streams until the preview layer normalizes them', () => {
+      streamingBuffer.append('msg-1', 'word1\nword2\nword3\n')
+
+      expect(streamingBuffer.get('msg-1')).toBe('word1\nword2\nword3')
+    })
+
+    it('should preserve blank lines in committed content', () => {
+      streamingBuffer.append('msg-1', 'word1\n \nword2\r\n\r\nword3\n')
+
+      expect(streamingBuffer.get('msg-1')).toBe('word1\n \nword2\n\nword3')
     })
   })
 
@@ -62,10 +74,10 @@ describe('StreamingBuffer', () => {
       expect(streamingBuffer.get('non-existent')).toBe('')
     })
 
-    it('should return accumulated content', () => {
+    it('should return only committed render-safe content', () => {
       streamingBuffer.append('msg-1', 'A')
       streamingBuffer.append('msg-1', 'B')
-      streamingBuffer.append('msg-1', 'C')
+      streamingBuffer.append('msg-1', 'C\n')
 
       expect(streamingBuffer.get('msg-1')).toBe('ABC')
     })
@@ -130,7 +142,7 @@ describe('StreamingBuffer', () => {
   })
 
   describe('entries', () => {
-    it('should iterate over all active buffers', () => {
+    it('should iterate over all active raw buffers', () => {
       streamingBuffer.append('msg-1', 'Content 1')
       streamingBuffer.append('msg-2', 'Content 2')
 
@@ -276,13 +288,13 @@ describe('StreamingBuffer', () => {
         streamingBuffer.append('msg-1', 'token ')
       }
 
-      expect(streamingBuffer.get('msg-1').length).toBe(6000)
+      expect(streamingBuffer.get('msg-1')).toBe('')
     })
 
     it('should handle multiple concurrent streams', () => {
       for (let i = 0; i < 10; i++) {
         for (let j = 0; j < 100; j++) {
-          streamingBuffer.append(`msg-${i}`, `token-${j} `)
+          streamingBuffer.append(`msg-${i}`, `token-${j}\n`)
         }
       }
 

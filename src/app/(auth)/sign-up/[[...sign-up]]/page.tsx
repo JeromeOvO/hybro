@@ -9,7 +9,7 @@ export default function Page () {
     return (
       <div className="flex flex-col items-center justify-center gap-4">
         <SignUp
-          redirectUrl="/"
+          forceRedirectUrl="/"
           appearance={{
             elements: {
               rootBox: "mx-auto",

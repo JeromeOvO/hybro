@@ -67,7 +67,7 @@ describe('Token Streaming Lifecycle', () => {
       agentId: AGENT_ID,
       isEphemeral: true,
     }, 'sse')
-    streamingBuffer.append(MSG_ID, 'Hello')
+    streamingBuffer.append(MSG_ID, 'Hello\n')
 
     const entity = getEntity(MSG_ID)
     expect(entity).toBeDefined()
@@ -93,13 +93,13 @@ describe('Token Streaming Lifecycle', () => {
 
     const versionAfterPlaceholder = useMessageStore.getState().version
 
-    streamingBuffer.append(MSG_ID, 'Hello')
+    streamingBuffer.append(MSG_ID, 'Hello\n')
     streamingBuffer.append(MSG_ID, ' ')
-    streamingBuffer.append(MSG_ID, 'World')
+    streamingBuffer.append(MSG_ID, 'World\n')
 
     // Store version should NOT have changed — tokens don't touch the store
     expect(useMessageStore.getState().version).toBe(versionAfterPlaceholder)
-    expect(streamingBuffer.get(MSG_ID)).toBe('Hello World')
+    expect(streamingBuffer.get(MSG_ID)).toBe('Hello\n World')
   })
 
   it('step 4: agent_response finalizes buffer and upserts authoritative content', () => {
@@ -286,8 +286,8 @@ describe('Token Streaming Lifecycle', () => {
     // Stream tokens interleaved
     streamingBuffer.append(MSG_A, 'Hello from ')
     streamingBuffer.append(MSG_B, 'Greetings from ')
-    streamingBuffer.append(MSG_A, 'Agent A')
-    streamingBuffer.append(MSG_B, 'Agent B')
+    streamingBuffer.append(MSG_A, 'Agent A\n')
+    streamingBuffer.append(MSG_B, 'Agent B\n')
 
     expect(streamingBuffer.get(MSG_A)).toBe('Hello from Agent A')
     expect(streamingBuffer.get(MSG_B)).toBe('Greetings from Agent B')
@@ -358,8 +358,8 @@ describe('Token Streaming Lifecycle', () => {
 
   // ─── Bug fixes: task_update lifecycle (not agent_response) ──
 
-  it('task_submitted -> agent_token converts task-status to agent-bubble for streaming', () => {
-    // task_submitted creates entity with taskStatus (renders as task-status card)
+  it('task_submitted -> agent_token keeps agent-bubble and buffers tokens with line buffering', () => {
+    // task_submitted creates entity with taskStatus (renders as agent-bubble with waiting indicator)
     upsert({
       id: MSG_ID,
       roomId: ROOM_ID,
@@ -372,25 +372,16 @@ describe('Token Streaming Lifecycle', () => {
       timestamp: new Date().toISOString(),
     }, 'sse')
 
-    expect(getEntity(MSG_ID)!.displayType).toBe('task-status')
+    expect(getEntity(MSG_ID)!.displayType).toBe('agent-bubble')
 
-    // First agent_token arrives — should convert to agent-bubble for streaming
-    // (simulating the handleSSEMessage logic: re-upsert with isEphemeral: true)
-    upsert({
-      id: MSG_ID,
-      roomId: ROOM_ID,
-      messageType: 'agent',
-      content: '',
-      senderName: AGENT_NAME,
-      agentId: AGENT_ID,
-      timestamp: new Date().toISOString(),
-      isEphemeral: true,
-    }, 'sse')
+    // First agent_token arrives — does NOT re-upsert when entity already exists
+    // (useRoomWebhook skips upsert if existingEntity is truthy)
+    // Token is line-buffered: partial lines return '' until a newline is received
     streamingBuffer.append(MSG_ID, 'Hello')
+    streamingBuffer.append(MSG_ID, '\n')
 
     const entity = getEntity(MSG_ID)
     expect(entity!.displayType).toBe('agent-bubble')
-    expect(entity!.isEphemeral).toBe(true)
     expect(streamingBuffer.get(MSG_ID)).toBe('Hello')
     expect(streamingBuffer.isStreaming(MSG_ID)).toBe(true)
   })
@@ -443,27 +434,17 @@ describe('Token Streaming Lifecycle', () => {
       taskStatus: 'working' as TaskState,
       timestamp: new Date().toISOString(),
     }, 'sse')
-    expect(getEntity(MSG_ID)!.displayType).toBe('task-status')
+    expect(getEntity(MSG_ID)!.displayType).toBe('agent-bubble')
 
-    // 2. First agent_token converts to streaming agent-bubble
-    upsert({
-      id: MSG_ID,
-      roomId: ROOM_ID,
-      messageType: 'agent',
-      content: '',
-      senderName: AGENT_NAME,
-      agentId: AGENT_ID,
-      isEphemeral: true,
-      timestamp: new Date().toISOString(),
-    }, 'sse')
-    streamingBuffer.append(MSG_ID, 'Hello ')
+    // 2. agent_tokens arrive — useRoomWebhook does NOT re-upsert for existing entities
+    // Tokens are buffered with line-buffering
+    streamingBuffer.append(MSG_ID, 'Hello \n')
 
     expect(getEntity(MSG_ID)!.displayType).toBe('agent-bubble')
-    expect(getEntity(MSG_ID)!.isEphemeral).toBe(true)
 
     // 3. More tokens
-    streamingBuffer.append(MSG_ID, 'World')
-    expect(streamingBuffer.get(MSG_ID)).toBe('Hello World')
+    streamingBuffer.append(MSG_ID, 'World\n')
+    expect(streamingBuffer.get(MSG_ID)).toBe('Hello \nWorld')
 
     // 4. task_update(completed) finalizes
     streamingBuffer.finalize(MSG_ID)
@@ -521,7 +502,7 @@ describe('Typewriter Lifecycle', () => {
   it('task_update(completed) without prior streaming triggers typewriter', () => {
     const content = 'Hello from the agent, this is a complete response.'
 
-    // 1. task_submitted creates task-status entity
+    // 1. task_submitted creates agent-bubble entity (with waiting indicator)
     upsert({
       id: MSG_ID,
       roomId: ROOM_ID,
@@ -532,7 +513,7 @@ describe('Typewriter Lifecycle', () => {
       taskStatus: 'working' as TaskState,
       timestamp: new Date().toISOString(),
     }, 'sse')
-    expect(getEntity(MSG_ID)!.displayType).toBe('task-status')
+    expect(getEntity(MSG_ID)!.displayType).toBe('agent-bubble')
 
     // 2. task_update(completed) arrives — no prior streaming
     const wasStreaming = streamingBuffer.isStreaming(MSG_ID)
@@ -707,7 +688,7 @@ describe('Typewriter Lifecycle', () => {
     // Real streaming can now take over: re-create buffer, append tokens
     streamingBuffer.append(MSG_ID, 'Real ')
     streamingBuffer.append(MSG_ID, 'streamed ')
-    streamingBuffer.append(MSG_ID, 'content')
+    streamingBuffer.append(MSG_ID, 'content\n')
     expect(streamingBuffer.get(MSG_ID)).toBe('Real streamed content')
     expect(streamingBuffer.isStreaming(MSG_ID)).toBe(true)
   })

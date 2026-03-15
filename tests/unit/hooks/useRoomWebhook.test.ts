@@ -166,14 +166,47 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    // Streaming buffer should have content
+    // Streaming buffer stays empty until a complete line arrives
     const snapshot = streamingBuffer.get('msg-tok-1')
-    expect(snapshot).toBe('Hello')
+    expect(snapshot).toBe('')
 
     // Should have created a placeholder entity
     const entity = useMessageStore.getState().entities['msg-tok-1']
     expect(entity).toBeDefined()
     expect(entity.isEphemeral).toBe(true)
+  })
+
+  it('should keep a submitted working task as agent-bubble when agent_token arrives', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_submitted',
+        data: {
+          message_id: 'task-stream-1',
+          agent_name: 'Code Agent',
+          agent_id: 'agent-1',
+          status: 'working',
+          task_content: 'Analyzing code...',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_token',
+        data: {
+          message_id: 'task-stream-1',
+          agent_id: 'agent-1',
+          token: 'Hello world',
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-stream-1']
+    expect(entity).toBeDefined()
+    expect(entity.displayType).toBe('agent-bubble')
+    expect(entity.isEphemeral).toBe(false)
   })
 
   it('should ignore agent_token without message_id or token', async () => {

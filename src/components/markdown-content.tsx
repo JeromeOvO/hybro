@@ -1,8 +1,7 @@
 'use client'
 
 import React, { useCallback, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Streamdown } from 'streamdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy } from 'lucide-react'
 import { formatIfJson } from '@/lib/utils'
@@ -67,8 +66,6 @@ function CodeBlockWithCopy({
 
 /**
  * Convert <@agent_id|agent_name> mention syntax to markdown links.
- * Uses standard markdown link syntax so react-markdown handles them natively
- * without needing rehype-raw.
  */
 function processMentions(content: string): string {
   return content.replace(
@@ -82,26 +79,99 @@ function isAgentMentionHref(href: string | undefined): boolean {
   return !!href && href.startsWith('/c/agents/')
 }
 
+/** Shared custom component overrides used by all Streamdown instances. */
+const sharedComponents = {
+  a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
+    if (isAgentMentionHref(href)) {
+      return (
+        <a
+          className="prose room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          {...props}
+        >
+          {children}
+        </a>
+      )
+    }
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline underline-offset-2 transition-colors duration-150"
+        {...props}
+      >
+        {children}
+      </a>
+    )
+  },
+  code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
+    const match = /language-(\w+)/.exec(className || '')
+    const isInline = !match
+    return isInline ? (
+      <code
+        className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono"
+        {...props}
+      >
+        {children}
+      </code>
+    ) : (
+      <CodeBlockWithCopy className={className} {...props}>
+        {children}
+      </CodeBlockWithCopy>
+    )
+  },
+  p: ({ children }: { children?: React.ReactNode }) => <p className="mb-2 last:mb-0">{children}</p>,
+  ul: ({ children }: { children?: React.ReactNode }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
+  ol: ({ children }: { children?: React.ReactNode }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
+  li: ({ children }: { children?: React.ReactNode }) => <li className="mb-1">{children}</li>,
+  h1: ({ children }: { children?: React.ReactNode }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
+  h2: ({ children }: { children?: React.ReactNode }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
+  h3: ({ children }: { children?: React.ReactNode }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
+  h4: ({ children }: { children?: React.ReactNode }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
+  h5: ({ children }: { children?: React.ReactNode }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
+  h6: ({ children }: { children?: React.ReactNode }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="min-w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }: { children?: React.ReactNode }) => (
+    <thead className="bg-slate-100 dark:bg-slate-800">{children}</thead>
+  ),
+  th: ({ children }: { children?: React.ReactNode }) => (
+    <th className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-left text-xs font-semibold">
+      {children}
+    </th>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => (
+    <td className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs">
+      {children}
+    </td>
+  ),
+}
+
 /**
  * Shared markdown renderer for all message types.
  *
- * Features:
- * - Full GFM markdown with syntax highlighting
- * - @mention syntax rendered as clickable agent profile links
- * - All links open in a new tab (`target="_blank"`)
- * - Optional JSON auto-formatting (wraps raw JSON in a code block)
+ * Uses Streamdown for both streaming and static rendering:
+ *  - streaming: handles incomplete/unterminated markdown, shows a caret
+ *  - static (mode="static"): same output, zero animation overhead
  *
- * @param content   - The raw text / markdown to render.
+ * @param content        - The raw text / markdown to render.
+ * @param isStreaming    - Pass true while tokens are still arriving.
  * @param autoFormatJson - When true (default), raw JSON strings are wrapped in
- *                         a fenced code block for pretty-printing. Pass false
- *                         for user-authored messages where auto-formatting may
- *                         be surprising.
+ *                         a fenced code block for pretty-printing.
  */
 export function MarkdownContent({
   content,
+  isStreaming = false,
   autoFormatJson = true,
 }: {
   content: string
+  isStreaming?: boolean
   autoFormatJson?: boolean
 }) {
   const formatted = autoFormatJson ? formatIfJson(content) : content
@@ -109,90 +179,14 @@ export function MarkdownContent({
 
   return (
     <div className="min-w-0 text-sm leading-relaxed text-inherit">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <Streamdown
+        mode={isStreaming ? 'streaming' : 'static'}
+        caret={isStreaming ? 'block' : undefined}
+        components={sharedComponents}
         rehypePlugins={[rehypeHighlight]}
-        components={{
-          // --- Links: always open in new tab ---
-          a: ({ children, href, ...props }) => {
-            if (isAgentMentionHref(href)) {
-              return (
-                <a
-                  className="prose room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  {...props}
-                >
-                  {children}
-                </a>
-              )
-            }
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline underline-offset-2 transition-colors duration-150"
-                {...props}
-              >
-                {children}
-              </a>
-            )
-          },
-          // --- Code blocks ---
-          code: ({ className, children, ...props }) => {
-            const match = /language-(\w+)/.exec(className || '')
-            const isInline = !match
-            return isInline ? (
-              <code
-                className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono"
-                {...props}
-              >
-                {children}
-              </code>
-            ) : (
-              <CodeBlockWithCopy className={className} {...props}>
-                {children}
-              </CodeBlockWithCopy>
-            )
-          },
-          // --- Block elements ---
-          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="mb-2 ml-4 list-disc">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-2 ml-4 list-decimal">{children}</ol>,
-          li: ({ children }) => <li className="mb-1">{children}</li>,
-          h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
-          h4: ({ children }) => <h4 className="text-sm font-semibold mb-1">{children}</h4>,
-          h5: ({ children }) => <h5 className="text-xs font-semibold mb-1">{children}</h5>,
-          h6: ({ children }) => <h6 className="text-xs font-medium mb-1">{children}</h6>,
-          // --- Tables: horizontally scrollable within the bubble ---
-          table: ({ children }) => (
-            <div className="overflow-x-auto my-2">
-              <table className="min-w-full border-collapse text-sm">
-                {children}
-              </table>
-            </div>
-          ),
-          thead: ({ children }) => (
-            <thead className="bg-slate-100 dark:bg-slate-800">{children}</thead>
-          ),
-          th: ({ children }) => (
-            <th className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-left text-xs font-semibold">
-              {children}
-            </th>
-          ),
-          td: ({ children }) => (
-            <td className="border border-slate-200 dark:border-slate-700 px-3 py-1.5 text-xs">
-              {children}
-            </td>
-          ),
-        }}
       >
         {processedContent}
-      </ReactMarkdown>
+      </Streamdown>
     </div>
   )
 }
@@ -220,7 +214,6 @@ export function LinkifiedContent({ content }: { content: string }) {
     })
   }
 
-  // Combined regex: match @mentions OR bare URLs
   const combinedRegex = /<@([^|]+)\|([^>]+)>|(https?:\/\/[^\s<>)"'\]]+)/g
   let match
 
@@ -232,7 +225,6 @@ export function LinkifiedContent({ content }: { content: string }) {
     if (match[1] && match[2]) {
       const agentId = match[1]
       const agentName = match[2]
-
       parts.push(
         <a
           key={`link-${keyIndex++}`}

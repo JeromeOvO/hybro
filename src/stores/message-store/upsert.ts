@@ -315,9 +315,10 @@ export function mergeArtifacts(
 
   if (idx >= 0) {
     if (append) {
+      const merged = mergeTextParts([...list[idx].parts], incoming.parts)
       list[idx] = {
         ...list[idx],
-        parts: [...list[idx].parts, ...incoming.parts],
+        parts: merged,
         isStreaming: incoming.isStreaming ?? list[idx].isStreaming,
       }
     } else {
@@ -328,4 +329,25 @@ export function mergeArtifacts(
   }
 
   return list
+}
+
+/**
+ * When appending artifact parts during streaming, concatenate consecutive
+ * text parts into the trailing text part instead of creating separate
+ * `<p>` elements per token (which causes the one-word-per-line glitch).
+ */
+function mergeTextParts(
+  existingParts: ArtifactData['parts'],
+  newParts: ArtifactData['parts'],
+): ArtifactData['parts'] {
+  const result = [...existingParts]
+  for (const part of newParts) {
+    const last = result[result.length - 1]
+    if (part.kind === 'text' && last?.kind === 'text') {
+      result[result.length - 1] = { ...last, text: (last.text || '') + (part.text || '') }
+    } else {
+      result.push(part)
+    }
+  }
+  return result
 }

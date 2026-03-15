@@ -80,18 +80,42 @@ describe('resolveDisplayType', () => {
   })
 
   // ── Non-terminal task states ──────────────────────────────
-  it('returns task-status for working task', () => {
+  it('returns agent-bubble for working task', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
       taskStatus: TASK_STATE.WORKING,
-    })).toBe('task-status')
+    })).toBe('agent-bubble')
   })
 
-  it('returns task-status for submitted task', () => {
+  it('returns agent-bubble for working task with content', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.WORKING,
+      content: 'Streaming content already landed',
+    })).toBe('agent-bubble')
+  })
+
+  it('returns agent-bubble for working task with artifacts', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.WORKING,
+      artifacts: [{ artifactId: 'w-1', parts: [{ kind: 'data', data: { ok: true } }] }],
+    })).toBe('agent-bubble')
+  })
+
+  it('returns agent-bubble for submitted task', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
       taskStatus: TASK_STATE.SUBMITTED,
-    })).toBe('task-status')
+    })).toBe('agent-bubble')
+  })
+
+  it('returns agent-bubble for submitted task with content', () => {
+    expect(resolveDisplayType({
+      messageType: 'agent',
+      taskStatus: TASK_STATE.SUBMITTED,
+      content: 'Payload arrived before terminal status',
+    })).toBe('agent-bubble')
   })
 
   it('returns task-status for input-required task', () => {
@@ -140,20 +164,20 @@ describe('resolveDisplayType', () => {
     })).toBe('agent-bubble')
   })
 
-  it('returns task-status for ephemeral agent with non-terminal taskStatus (processing placeholder)', () => {
+  it('returns agent-bubble for ephemeral agent with non-terminal taskStatus (processing placeholder)', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
       taskStatus: TASK_STATE.WORKING,
       isEphemeral: true,
-    })).toBe('task-status')
+    })).toBe('agent-bubble')
   })
 
-  it('returns task-status for ephemeral agent with input-required taskStatus', () => {
+  it('returns agent-bubble for ephemeral agent with input-required taskStatus', () => {
     expect(resolveDisplayType({
       messageType: 'agent',
       taskStatus: TASK_STATE.INPUT_REQUIRED,
       isEphemeral: true,
-    })).toBe('task-status')
+    })).toBe('agent-bubble')
   })
 
   it('returns user-bubble for user messages even with isEphemeral', () => {

@@ -1,17 +1,17 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Shield, Cloud } from 'lucide-react'
+import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Shield, Cloud, Loader2, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
-import { formatTimestamp } from '@/lib/time'
+import { formatTimestamp, elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
-import { StreamingCursor } from './streaming-cursor'
 import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
+import { PENDING_STATES } from '@/lib/types/sse'
 
 /** Lightweight UI type for passing quote data between components. */
 export interface QuoteData {
@@ -155,6 +155,13 @@ interface EntityBubbleProps {
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
   isStreaming?: boolean
+  showIndicator?: boolean
+  waitingInfo?: {
+    taskStatus: string
+    taskStatusMessage?: string
+    taskContent?: string
+    taskCreatedAt?: string
+  }
 }
 
 /**
@@ -233,7 +240,9 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
 
 /**
  * Agent message bubble - internal implementation using BubbleMessage shape.
- * Supports streaming content with debounced markdown rendering.
+ * Renders static or typewriter-reveal content via Streamdown.
+ * When showIndicator=true the content area fades out and bouncing dots fade
+ * in, all within the same mounted component so there is no layout flash.
  */
 function AgentMessageBubbleInner({
   message,
@@ -246,6 +255,8 @@ function AgentMessageBubbleInner({
   onUserToggle,
   onQuote,
   isStreaming = false,
+  showIndicator = false,
+  waitingInfo,
 }: EntityBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(
     defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
@@ -253,45 +264,25 @@ function AgentMessageBubbleInner({
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
-  
-  // Throttled markdown rendering during streaming (Option B from design doc).
-  // We keep a ref to the latest content and run a 50ms interval that picks
-  // up whatever is current. This avoids the "cancel-on-every-frame" problem
-  // that a useEffect + setTimeout approach has when content changes at 60fps.
-  const [debouncedContent, setDebouncedContent] = useState(message.content)
-  const latestContentRef = useRef(message.content)
-  latestContentRef.current = message.content
-  
-  useEffect(() => {
-    if (!isStreaming) {
-      setDebouncedContent(message.content)
-      return
-    }
-    
-    // Immediately render the first frame
-    setDebouncedContent(message.content)
-    
-    // Then update at most every 50ms via interval
-    const interval = setInterval(() => {
-      setDebouncedContent(latestContentRef.current)
-    }, 50)
-    
-    return () => clearInterval(interval)
-  // Only re-run when streaming state changes, not on every content change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming])
-  
-  // When streaming ends, ensure we render the final content
-  useEffect(() => {
-    if (!isStreaming) {
-      setDebouncedContent(message.content)
-    }
-  }, [isStreaming, message.content])
+  const bubbleRef = useRef<HTMLDivElement>(null)
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
   const quoteBtnRef = useRef<HTMLButtonElement | null>(null)
   const selectedTextRef = useRef<string>('')
+
+  // --- Elapsed timer for WAITING phase ---
+  const [elapsed, setElapsed] = useState(() =>
+    waitingInfo?.taskCreatedAt ? elapsedSeconds(waitingInfo.taskCreatedAt) : 0
+  )
+  useEffect(() => {
+    if (!showIndicator || !waitingInfo?.taskCreatedAt) return
+    setElapsed(elapsedSeconds(waitingInfo.taskCreatedAt))
+    const id = setInterval(() => {
+      setElapsed(elapsedSeconds(waitingInfo.taskCreatedAt))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [showIndicator, waitingInfo?.taskCreatedAt])
 
   const hideQuoteButton = useCallback(() => {
     if (quoteBtnRef.current) {
@@ -428,14 +419,9 @@ function AgentMessageBubbleInner({
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   
-  // Determine display content:
-  // - During streaming: use debounced content for markdown rendering (throttled to 50ms)
-  // - After streaming: use the final message content
-  // - Fallback to "No message content" only when not streaming and content is empty
-  const displayContent = isStreaming 
-    ? (debouncedContent || '') 
-    : (message.content || "No message content")
+  const displayContent = message.content
   const isLongMessage = displayContent.length > 500
+  
   const colors = getAgentColorClasses(message.agent_id || 'unknown')
   const textColorClass = colors.text
   const contentColorClass = colors.content
@@ -444,6 +430,7 @@ function AgentMessageBubbleInner({
     <div className="flex w-full">
       {/* Message Content */}
       <div
+        ref={bubbleRef}
         className={cn(
           "flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border message-bubble agent-message",
           colors.border,
@@ -489,25 +476,63 @@ function AgentMessageBubbleInner({
             </span>
           )}
         </div>
+        {/* Typing / waiting indicator — lives in normal flow above the content grid.
+            When task metadata is available (WAITING phase), show a richer status
+            with elapsed time. Otherwise fall back to simple bouncing dots. */}
         <div
-          ref={contentRef}
           className={cn(
-            "text-sm leading-relaxed select-text",
-            contentColorClass,
-            !isExpanded && isLongMessage && "line-clamp-4"
+            "transition-opacity duration-200",
+            showIndicator ? "opacity-100" : "opacity-0 pointer-events-none h-0"
           )}
-          onMouseUp={handleMouseUp}
+          aria-hidden={!showIndicator}
         >
-          {isStreaming ? (
-            // Streaming mode: show content with cursor
-            <>
-              {displayContent && <MarkdownContent content={displayContent} />}
-              <StreamingCursor />
-            </>
+          {waitingInfo ? (
+            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+              <span>{waitingInfo.taskStatusMessage || waitingInfo.taskContent || 'Working on your request…'}</span>
+              {elapsed > 0 && (
+                <span className="flex items-center gap-0.5 opacity-60">
+                  <Clock className="h-3 w-3" />
+                  {formatElapsedTime(elapsed)}
+                </span>
+              )}
+            </div>
           ) : (
-            // Final mode: show content or placeholder
-            <MarkdownContent content={displayContent} />
+            <div className="flex items-center gap-0.5">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className={cn("w-1.5 h-1.5 rounded-full animate-bounce", textColorClass)}
+                  style={{ animationDelay: `${i * 150}ms` }}
+                />
+              ))}
+            </div>
           )}
+        </div>
+
+        {/* Content wrapper. During the indicator phase, collapse the content
+            area. No transition is used because the 0fr→1fr animation causes a
+            brief "one-token-per-line" flash as the container height grows. */}
+        <div
+          className={cn(
+            "grid",
+            showIndicator ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
+          )}
+        >
+          <div
+            ref={contentRef}
+            className={cn(
+              "min-h-0 overflow-hidden text-sm leading-relaxed select-text",
+              contentColorClass,
+              !isExpanded && isLongMessage && "line-clamp-4"
+            )}
+            onMouseUp={handleMouseUp}
+          >
+            <MarkdownContent
+              content={displayContent}
+              isStreaming={isStreaming}
+            />
+          </div>
         </div>
 
         {/* Expand/Collapse button */}
@@ -586,9 +611,14 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
- * Supports real-time token streaming via StreamingBuffer (agent_token events)
- * and typewriter-driven progressive reveal (non-streaming agents).
- * Both paths feed through useStreamingContent so the component stays simple.
+ * - Shows typing indicator until the first streaming token arrives.
+ * - During streaming: shows content live via Streamdown in streaming mode,
+ *   with line-buffering from the streaming buffer ensuring stable chunks.
+ * - After streaming ends: typewriter-reveals the final content via Streamdown.
+ *
+ * The typing indicator and content area live inside a single always-mounted
+ * AgentMessageBubbleInner so there is never a React mount/unmount between
+ * states, eliminating layout-flash on the transition.
  */
 export function EntityAgentBubble({
   entity,
@@ -611,10 +641,107 @@ export function EntityAgentBubble({
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }) {
-  const { streamingText, isStreaming } = useStreamingContent(entity.id)
+  const { isStreaming, streamingText } = useStreamingContent(entity.id)
 
-  const displayContent = isStreaming ? streamingText : entity.content
-  const showAsStreaming = isStreaming
+  // Typewriter reveal state. After streaming ends we animate the final content
+  // in by progressively slicing entity.content and feeding it to Streamdown.
+  const [revealedChars, setRevealedChars] = useState(0)
+  const [isRevealing, setIsRevealing] = useState(false)
+  const prevIsStreaming = useRef(isStreaming)
+
+  const streamingPreviewText = streamingText
+
+  // Detect the exact render where streaming just ended so we can keep showing
+  // the last preview text until the reveal state becomes active on the next render.
+  const isStartingReveal =
+    prevIsStreaming.current &&
+    !isStreaming &&
+    entity.content.length > 0 &&
+    !isRevealing
+
+  const lastStreamingPreviewRef = useRef('')
+  if (isStreaming && streamingPreviewText) {
+    lastStreamingPreviewRef.current = streamingPreviewText
+  }
+
+  // Detect the streaming→done transition synchronously during render.
+  // Calling setState here schedules the next render with isRevealing=true,
+  // but the CURRENT render still executes with isRevealing=false. The
+  // displayContent ternary below uses lastLiveTextRef to cover that gap.
+  if (prevIsStreaming.current !== isStreaming) {
+    prevIsStreaming.current = isStreaming
+    if (!isStreaming && entity.content.length > 0 && !isRevealing) {
+      const initialRevealChars = lastStreamingPreviewRef.current
+        ? Math.min(entity.content.length, Math.max(10, lastStreamingPreviewRef.current.length))
+        : Math.min(10, entity.content.length)
+      setRevealedChars(initialRevealChars)
+      setIsRevealing(true)
+    }
+  }
+
+  // Advance the reveal at ~60fps (10 chars/frame ≈ 600 chars/sec).
+  useEffect(() => {
+    if (!isRevealing) return
+    const full = entity.content
+    let animId: number
+    let active = true
+
+    const step = () => {
+      if (!active) return
+      setRevealedChars(prev => {
+        const next = prev + 10
+        if (next >= full.length) {
+          setIsRevealing(false)
+          return full.length
+        }
+        return next
+      })
+      animId = requestAnimationFrame(step)
+    }
+
+    animId = requestAnimationFrame(step)
+    return () => {
+      active = false
+      cancelAnimationFrame(animId)
+    }
+  }, [isRevealing, entity.content])
+
+  // Show the typing indicator while no displayable content exists:
+  // - Before streaming starts (~16ms gap before the first rAF flush).
+  // - Once streaming is active but no complete line has arrived yet.
+  // - But NOT when artifacts are present (Ollama streams content as artifacts).
+  const hasArtifactContent = (entity.artifacts?.length ?? 0) > 0
+  const showIndicator =
+    ((!isStreaming && !isRevealing && !entity.content) ||
+    (isStreaming && !streamingPreviewText.trim())) &&
+    !hasArtifactContent
+
+  // WAITING phase: entity has a pending task status but no content/streaming yet.
+  // Pass task metadata to the inner component for a richer waiting indicator.
+  const waitingInfo = showIndicator && entity.taskStatus && PENDING_STATES.includes(entity.taskStatus)
+    ? {
+        taskStatus: entity.taskStatus,
+        taskStatusMessage: entity.taskStatusMessage ?? undefined,
+        taskContent: entity.taskContent,
+        taskCreatedAt: entity.taskCreatedAt,
+      }
+    : undefined
+
+  // displayContent priority:
+  // 1. '' — typing indicator phase
+  // 2. entity.content slice — typewriter reveal
+  // 3. streamingPreviewText — plain-text live preview during streaming
+  // 4. lastStreamingPreviewRef — transition frame: streaming ended, reveal not yet active
+  // 5. entity.content — static / fully revealed
+  const displayContent = showIndicator
+    ? ''
+    : isRevealing
+      ? entity.content.slice(0, revealedChars)
+      : isStreaming
+        ? streamingPreviewText
+        : isStartingReveal
+          ? lastStreamingPreviewRef.current
+          : entity.content
 
   const bubble: BubbleMessage = {
     id: entity.id,
@@ -637,7 +764,9 @@ export function EntityAgentBubble({
         isUserExpanded={isUserExpanded}
         onUserToggle={onUserToggle}
         onQuote={onQuote}
-        isStreaming={showAsStreaming}
+        isStreaming={isStreaming || isRevealing}
+        showIndicator={showIndicator}
+        waitingInfo={waitingInfo}
       />
       {entity.artifacts && entity.artifacts.length > 0 && (() => {
         const messageText = (entity.content || '').trim()

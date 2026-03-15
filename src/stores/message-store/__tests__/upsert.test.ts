@@ -148,6 +148,19 @@ describe('applyUpsert', () => {
       )
       expect(result).not.toBeNull()
     })
+
+    it('keeps working task with content as task-status', () => {
+      const entities = {
+        'msg-1': makeEntity({ source: 'db', taskStatus: 'working', displayType: 'task-status', content: '' }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'working', content: 'SSE update' }),
+        'sse',
+      )
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].displayType).toBe('agent-bubble')
+    })
   })
 
   describe('Rule 5: Never overwrite ephemeral from DB', () => {
