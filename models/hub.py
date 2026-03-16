@@ -8,7 +8,6 @@ Event type vocabularies
 
 **Hub → Cloud** (``HubPublishEvent.type``):
   task_submitted   — agent acknowledged the task
-  agent_token      — (DEPRECATED, Phase 5b removal pending) streaming text token
   agent_response   — final successful response (text + optional parts)
   agent_error      — dispatch or agent-level failure
   processing_status — terminal processing signal (completed / failed)
@@ -81,7 +80,6 @@ class RelayToHubEvent(BaseModel):
 
 HubPublishEventType = Literal[
     "task_submitted",
-    "agent_token",  # DEPRECATED: hub Phase 5 no longer emits this; remove after all hubs updated
     "agent_response",
     "agent_error",
     "processing_status",

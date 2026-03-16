@@ -229,21 +229,6 @@ class RelayTransport(AgentTransport):
                 agent_name=data.get("agent_name", ""),
             )
 
-        if event_type == "agent_token":
-            token_text = data.get("token", "")
-            return AgentEvent(
-                kind="artifact_update",
-                **base,
-                text=token_text,
-                artifacts=[{
-                    "artifact_id": f"{agent_message_id}-stream",
-                    "parts": [{"kind": "text", "text": token_text}],
-                }] if token_text else None,
-                append=True,
-                last_chunk=False,
-                skip_persist=True,
-            )
-
         if event_type == "agent_response":
             return AgentEvent(
                 kind="response",

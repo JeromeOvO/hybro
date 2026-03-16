@@ -4611,7 +4611,6 @@
             "type": "string",
             "enum": [
               "task_submitted",
-              "agent_token",
               "agent_response",
               "agent_error",
               "processing_status",

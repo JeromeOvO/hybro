@@ -603,30 +603,12 @@ def _make_msg(
 
 
 class TestRelayTransportNormalize:
-    def test_agent_token_normalizes_to_artifact_update(self):
-        """agent_token always normalizes to kind='artifact_update'."""
+    def test_agent_token_rejected_as_unknown(self):
+        """agent_token is no longer a recognized event type after Phase 5b."""
         rt = _make_relay_transport()
         msg = _make_msg()
         event = rt._normalize("agent_token", "amsg-001", {"token": "hello"}, msg)
-        assert event is not None
-        assert event.kind == "artifact_update"
-        assert event.text == "hello"
-        assert event.append is True
-        assert event.last_chunk is False
-        assert event.skip_persist is True
-        assert event.artifacts is not None
-        assert len(event.artifacts) == 1
-        assert event.artifacts[0]["artifact_id"] == "amsg-001-stream"
-        assert event.artifacts[0]["parts"] == [{"kind": "text", "text": "hello"}]
-
-    def test_agent_token_empty_text_no_artifacts(self):
-        """Empty token text produces artifacts=None."""
-        rt = _make_relay_transport()
-        msg = _make_msg()
-        event = rt._normalize("agent_token", "amsg-001", {"token": ""}, msg)
-        assert event is not None
-        assert event.kind == "artifact_update"
-        assert event.artifacts is None
+        assert event is None
 
     def test_agent_response(self):
         rt = _make_relay_transport()
