@@ -87,7 +87,6 @@ def _make_relay_service(
     if sse_manager is None:
         sse_manager = MagicMock()
         sse_manager.send_agent_response = AsyncMock()
-        sse_manager.send_agent_token = AsyncMock()
         sse_manager.send_task_submitted = AsyncMock()
         sse_manager.send_processing_status = AsyncMock()
         sse_manager.send_error = AsyncMock()
@@ -518,7 +517,6 @@ class TestRelayServicePublish:
 
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
-        sse.send_agent_token = AsyncMock()
         sse.send_task_submitted = AsyncMock()
         sse.send_processing_status = AsyncMock()
 
@@ -605,19 +603,8 @@ def _make_msg(
 
 
 class TestRelayTransportNormalize:
-    def test_agent_token_fallback(self, monkeypatch):
-        """With stream_via_artifact=False, agent_token normalizes to kind='token'."""
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
-        rt = _make_relay_transport()
-        msg = _make_msg()
-        event = rt._normalize("agent_token", "amsg-001", {"token": "hi"}, msg)
-        assert event is not None
-        assert event.kind == "token"
-        assert event.text == "hi"
-
-    def test_agent_token_normalizes_to_artifact_update(self, monkeypatch):
-        """With stream_via_artifact=True, agent_token normalizes to kind='artifact_update'."""
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+    def test_agent_token_normalizes_to_artifact_update(self):
+        """agent_token always normalizes to kind='artifact_update'."""
         rt = _make_relay_transport()
         msg = _make_msg()
         event = rt._normalize("agent_token", "amsg-001", {"token": "hello"}, msg)
@@ -632,9 +619,8 @@ class TestRelayTransportNormalize:
         assert event.artifacts[0]["artifact_id"] == "amsg-001-stream"
         assert event.artifacts[0]["parts"] == [{"kind": "text", "text": "hello"}]
 
-    def test_agent_token_empty_text_no_artifacts(self, monkeypatch):
-        """With stream_via_artifact=True and empty token, artifacts should be None."""
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
+    def test_agent_token_empty_text_no_artifacts(self):
+        """Empty token text produces artifacts=None."""
         rt = _make_relay_transport()
         msg = _make_msg()
         event = rt._normalize("agent_token", "amsg-001", {"token": ""}, msg)

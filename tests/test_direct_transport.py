@@ -432,16 +432,12 @@ class TestFinalizeStreamingWritesArtifacts:
 
 
 class TestMessageChunkEmitsArtifactUpdate:
-    """When stream_via_artifact=True, _handle_stream_message_chunk emits
-    send_artifact_update instead of send_agent_token."""
+    """_handle_stream_message_chunk emits send_artifact_update."""
 
     @pytest.mark.asyncio
-    async def test_message_chunk_emits_artifact_update(self, monkeypatch):
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
-
+    async def test_message_chunk_emits_artifact_update(self):
         proc = _make_processor()
         proc.sse_manager.send_artifact_update = AsyncMock()
-        proc.sse_manager.send_agent_token = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
 
         current_message = _make_room_agent_message()
@@ -467,12 +463,15 @@ class TestMessageChunkEmitsArtifactUpdate:
         result.role = "agent"
         result.message_id = "a2a-msg-1"
 
+        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
             lambda parts: MagicMock(text="Hello", has_non_text=False, file_parts=[], data_parts=[]),
         )
 
         await proc._handle_stream_message_chunk(result, ctx, streaming_state)
+
+        monkeypatch.undo()
 
         proc.sse_manager.send_artifact_update.assert_awaited_once()
         call_args = proc.sse_manager.send_artifact_update.call_args
@@ -481,61 +480,12 @@ class TestMessageChunkEmitsArtifactUpdate:
         assert artifact["artifact_id"] == "msg-1-stream"
         assert artifact["parts"] == [{"kind": "text", "text": "Hello"}]
         assert call_args[1]["append"] is True or call_args[0][4] is True
-        proc.sse_manager.send_agent_token.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_message_chunk_fallback_to_agent_token(self, monkeypatch):
-        """When stream_via_artifact=False, the old send_agent_token path is used."""
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
-
-        proc = _make_processor()
-        proc.sse_manager.send_artifact_update = AsyncMock()
-        proc.sse_manager.send_agent_token = AsyncMock()
-        proc.tsm.persist_message = AsyncMock(return_value=True)
-
-        current_message = _make_room_agent_message()
-        agent_card = MagicMock(spec_set=["name"])
-        agent_card.name = "test-agent"
-
-        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
-        ctx = ProcessingContext(
-            room_id="room-1",
-            current_message=current_message,
-            agent_card=agent_card,
-            user_message_id="msg-1",
-            task_info=task_info,
-            send_sse=True,
-        )
-
-        streaming_state = MessageStreamingState()
-
-        text_part = TextPart(kind="text", text="Hello")
-
-        result = MagicMock()
-        result.parts = [text_part]
-        result.role = "agent"
-        result.message_id = "a2a-msg-1"
-
-        monkeypatch.setattr(
-            "common.utils.a2a_helpers.extract_parts",
-            lambda parts: MagicMock(text="Hello", has_non_text=False, file_parts=[], data_parts=[]),
-        )
-
-        await proc._handle_stream_message_chunk(result, ctx, streaming_state)
-
-        proc.sse_manager.send_agent_token.assert_awaited_once_with(
-            "room-1", "msg-1", "agent-1", "Hello",
-        )
-        proc.sse_manager.send_artifact_update.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_message_chunk_skips_empty_content(self, monkeypatch):
+    async def test_message_chunk_skips_empty_content(self):
         """Empty text content should not emit any SSE event."""
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
-
         proc = _make_processor()
         proc.sse_manager.send_artifact_update = AsyncMock()
-        proc.sse_manager.send_agent_token = AsyncMock()
         proc.tsm.persist_message = AsyncMock(return_value=True)
 
         current_message = _make_room_agent_message()
@@ -559,6 +509,7 @@ class TestMessageChunkEmitsArtifactUpdate:
         result.role = "agent"
         result.message_id = "a2a-msg-1"
 
+        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(
             "common.utils.a2a_helpers.extract_parts",
             lambda parts: MagicMock(text="", has_non_text=False, file_parts=[], data_parts=[]),
@@ -566,18 +517,16 @@ class TestMessageChunkEmitsArtifactUpdate:
 
         await proc._handle_stream_message_chunk(result, ctx, streaming_state)
 
+        monkeypatch.undo()
+
         proc.sse_manager.send_artifact_update.assert_not_awaited()
-        proc.sse_manager.send_agent_token.assert_not_awaited()
 
 
 class TestFinalizeStreamingEmitsLastChunk:
-    """When stream_via_artifact=True, _finalize_streaming sends a
-    last_chunk=True artifact_update event."""
+    """_finalize_streaming sends a last_chunk=True artifact_update event."""
 
     @pytest.mark.asyncio
-    async def test_finalize_emits_last_chunk(self, monkeypatch):
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", True)
-
+    async def test_finalize_emits_last_chunk(self):
         proc = _make_processor()
         proc.sse_manager.send_artifact_update = AsyncMock()
         proc.tsm.transition_task = AsyncMock()
@@ -613,36 +562,3 @@ class TestFinalizeStreamingEmitsLastChunk:
         assert artifact["artifact_id"] == "msg-1-stream"
         assert artifact["parts"] == []
         assert first_call[1]["last_chunk"] is True or first_call[0][5] is True
-
-    @pytest.mark.asyncio
-    async def test_finalize_no_last_chunk_when_flag_off(self, monkeypatch):
-        monkeypatch.setattr("config.settings.settings.stream_via_artifact", False)
-
-        proc = _make_processor()
-        proc.sse_manager.send_artifact_update = AsyncMock()
-        proc.tsm.transition_task = AsyncMock()
-        proc.tsm.persist_message = AsyncMock(return_value=True)
-        proc.response_handler.handle = AsyncMock()
-
-        current_message = _make_room_agent_message()
-        agent_card = MagicMock(spec_set=["name"])
-        agent_card.name = "test-agent"
-
-        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
-        ctx = ProcessingContext(
-            room_id="room-1",
-            current_message=current_message,
-            agent_card=agent_card,
-            user_message_id="msg-1",
-            task_info=task_info,
-            send_sse=True,
-        )
-
-        streaming_state = MessageStreamingState()
-        streaming_state.full_response_text = "Agent done."
-        streaming_state.accumulated_parts = [MagicMock()]
-        streaming_state.non_text_parts = []
-
-        await proc._finalize_streaming(ctx, streaming_state)
-
-        proc.sse_manager.send_artifact_update.assert_not_awaited()

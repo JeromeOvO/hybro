@@ -1,7 +1,7 @@
 """AgentResponseHandler — single source of truth for processing agent results.
 
 Terminal events delegate to ``notify_task_update`` for SSE emission.
-Streaming events (token, artifact_update) use ``SSEManager`` directly.
+Streaming events (artifact_update) use ``SSEManager`` directly.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from a2a.types import TaskState
 
 from common.utils.logger import get_logger
-from config.settings import settings
 from modules.agent_event import AgentEvent
 
 if TYPE_CHECKING:
@@ -25,7 +24,7 @@ class AgentResponseHandler:
     """Single source of truth for processing agent results.
 
     Terminal events delegate to notify_task_update for SSE emission.
-    Streaming events (token, artifact_update) use sse_manager directly.
+    Streaming events (artifact_update) use sse_manager directly.
     """
 
     def __init__(
@@ -40,8 +39,6 @@ class AgentResponseHandler:
 
     async def handle(self, event: AgentEvent) -> None:
         match event.kind:
-            case "token":
-                await self._on_token(event)
             case "artifact_update":
                 await self._on_artifact(event)
             case "response":
@@ -60,14 +57,6 @@ class AgentResponseHandler:
                 await self._on_processing_status(event)
 
     # --- Streaming events (direct SSE, no terminal DB persist) ---
-
-    async def _on_token(self, e: AgentEvent) -> None:
-        await self._sse.send_agent_token(
-            room_id=e.room_id,
-            message_id=e.message_id,
-            agent_id=e.agent_id,
-            token=e.text,
-        )
 
     async def _on_artifact(self, e: AgentEvent) -> None:
         artifact = e.artifacts[0] if e.artifacts else None
@@ -101,7 +90,7 @@ class AgentResponseHandler:
                 e.message_id, artifact, append=e.append,
             )
 
-        # SSE emission: artifact_update for artifacts, token for text-only
+        # SSE emission: artifact_update for real artifacts or synthetic text-only fallback
         if artifact:
             logger.debug(
                 "Sending artifact_update SSE for message %s (append=%s, last_chunk=%s)",
@@ -118,26 +107,18 @@ class AgentResponseHandler:
                 last_chunk=e.last_chunk,
             )
         elif e.text:
-            if settings.stream_via_artifact:
-                fallback_artifact = {
-                    "artifact_id": f"{e.message_id}-stream",
-                    "parts": [{"kind": "text", "text": e.text}],
-                }
-                await self._sse.send_artifact_update(
-                    room_id=e.room_id,
-                    message_id=e.message_id,
-                    agent_id=e.agent_id,
-                    artifact=fallback_artifact,
-                    append=e.append,
-                    last_chunk=e.last_chunk,
-                )
-            else:
-                await self._sse.send_agent_token(
-                    room_id=e.room_id,
-                    message_id=e.message_id,
-                    agent_id=e.agent_id,
-                    token=e.text,
-                )
+            fallback_artifact = {
+                "artifact_id": f"{e.message_id}-stream",
+                "parts": [{"kind": "text", "text": e.text}],
+            }
+            await self._sse.send_artifact_update(
+                room_id=e.room_id,
+                message_id=e.message_id,
+                agent_id=e.agent_id,
+                artifact=fallback_artifact,
+                append=e.append,
+                last_chunk=e.last_chunk,
+            )
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
 
@@ -248,21 +229,13 @@ class AgentResponseHandler:
 
     async def _on_status(self, e: AgentEvent) -> None:
         if e.text:
-            if settings.stream_via_artifact:
-                await self._sse.send_task_update(
-                    room_id=e.room_id,
-                    message_id=e.message_id,
-                    status="working",
-                    status_message=e.text,
-                    agent_id=e.agent_id,
-                )
-            else:
-                await self._sse.send_agent_token(
-                    room_id=e.room_id,
-                    message_id=e.message_id,
-                    agent_id=e.agent_id,
-                    token=e.text,
-                )
+            await self._sse.send_task_update(
+                room_id=e.room_id,
+                message_id=e.message_id,
+                status="working",
+                status_message=e.text,
+                agent_id=e.agent_id,
+            )
 
     async def _on_processing_status(self, e: AgentEvent) -> None:
         await self._sse.send_processing_status(

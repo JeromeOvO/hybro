@@ -4,9 +4,7 @@ Absorbs all response-processing logic (formerly in ``ResponseProcessor``)
 and replaces terminal ``notify_task_update`` calls with ``AgentEvent``
 emissions through ``AgentResponseHandler``.
 
-Mid-stream SSE uses ``send_artifact_update`` (A2A-standard) by default
-when ``settings.stream_via_artifact`` is True. The legacy
-``send_agent_token`` path is retained behind the flag for rollback.
+Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
 """
 
 import asyncio
@@ -34,7 +32,6 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
-from config.settings import settings
 from models.processing import ProcessingContext, ProcessingResult, ProcessingStatus
 from models.room import RoomAgentMessage
 from modules.agent_event import AgentEvent
@@ -830,26 +827,18 @@ class DirectTransport(AgentTransport):
             await self.tsm.persist_message(ctx.current_message)
 
         if ctx.send_sse and content:
-            if settings.stream_via_artifact:
-                artifact_dict = {
-                    "artifact_id": f"{ctx.current_message.message_id}-stream",
-                    "parts": [{"kind": "text", "text": content}],
-                }
-                await self.sse_manager.send_artifact_update(
-                    ctx.room_id,
-                    ctx.current_message.message_id,
-                    ctx.current_message.agent_id,
-                    artifact_dict,
-                    append=True,
-                    last_chunk=False,
-                )
-            else:
-                await self.sse_manager.send_agent_token(
-                    ctx.room_id,
-                    ctx.current_message.message_id,
-                    ctx.current_message.agent_id,
-                    content,
-                )
+            artifact_dict = {
+                "artifact_id": f"{ctx.current_message.message_id}-stream",
+                "parts": [{"kind": "text", "text": content}],
+            }
+            await self.sse_manager.send_artifact_update(
+                ctx.room_id,
+                ctx.current_message.message_id,
+                ctx.current_message.agent_id,
+                artifact_dict,
+                append=True,
+                last_chunk=False,
+            )
 
     @staticmethod
     def _handle_stream_task_event(result) -> None:
@@ -1001,7 +990,7 @@ class DirectTransport(AgentTransport):
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
-        if settings.stream_via_artifact and ctx.send_sse:
+        if ctx.send_sse:
             await self.sse_manager.send_artifact_update(
                 ctx.room_id,
                 ctx.current_message.message_id,

@@ -14,7 +14,6 @@ from a2a.types import TaskState
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from config.settings import settings
 from models.hub import RelayToHubEvent
 from models.processing import ProcessingResult, ProcessingStatus
 from modules.agent_event import AgentEvent
@@ -34,15 +33,6 @@ if TYPE_CHECKING:
     from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
-
-_EVENT_TYPE_MAP = {
-    "task_submitted": "task_submitted",
-    "agent_token": "token",
-    "agent_response": "response",
-    "agent_error": "error",
-    "artifact_update": "artifact_update",
-    "processing_status": "processing_status",
-}
 
 
 class RelayTransport(AgentTransport):
@@ -240,24 +230,18 @@ class RelayTransport(AgentTransport):
             )
 
         if event_type == "agent_token":
-            if settings.stream_via_artifact:
-                token_text = data.get("token", "")
-                return AgentEvent(
-                    kind="artifact_update",
-                    **base,
-                    text=token_text,
-                    artifacts=[{
-                        "artifact_id": f"{agent_message_id}-stream",
-                        "parts": [{"kind": "text", "text": token_text}],
-                    }] if token_text else None,
-                    append=True,
-                    last_chunk=False,
-                    skip_persist=True,
-                )
+            token_text = data.get("token", "")
             return AgentEvent(
-                kind="token",
+                kind="artifact_update",
                 **base,
-                text=data.get("token", ""),
+                text=token_text,
+                artifacts=[{
+                    "artifact_id": f"{agent_message_id}-stream",
+                    "parts": [{"kind": "text", "text": token_text}],
+                }] if token_text else None,
+                append=True,
+                last_chunk=False,
+                skip_persist=True,
             )
 
         if event_type == "agent_response":

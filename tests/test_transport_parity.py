@@ -25,7 +25,6 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
-        sse.send_agent_token = AsyncMock()
         sse.send_agent_response = AsyncMock()
         sse.send_artifact_update = AsyncMock()
         sse.send_task_submitted = AsyncMock()
@@ -50,10 +49,28 @@ def _base(**overrides):
 
 
 def _multi_event_sequence(*, skip_persist: bool) -> list[AgentEvent]:
-    """token -> token -> artifact_update -> response (terminal)."""
+    """artifact_update (text) -> artifact_update (text) -> artifact_update (file) -> response (terminal)."""
     return [
-        AgentEvent(kind="token", **_base(), text="Hello ", skip_persist=skip_persist),
-        AgentEvent(kind="token", **_base(), text="world", skip_persist=skip_persist),
+        AgentEvent(
+            kind="artifact_update", **_base(),
+            text="Hello ",
+            artifacts=[{
+                "artifact_id": "msg-001-stream",
+                "parts": [{"kind": "text", "text": "Hello "}],
+            }],
+            append=True, last_chunk=False,
+            skip_persist=skip_persist,
+        ),
+        AgentEvent(
+            kind="artifact_update", **_base(),
+            text="world",
+            artifacts=[{
+                "artifact_id": "msg-001-stream",
+                "parts": [{"kind": "text", "text": "world"}],
+            }],
+            append=True, last_chunk=False,
+            skip_persist=skip_persist,
+        ),
         AgentEvent(
             kind="artifact_update", **_base(),
             text="file ready", artifacts=[{"id": "a1"}],
@@ -86,17 +103,11 @@ class TestMultiEventSequenceWithPersist:
             for event in _multi_event_sequence(skip_persist=False):
                 await h.handle(event)
 
-        # Two token events -> two send_agent_token calls
-        # artifact_update now uses send_artifact_update instead of send_agent_token
-        assert h._sse.send_agent_token.await_count == 2
+        # Three artifact_update events -> three send_artifact_update calls
+        assert h._sse.send_artifact_update.await_count == 3
 
-        # artifact_update uses send_artifact_update
-        h._sse.send_artifact_update.assert_awaited_once()
-
-        # artifact_update uses accumulate_artifact_on_message
-        h._db.accumulate_artifact_on_message.assert_awaited_once_with(
-            "msg-001", {"id": "a1"}, append=False,
-        )
+        # All three artifact_update events with artifacts trigger DB accumulation
+        assert h._db.accumulate_artifact_on_message.await_count == 3
 
         # response persists "completed" state via update_task_state_on_message
         h._db.update_task_state_on_message.assert_awaited_once_with(
@@ -133,9 +144,8 @@ class TestMultiEventSequenceSkipPersist:
                 await h.handle(event)
 
         # SSE emissions are identical regardless of skip_persist
-        # Two tokens + one artifact_update + one agent_response
-        assert h._sse.send_agent_token.await_count == 2
-        h._sse.send_artifact_update.assert_awaited_once()
+        # Three artifact_update events + one agent_response
+        assert h._sse.send_artifact_update.await_count == 3
         h._sse.send_agent_response.assert_awaited_once()
 
         # DB writes are skipped
@@ -167,16 +177,12 @@ class TestSSEParity:
                     await h.handle(event)
 
             results[skip] = {
-                "token_count": h._sse.send_agent_token.await_count,
-                "token_calls": h._sse.send_agent_token.call_args_list,
                 "artifact_count": h._sse.send_artifact_update.await_count,
                 "artifact_calls": h._sse.send_artifact_update.call_args_list,
                 "response_count": h._sse.send_agent_response.await_count,
                 "response_calls": h._sse.send_agent_response.call_args_list,
             }
 
-        assert results[True]["token_count"] == results[False]["token_count"]
-        assert results[True]["token_calls"] == results[False]["token_calls"]
         assert results[True]["artifact_count"] == results[False]["artifact_count"]
         assert results[True]["artifact_calls"] == results[False]["artifact_calls"]
         assert results[True]["response_count"] == results[False]["response_count"]
