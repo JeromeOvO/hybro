@@ -2,10 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { useMessageStore } from '@/stores/message-store'
 
-vi.mock('@/hooks/useStreamingContent', () => ({
-  useStreamingContent: vi.fn().mockReturnValue({ streamingText: '', isStreaming: false }),
-}))
-
 vi.mock('@/hooks/useAutoHideScroll', () => ({
   useAutoHideScroll: vi.fn(),
 }))

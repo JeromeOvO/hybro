@@ -1,6 +1,6 @@
 # Remove `agent_token` — Unify Streaming on A2A Protocol
 
-> **Status: Phase 2 Implemented** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
+> **Status: Phase 5 Implemented; Phase 5b Pending** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
 
 **Target A2A version**: v0.3 (current Hybro SDK: `@a2a-js/sdk ^0.3.10`)
 **v1.0 readiness**: Design is forward-compatible with A2A v1.0; v1.0-only features are flagged as future enhancements.
@@ -141,15 +141,15 @@ Hub daemon publishes events (via relay_client.publish())
 ```
 Local agent streams A2A SSE response to hub daemon
   │
-  ├─ A2A kind="message"     → DispatchEvent(type="agent_token", data={token: text, parts})
+  ├─ A2A kind="message"     → DispatchEvent(type="artifact_update", data={raw, text, parts, append, last_chunk, artifact})  [Phase 5]
   ├─ A2A kind="artifact-update" → DispatchEvent(type="artifact_update", data={raw, text, parts, append, last_chunk})
   ├─ A2A kind="status-update"   → DispatchEvent(type="task_status", data={state, status_text, final, ...})
   └─ A2A kind="task"            → DispatchEvent(type="task_submitted", data={task_id, ...})
 ```
 
-The hub daemon is the **origin** of `agent_token` events in the relay path: it translates A2A `message` streaming events (text chunks) into `agent_token` hub publish events, then publishes them to the cloud backend via HTTP POST. The publish queue (`publish_queue.py`) treats `agent_token` as a `STREAMING_EVENTS` type with low retry budget (`max_retries_streaming = 3`).
+~~The hub daemon is the **origin** of `agent_token` events in the relay path: it translates A2A `message` streaming events (text chunks) into `agent_token` hub publish events, then publishes them to the cloud backend via HTTP POST. The publish queue (`publish_queue.py`) treats `agent_token` as a `STREAMING_EVENTS` type with low retry budget (`max_retries_streaming = 3`).~~ **Updated (Phase 5)**: The hub daemon now emits `artifact_update` for both `kind="message"` and `kind="artifact-update"` A2A events. The streaming retry tier (`STREAMING_EVENTS`) has been removed; all events use the normal retry budget.
 
-### 3.3 Frontend: Two rendering pipelines
+### 3.3 Frontend: Two rendering pipelines (historical — agent_token path removed in Phase 2)
 
 ```
 SSE events arrive
@@ -170,7 +170,7 @@ SSE events arrive
 
 ### 3.4 Files to remove or modify
 
-#### Frontend — Files to DELETE (agent_token-only infrastructure)
+#### Frontend — Files DELETED (Phase 3)
 
 | File | Lines | Purpose |
 |------|-------|---------|
@@ -200,25 +200,25 @@ SSE events arrive
 
 | File | Changes | Phase 1 |
 |------|---------|---------|
-| `config/settings.py` | Add `stream_via_artifact: bool = True` feature flag | ✅ Done |
-| `modules/transports/direct.py` | `_handle_stream_message_chunk`: emit `send_artifact_update` instead of `send_agent_token` | ✅ Done (flag-gated) |
-| `modules/transports/relay.py` | Remove `"agent_token" → "token"` normalization; convert inbound `agent_token` hub events to `artifact_update` AgentEvents | ✅ Done (flag-gated) |
-| `modules/agent_response_handler.py` | Remove `_on_token` method and `case "token"` branch; remove fallback `send_agent_token` in `_on_artifact`; **remove `send_agent_token` call in `_on_status` — replace with `send_artifact_update` or `send_task_update` depending on semantics** | ✅ Partial (flag-gated; dead code removal deferred to Phase 4) |
-| `services/sse_services.py` | Remove `send_agent_token` method; remove `agent_token` special-casing in `broadcast_to_room` | Phase 4 |
-| `modules/agent_event.py` | Remove `"token"` from `kind` Literal union | Phase 4 |
-| `models/hub.py` | Remove `"agent_token"` from `HubPublishEventType` | Phase 4 |
+| `config/settings.py` | Add `stream_via_artifact: bool = True` feature flag | ✅ Done (removed in Phase 4) |
+| `modules/transports/direct.py` | `_handle_stream_message_chunk`: emit `send_artifact_update` instead of `send_agent_token` | ✅ Done (flag removed in Phase 4) |
+| `modules/transports/relay.py` | Remove `"agent_token" → "token"` normalization; convert inbound `agent_token` hub events to `artifact_update` AgentEvents | ✅ Done (flag removed in Phase 4) |
+| `modules/agent_response_handler.py` | Remove `_on_token` method and `case "token"` branch; remove fallback `send_agent_token` in `_on_artifact`; **remove `send_agent_token` call in `_on_status` — replace with `send_artifact_update` or `send_task_update` depending on semantics** | ✅ Done (dead code removed in Phase 4) |
+| `services/sse_services.py` | Remove `send_agent_token` method; remove `agent_token` special-casing in `broadcast_to_room` | ✅ Done (Phase 4) |
+| `modules/agent_event.py` | Remove `"token"` from `kind` Literal union | ✅ Done (Phase 4) |
+| `models/hub.py` | Remove `"agent_token"` from `HubPublishEventType` | Deferred to Phase 5b (kept with deprecation comment for backward compat until all hubs updated) |
 
 #### Hybro-Hub — Files to MODIFY
 
-The hub daemon (`hybro-hub`) is the **source** of `agent_token` events for hub-relayed agents. It translates A2A `message` streaming events into `agent_token` hub publish events. These changes can be deferred (the backend's `RelayTransport` normalization handles them transparently), but should be made to complete the migration.
+~~The hub daemon (`hybro-hub`) is the **source** of `agent_token` events for hub-relayed agents. It translates A2A `message` streaming events into `agent_token` hub publish events. These changes can be deferred (the backend's `RelayTransport` normalization handles them transparently), but should be made to complete the migration.~~ **Updated (Phase 5)**: All hub files below have been updated.
 
-| File | Changes |
-|------|---------|
-| `hub/dispatcher.py` | In `_dispatch_streaming`: change A2A `kind="message"` translation from `DispatchEvent(type="agent_token")` to `DispatchEvent(type="artifact_update")`, wrapping message text as artifact with `append=True`. Update the accumulation logic (line 102-103) that currently does `result.text += event.data.get("token", "")` to use the artifact text path. Also update the yield guard (line 100) that checks `event.type in ("agent_token", "artifact_update", "task_status")`. |
-| `hub/publish_queue.py` | Update `STREAMING_EVENTS = frozenset({"agent_token"})` to `frozenset({"artifact_update"})` — or remove the streaming-specific retry budget entirely since `artifact_update` is already in the normal retry tier. |
-| `hub/config.py` | Update comments documenting `max_retries_streaming = 3` for `agent_token`; reassess whether a separate streaming retry tier is still needed. |
-| `tests/test_publish_queue.py` | Update tests that create `{"type": "agent_token"}` events to use `artifact_update`. |
-| `tests/test_dispatcher.py` | Update tests for the streaming event translation. |
+| File | Changes | Status |
+|------|---------|--------|
+| `hub/dispatcher.py` | Changed A2A `kind="message"` translation to `DispatchEvent(type="artifact_update")` with synthetic artifact dict. Collapsed accumulation branches. | ✅ Phase 5 |
+| `hub/publish_queue.py` | Removed `STREAMING_EVENTS` and streaming retry tier from `_max_retries_for()`. | ✅ Phase 5 |
+| `hub/config.py` | Updated `max_retries_streaming` comment to note it's unused. | ✅ Phase 5 |
+| `tests/test_publish_queue.py` | Updated all `agent_token` references; replaced streaming-tier test with normal-tier assertion. | ✅ Phase 5 |
+| `tests/test_dispatcher.py` | Added 3 streaming dispatch tests for `kind="message"` → `artifact_update` translation. | ✅ Phase 5 |
 
 #### a2a-adapter — No changes needed
 
@@ -509,38 +509,80 @@ All changes retain the legacy `agent_token` path behind the flag for rollback (`
 8. Removed `agent_token` ephemeral branch from `upsert.ts`. Audited `isEphemeral` — still needed for processing placeholders and cancel confirmations.
 9. Added `agentId`/`agentSource` to `artifact_update` handler to prevent missing avatar when artifact arrives before `task_submitted`.
 10. Added streaming guard to artifact deduplication filter to prevent visual flash when `entity.content` arrives.
-11. Updated tests: removed `agent_token` test cases, `streamingBuffer`/`TypewriterManager` mocks, and `createAgentTokenSSE` helper.
+11. Updated tests: removed `agent_token` test cases and `createAgentTokenSSE` helper. Removed `streamingBuffer`/`TypewriterManager` mocks from SSE handler tests and `useStreamingContent` mocks from component tests.
 
-**Dead code still present (deferred to Phase 3):** `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, `streaming-cursor.tsx`, and associated test files. No production code imports them.
+**Dead code deleted (Phase 3, executed alongside Phase 2):** `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, `streaming-cursor.tsx`, `streaming-lifecycle.test.ts`, `typewriter.test.ts`, `streaming-buffer.test.ts`, `useStreamingContent.test.ts`, and `streaming-cursor.test.tsx`.
 
 ### Phase 3: Delete dead code
 
-1. Delete `src/stores/streaming-buffer.ts`.
-2. Delete `src/hooks/useStreamingContent.ts`.
-3. Delete `src/stores/typewriter.ts`.
-4. Delete associated test files.
-5. Delete `docs/TOKEN_STREAMING_DESIGN.md` (or archive with a deprecation header).
-6. Update `docs/STREAMING_RENDERING_REDESIGN.md` to reflect the unified path.
+**Status**: Implemented (executed alongside Phase 2).
+
+**What was done:**
+
+1. Deleted `src/stores/streaming-buffer.ts`.
+2. Deleted `src/hooks/useStreamingContent.ts`.
+3. Deleted `src/stores/typewriter.ts`.
+4. Deleted `src/components/streaming-cursor.tsx`.
+5. Deleted test files: `src/stores/__tests__/streaming-lifecycle.test.ts`, `src/stores/__tests__/typewriter.test.ts`, `tests/unit/stores/streaming-buffer.test.ts`, `tests/unit/hooks/useStreamingContent.test.ts`, `tests/unit/components/streaming-cursor.test.tsx`.
+
+**Remaining (deferred):**
+
+6. ~~Delete `docs/TOKEN_STREAMING_DESIGN.md` (or archive with a deprecation header).~~ Done (added deprecation header).
+7. ~~Update `docs/STREAMING_RENDERING_REDESIGN.md` to reflect the unified path.~~ Done.
 
 ### Phase 4: Backend cleanup
 
-1. Delete `SSEManager.send_agent_token()`.
-2. Delete `AgentResponseHandler._on_token()` and `case "token"`.
-3. Remove `"token"` from `AgentEvent.kind`.
-4. Remove `"agent_token"` from `HubPublishEventType`.
-5. Remove `agent_token` log suppression in `broadcast_to_room`.
-6. Remove the feature flag once stable.
+**Status**: Implemented.
 
-### Phase 5: Hub daemon — Emit artifact_update instead of agent_token (optional, can defer)
+**What was done:**
 
-**Scope**: `hybro-hub` only. Backend's `RelayTransport` normalization already handles `agent_token` → `artifact_update` transparently, so this phase is an optimization to align the hub's wire protocol.
+1. Deleted `SSEManager.send_agent_token()` method from `services/sse_services.py`.
+2. Removed `agent_token` log suppression in `broadcast_to_room` (both the silent-drop and debug-level logging).
+3. Deleted `AgentResponseHandler._on_token()` and `case "token"` from the match dispatch block.
+4. Removed all `stream_via_artifact` feature flag branches in `agent_response_handler.py`, `direct.py`, and `relay.py` — hardcoded the `artifact_update` path.
+5. Removed `"token"` from `AgentEvent.kind` Literal union.
+6. Kept `"agent_token"` in `HubPublishEventType` with deprecation comment (hub daemon still emits it; relay normalization always maps to `artifact_update`).
+7. Deleted `stream_via_artifact: bool = True` setting from `config/settings.py`.
+8. Deleted unused `_EVENT_TYPE_MAP` from `relay.py`.
+9. Removed `settings` imports from `agent_response_handler.py`, `direct.py`, and `relay.py` (no longer needed).
+10. Updated all 4 test files: removed `send_agent_token` mocks, `kind="token"` events, flag-off fallback tests, and monkeypatch calls.
 
-1. In `hub/dispatcher.py`, change A2A `kind="message"` translation from `DispatchEvent(type="agent_token")` to `DispatchEvent(type="artifact_update")` with message text wrapped as artifact parts.
-2. Update `hub/publish_queue.py`: change `STREAMING_EVENTS = frozenset({"agent_token"})` — either update to `frozenset({"artifact_update"})` or remove the streaming-specific retry tier (since `artifact_update` is already in the normal tier, consider whether text streaming chunks still need lower retry budget).
-3. Update `hub/config.py` comments for `max_retries_streaming`.
-4. Update hub tests (`test_publish_queue.py`, `test_dispatcher.py`).
+**Note on `HubPublishEventType`**: `"agent_token"` is intentionally retained for backward compatibility with pre-Phase-5 hub daemons. The relay normalization handles it transparently. Remove after all hub daemons are confirmed updated to Phase 5 (Phase 5b).
 
-**Coordination note**: This phase requires the backend's `RelayTransport` to accept `artifact_update` from the hub (it already does). However, if hub and backend are deployed independently, the backend's normalization in Phase 1 ensures backward compatibility — old hubs emitting `agent_token` continue to work.
+### Phase 5: Hub daemon — Emit artifact_update instead of agent_token
+
+**Status**: Implemented.
+
+**Scope**: `hybro-hub` only. Backend's `RelayTransport` normalization already handles `agent_token` → `artifact_update` transparently, so this phase aligns the hub's wire protocol.
+
+**What was done:**
+
+1. In `hub/dispatcher.py`, changed A2A `kind="message"` translation from `DispatchEvent(type="agent_token")` to `DispatchEvent(type="artifact_update")` with message text wrapped as a synthetic artifact dict (`artifactId: "{agent_message_id}-stream"`, `parts: [{kind: "text", text}]`, `append: true`, `last_chunk: false`). This matches the backend's `RelayTransport._normalize` extraction path for `artifact_update` events.
+2. Updated `dispatch()` accumulation: removed `"agent_token"` from the streaming yield guard and collapsed the `agent_token`/`artifact_update` branches — both message-derived and native artifact events now accumulate into `result.artifact_text`.
+3. Removed `STREAMING_EVENTS = frozenset({"agent_token"})` from `hub/publish_queue.py` and simplified `_max_retries_for()` — all events now use either `max_retries_critical` or `max_retries_normal`.
+4. Updated `hub/config.py` comment on `max_retries_streaming` to note it's unused (field retained for config-file backward compat).
+5. Updated hub tests: added 3 streaming dispatch tests (`test_message_kind_emits_artifact_update`, `test_native_artifact_update_unchanged`, `test_empty_message_skipped`); updated all `agent_token` references in `test_publish_queue.py`.
+
+**Deferred to Phase 5b**: Remove `"agent_token"` from backend `HubPublishEventType` and the `RelayTransport._normalize` backward-compat branch. This requires confirming all hub daemons are updated, since Pydantic validation on the `/publish` endpoint would reject `agent_token` events if the Literal type no longer includes it.
+
+**Coordination note**: The hub can be deployed independently. The backend already accepts `artifact_update` from the hub (Phase 4). Old hub daemons continue to work because the backend's relay normalization still handles `agent_token`.
+
+### Phase 5b: Backend cleanup — Remove agent_token backward compat
+
+**Status**: Pending. Requires all production hub daemons running Phase 5+ code.
+
+**Scope**: `multi-agents-backend` only.
+
+**Acceptance criteria**: All production hub daemons confirmed running Phase 5+ code (emitting `artifact_update` instead of `agent_token`).
+
+**What to do:**
+
+1. Remove `"agent_token"` from `HubPublishEventType` Literal in `models/hub.py`.
+2. Remove the `if event_type == "agent_token"` normalization branch in `relay.py` `_normalize()`.
+3. Remove `agent_token` from the `models/hub.py` module docstring.
+4. Update `test_api_relay.py`: remove `agent_token` normalization test cases.
+
+**Risk**: If any hub daemon is still running pre-Phase-5 code, its `agent_token` publish events will be rejected by Pydantic validation on the `/publish` endpoint (the Literal type will no longer include `"agent_token"`). Ensure all hubs are updated before deploying.
 
 ---
 
@@ -616,21 +658,22 @@ Messages already persisted in the database are unaffected. Historical messages t
 | `AgentResponseHandler._on_artifact: text-only uses artifact_update` | Verify text fallback wraps as artifact when flag on | ✅ `test_agent_response_handler.py` |
 | `AgentResponseHandler._on_status: emits task_update` | Verify status_update with text emits `send_task_update`, not `agent_token` | ✅ `test_agent_response_handler.py` |
 | `AgentResponseHandler._on_status: fallback to token` | Verify legacy `send_agent_token` path when flag off | ✅ `test_agent_response_handler.py` |
-| `TextPartView: renders markdown with streaming caret` | Verify Streamdown receives `isStreaming` prop from artifact | Phase 2 |
-| `EntityAgentBubble: shows indicator until artifact arrives` | Verify `showIndicator` hides when `entity.artifacts.length > 0` | Phase 2 |
-| `artifact_update handler: dismisses processing placeholder` | Verify placeholder removed on first artifact event | Phase 2 |
-| `Hub dispatcher: message kind emits artifact_update` | (Phase 5) Verify A2A `message` events are translated to `DispatchEvent(type="artifact_update")` | Phase 5 |
+| `TextPartView: renders markdown with streaming caret` | Verify Streamdown receives `isStreaming` prop from artifact | ✅ Phase 2 |
+| `EntityAgentBubble: shows indicator until artifact arrives` | Verify `showIndicator` hides when `entity.artifacts.length > 0` | ✅ Phase 2 |
+| `artifact_update handler: dismisses processing placeholder` | Verify placeholder removed on first artifact event | ✅ Phase 2 |
+| `Hub dispatcher: message kind emits artifact_update` | (Phase 5) Verify A2A `message` events are translated to `DispatchEvent(type="artifact_update")` | ✅ `test_dispatcher.py` |
 
-### Unit tests to REMOVE
+### Unit tests REMOVED (Phase 2/3)
 
-| Test | Reason |
-|------|--------|
-| `streaming-lifecycle.test.ts` (entire file) | Tests `StreamingBuffer` + `TypewriterManager` lifecycle |
-| `streaming-buffer.test.ts` (entire file) | Tests deleted module |
-| `useStreamingContent.test.ts` (entire file) | Tests deleted hook |
-| `agent_token` cases in `useRoomWebhook.test.ts` | Handler deleted |
-| `streamingBuffer` mocks in 6 test files | Dead imports |
-| `_on_status → send_agent_token` cases in `test_agent_response_handler.py` | `_on_status` no longer emits `agent_token` |
+| Test | Reason | Status |
+|------|--------|--------|
+| `streaming-lifecycle.test.ts` (entire file) | Tests `StreamingBuffer` + `TypewriterManager` lifecycle | ✅ Deleted |
+| `typewriter.test.ts` (entire file) | Tests deleted module | ✅ Deleted |
+| `streaming-buffer.test.ts` (entire file) | Tests deleted module | ✅ Deleted |
+| `useStreamingContent.test.ts` (entire file) | Tests deleted hook | ✅ Deleted |
+| `agent_token` cases in `useRoomWebhook.test.ts` | Handler deleted | ✅ Removed |
+| `streamingBuffer` mocks in 6 test files | Dead imports | ✅ Removed |
+| `_on_status → send_agent_token` cases in `test_agent_response_handler.py` | `_on_status` no longer emits `agent_token` | ✅ Phase 1 |
 
 ### Manual testing matrix
 
@@ -653,8 +696,8 @@ Messages already persisted in the database are unaffected. Historical messages t
 |------|-----------|--------|------------|
 | Performance regression from per-chunk store updates | Low | Medium | Benchmark with GPT-4o streaming; add 16ms debounce if needed (§7.1) |
 | MongoDB write amplification | Low | Low | `$concatArrays` is atomic; monitor `oplog` size during load test (§7.2) |
-| Hub agents still emit `agent_token` after backend migration | Certain | None | RelayTransport normalization handles this transparently (§8.1). Phase 5 updates the hub daemon itself. |
-| Hub daemon deployment coordination | Low | Medium | Phase 5 is independent of Phases 1-4; RelayTransport normalization ensures backward compat. However, if hub and backend are deployed together, coordinate the Phase 5 changes. |
+| Hub agents still emit `agent_token` after backend migration | ~~Certain~~ Resolved | None | ~~RelayTransport normalization handles this transparently (§8.1). Phase 5 updates the hub daemon itself.~~ Phase 5 complete — hub now emits `artifact_update`. Backend relay normalization retained for old hubs until Phase 5b. |
+| Hub daemon deployment coordination | Low | Medium | Phase 5 is independent of Phases 1-4; RelayTransport normalization ensures backward compat. Hub can be deployed independently; old hubs continue to work. |
 | Typewriter removal feels like UX regression | Medium | Low | If user feedback is negative, implement Option B (§4.8) — component-local typewriter with no global state |
 | SSE payload size increase | Low | Negligible | 100 bytes/event overhead, 5KB/sec at peak (§7.3) |
 | Feature flag rollback needed | Low | Low | Backend flag reverts to `agent_token`; frontend handles both during transition |
@@ -681,9 +724,9 @@ Messages already persisted in the database are unaffected. Historical messages t
 
 2. **Persistence frequency**: Should every streaming chunk be persisted to MongoDB, or should we batch/skip for performance? Current recommendation is per-chunk persistence (§7.2 Option C), but this can be revisited under load.
 
-3. **Hub daemon migration**: After the backend stops emitting `agent_token`, should the hub daemon protocol vocabulary (`HubPublishEventType`) also drop `"agent_token"`? This requires coordinating with hub agent implementations.
+3. **Hub daemon migration**: ~~After the backend stops emitting `agent_token`, should the hub daemon protocol vocabulary (`HubPublishEventType`) also drop `"agent_token"`? This requires coordinating with hub agent implementations.~~ **Resolved (Phase 5)**: Hub daemon now emits `artifact_update` instead of `agent_token`. `HubPublishEventType` retains `"agent_token"` for backward compat with old hubs until Phase 5b confirms all hubs are updated.
 
-4. **Artifact deduplication**: The frontend currently deduplicates text-only artifacts whose text matches `entity.content`. With all streaming going through artifacts, this dedup logic may need to be revisited — the artifact text *is* the primary content, not a duplicate.
+4. **Artifact deduplication**: ~~The frontend currently deduplicates text-only artifacts whose text matches `entity.content`. With all streaming going through artifacts, this dedup logic may need to be revisited — the artifact text *is* the primary content, not a duplicate.~~ **Resolved (Phase 2)**: Added `if (a.isStreaming) return true` guard to the dedup filter so streaming artifacts are never suppressed. Once streaming completes and `entity.content` arrives, finished text-only artifacts matching `entity.content` are correctly filtered to avoid duplicate display.
 
 5. **`entity.content` vs `entity.artifacts` as source of truth**: Should the final artifact text be promoted to `entity.content` on `last_chunk=true`? This would maintain backward compatibility with components that read `entity.content` directly. Alternatively, components can be updated to read from artifacts.
 
@@ -698,17 +741,18 @@ Messages already persisted in the database are unaffected. Historical messages t
 | Phase | Effort | Dependencies | Status |
 |-------|--------|-------------|--------|
 | Phase 1: Backend emission change | 1-2 days | None | ✅ Complete |
-| Phase 2: Frontend cleanup | 2-3 days | Phase 1 deployed | Not started |
-| Phase 3: Delete dead code | 0.5 day | Phase 2 merged | Not started |
-| Phase 4: Backend cleanup | 0.5 day | Phase 1 stable for ≥1 week | Not started |
-| Phase 5: Hub daemon migration | 0.5-1 day | Phase 1 deployed (backend handles both) | Not started |
+| Phase 2: Frontend cleanup | 2-3 days | Phase 1 deployed | ✅ Complete |
+| Phase 3: Delete dead code | 0.5 day | Phase 2 merged | ✅ Complete |
+| Phase 4: Backend cleanup | 0.5 day | Phase 1 stable for ≥1 week | ✅ Complete |
+| Phase 5: Hub daemon migration | 0.5-1 day | Phase 1 deployed (backend handles both) | ✅ Complete |
+| Phase 5b: Backend backward-compat removal | 0.5 day | All hub daemons confirmed running Phase 5+ | ⏳ Pending |
 | **Total** | **5-7 days** | | |
 
 ---
 
-## Appendix A: Deleted Module Inventory
+## Appendix A: Deleted Module Inventory (all deleted in Phase 3)
 
-| Module | Lines | Dependents | Replacement |
+| Module | Lines | Dependents (removed) | Replacement |
 |--------|-------|-----------|-------------|
 | `streaming-buffer.ts` | 129 | `useStreamingContent.ts`, `typewriter.ts`, `useRoomWebhook.ts`, 6 test files | `mergeArtifacts` in message store |
 | `useStreamingContent.ts` | 47 | `message-bubble.tsx`, 1 test file | `entity.artifacts[].isStreaming` |

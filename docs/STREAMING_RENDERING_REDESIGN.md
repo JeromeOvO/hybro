@@ -1,22 +1,22 @@
 # Streaming Message Rendering Redesign
 
-> **Status: Phases 1, 2, 2.5 Complete; Phase 3 superseded by `REMOVE_AGENT_TOKEN_DESIGN.md`** | Addresses the recurring "one-token-per-line" and component-remount flash during agent message streaming.
+> **Status: Phases 1, 2, 2.5 Complete; Phase 3 subsumed by `REMOVE_AGENT_TOKEN_DESIGN.md` (Phases 2-3 complete)** | Addresses the recurring "one-token-per-line" and component-remount flash during agent message streaming.
 
 **Supersedes**: Portions of `TOKEN_STREAMING_DESIGN.md` (Sections 4-7, rendering pipeline)
-**Superseded by**: `REMOVE_AGENT_TOKEN_DESIGN.md` (Phases 3-4 of this doc, infrastructure retention in §4.7, open questions §8)
+**Superseded by**: `REMOVE_AGENT_TOKEN_DESIGN.md` (Phases 2-3 of REMOVE doc now complete; all dead code deleted)
 
-> ### Post-migration note (after `REMOVE_AGENT_TOKEN_DESIGN.md` implementation)
+> ### Post-migration status (after `REMOVE_AGENT_TOKEN_DESIGN.md` Phases 2-3)
 >
-> This document's **Phases 1, 2, and 2.5 are completed** and remain valid as historical record. However, the `agent_token` removal migration fundamentally changes the streaming architecture in ways that supersede several sections:
+> This document's **Phases 1, 2, 2.5, and 3 are all completed**. The `agent_token` removal migration has been fully implemented on the frontend:
 >
 > - **§3.2 (dual state stores)**: The `streamingBuffer` ↔ Zustand timing mismatch is eliminated — `streamingBuffer` is deleted.
 > - **§3.4 (artifact-streaming bypass)**: No longer a "bypass" — artifact streaming is now the **only** path for all agents.
-> - **§4.2 (derivePhase)**: The `isBufferStreaming` / `streamingText` / `isRevealing` parameters are replaced by `entity.artifacts[].isStreaming` (from `append && !last_chunk`). The REVEALING phase either disappears (Option A) or becomes component-local (Option B per REMOVE doc §4.8).
+> - **§4.2 (derivePhase)**: The `isBufferStreaming` / `streamingText` / `isRevealing` parameters are replaced by `entity.artifacts[].isStreaming` (from `append && !last_chunk`). The REVEALING phase is dropped (Option A per REMOVE doc §4.8).
 > - **§4.5 (phase transitions)**: `streamingBuffer.finalize()` references are replaced by `last_chunk=true` → `isStreaming=false`.
-> - **§4.7 (retained infrastructure)**: `streaming-buffer.ts`, `useStreamingContent.ts`, and `typewriter.ts` are **deleted**, not retained.
+> - **§4.7 (retained infrastructure)**: `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, and `streaming-cursor.tsx` are **deleted**.
 > - **§8 (open questions)**: Q1, Q3, Q4 are answered by the migration. See REMOVE doc §4.5, §4.8, and Open Question #5.
 >
-> **Phase 3** of this doc (dead code cleanup) is subsumed by REMOVE doc Phases 2-3, which have broader scope.
+> **Phase 3** of this doc is subsumed by REMOVE doc Phases 2-3, which are now complete.
 
 ---
 
@@ -327,18 +327,15 @@ The component needs a local `elapsed` timer (1-second interval via `useEffect`, 
 
 ### 4.7 Retained infrastructure
 
-> **Post-migration note**: After `REMOVE_AGENT_TOKEN_DESIGN.md` implementation, `streaming-buffer.ts`, `useStreamingContent.ts`, and `typewriter.ts` are **deleted**. The retained infrastructure becomes `mergeArtifacts`/`mergeTextParts` in the message store, the `artifact.isStreaming` flag, and `MarkdownContent`/Streamdown in `TextPartView`.
+> **Post-migration note**: After `REMOVE_AGENT_TOKEN_DESIGN.md` Phases 2-3 implementation, `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, and `streaming-cursor.tsx` are **deleted**. The current streaming infrastructure is:
 
-The following modules are retained as-is (**pre-migration snapshot — see note above**):
-
-| Module | Role | Changes |
-|---|---|---|
-| `streaming-buffer.ts` | Ephemeral token buffer with line-buffering and rAF batching | None |
-| `useStreamingContent.ts` | React hook for per-message streaming state | None |
-| `typewriter.ts` | Progressive reveal for non-streaming agents | None |
-| `markdown-content.tsx` | Streamdown wrapper (`MarkdownContent`) | ~~Remove `LinkifiedContent` usage for agent messages~~ Done (Phase 2) |
-| `message-store/upsert.ts` | Core upsert logic and artifact merging | Added `mergeTextParts` to concatenate consecutive text parts during artifact append (Phase 2.5) |
-| `task-status-message.tsx` | Standalone task status cards | Scope narrowed to HITL/auth/failure-only states |
+| Module | Role |
+|---|---|
+| `message-store/upsert.ts` | `mergeArtifacts` + `mergeTextParts` — core artifact accumulation and text concatenation |
+| `part-renderer.tsx` | `TextPartView` renders streaming text via `MarkdownContent` with `isStreaming` prop |
+| `artifact-renderer.tsx` | Suppresses card chrome for `-stream` text-only artifacts; threads `isStreaming` to parts |
+| `markdown-content.tsx` | Streamdown wrapper (`MarkdownContent`) — used for both main content and artifact text parts |
+| `task-status-message.tsx` | Standalone task status cards — scoped to HITL/auth/failure-only states |
 
 ---
 
@@ -411,14 +408,16 @@ Discovered that the "one-token-per-line" bug persisted for Ollama because it str
 
 **Additional fix applied earlier**: Removed the `transition-[grid-template-rows] duration-200` CSS class from the content wrapper div in `AgentMessageBubbleInner`. This 200ms CSS transition was causing a visible height animation from the collapsed indicator to the expanded content, which briefly displayed the raw content in a partially-expanded state for non-streaming agents.
 
-### Phase 3: Clean up dead code
+### Phase 3: Clean up dead code ✅ DONE (via REMOVE_AGENT_TOKEN_DESIGN.md Phases 2-3)
 
-**Files changed**: `message-bubble.tsx`, `markdown-content.tsx`, `room-messages.tsx`, `task-status-message.tsx`
+**Subsumed by `REMOVE_AGENT_TOKEN_DESIGN.md`**. All dead code from the `agent_token` infrastructure has been deleted:
 
-1. ~~Remove `LinkifiedContent` usage from agent message rendering (keep it for `UserMessageBubbleInner` which still needs it).~~ Done in Phase 2.
-2. ~~Remove the `renderStreamingPreviewAsPlainText` prop from `EntityBubbleProps`.~~ Done in Phase 2.
-3. Simplify the `displayContent` ternary -- the `lastStreamingPreviewRef` gap-covering logic may be unnecessary once all phases use the same renderer.
-4. Narrow `TaskStatusMessage` scope: remove the `WORKING`/`SUBMITTED` rendering path (or keep as fallback for edge cases).
+- `streaming-buffer.ts`, `useStreamingContent.ts`, `typewriter.ts`, `streaming-cursor.tsx` — deleted
+- Associated test files (`streaming-lifecycle.test.ts`, `typewriter.test.ts`, `streaming-buffer.test.ts`, `useStreamingContent.test.ts`) — deleted
+- `LinkifiedContent` usage for agent messages — removed in Phase 2
+- `renderStreamingPreviewAsPlainText` prop — removed in Phase 2
+- `displayContent` ternary and `lastStreamingPreviewRef` — simplified in Phase 2
+- `TaskStatusMessage` scope narrowed to HITL/auth/failure-only states in Phase 1
 
 ---
 
