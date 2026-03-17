@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'agent_token' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update'
+  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update'
   room_id: string
   timestamp: string
   data?: {
@@ -41,8 +41,6 @@ export interface SSEMessage {
     task_content?: string
     // Correlation field (for processing_status events — ties SSE to HTTP request)
     client_request_id?: string
-    // Token streaming field (for agent_token events)
-    token?: string
     // HITL fields (for hitl_input_requested)
     request_id?: string
     source?: 'agent' | 'supervisor'

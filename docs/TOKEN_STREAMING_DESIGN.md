@@ -1,7 +1,8 @@
 # Token Streaming Design — Real-time Agent Token Streaming
 
-> **Status: Implemented** | All planned features shipped including typewriter fallback.
+> **Status: DEPRECATED — Superseded by `REMOVE_AGENT_TOKEN_DESIGN.md`** | The `agent_token` SSE event and all associated infrastructure (`StreamingBuffer`, `useStreamingContent`, `TypewriterManager`) have been removed. All streaming now uses A2A-standard `artifact_update` events. This document is retained for historical reference only.
 
+**Superseded by**: `REMOVE_AGENT_TOKEN_DESIGN.md` (entire document)
 **Depends on**: None (backend already emits `agent_token` SSE events)
 **Decoupled from**: All other frontend design docs
 

@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import ReactMarkdown from "react-markdown"
-import rehypeHighlight from "rehype-highlight"
+import hljs from "highlight.js/lib/core"
+import python from "highlight.js/lib/languages/python"
+import "highlight.js/styles/github-dark.css"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { VideoEmbed } from "@/components/video-embed"
@@ -58,8 +59,10 @@ function CopyButton({ text, className = "" }: { text: string; className?: string
   )
 }
 
+hljs.registerLanguage("python", python)
+
 function CodeBlock({ code, language = "python" }: { code: string; language?: string }) {
-  const markdown = `\`\`\`${language}\n${code}\n\`\`\``
+  const highlighted = hljs.highlight(code, { language }).value
 
   return (
     <div className="rounded-lg border border-border/50 hover:border-border bg-muted/30 overflow-hidden transition-colors duration-200">
@@ -67,10 +70,13 @@ function CodeBlock({ code, language = "python" }: { code: string; language?: str
         <span className="text-xs text-muted-foreground font-mono">{language}</span>
         <CopyButton text={code} />
       </div>
-      <div className="p-4 text-sm font-mono overflow-x-auto [&_pre]:m-0 [&_pre]:p-0 [&_pre]:bg-transparent [&_code]:bg-transparent">
-        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
-          {markdown}
-        </ReactMarkdown>
+      <div className="p-4 text-sm font-mono overflow-x-auto">
+        <pre className="m-0 p-0 bg-transparent">
+          <code
+            className={`hljs language-${language} bg-transparent`}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
+        </pre>
       </div>
     </div>
   )

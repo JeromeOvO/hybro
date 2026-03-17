@@ -5,9 +5,6 @@ import type { SSEMessage } from '@/lib/types/sse'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useRoomSSE } from '../useRoomSSE'
 import type { ProcessingLifecycle } from './processing-lifecycle'
-import { useMessageStore } from '@/stores/message-store'
-import { streamingBuffer } from '@/stores/streaming-buffer'
-import { typewriterManager } from './sse-handlers'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
 
 export function useRoomSSEConnection(
@@ -46,41 +43,12 @@ export function useRoomSSEConnection(
   // Track SSE disconnections during active processing.
   // If SSE drops while agents are working, we may have missed events and need
   // to reconcile with DB after processing completes.
-  // Also promote any partial streaming content to entity content.
   // On reconnect, restore any pending HITL requests.
   const prevSseConnectedRef = useRef(false)
   useEffect(() => {
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       lifecycle.markSseDisconnection()
-
-      // Finish any active typewriters so their content is committed
-      typewriterManager.finishAll()
-
-      // Promote partial streaming content to entity content on disconnect.
-      // Use 'optimistic' source so Rule 2 (SSE wins over DB for non-terminal)
-      // doesn't block DB reconciliation later. Clear task fields so
-      // cancelAllNonTerminal doesn't sweep these fallback messages.
-      const store = useMessageStore.getState()
-      for (const [messageId, partial] of streamingBuffer.entries()) {
-        if (partial) {
-          console.log(`📝 Promoting partial streaming content for message ${messageId}`)
-          const existing = store.entities[messageId]
-          store.upsertMessage({
-            id: messageId,
-            roomId,
-            messageType: 'agent',
-            content: partial,
-            senderName: existing?.senderName || 'Agent',
-            agentId: existing?.agentId,
-            agentSource: existing?.agentSource,
-            timestamp: existing?.timestamp || new Date().toISOString(),
-            isEphemeral: false,
-            taskStatus: null,
-          }, 'optimistic')
-        }
-      }
-      streamingBuffer.clear()
     }
 
     // HITL reconnect catch-up: restore pending HITL requests after SSE reconnects

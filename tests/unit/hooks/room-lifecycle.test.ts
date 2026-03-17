@@ -15,7 +15,6 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { streamingBuffer } from '@/stores/streaming-buffer'
 import type { SSEMessage } from '@/lib/types/sse'
 
 let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
@@ -96,7 +95,6 @@ describe('Room lifecycle characterization tests', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
     useRoomUiStore.getState().resetAll()
-    streamingBuffer.clear()
   })
 
   afterEach(() => {
@@ -160,30 +158,6 @@ describe('Room lifecycle characterization tests', () => {
 
       // Store should have switched to new room
       expect(useMessageStore.getState().roomId).toBe('room-2')
-    })
-
-    it('clears streaming buffer on room switch', async () => {
-      // Set up streaming content in room-1
-      streamingBuffer.append('msg-stream-1', 'partial content')
-      expect(streamingBuffer.get('msg-stream-1')).toBe('partial content')
-
-      await mountAndWaitForRoom('room-1')
-
-      // Switch to room-2
-      cleanup()
-      useMessageStore.getState().clearRoom()
-      useMessageStore.getState().setRoom('room-2')
-      useMessageStore.getState().markDbSynced()
-
-      mockInquiryRoomSetting.mockResolvedValue({
-        success: true,
-        room: { room_id: 'room-2', room_name: 'Second Room', room_agent_set: {} },
-      })
-
-      await mountAndWaitForRoom('room-2')
-
-      // Streaming buffer should be empty after room switch
-      expect(streamingBuffer.get('msg-stream-1')).toBeFalsy()
     })
   })
 
@@ -273,46 +247,6 @@ describe('Room lifecycle characterization tests', () => {
   // ── Test 3: SSE disconnect/reconnect ──
 
   describe('SSE disconnect/reconnect', () => {
-    it('promotes partial streaming content on disconnect during processing', async () => {
-      mockSseConnected = true
-      const { rerender } = await mountHook()
-      expect(capturedOnMessage).toBeDefined()
-
-      // Simulate an agent_token SSE arriving (creates entity + buffers content)
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'agent_token',
-          data: { message_id: 'msg-partial', agent_id: 'agent-1', token: 'Half of the response' },
-        }))
-      })
-
-      // Verify streaming buffer has content
-      expect(streamingBuffer.get('msg-partial')).toBe('Half of the response')
-
-      // Set processing to true (simulates active agent work)
-      useRoomUiStore.getState().setProcessing(true)
-
-      // Simulate SSE disconnecting during processing
-      mockSseConnected = false
-      await act(async () => {
-        rerender()
-      })
-
-      // Wait for the effect to fire
-      await act(async () => {
-        await new Promise(r => setTimeout(r, 50))
-      })
-
-      // Partial content should be promoted to entity
-      const entity = useMessageStore.getState().entities['msg-partial']
-      expect(entity).toBeDefined()
-      expect(entity.content).toBe('Half of the response')
-      expect(entity.isEphemeral).toBe(false)
-
-      // Streaming buffer should be cleared
-      expect(streamingBuffer.get('msg-partial')).toBeFalsy()
-    })
-
     it('restores pending HITL requests on SSE reconnect', async () => {
       const { fetchPendingHitlRequests } = await import('@/lib/api/hitl')
       const mockFetch = vi.mocked(fetchPendingHitlRequests)

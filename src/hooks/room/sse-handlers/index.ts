@@ -3,15 +3,9 @@ import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
-import { mergeArtifacts } from '@/stores/message-store/upsert'
-import { streamingBuffer } from '@/stores/streaming-buffer'
-import { TypewriterManager } from '@/stores/typewriter'
+import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import type { SSEHandlerDeps } from './types'
-
-const typewriterManager = new TypewriterManager()
-
-export { typewriterManager }
 
 function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
@@ -72,8 +66,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         console.log('🤖 Agent response received via SSE')
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
-          streamingBuffer.finalize(messageId)
-          typewriterManager.finish(messageId)
 
           if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
             const agentName = await getAgentName(sseMessage.data.agent_id)
@@ -102,36 +94,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
         }
         break
-
-      case 'agent_token': {
-        const { message_id, agent_id, token } = sseMessage.data || {}
-        if (!message_id || !token) break
-
-        typewriterManager.abort(message_id)
-
-        const existingEntity = store.entities[message_id]
-        if (existingEntity && existingEntity.content && !existingEntity.isEphemeral) {
-          break
-        }
-
-        if (!existingEntity || existingEntity.displayType === 'task-status') {
-          const agentName = agent_id ? await getAgentName(agent_id) : (existingEntity?.senderName || 'Agent')
-          store.upsertMessage({
-            id: message_id,
-            roomId,
-            messageType: 'agent',
-            content: '',
-            senderName: agentName,
-            timestamp: existingEntity?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
-            agentId: agent_id,
-            agentSource: getAgentSource(agent_id),
-            isEphemeral: true,
-          }, 'sse')
-        }
-
-        streamingBuffer.append(message_id, token)
-        break
-      }
 
       case 'processing_status':
         console.log('⚙️ Processing status update:', sseMessage.data?.status)
@@ -315,42 +277,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           )
 
           if (isTerminalState(status)) {
-            const hadRealStreaming = streamingBuffer.isStreaming(messageId)
-            streamingBuffer.finalize(messageId)
-            typewriterManager.finish(messageId)
-
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
 
-            if (!hadRealStreaming && content && status === TASK_STATE.COMPLETED) {
-              store.upsertMessage({
-                ...baseMsg,
-                content: '',
-                isEphemeral: true,
-                ...(artifacts ? { artifacts } : {}),
-              }, 'sse')
-
-              const finalContent = content
-              const finalTaskFields = taskFields
-              typewriterManager.start(messageId, finalContent, () => {
-                streamingBuffer.finalize(messageId)
-                store.upsertMessage({
-                  ...baseMsg,
-                  content: finalContent,
-                  isEphemeral: false,
-                  ...finalTaskFields,
-                  ...(artifacts ? { artifacts } : {}),
-                }, 'sse')
-              })
-            } else {
-              store.upsertMessage({
-                ...baseMsg,
-                content,
-                isEphemeral: false,
-                ...taskFields,
-                ...(artifacts ? { artifacts } : {}),
-              }, 'sse')
-            }
+            store.upsertMessage({
+              ...baseMsg,
+              content,
+              isEphemeral: false,
+              ...taskFields,
+              ...(artifacts ? { artifacts } : {}),
+            }, 'sse')
 
             lifecycle.setProcessing(false)
             setCancelling(false)
@@ -364,20 +300,22 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             }
             lifecycle.setCancelTimedOut(false)
           } else {
-            const isCurrentlyStreaming = streamingBuffer.isStreaming(messageId)
-            if (!isCurrentlyStreaming) {
-              store.upsertMessage({
-                ...baseMsg,
-                content,
-                ...taskFields,
-                ...(artifacts ? { artifacts } : {}),
-              }, 'sse')
-            }
+            store.upsertMessage({
+              ...baseMsg,
+              content,
+              ...taskFields,
+              ...(artifacts ? { artifacts } : {}),
+            }, 'sse')
           }
         }
         break
 
       case 'artifact_update': {
+        if (!lifecycle.isPlaceholderDismissed()) {
+          store.removeMessage(lifecycle.placeholderId(roomId))
+          lifecycle.dismissPlaceholder()
+        }
+
         if (sseMessage.data?.message_id && sseMessage.data?.artifact) {
           const { message_id, artifact, append: isAppend, last_chunk } = sseMessage.data
           const existing = store.entities[message_id]
@@ -401,12 +339,22 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             isStreaming: isAppend ? !last_chunk : false,
           }
           const merged = mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+
+          // Promote text from text-only artifacts into content so the
+          // bubble renders it inline instead of as a separate artifact card.
+          const existingContent = existing?.content || ''
+          const promotedText = extractTextFromArtifacts(merged)
+          const content = promotedText.length > existingContent.length
+            ? promotedText : existingContent
+
           store.upsertMessage({
             id: message_id,
             roomId,
             messageType: 'agent',
-            content: existing?.content || '',
+            content,
             senderName: existing?.senderName || 'Agent',
+            agentId: existing?.agentId || sseMessage.data.agent_id,
+            agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),
             timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             artifacts: merged,
           }, 'sse')

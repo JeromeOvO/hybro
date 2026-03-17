@@ -11,7 +11,6 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { streamingBuffer } from '@/stores/streaming-buffer'
 import type { SSEMessage } from '@/lib/types/sse'
 
 vi.mock('@/hooks/useRoomSSE', () => ({
@@ -72,7 +71,6 @@ describe('useRoomWebhook consumer contract', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
     useRoomUiStore.getState().resetAll()
-    streamingBuffer.clear()
   })
 
   afterEach(() => {
