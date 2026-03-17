@@ -82,10 +82,16 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 }
 
 const VALID_SOURCE_TABS = new Set<SourceTab>(["all", "cloud", "local"])
+const TAB_STORAGE_KEY = 'agents-source-tab'
 
 function parseSourceTab(value: string | null): SourceTab | null {
   if (value && VALID_SOURCE_TABS.has(value as SourceTab)) return value as SourceTab
   return null
+}
+
+function getStoredTab(): SourceTab | null {
+  if (typeof window === 'undefined') return null
+  return parseSourceTab(localStorage.getItem(TAB_STORAGE_KEY))
 }
 
 function ConsumerAgentsPageContent() {
@@ -99,6 +105,7 @@ function ConsumerAgentsPageContent() {
   const urlSourceTab = parseSourceTab(searchParams.get("source"))
 
   const setSourceTab = useCallback((tab: SourceTab) => {
+    localStorage.setItem(TAB_STORAGE_KEY, tab)
     const params = new URLSearchParams(searchParams.toString())
     params.set("source", tab)
     router.replace(`?${params.toString()}`, { scroll: false })
@@ -117,19 +124,24 @@ function ConsumerAgentsPageContent() {
   const cloudAgents = useMemo(() => filteredAgents.filter(a => a.source !== 'hub'), [filteredAgents])
   const localAgents = useMemo(() => filteredAgents.filter(a => a.source === 'hub'), [filteredAgents])
 
-  const sourceTab: SourceTab = urlSourceTab ?? (localAgents.length > 0 ? "local" : "all")
+  const tabCounts: Record<SourceTab, number> = {
+    all: filteredAgents.length,
+    cloud: cloudAgents.length,
+    local: localAgents.length,
+  }
+
+  const dataLoaded = !!data
+  const storedTab = getStoredTab()
+  const smartDefault: SourceTab = localAgents.length > 0 ? "local" : "all"
+  const sourceTab: SourceTab = urlSourceTab
+    ?? (storedTab && (!dataLoaded || tabCounts[storedTab] > 0) ? storedTab : null)
+    ?? smartDefault
 
   const displayAgents = useMemo(() => {
     if (sourceTab === "cloud") return cloudAgents
     if (sourceTab === "local") return localAgents
     return filteredAgents
   }, [filteredAgents, cloudAgents, localAgents, sourceTab])
-
-  const tabCounts: Record<SourceTab, number> = {
-    all: filteredAgents.length,
-    cloud: cloudAgents.length,
-    local: localAgents.length,
-  }
 
   if (isLoading && allAgents.length === 0) {
     return (
