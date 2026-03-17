@@ -3,7 +3,7 @@ import type { SSEMessage, TaskState, ProcessingStatus } from '@/lib/types/sse'
 import { isTerminalState, PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
-import { mergeArtifacts } from '@/stores/message-store/upsert'
+import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import type { SSEHandlerDeps } from './types'
 
@@ -339,11 +339,19 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             isStreaming: isAppend ? !last_chunk : false,
           }
           const merged = mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+
+          // Promote text from text-only artifacts into content so the
+          // bubble renders it inline instead of as a separate artifact card.
+          const existingContent = existing?.content || ''
+          const promotedText = extractTextFromArtifacts(merged)
+          const content = promotedText.length > existingContent.length
+            ? promotedText : existingContent
+
           store.upsertMessage({
             id: message_id,
             roomId,
             messageType: 'agent',
-            content: existing?.content || '',
+            content,
             senderName: existing?.senderName || 'Agent',
             agentId: existing?.agentId || sseMessage.data.agent_id,
             agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),

@@ -207,6 +207,82 @@ describe('convertApiMessageToIncoming', () => {
       expect(result.taskContent).toBe('From metadata')
     })
 
+    it('does not promote status message to content for non-terminal tasks', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: {
+              state: 'working',
+              message: { parts: [{ text: 'Processing your request' }] },
+            },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.WORKING)
+      expect(result.content).toBe('')
+      expect(result.taskError).toBe('Processing your request')
+    })
+
+    it('ignores message_text for non-terminal agent tasks (user prompt seed)', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: 'What is the weather today?',
+          message_task: {
+            status: { state: 'working' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.WORKING)
+      expect(result.content).toBe('')
+    })
+
+    it('uses message_text for completed agent tasks', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: 'Here is the final answer.',
+          message_task: {
+            status: { state: 'completed' },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.COMPLETED)
+      expect(result.content).toBe('Here is the final answer.')
+    })
+
+    it('promotes status message to content for terminal failed tasks', async () => {
+      const apiMsg = makeApiMessage({
+        message_type: 'agent',
+        agent_id: 'agent-1',
+        message_content: {
+          message_text: '',
+          message_task: {
+            status: {
+              state: 'failed',
+              message: { parts: [{ text: 'Something went wrong' }] },
+            },
+          } as RoomMessage['message_content']['message_task'],
+        },
+      })
+      const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
+
+      expect(result.taskStatus).toBe(TASK_STATE.FAILED)
+      expect(result.content).toBe('Something went wrong')
+      expect(result.taskError).toBe('Something went wrong')
+    })
+
     it('has no taskStatus when message_task is absent', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',

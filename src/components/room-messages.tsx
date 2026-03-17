@@ -10,12 +10,11 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
-import { TaskStatusMessage } from './task-status-message'
-import { type TaskState, TASK_STATE } from '@/lib/types/sse'
+import { EntityUserBubble, EntityAgentBubble, derivePhase, type QuoteData } from './message-bubble'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
+import { useShallow } from 'zustand/shallow'
 
 // Empty state component
 function EmptyState() {
@@ -93,30 +92,6 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
           onQuote={onQuote}
         />
       )
-
-    case 'task-status':
-      return (
-        <TaskStatusMessage
-          internalId={entity.id}
-          agentId={entity.agentId}
-          agentName={entity.senderName}
-          initialStatus={(entity.taskStatus || TASK_STATE.WORKING) as TaskState}
-          content={
-            entity.taskStatus === TASK_STATE.WORKING || entity.taskStatus === TASK_STATE.SUBMITTED
-              ? null
-              : (entity.content || null)
-          }
-          error={entity.taskError}
-          statusMessage={entity.taskStatusMessage}
-          stepNumber={entity.stepNumber}
-          totalSteps={entity.totalSteps}
-          taskContent={entity.taskContent}
-          taskCreatedAt={entity.taskCreatedAt || entity.timestamp}
-          hitlPrompt={entity.hitlPrompt}
-          hitlResolved={entity.hitlResolved}
-          hitlUserAnswer={entity.hitlUserAnswer}
-        />
-      )
   }
 })
 
@@ -145,18 +120,15 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
   const prevLatestAgentIdRef = useRef<string | null>(null)
 
-  // Subscribe to store version so derived state recomputes on displayType transitions (Gap 15)
-  const storeVersion = useMessageStore(s => s.version)
-
-  // Compute which IDs are agent bubbles (for expand/collapse pill)
-  const allAgentIds = useMemo(() => {
-    const store = useMessageStore.getState()
-    return orderedIds.filter(id => {
-      const e = store.entities[id]
-      return e && (e.displayType === 'agent-bubble')
+  // Compute which IDs are agent bubbles with renderable content (for expand/collapse pill)
+  const allAgentIds = useMessageStore(useShallow(s =>
+    s.orderedIds.filter(id => {
+      const e = s.entities[id]
+      if (!e || e.messageType !== 'agent') return false
+      const phase = derivePhase(e)
+      return phase === 'complete' || phase === 'streaming'
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeVersion is an intentional invalidation signal (Gap 15)
-  }, [orderedIds, storeVersion])
+  ))
 
   const allExpanded = useMemo(
     () => allAgentIds.length > 0 && allAgentIds.every(id => userExpandedIds.has(id)),
@@ -164,17 +136,15 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
   )
 
   // Find last agent message ID (for auto-expand)
-  const lastAgentMessageId = useMemo(() => {
-    const store = useMessageStore.getState()
-    for (let i = orderedIds.length - 1; i >= 0; i--) {
-      const e = store.entities[orderedIds[i]]
-      if (e && e.displayType === 'agent-bubble') {
-        return orderedIds[i]
-      }
+  const lastAgentMessageId = useMessageStore(useShallow(s => {
+    for (let i = s.orderedIds.length - 1; i >= 0; i--) {
+      const e = s.entities[s.orderedIds[i]]
+      if (!e || e.messageType !== 'agent') continue
+      const phase = derivePhase(e)
+      if (phase === 'complete' || phase === 'streaming') return s.orderedIds[i]
     }
     return null
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- storeVersion is an intentional invalidation signal (Gap 15)
-  }, [orderedIds, storeVersion])
+  }))
 
   // Track newest agent message to auto-collapse prior non-user-expanded responses
   useEffect(() => {

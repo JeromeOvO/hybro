@@ -23,7 +23,7 @@ function makeHitlEntity(overrides: Record<string, unknown> = {}) {
     timestamp: new Date().toISOString(),
     source: 'sse' as const,
     sourceVersion: 1,
-    displayType: 'task-status' as const,
+    displayType: 'agent-bubble' as const,
     isEphemeral: false,
     createdAt: Date.now(),
     updatedAt: Date.now(),

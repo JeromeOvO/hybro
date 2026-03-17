@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
-import { TASK_STATE } from '@/lib/types/sse'
+import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
 export function useProcessingRestore(
@@ -43,9 +43,9 @@ export function useProcessingRestore(
         return
       }
 
-      // Check if any task-status messages already exist in the store
+      // Check if any active (non-terminal) task entities already exist in the store
       const hasTaskEntities = Object.values(store.entities).some(
-        e => e.roomId === roomId && e.displayType === 'task-status'
+        e => e.roomId === roomId && e.taskStatus && !isTerminalState(e.taskStatus)
       )
 
       if (hasTaskEntities) {

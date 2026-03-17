@@ -1,6 +1,6 @@
 # Remove `agent_token` — Unify Streaming on A2A Protocol
 
-> **Status: Phase 5 Implemented; Phase 5b Pending** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
+> **Status: All Phases Complete (including Phase 6 refresh fidelity fixes)** | Eliminates the custom `agent_token` SSE event and consolidates all real-time content streaming onto A2A's native streaming events (`TaskArtifactUpdateEvent` for content, `TaskStatusUpdateEvent` for status).
 
 **Target A2A version**: v0.3 (current Hybro SDK: `@a2a-js/sdk ^0.3.10`)
 **v1.0 readiness**: Design is forward-compatible with A2A v1.0; v1.0-only features are flagged as future enhancements.
@@ -321,54 +321,58 @@ def _normalize_token_as_artifact(hub_event) -> AgentEvent:
 
 ### 4.5 Frontend: Upgrade artifact rendering for streaming text
 
-The current `PartRenderer` → `TextPartView` renders text in a `<p className="whitespace-pre-wrap">` tag. For streaming text content, this needs to use Streamdown for proper markdown rendering with a streaming caret.
+**Status**: Implemented (Phase 2).
 
-```typescript
-// BEFORE (part-renderer.tsx):
-function TextPartView({ part }: { part: ArtifactPart }) {
-  return <p className="whitespace-pre-wrap">{part.text || ''}</p>
-}
+`TextPartView` uses `MarkdownContent` with an `isStreaming` prop for streaming-aware markdown rendering (Streamdown caret). The `isStreaming` flag flows from `ArtifactData.isStreaming` (set by the `artifact_update` handler based on `append && !last_chunk`) through `ArtifactRenderer` → `PartRenderer` → `TextPartView`.
 
-// AFTER:
-function TextPartView({ part, isStreaming }: { part: ArtifactPart; isStreaming?: boolean }) {
-  return (
-    <MarkdownContent
-      content={part.text || ''}
-      isStreaming={isStreaming}
-    />
-  )
-}
-```
-
-The `isStreaming` flag flows from `ArtifactData.isStreaming` (set by the `artifact_update` handler based on `append && !last_chunk`) through `ArtifactRenderer` to `PartRenderer`.
+`ArtifactRenderer` suppresses card chrome (border, spinner icon) for `-stream` text-only artifacts so streaming text renders inline within the bubble, not inside a bordered card.
 
 ### 4.6 Frontend: Simplify EntityAgentBubble
 
-Remove the entire streaming state machine:
+**Status**: Implemented (Phase 2) and refined (Phase 6).
+
+The streaming state machine (`useStreamingContent`, `revealedChars`, `isRevealing`, `prevIsStreaming`, `TypewriterManager`) has been completely removed. The bubble's visual state is now derived by a pure `derivePhase(entity)` function:
 
 ```typescript
-// DELETE all of this from EntityAgentBubble:
-const { isStreaming, streamingText } = useStreamingContent(entity.id)
-const [revealedChars, setRevealedChars] = useState(0)
-const [isRevealing, setIsRevealing] = useState(false)
-const prevIsStreaming = useRef(isStreaming)
-const streamingPreviewText = streamingText
-const isStartingReveal = ...
-const lastStreamingPreviewRef = useRef('')
-// ... entire transition detection + rAF reveal effect
+export function derivePhase(entity: MessageEntity): AgentPhase {
+  const hasContent = !!entity.content?.trim()
+  const hasArtifacts = (entity.artifacts?.length ?? 0) > 0
+  const isStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
+  const hasVisibleBody = hasContent || hasArtifacts
 
-// REPLACE with:
-const isArtifactStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
-const displayContent = entity.content
+  // Tier 1: taskStatus is authoritative when present
+  if (isFailureState(entity.taskStatus))  return 'failed'
+  if (isInteractiveState(entity.taskStatus)) return 'interactive'
+  if (entity.taskStatus === TASK_STATE.COMPLETED)
+    return hasVisibleBody ? 'complete' : 'complete-empty'
+  if (entity.taskStatus && !isTerminalState(entity.taskStatus))
+    return hasVisibleBody ? 'streaming' : 'waiting'
+
+  // Tier 2: no taskStatus — infer from content signals
+  if (isStreaming) return 'streaming'
+  if (hasVisibleBody) return 'complete'
+  return 'waiting'
+}
 ```
 
-The `showIndicator` logic simplifies to:
+**Content source-of-truth strategy**: The bubble uses a dual-source rendering model:
+
+1. **`entity.content`** is the primary text source, rendered via `MarkdownContent` in the main bubble body. It is populated from `message_text` (for terminal tasks) or `extractTaskContent` from artifacts (for non-terminal tasks recovered from DB).
+2. **`entity.artifacts`** render separately below the bubble via `ArtifactList`, but with a **deduplication filter** that suppresses text-only artifacts when `entity.content` already covers the same text. A streaming guard (`if (a.isStreaming) return true`) ensures in-flight artifacts are never suppressed.
+
+This means there is no empty or duplicated output — the dedup filter handles the overlap, and `derivePhase` ensures the correct visual phase regardless of which source has content.
+
+**"Still working…" indicator**: For the `streaming` phase, a secondary indicator appears when `entity.taskStatus` is non-terminal, non-interactive, and no artifact is actively streaming (i.e. content has arrived but the task isn't done yet):
 
 ```typescript
-const showIndicator = !entity.content && !hasArtifactContent
+{entity.taskStatus && !isTerminalState(entity.taskStatus) &&
+ !isInteractiveState(entity.taskStatus) && !isArtifactStreaming && (
+  <div>
+    <Loader2 className="animate-spin" />
+    <span>{entity.taskStatusMessage || 'Still working…'}</span>
+  </div>
+)}
 ```
-
-The `isStreaming` prop passed to `AgentMessageBubbleInner` and `MarkdownContent` is removed for the main content area. Streaming state is now local to each `TextPartView` within the artifact renderer.
 
 ### 4.7 Frontend: Remove agent_token SSE handler
 
@@ -390,7 +394,9 @@ The `TypewriterManager` exists to provide a progressive reveal animation when co
 
 ### 4.9 Frontend: Processing placeholder lifecycle
 
-The processing placeholder (`processing-placeholder-{roomId}`) is currently removed by the `agent_token` handler when the first token arrives. With `agent_token` removed, the placeholder must be removed by the `artifact_update` handler instead:
+**Status**: Implemented (Phase 2).
+
+The processing placeholder (`processing-placeholder-{roomId}`) is removed by the `artifact_update` handler when the first artifact content arrives:
 
 ```typescript
 case 'artifact_update': {
@@ -405,18 +411,15 @@ case 'artifact_update': {
 
 ### 4.10 Frontend: SSE disconnect handling via A2A reconnection
 
-The current `agent_token` path has a bespoke disconnect handler that iterates `streamingBuffer.entries()` and promotes partial content to entity. With the migration to `artifact_update`, this is unnecessary because:
+**Status**: Implemented (Phase 2 + Phase 6).
 
-1. **Content is already persisted**: Each `artifact_update` chunk is persisted to MongoDB (§7.2). On page refresh, `GetTask` returns the accumulated artifact.
-2. **A2A provides `tasks/resubscribe`** (v0.3): The client can reconnect to a still-active task's stream. The server returns the current task state (including accumulated artifacts), then resumes streaming. In v1.0, this becomes `SubscribeToTask`.
+The custom `agent_token` disconnect handler (iterating `streamingBuffer.entries()` to promote partial content) has been removed. With the migration to `artifact_update`, disconnect resilience is handled at two levels:
 
-**Implementation (v0.3)**: On SSE disconnect, if there are messages with `artifacts[].isStreaming=true`, the backend can:
-- Attempt `tasks/resubscribe` for the active task to resume the stream, or
-- Simply rely on the already-persisted artifact content (the user sees everything up to the last received chunk)
+**1. Persisted artifacts (implemented):** Each `artifact_update` chunk is persisted to MongoDB via `accumulate_artifact_on_message`. On page refresh, the DB-hydrated message carries the accumulated artifact content. `convertApiMessageToIncoming` extracts text from task artifacts (via `extractTaskContent`) and populates `entity.content`, so the bubble displays everything received before the disconnect.
 
-This replaces the 26-line partial-content promotion loop in the disconnect handler with zero custom code.
+**2. `derivePhase` handles working tasks with content (implemented):** The `derivePhase` function (§4.6) maps a non-terminal task with visible body (`hasContent || hasArtifacts`) to `'streaming'` phase, ensuring the bubble renders content with an activity indicator instead of showing an empty waiting state. If the task has no visible body, it renders as `'waiting'` with the original ticking-clock spinner.
 
-**v1.0 migration note**: When upgrading to v1.0, replace `tasks/resubscribe` with `SubscribeToTask` (`tasks/subscribe`). The semantics and implementation remain identical.
+**3. `tasks/resubscribe` (future):** A2A v0.3 provides `TaskResubscriptionRequest` to resume a streaming connection after disconnect. The server returns the current task state and resumes streaming. In v1.0, this becomes `SubscribeToTask`. This is available for future implementation but not required — persisted artifact content ensures no visible data loss.
 
 ---
 
@@ -452,9 +455,16 @@ useRoomWebhook.ts → case 'artifact_update'
         ▼ React
 
 EntityAgentBubble
-  ├─ displayContent = entity.content (for backward-compat with non-streaming)
-  ├─ entity.artifacts → ArtifactList → ArtifactRenderer
-  │   └─ TextPartView: <MarkdownContent content={text} isStreaming={artifact.isStreaming} />
+  ├─ phase = derivePhase(entity)  ← single source of truth for visual state
+  ├─ displayContent = entity.content  (text from message_text or extractTaskContent)
+  ├─ phase == 'waiting'  → spinner + taskStatusMessage/taskContent
+  ├─ phase == 'streaming' or 'complete':
+  │   ├─ <MarkdownContent content={displayContent} />  (main bubble body)
+  │   └─ "Still working…" indicator (if non-terminal + not actively streaming)
+  ├─ entity.artifacts → dedup filter:
+  │   ├─ text-only artifacts matching entity.content → suppressed
+  │   ├─ streaming artifacts → always shown
+  │   └─ remaining → ArtifactList → ArtifactRenderer → PartRenderer
   └─ showIndicator = !entity.content && !hasArtifactContent
 ```
 
@@ -569,20 +579,60 @@ All changes retain the legacy `agent_token` path behind the flag for rollback (`
 
 ### Phase 5b: Backend cleanup — Remove agent_token backward compat
 
-**Status**: Pending. Requires all production hub daemons running Phase 5+ code.
+**Status**: Implemented.
 
 **Scope**: `multi-agents-backend` only.
 
-**Acceptance criteria**: All production hub daemons confirmed running Phase 5+ code (emitting `artifact_update` instead of `agent_token`).
+**What was done:**
 
-**What to do:**
+1. Removed `"agent_token"` from `HubPublishEventType` Literal in `models/hub.py`.
+2. Removed the `if event_type == "agent_token"` normalization branch in `relay.py` `_normalize()`.
+3. Removed `agent_token` from the `models/hub.py` module docstring.
+4. Updated `test_api_relay.py`: replaced `agent_token` normalization test cases with a single test asserting `agent_token` is rejected as unknown.
+5. Updated `openapi.json`: removed `agent_token` from the `HubPublishEventType` enum.
 
-1. Remove `"agent_token"` from `HubPublishEventType` Literal in `models/hub.py`.
-2. Remove the `if event_type == "agent_token"` normalization branch in `relay.py` `_normalize()`.
-3. Remove `agent_token` from the `models/hub.py` module docstring.
-4. Update `test_api_relay.py`: remove `agent_token` normalization test cases.
+### Phase 6: Refresh fidelity fixes — Visual consistency after page reload
 
-**Risk**: If any hub daemon is still running pre-Phase-5 code, its `agent_token` publish events will be rejected by Pydantic validation on the `/publish` endpoint (the Literal type will no longer include `"agent_token"`). Ensure all hubs are updated before deploying.
+**Status**: Implemented.
+
+**Scope**: `multi-agents-backend` (1 file) + `hybro-frontend` (2 files + tests).
+
+**Problem**: After page refresh mid-task, the UI displayed visual changes that shouldn't occur:
+- The ticking-clock waiting indicator was replaced by "Still working…" with different text.
+- The status message changed from "Processing your request…" to the echoed user message.
+- `entity.content` was populated with the user's original prompt (from `message_text`), causing a non-terminal task to skip the waiting phase and render in streaming phase.
+
+**Root causes identified:**
+
+1. **Backend**: `_generate_agent_message_content()` in `room_services.py` initialized `message_text` with the user's original prompt at task creation time. This is semantically incorrect — `message_text` should only contain agent-produced output.
+2. **Frontend**: `convertApiMessageToIncoming` in `convert-api-message.ts` unconditionally used `message_text` as `content`, so the echoed user prompt appeared as the agent's response body.
+3. **Frontend**: `extractTaskError()` reads `task.status.message.parts[0].text`, which for working tasks often contains the echoed user message (per A2A spec, `status.message` is transient progress info). This value was incorrectly mapped to `taskStatusMessage` and used as a content fallback.
+
+**What was done:**
+
+1. **Backend fix** (`multi-agents-backend/services/room_services.py`): Changed `_generate_agent_message_content()` to return `MessageContent(message_task=task)` without setting `message_text`. The field is left `None` at creation time and only populated when the agent produces output (streaming artifacts or terminal response).
+
+2. **Frontend `message_text` gate** (`hybro-frontend/src/stores/message-store/convert-api-message.ts`): Added a condition to skip `message_text` as display `content` for non-terminal agent tasks:
+   ```typescript
+   const isNonTerminalAgentTask = apiMessage.message_type === 'agent'
+     && taskStatus && !isTerminalState(taskStatus)
+   if (!isNonTerminalAgentTask) {
+     content = apiMessage.message_content.message_text
+   }
+   ```
+   This ensures `message_text` is only used as content for terminal tasks, non-task messages, or user messages.
+
+3. **Frontend `extractedError` gate** (`convert-api-message.ts`): The fallback that promoted `extractTaskError()` to `content` was already gated to terminal states only (`!taskStatus || isTerminalState(taskStatus)`). This was confirmed correct and retained.
+
+4. **Frontend `taskStatusMessage` cleanup** (`convert-api-message.ts`): Removed incorrect mapping of `taskStatusMessage` from `taskError` (which contained the echoed user message from `task.status.message`). `taskStatusMessage` is now left undefined for DB-hydrated messages, allowing the bubble to fall through to `taskContent` or defaults.
+
+5. **Frontend `derivePhase` rewrite** (`message-bubble.tsx`): Replaced the original `derivePhase` with a two-tier function (§4.6) that treats `taskStatus` as authoritative. A non-terminal task with no visible body correctly resolves to `'waiting'` (ticking clock), while one with content resolves to `'streaming'` (content visible + "Still working…" indicator).
+
+**Result**: After refresh, a working task with no agent output stays in the `'waiting'` phase with the original "Processing your request…" text and ticking clock — identical to the live SSE experience. No visual shift occurs.
+
+**Tests added/updated:**
+- `convert-api-message.test.ts`: Added `it('ignores message_text for non-terminal agent tasks')`, `it('uses message_text for completed agent tasks')`. Removed incorrect `taskStatusMessage` assertions from non-terminal test cases.
+- `message-bubble.test.tsx`: Updated `derivePhase` test coverage for the two-tier logic.
 
 ---
 
@@ -662,6 +712,10 @@ Messages already persisted in the database are unaffected. Historical messages t
 | `EntityAgentBubble: shows indicator until artifact arrives` | Verify `showIndicator` hides when `entity.artifacts.length > 0` | ✅ Phase 2 |
 | `artifact_update handler: dismisses processing placeholder` | Verify placeholder removed on first artifact event | ✅ Phase 2 |
 | `Hub dispatcher: message kind emits artifact_update` | (Phase 5) Verify A2A `message` events are translated to `DispatchEvent(type="artifact_update")` | ✅ `test_dispatcher.py` |
+| `convertApiMessage: ignores message_text for non-terminal agent tasks` | (Phase 6) Verify user prompt seed in `message_text` is not used as `content` for working tasks | ✅ `convert-api-message.test.ts` |
+| `convertApiMessage: uses message_text for completed agent tasks` | (Phase 6) Verify `message_text` populates `content` for terminal tasks | ✅ `convert-api-message.test.ts` |
+| `derivePhase: non-terminal task without body → waiting` | (Phase 6) Verify correct waiting phase after refresh for empty working tasks | ✅ `message-bubble.test.tsx` |
+| `derivePhase: non-terminal task with content → streaming` | (Phase 6) Verify streaming phase for working tasks with partial content | ✅ `message-bubble.test.tsx` |
 
 ### Unit tests REMOVED (Phase 2/3)
 
@@ -684,6 +738,8 @@ Messages already persisted in the database are unaffected. Historical messages t
 | Hub-relayed agent streaming | Hub `agent_token` events render as artifact content |
 | Non-streaming agent | Content appears after task completes (no typewriter unless Option B chosen) |
 | Page refresh mid-stream | Content up to last persisted chunk is visible on reload |
+| Page refresh mid-stream (waiting phase) | Working task with no agent output: ticking clock + "Processing your request…" text persists identically after refresh — no visual shift |
+| Page refresh mid-stream (streaming phase) | Working task with partial content: content visible + "Still working…" indicator — no echoed user message |
 | SSE disconnect mid-stream | Partial artifact content is already in the store (persisted); no data loss. If `tasks/resubscribe` is implemented, stream resumes. |
 | Multiple agents streaming simultaneously | Each agent's artifact accumulates independently |
 | SSE reconnection via tasks/resubscribe | (Future) Client resubscribes; receives current Task state + remaining events |
@@ -712,6 +768,7 @@ Messages already persisted in the database are unaffected. Historical messages t
 | SSE event types for streaming | 2 (`agent_token` + `artifact_update`) | 1 (`artifact_update`) |
 | Backend emission paths | 2 (`send_agent_token` + `send_artifact_update`) | 1 (`send_artifact_update`) |
 | Content survival on page refresh mid-stream | No (ephemeral buffer lost) | Yes (persisted per chunk) |
+| Visual fidelity on page refresh | Waiting indicator lost; echoed user message shown as content | Identical to live SSE experience (Phase 6) |
 | Reconnection strategy | Custom partial-content promotion | A2A `tasks/resubscribe` (v0.3) or `tasks/get` (spec-compliant) |
 | Lines of frontend code removed | — | ~600 production + ~700 test/doc |
 | Visual streaming behavior | Different per agent type | Identical for all agents |
@@ -728,7 +785,7 @@ Messages already persisted in the database are unaffected. Historical messages t
 
 4. **Artifact deduplication**: ~~The frontend currently deduplicates text-only artifacts whose text matches `entity.content`. With all streaming going through artifacts, this dedup logic may need to be revisited — the artifact text *is* the primary content, not a duplicate.~~ **Resolved (Phase 2)**: Added `if (a.isStreaming) return true` guard to the dedup filter so streaming artifacts are never suppressed. Once streaming completes and `entity.content` arrives, finished text-only artifacts matching `entity.content` are correctly filtered to avoid duplicate display.
 
-5. **`entity.content` vs `entity.artifacts` as source of truth**: Should the final artifact text be promoted to `entity.content` on `last_chunk=true`? This would maintain backward compatibility with components that read `entity.content` directly. Alternatively, components can be updated to read from artifacts.
+5. **`entity.content` vs `entity.artifacts` as source of truth**: ~~Should the final artifact text be promoted to `entity.content` on `last_chunk=true`? This would maintain backward compatibility with components that read `entity.content` directly. Alternatively, components can be updated to read from artifacts.~~ **Resolved (Phase 6)**: The settled design uses a dual-source model. `entity.content` is the primary text source for the bubble body (populated from `message_text` for terminal tasks, or `extractTaskContent` from artifacts for non-terminal DB-hydrated messages). Non-text artifacts render separately via `ArtifactList`. A deduplication filter in the render layer suppresses text-only artifacts that duplicate `entity.content`, with a streaming guard to never suppress in-flight artifacts. See §4.6 for details.
 
 6. **`tasks/resubscribe` for reconnection**: The v0.3 SDK provides `TaskResubscriptionRequest` (`tasks/resubscribe`) for resuming a stream after disconnect. Should we implement this as a reconnection strategy, or is relying on persisted artifact state via `tasks/get` sufficient? The former provides real-time resume; the latter is simpler but loses remaining streaming events. (In v1.0, this becomes `SubscribeToTask`.)
 
@@ -745,8 +802,9 @@ Messages already persisted in the database are unaffected. Historical messages t
 | Phase 3: Delete dead code | 0.5 day | Phase 2 merged | ✅ Complete |
 | Phase 4: Backend cleanup | 0.5 day | Phase 1 stable for ≥1 week | ✅ Complete |
 | Phase 5: Hub daemon migration | 0.5-1 day | Phase 1 deployed (backend handles both) | ✅ Complete |
-| Phase 5b: Backend backward-compat removal | 0.5 day | All hub daemons confirmed running Phase 5+ | ⏳ Pending |
-| **Total** | **5-7 days** | | |
+| Phase 5b: Backend backward-compat removal | 0.5 day | All hub daemons confirmed running Phase 5+ | ✅ Complete |
+| Phase 6: Refresh fidelity fixes | 0.5 day | Phase 2 complete | ✅ Complete |
+| **Total** | **5.5-7.5 days** | | |
 
 ---
 
