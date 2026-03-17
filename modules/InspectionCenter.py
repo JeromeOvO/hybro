@@ -221,51 +221,50 @@ class InspectionCenter:
                 error_message="Agent URL is invalid.",
             ) from None
 
-        # initialize a2a client
-        try:
-            httpx_client = httpx.AsyncClient(timeout=600.0)
-            card = await a2a_service._fetch_agent_card_with_fallback(
-                httpx_client, str(agent_url)
-            )
-            a2a_client = A2AClient(httpx_client, agent_card=card)
+        # initialize a2a client and send test message
+        async with httpx.AsyncClient(timeout=600.0) as httpx_client:
+            try:
+                card = await a2a_service._fetch_agent_card_with_fallback(
+                    httpx_client, str(agent_url)
+                )
+                a2a_client = A2AClient(httpx_client, agent_card=card)
 
-        except Exception as e:
-            logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
-            return InspectionCenterResponse(
-                agent_url=agent_url,
-                agent_card=None,
-                result=[f"Failed to initialize a2a client: {str(e)}"],
-                status_code=500,
-            )
+            except Exception as e:
+                logger.error(f"Failed to initialize a2a client: {e}", exc_info=True)
+                return InspectionCenterResponse(
+                    agent_url=agent_url,
+                    agent_card=None,
+                    result=[f"Failed to initialize a2a client: {str(e)}"],
+                    status_code=500,
+                )
 
-        # send a2a client to agent
-        inspection_message = "Hello, how are you?"
+            inspection_message = "Hello, how are you?"
 
-        try:
-            dry_send_message_response = await self.a2a_service.dry_send_message(
-                a2a_client, card, inspection_message
-            )
+            try:
+                dry_send_message_response = await self.a2a_service.dry_send_message(
+                    a2a_client, card, inspection_message
+                )
 
-            if not dry_send_message_response.is_valid:
+                if not dry_send_message_response.is_valid:
+                    return InspectionCenterResponse(
+                        agent_url=agent_url,
+                        agent_card=card,
+                        result=dry_send_message_response.result,
+                        status_code=500,
+                    )
+
                 return InspectionCenterResponse(
                     agent_url=agent_url,
                     agent_card=card,
                     result=dry_send_message_response.result,
-                    status_code=500,
+                    status_code=200,
                 )
 
-            return InspectionCenterResponse(
-                agent_url=agent_url,
-                agent_card=card,
-                result=dry_send_message_response.result,
-                status_code=200,
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to send message to agent: {e}", exc_info=True)
-            return InspectionCenterResponse(
-                agent_url=agent_url,
-                agent_card=card,
-                result=["Failed to send message to agent"],
-                status_code=500,
-            )
+            except Exception as e:
+                logger.error(f"Failed to send message to agent: {e}", exc_info=True)
+                return InspectionCenterResponse(
+                    agent_url=agent_url,
+                    agent_card=card,
+                    result=["Failed to send message to agent"],
+                    status_code=500,
+                )

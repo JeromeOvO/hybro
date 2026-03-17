@@ -11,6 +11,7 @@ from enum import Enum
 
 from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
+from services.agent_capability_issue_service import capability_issue_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 
@@ -57,7 +58,8 @@ class AgentSelectionService:
     async def select_agents_for_message(
         self,
         message_text: str,
-        top_k: int = 3
+        top_k: int = 10,
+        user_id: str | None = None,
     ) -> AgentSelectionResult:
         """
         Select agents for a message using vector search + LLM routing.
@@ -67,6 +69,8 @@ class AgentSelectionService:
         Args:
             message_text: The user's message to route
             top_k: Maximum number of candidate agents to consider
+            user_id: Optional sender ID — when provided, includes the sender's
+                     private agents in the candidate pool (shared eligibility predicate)
             
         Returns:
             AgentSelectionResult with strategy, selected agents, and reasoning
@@ -76,9 +80,12 @@ class AgentSelectionService:
             len(message_text)
         )
 
+        # Step 0.5: Get agents with open capability issues to exclude
+        excluded = await capability_issue_service.get_excluded_agent_ids()
+
         # Step 1: Vector search for candidate agents (active only)
         candidates = await self.database_service.query_similar_agents(
-            message_text, count=top_k, active_only=True
+            message_text, count=top_k, excluded_agent_ids=excluded, active_only=True, user_id=user_id,
         )
 
         if not candidates:
@@ -95,10 +102,104 @@ class AgentSelectionService:
             len(candidates)
         )
 
-        # Step 2: LLM analyzes message and decides routing strategy
-        routing_result = await self._analyze_routing_needs(message_text, candidates)
+        # Step 2: Filter by skills to remove obviously wrong agents
+        skill_filtered = self._filter_by_skills(message_text, candidates)
+
+        # Step 3: LLM analyzes message and decides routing strategy
+        routing_result = await self._analyze_routing_needs(message_text, skill_filtered)
 
         return routing_result
+
+    def _filter_by_skills(
+        self,
+        message_text: str,
+        candidates: list[Agent],
+    ) -> list[Agent]:
+        """
+        Filter candidates by skill matching to remove obviously unsuitable agents.
+
+        Uses simple keyword matching to quickly eliminate agents that lack
+        relevant skills for the task. Preserves agents with no skills listed
+        (general purpose) as potential fallbacks.
+
+        Args:
+            message_text: The user's message
+            candidates: List of candidate agents from vector search
+
+        Returns:
+            Filtered list of agents, or original list if no matches
+        """
+        message_lower = message_text.lower()
+
+        # Task keywords mapped to relevant skill patterns
+        task_skill_map = {
+            'summarize': ['summarization', 'writing', 'content', 'text'],
+            'summary': ['summarization', 'writing', 'content', 'text'],
+            'write': ['writing', 'content', 'generation', 'creation'],
+            'code': ['code', 'programming', 'development', 'software'],
+            'program': ['code', 'programming', 'development', 'software'],
+            'search': ['search', 'research', 'web', 'retrieval', 'information'],
+            'find': ['search', 'research', 'web', 'retrieval', 'information'],
+            'research': ['research', 'search', 'analysis', 'investigation'],
+            'analyze': ['analysis', 'data', 'reasoning', 'evaluation'],
+            'data': ['data', 'analysis', 'processing', 'statistics'],
+            'youtube': ['youtube', 'video', 'content', 'creator'],
+            'video': ['video', 'media', 'content', 'youtube'],
+            'translate': ['translation', 'language', 'localization'],
+            'travel': ['travel', 'planning', 'booking', 'destination'],
+        }
+
+        # Find which task keywords appear in message
+        relevant_skills = set()
+        for keyword, skills in task_skill_map.items():
+            if keyword in message_lower:
+                relevant_skills.update(skills)
+
+        # If no task keywords found, return all candidates (no filtering)
+        if not relevant_skills:
+            logger.info(
+                "AgentSelectionService: No specific task keywords found, skipping skill filter"
+            )
+            return candidates
+
+        # Filter candidates
+        filtered = []
+        for agent in candidates:
+            # Get agent's skills
+            agent_skills = []
+            if agent.agent_card.skills:
+                agent_skills = [s.name.lower() for s in agent.agent_card.skills]
+
+            # Include if:
+            # 1. Agent has no skills listed (general purpose)
+            # 2. Agent has at least one relevant skill
+            if not agent_skills:
+                filtered.append(agent)
+            elif any(
+                skill_keyword in agent_skill
+                for skill_keyword in relevant_skills
+                for agent_skill in agent_skills
+            ):
+                filtered.append(agent)
+            else:
+                logger.debug(
+                    "AgentSelectionService: Filtered out %s - no relevant skills for task",
+                    agent.agent_card.name
+                )
+
+        # If filtering removed everyone, return original candidates as fallback
+        if not filtered:
+            logger.warning(
+                "AgentSelectionService: Skill filtering removed all candidates, using original list"
+            )
+            return candidates
+
+        logger.info(
+            "AgentSelectionService: Skill filtering: %d -> %d candidates",
+            len(candidates),
+            len(filtered)
+        )
+        return filtered
 
     async def _analyze_routing_needs(
         self,

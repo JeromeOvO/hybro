@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from models.agent import Agent, AgentStatus
 from models.memory import ChatContext, RoomMemory
-from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
+from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage, UserAttachment
 from models.task import BaseTask, MetaTask, TaskSession
 
 
@@ -117,6 +117,7 @@ class OrchestrationRequest(BaseModel):
     room_agent_message_id: str | None = None
     room_related_message_id: str | None = None
     user_id: str | None = None
+    is_recovery: bool = False
 
 
 class DebatationCenterRequest(BaseModel):
@@ -228,14 +229,29 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room_name: str | None = None
     room_owner_id: str | None = None
     room_owner_name: str | None = None
-    room_agent_set: dict[str, str] | None = None
     room_created_at: datetime | None = None
-    applied_from_group: str | None = None  # Group ID if agents applied from a group
     extend_info: dict[str, Any] | None = None
     room: Room | None = None
-    requesting_user_id: str | None = (
-        None  # User making the request, for visibility validation
-    )
+    requesting_user_id: str | None = None
+
+    # Legacy fields — accepted during rollout; canonical fields take precedence.
+    room_agent_set: dict[str, str] | None = None
+    applied_from_group: str | None = None
+
+    # Canonical membership write input (mutually exclusive)
+    membership_seed_input: str | None = None  # "manual" | "saved_group" | "all_current_agents"
+    room_agent_ids: list[str] | None = None
+    seed_group_id: str | None = None
+    seed_all_current_agents: bool | None = None
+
+
+class UserAttachmentRequest(BaseModel):
+    """Wire format from frontend. Only file_id is used server-side; all metadata
+    is resolved from the file_uploads collection to prevent spoofing.
+    """
+
+    file_id: str
+    file_url: str | None = None
 
 
 class RoomCenterUserMessageRequest(BaseModel):
@@ -248,6 +264,9 @@ class RoomCenterUserMessageRequest(BaseModel):
     message_created_at: datetime | None = None
     extend_info: dict[str, Any] | None = None
     message: RoomUserMessage | None = None
+    attachments: list[UserAttachmentRequest] | None = None
+    inline_file_ids: list[str] | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RoomCenterAgentMessageRequest(BaseModel):
@@ -273,6 +292,7 @@ class RoomCenterMemoryRequest(BaseModel):
         None  # {agent_id: agent_name} for cleaning mentions
     )
     user_id: str | None = None  # User ID for attribution in conversation history
+    attachments: list[UserAttachment] | None = None
 
 
 class RoomCenterRoomMessageRequest(BaseModel):

@@ -26,6 +26,7 @@ from a2a.utils.constants import (
 from common.utils.logger import get_logger
 from config.settings import settings
 from models.agent import Agent, AgentStatus
+from services.agent_capability_issue_service import capability_issue_service
 from services.database_service import db_service
 from services.openai_service import openai_service
 
@@ -144,11 +145,15 @@ class AgentResolverService:
                 ),
             )
 
+        # Step 0.5 – get agents with open capability issues to exclude
+        excluded = await capability_issue_service.get_excluded_agent_ids()
+
         # Step 1 – vector similarity search (already filters active_only)
         candidates = await self.database_service.query_similar_agents(
             query_text,
             count=count,
             allowed_agent_ids=allowed_agent_ids,
+            excluded_agent_ids=excluded,
             active_only=True,
             user_id=user_id,
         )
@@ -329,8 +334,15 @@ class AgentResolverService:
     async def _probe_agent(agent: Agent) -> bool:
         """Lightweight HTTP probe to check if an agent is reachable.
 
+        Hub-associated agents are not probed over HTTP (their local URLs
+        are unreachable from the cloud server).  Liveness is determined
+        by the relay heartbeat via ``is_hub_online``.
+
         Uses a short timeout (3 s) to keep the critical path fast.
         """
+        if agent.hub_id:
+            return agent.is_hub_online
+
         agent_url = agent.agent_card.url
         try:
             async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT) as client:

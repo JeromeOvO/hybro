@@ -2,7 +2,7 @@
 
 Owns the queue loop, RAII cleanup (``_managed_queue``), continuation
 save/resume for webhook-paused queues, per-item dispatch to the
-``ResponseProcessor``, and queue chaining (``_queue_next_messages``).
+``DirectTransport``, and queue chaining (``_queue_next_messages``).
 
 Agent assignment is delegated to the injected ``AgentDispatcher``.
 
@@ -25,10 +25,10 @@ from common.utils.logger import get_logger
 from models.room import RoomAgentMessage
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
-from modules.ResponseProcessor import ResponseProcessor
-from modules.TaskStateManager import TaskStateManager, get_task
+from modules.TaskStateManager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
+from services.task_notification_service import notify_task_update
 
 if TYPE_CHECKING:
     from services.a2a_service import A2AService
@@ -91,7 +91,6 @@ class QueueExecutor:
         *,
         tsm: TaskStateManager,
         sse_manager: SSEManager,
-        response_processor: ResponseProcessor,
         a2a_service: A2AService,
         room_services: RoomServices,
         room_memory_service: RoomMemoryService,
@@ -99,11 +98,10 @@ class QueueExecutor:
         debate_service: DebateService,
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
-        agent_message_processor: AgentMessageProcessor | None = None,
+        agent_message_processor: AgentMessageProcessor,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
-        self.response_processor = response_processor
         self.a2a_service = a2a_service
         self.room_services = room_services
         self.room_memory_service = room_memory_service
@@ -148,7 +146,7 @@ class QueueExecutor:
             if len(message_queue) > 0:
                 for msg in message_queue:
                     await self.tsm.transition_task(
-                        msg, TaskState.canceled, persist=True, notify=False
+                        msg, TaskState.canceled, persist=True
                     )
                 canceled_ids = [msg.message_id for msg in message_queue]
                 message_queue.clear()
@@ -213,7 +211,7 @@ class QueueExecutor:
                         user_message_id,
                     )
                     await self.tsm.transition_task(
-                        current_message, TaskState.canceled, persist=True, notify=False
+                        current_message, TaskState.canceled, persist=True
                     )
                     queue_result = QueueResult.CANCELED
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
@@ -262,7 +260,10 @@ class QueueExecutor:
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
                     break
 
-                elif result.status == ProcessingStatus.PAUSED:
+                elif result.status in (
+                    ProcessingStatus.PAUSED,
+                    ProcessingStatus.RELAY_DISPATCHED,
+                ):
                     if not is_direct_chat:
                         await self._queue_next_messages(
                             current_message, message_queue, room_id
@@ -300,6 +301,7 @@ class QueueExecutor:
                         agent_id=current_message.agent_id,
                         agent_name=agent.agent_card.name if agent else "Agent",
                         response_text=result.response_text,
+                        was_successful=result.status == ProcessingStatus.SUCCESS,
                     )
 
                 # Queue up next messages in the chain (skip for direct chat)
@@ -361,11 +363,17 @@ class QueueExecutor:
                         intended_agent_id = allowed[0]
                 if intended_agent_id:
                     current_message.agent_id = intended_agent_id
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=error_text,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=error_text,
-                    agent_id=intended_agent_id,
+                    user_id=current_message.user_id or "",
+                    error=error_text,
                 )
                 return None
             return agent
@@ -379,11 +387,17 @@ class QueueExecutor:
                 current_message.agent_id,
                 current_message.message_id,
             )
-            await self.tsm.fail_task_and_notify(
+            await self.tsm.transition_task(
+                current_message, TaskState.failed,
+                error="The assigned agent could not be found.",
+                persist=True,
+            )
+            await notify_task_update(
+                message_id=current_message.message_id,
+                state=TaskState.failed,
                 room_id=room_id,
-                message=current_message,
-                error_text="The assigned agent could not be found.",
-                agent_id=current_message.agent_id,
+                user_id=current_message.user_id or "",
+                error="The assigned agent could not be found.",
             )
             return None
 
@@ -405,11 +419,17 @@ class QueueExecutor:
                     or "The assigned agent is no longer available and no alternative could be found."
                 )
                 current_message.agent_id = original_agent_id
-                await self.tsm.fail_task_and_notify(
+                await self.tsm.transition_task(
+                    current_message, TaskState.failed,
+                    error=error_text,
+                    persist=True,
+                )
+                await notify_task_update(
+                    message_id=current_message.message_id,
+                    state=TaskState.failed,
                     room_id=room_id,
-                    message=current_message,
-                    error_text=error_text,
-                    agent_id=original_agent_id,
+                    user_id=current_message.user_id or "",
+                    error=error_text,
                 )
                 return None
             return reassigned
@@ -451,7 +471,7 @@ class QueueExecutor:
                 system_requests_limit=rate_limit_result.system_requests_limit,
             )
             await self.tsm.transition_task(
-                current_message, TaskState.canceled, persist=True, notify=False
+                current_message, TaskState.canceled, persist=True
             )
             return True
 
@@ -473,24 +493,11 @@ class QueueExecutor:
         total_steps: int | None = None,
         quoted_text: str | None = None,
     ) -> ProcessingResult:
-        """Process a single agent message with streaming support.
+        """Process a single agent message.
 
-        Delegates to ``AgentMessageProcessor`` if available, otherwise
-        falls back to the inline implementation for backward compatibility.
+        Delegates to ``AgentMessageProcessor.process_single_message``.
         """
-        if self._agent_message_processor is not None:
-            return await self._agent_message_processor.process_single_message(
-                current_message,
-                room_id,
-                agent,
-                user_message_id,
-                token=token,
-                step_number=step_number,
-                total_steps=total_steps,
-                quoted_text=quoted_text,
-            )
-
-        return await self._process_single_message_inline(
+        return await self._agent_message_processor.process_single_message(
             current_message,
             room_id,
             agent,
@@ -500,139 +507,6 @@ class QueueExecutor:
             total_steps=total_steps,
             quoted_text=quoted_text,
         )
-
-    async def _process_single_message_inline(
-        self,
-        current_message: RoomAgentMessage,
-        room_id: str,
-        agent,
-        user_message_id: str,
-        *,
-        token: CancellationToken | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        quoted_text: str | None = None,
-    ) -> ProcessingResult:
-        """Original inline implementation — kept as fallback during migration."""
-        from models.memory import MemoryContent
-        from models.request import RoomCenterAgentMessageRequest
-
-        room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
-        room_memory_content = (
-            room_memory.memory_content if room_memory else MemoryContent()
-        )
-
-        process_response = await self.room_services.process_agent_message(
-            RoomCenterAgentMessageRequest(message=current_message),
-            room_memory_content,
-            quoted_text=quoted_text,
-        )
-
-        if not process_response.success:
-            return ProcessingResult(ProcessingStatus.FAILED)
-
-        prepared_message = process_response.a2a_message
-        if prepared_message is None:
-            return ProcessingResult(ProcessingStatus.FAILED)
-
-        support_streaming = self.a2a_service.has_streaming_capability(
-            agent_card=agent.agent_card
-        )
-
-        rp = self.response_processor
-        full_response_text = ""
-        paused_message_id = None
-        if support_streaming:
-            try:
-                (
-                    status,
-                    full_response_text,
-                ) = await rp.handle_streaming_response(
-                    current_message,
-                    agent.agent_card,
-                    prepared_message,
-                    room_id,
-                    user_message_id,
-                    token=token,
-                    send_sse=True,
-                    step_number=step_number,
-                    total_steps=total_steps,
-                )
-            except Exception as exc:
-                logger.error(
-                    "QueueExecutor: Unhandled exception in streaming for message %s: %s",
-                    current_message.message_id,
-                    exc,
-                    exc_info=True,
-                )
-                await self.tsm.fail_task_and_notify(
-                    room_id=room_id,
-                    message=current_message,
-                    error_text=f"Agent streaming failed: {exc}",
-                    agent_id=current_message.agent_id,
-                    agent_card=agent.agent_card,
-                    step_number=step_number,
-                    total_steps=total_steps,
-                )
-                return ProcessingResult(ProcessingStatus.FAILED, "")
-            if status != ProcessingStatus.SUCCESS:
-                return ProcessingResult(status, full_response_text)
-        else:
-            (
-                success,
-                full_response_text,
-                paused_message_id,
-            ) = await rp.handle_sync_response(
-                current_message,
-                agent.agent_card,
-                prepared_message,
-                room_id,
-                current_message.user_id,
-                user_message_id=user_message_id,
-                token=token,
-                step_number=step_number,
-                total_steps=total_steps,
-            )
-            if not success:
-                task = get_task(current_message)
-                was_canceled = (
-                    (token and token.is_cancelled)
-                    or (task and task.status and task.status.state == TaskState.canceled)
-                )
-                if was_canceled:
-                    return ProcessingResult(ProcessingStatus.CANCELED)
-                return ProcessingResult(ProcessingStatus.FAILED)
-
-        if full_response_text is None and paused_message_id:
-            logger.info(
-                "QueueExecutor: Push notification task submitted for message %s; "
-                "queue will be paused until task completes",
-                paused_message_id,
-            )
-            return ProcessingResult(
-                ProcessingStatus.PAUSED,
-                response_text="",
-                message_id=paused_message_id,
-            )
-
-        if full_response_text is None:
-            logger.info(
-                "QueueExecutor: Async task submitted for message %s; "
-                "skipping immediate agent response",
-                current_message.message_id,
-            )
-            return ProcessingResult(ProcessingStatus.SUCCESS)
-
-        current_message = (
-            await self.database_service.get_room_agent_message_by_message_id(
-                current_message.message_id
-            )
-        )
-
-        if current_message is None:
-            return ProcessingResult(ProcessingStatus.FAILED, full_response_text)
-
-        return ProcessingResult(ProcessingStatus.SUCCESS, full_response_text)
 
     # ------------------------------------------------------------------
     # Continuation save/resume (webhook-paused queues)
@@ -723,6 +597,7 @@ class QueueExecutor:
                 agent_id=current_agent_id,
                 agent_name=current_agent_name,
                 response_text=task_result_text,
+                was_successful=True,
             )
 
         if len(remaining_queue) > 0:
@@ -742,9 +617,13 @@ class QueueExecutor:
                 return ResumeResult(success=True)
             if queue_processing_result.result == QueueResult.FAILED:
                 await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.ERROR, user_message_id
+                    room_id, SSEProcessingStatus.FAILED, user_message_id
                 )
-                return ResumeResult(success=False)
+                return ResumeResult(
+                    success=False,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
             if queue_processing_result.result == QueueResult.CANCELED:
                 return ResumeResult(success=True)
 

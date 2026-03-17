@@ -43,7 +43,12 @@ class Settings(BaseSettings):
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
     # Agent Health Check Settings
-    agent_health_check_enabled: bool = True # enable/disable agent health check
+    agent_health_check_enabled: bool = True  # enable/disable agent health check
+    cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
+    cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
+
+    # Agent Capability Issue Tracking
+    capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
 
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
@@ -53,6 +58,19 @@ class Settings(BaseSettings):
     discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
     hybro_timeout_seconds: float = 45.0  
 
+
+    # Gateway API Settings
+    gateway_base_url: str = ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime
+    gateway_rate_limit_per_key: int | None = 200  # Requests per API key per hour (None = unlimited)
+    gateway_rate_limit_global: int | None = 20000  # Total requests per hour across all keys (None = unlimited)
+
+    # Relay (Hub Phase 2) Settings
+    relay_heartbeat_interval: int = 30  # seconds
+    relay_offline_queue_max: int = 100  # per hub
+    relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
+    relay_hub_agent_heartbeat_miss_limit: int = 3
+    relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
+    
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
@@ -74,6 +92,51 @@ class Settings(BaseSettings):
     cs_backoff_max: float = 30.0  # ceiling delay in seconds
     cs_backoff_factor: float = 2.0  # multiplier per retry
     cs_jitter_fraction: float = 0.25  # ±25% random jitter
+
+    # ===========================================
+    # Context & Memory System Settings
+    # See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14 for specification
+    # ===========================================
+
+    # Token Budget Settings
+    context_model_window: int = 128000  # Model's max context window
+    context_system_prompt_tokens: int = 2000  # Reserved for system prompt
+    context_tool_schema_tokens: int = 3000  # Reserved for tool schemas
+    context_response_reserve_tokens: int = 4000  # Reserved for response
+    context_room_pct: float = 0.15  # % of remaining for room context
+    context_history_pct: float = 0.60  # % of remaining for conversation history
+    context_task_pct: float = 0.25  # % of remaining for current task
+
+    # Compaction Settings (LOSSLESS - pointer-based, not summarization)
+    compaction_enabled: bool = True  # Enable/disable auto-compaction
+    compaction_max_full_turns: int = 20  # Max turns to keep in FULL representation
+    compaction_max_total_tokens: int = 80000  # Trigger compaction when full turns exceed this
+    compaction_preserve_recent: int = 10  # Always keep this many recent turns FULL
+    compaction_content_ttl_days: int = 0  # TTL for stored content (0 = forever)
+
+    # Memory Search Settings
+    memory_search_enabled: bool = True  # Enable/disable memory search
+    memory_search_vector_weight: float = 0.7  # Weight for vector similarity
+    memory_search_keyword_weight: float = 0.3  # Weight for BM25 keyword matching
+    memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
+    memory_search_half_life_days: int = 30  # Half-life for temporal decay
+    memory_search_mmr_lambda: float = 0.7  # MMR diversity parameter (0=diverse, 1=relevant)
+    memory_search_max_results: int = 10  # Max results to return
+    memory_search_max_snippet_chars: int = 500  # Max chars per snippet
+    memory_search_index_name: str = "room-memory"  # Pinecone index for memory
+
+    # AWS S3 (file uploads and binary content storage)
+    s3_bucket_name: str = ""
+    s3_region: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    s3_presigned_url_ttl: int = 3600  # presigned URL validity in seconds
+    max_file_size_mb: int = 50
+
+    # AWS Bedrock Settings (Supervisor LLM)
+    bedrock_region: str = "us-east-1"
+    bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    use_bedrock_supervisor: bool = False
 
     class Config:
         env_file = ".env"

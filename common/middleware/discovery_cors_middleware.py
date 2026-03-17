@@ -14,19 +14,24 @@ from config.settings import settings
 
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that adds permissive CORS headers for Discovery API endpoints.
+    Middleware that adds permissive CORS headers for Discovery, Gateway, and Relay API endpoints.
     
-    Only applies to paths starting with {api_prefix}/discovery.
+    Applies to paths starting with {api_prefix}/discovery, {api_prefix}/gateway,
+    or {api_prefix}/relay.
     Allows all origins, methods, and headers for external API access.
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Check if this is a Discovery API request
         discovery_path_prefix = f"{settings.api_prefix}/discovery"
-        is_discovery_api = request.url.path.startswith(discovery_path_prefix)
+        gateway_path_prefix = f"{settings.api_prefix}/gateway"
+        relay_path_prefix = f"{settings.api_prefix}/relay"
+        is_external_api = (
+            request.url.path.startswith(discovery_path_prefix)
+            or request.url.path.startswith(gateway_path_prefix)
+            or request.url.path.startswith(relay_path_prefix)
+        )
         
-        # Handle preflight OPTIONS requests for Discovery API
-        if is_discovery_api and request.method == "OPTIONS":
+        if is_external_api and request.method == "OPTIONS":
             response = Response()
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
@@ -34,11 +39,9 @@ class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
             response.headers["Access-Control-Max-Age"] = "3600"
             return response
         
-        # Process the request
         response = await call_next(request)
         
-        # Add CORS headers to Discovery API responses
-        if is_discovery_api:
+        if is_external_api:
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "*"

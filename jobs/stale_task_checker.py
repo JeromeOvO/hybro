@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
-from api.webhooks import notify_task_update
+from services.task_notification_service import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
@@ -33,6 +33,8 @@ from services.a2a_service import a2a_service
 from services.database_service import db_service
 
 logger = get_logger(__name__)
+
+MAX_CONCURRENT_RECOVERIES = 5
 
 
 class StaleTaskChecker:
@@ -76,6 +78,7 @@ class StaleTaskChecker:
         self.processing_status_expiry_minutes = processing_status_expiry_minutes
         self._running = False
         self._task: asyncio.Task | None = None
+        self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -173,6 +176,14 @@ class StaleTaskChecker:
         #    SupervisorExecutor.run() was in-flight.
         await self._recover_stuck_supervisor_trajectories()
 
+        # 7. Recover HITL requests stuck in "processing" (worker crashed
+        #    between CAS claim and finalization).
+        try:
+            from services.hitl_service import hitl_service
+            await hitl_service.recover_stale_processing()
+        except Exception as e:
+            logger.error("Failed to recover stale HITL processing requests: %s", e)
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -200,7 +211,7 @@ class StaleTaskChecker:
             )
 
         # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending"):
+        if agent_task_id.startswith("pending") or agent_task_id.startswith("relay-pending"):
             logger.warning(
                 f"Task for message {message_id} never acknowledged, marking failed"
             )
@@ -232,8 +243,15 @@ class StaleTaskChecker:
                 return
 
             # Update our record
+            task_text = None
+            if is_terminal_state(current_task.status.state) and current_task.status.state == TaskState.completed:
+                from common.utils.a2a_helpers import extract_text_from_artifacts
+                if current_task.artifacts:
+                    task_text = extract_text_from_artifacts(current_task.artifacts) or None
             await db_service.update_task_on_message(
-                message_id, current_task.model_dump(mode="json")
+                message_id,
+                current_task.model_dump(mode="json"),
+                message_text=task_text,
             )
 
             # Notify if terminal or interactive state changed
@@ -241,9 +259,10 @@ class StaleTaskChecker:
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
                 await notify_task_update(
                     message_id=message_id,
-                    task=current_task,
+                    state=new_state,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
+                    send_processing_status=True,
                 )
             else:
                 # Still working - timestamp already touched by update_task_on_message
@@ -262,16 +281,18 @@ class StaleTaskChecker:
         from a2a.types import GetTaskRequest, JSONRPCErrorResponse, TaskQueryParams
 
         try:
-            a2a_client = await a2a_service.create_a2a_client(agent_card)
-            response = await a2a_client.get_task(
-                GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
-            )
-            if not response or isinstance(response.root, JSONRPCErrorResponse):
-                return None
-            return response.root.result
+            async with a2a_service.create_a2a_client(agent_card) as a2a_client:
+                response = await a2a_client.get_task(
+                    GetTaskRequest(id=task_id, params=TaskQueryParams(id=task_id))
+                )
+                if not response or isinstance(response.root, JSONRPCErrorResponse):
+                    return None
+                return response.root.result
         except Exception as e:
             logger.error(f"Failed to get task from agent: {e}")
             return None
+
+    HITL_EXPIRY_HOURS = 24
 
     async def _auto_fail_expired_task(
         self,
@@ -282,21 +303,39 @@ class StaleTaskChecker:
         if not msg.has_task_tracking:
             return
 
+        task_state = (
+            msg.message_content.message_task.status.state
+            if msg.message_content
+            and msg.message_content.message_task
+            and msg.message_content.message_task.status
+            else None
+        )
+
+        is_interactive = task_state and task_state in INTERACTIVE_STATES
         created_at = (
             ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
         )
-
         age_hours = (utcnow() - created_at).total_seconds() / 3600
 
+        if is_interactive:
+            if age_hours < self.HITL_EXPIRY_HOURS:
+                return
+            logger.warning(
+                "Auto-failing HITL task for message %s after %.1f hours "
+                "(HITL threshold: %dh)",
+                message_id, age_hours, self.HITL_EXPIRY_HOURS,
+            )
+
+        threshold = self.HITL_EXPIRY_HOURS if is_interactive else self.task_expiry_hours
         logger.error(
             f"Auto-failing task for message {message_id} after {age_hours:.1f} hours "
-            f"(threshold: {self.task_expiry_hours}h)"
+            f"(threshold: {threshold}h)"
         )
 
         await self._mark_task_failed(
             message_id=message_id,
             msg=msg,
-            error=f"Task expired after {self.task_expiry_hours} hours without completion. "
+            error=f"Task expired after {threshold} hours without completion. "
             "The agent may be unresponsive.",
         )
 
@@ -366,11 +405,30 @@ class StaleTaskChecker:
             message_id, failed_task.model_dump(mode="json")
         )
 
+        # Clear any orphaned continuation (on both agent and user messages)
+        await db_service.get_and_clear_continuation_on_message(message_id)
+        if msg.related_message_id:
+            await db_service.get_and_clear_continuation_on_user_message(msg.related_message_id)
+
+        # Cancel any pending HITL request for this message
+        try:
+            from services.hitl_service import hitl_service
+            # HITL requests are keyed by user_message_id, not agent message_id.
+            # related_message_id on the agent message points to the user message.
+            user_msg_id = msg.related_message_id or message_id
+            await hitl_service.cancel_requests_for_message(user_msg_id)
+        except Exception as e:
+            logger.warning(
+                "stale_task_checker: Failed to cancel HITL requests for %s: %s",
+                message_id, e,
+            )
+
         await notify_task_update(
             message_id=message_id,
-            task=failed_task,
+            state=TaskState.failed,
             room_id=msg.room_id,
             user_id=msg.user_id or "",
+            send_processing_status=True,
         )
 
     async def _cleanup_stuck_processing_status(self) -> None:
@@ -500,6 +558,12 @@ class StaleTaskChecker:
         user_messages_to_process: dict[str, str] = {}  # user_message_id -> room_id
 
         for msg in orphaned_messages:
+            # Skip hub-sourced agents — their timeouts are managed by the
+            # relay offline queue TTL, not the orphan recovery job.
+            agent = await db_service.get_agent_by_agent_id(msg.agent_id) if msg.agent_id else None
+            if agent and getattr(agent, "source", "cloud") == "hub":
+                continue
+
             user_message_id = msg.related_message_id
             if user_message_id and user_message_id not in user_messages_to_process:
                 user_messages_to_process[user_message_id] = msg.room_id
@@ -518,17 +582,33 @@ class StaleTaskChecker:
                     room_id=room_id,
                     room_user_message_id=user_message_id,
                     room_related_message_id="",
+                    is_recovery=True,
                 )
 
-                # Process in background to not block the checker
+                # Process in background with bounded concurrency (SDR 2.13).
+                # Non-blocking: if all slots are occupied, defer remaining
+                # to the next checker cycle so steps 4-7 aren't starved.
+                if self._recovery_semaphore.locked():
+                    logger.info(
+                        "Recovery slots full, deferring remaining orphan recoveries to next cycle"
+                    )
+                    break
+                await self._recovery_semaphore.acquire()
                 asyncio.create_task(
-                    self._process_orphaned_user_message(room_message_center, request)
+                    self._guarded_orphan_recovery(room_message_center, request)
                 )
 
             except Exception as e:
                 logger.error(
                     f"Failed to trigger recovery for user message {user_message_id}: {e}"
                 )
+
+    async def _guarded_orphan_recovery(self, room_message_center, request):
+        """Wrapper that releases the recovery semaphore after processing."""
+        try:
+            await self._process_orphaned_user_message(room_message_center, request)
+        finally:
+            self._recovery_semaphore.release()
 
     async def _process_orphaned_user_message(
         self,
@@ -581,22 +661,30 @@ class StaleTaskChecker:
             if not message_id or not room_id:
                 continue
 
+            # Check capacity BEFORE claiming — claiming mutates state
+            # (RUNNING → RECOVERING) so we must not claim if we can't schedule.
+            if self._recovery_semaphore.locked():
+                logger.info(
+                    "Recovery slots full, deferring remaining supervisor recoveries to next cycle"
+                )
+                break
+
+            # Respect persistent cancellation before claiming: if the user
+            # canceled during the crash window, the in-memory token was lost
+            # but the cancelled_messages DB record survives.
+            if await db_service.is_message_cancelled(message_id):
+                logger.info(
+                    "supervisor_recovery: skipping message %s — cancelled by user",
+                    message_id,
+                )
+                continue
+
             # Atomically claim this trajectory so no other worker (or
             # subsequent check cycle) can recover it concurrently.
             claimed = await db_service.claim_stuck_supervisor_trajectory(message_id)
             if not claimed:
                 logger.info(
                     "supervisor_recovery: message %s already claimed by another worker",
-                    message_id,
-                )
-                continue
-
-            # Respect persistent cancellation: if the user canceled during
-            # the crash window, the in-memory token was lost but the
-            # cancelled_messages DB record survives.
-            if await db_service.is_message_cancelled(message_id):
-                logger.info(
-                    "supervisor_recovery: skipping message %s — cancelled by user",
                     message_id,
                 )
                 continue
@@ -611,9 +699,11 @@ class StaleTaskChecker:
                     room_id=room_id,
                     room_user_message_id=message_id,
                     room_related_message_id="",
+                    is_recovery=True,
                 )
+                await self._recovery_semaphore.acquire()
                 asyncio.create_task(
-                    self._process_recovered_supervisor_message(request, message_id)
+                    self._guarded_supervisor_recovery(request, message_id)
                 )
             except Exception as e:
                 logger.error(
@@ -621,6 +711,13 @@ class StaleTaskChecker:
                     message_id,
                     e,
                 )
+
+    async def _guarded_supervisor_recovery(self, request, message_id):
+        """Wrapper that releases the recovery semaphore after processing."""
+        try:
+            await self._process_recovered_supervisor_message(request, message_id)
+        finally:
+            self._recovery_semaphore.release()
 
     async def _process_recovered_supervisor_message(
         self,

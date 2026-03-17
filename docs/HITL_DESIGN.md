@@ -971,10 +971,11 @@ async def reply_to_task(
         ),
     )
 
-    # 4. Send via A2A client
-    client = await self._get_a2a_client(agent_url)
-    request = SendMessageRequest(params=params)
-    response = await client.send_message(request)
+    # 4. Send via scoped A2A client (agent card resolution skipped — we already have the URL)
+    async with httpx.AsyncClient(timeout=120.0) as http_client:
+        a2a_client = A2AClient(httpx_client=http_client, url=agent_url)
+        request = SendMessageRequest(params=params)
+        response = await a2a_client.send_message(request)
 
     # 5. Update task status locally
     if hasattr(response, "root") and hasattr(response.root, "status"):
@@ -1855,7 +1856,7 @@ A2A agents are external services. They might not handle multi-turn `input_requir
 
 ```python
 # 1. Max rounds per task
-MAX_HITL_ROUNDS = 3
+MAX_HITL_ROUNDS = 10
 
 async def request_input(self, ...):
     # Count existing HITL requests for this continuation
@@ -2071,11 +2072,9 @@ async def _recover_orphaned_hitl_responses(self):
 
 **Severity: MEDIUM**
 
-The new `reply_to_task()` method (§6.2) calls `self._get_a2a_client(agent_url)` which creates a new `httpx.AsyncClient` per call. This inherits the same connection leak issue identified in `SYSTEM_DESIGN_REVIEW.md` §2.3.
+~~The new `reply_to_task()` method (§6.2) calls `self._get_a2a_client(agent_url)` which creates a new `httpx.AsyncClient` per call. This inherits the same connection leak issue identified in `SYSTEM_DESIGN_REVIEW.md` §2.3.~~
 
-**Mitigation:**
-
-The `reply_to_task()` implementation must use the shared client pool (once implemented per the System Design Review recommendations) or wrap the client in `async with httpx.AsyncClient() as client:` to ensure cleanup.
+**Resolved (Mar 13):** `reply_to_task()` now uses `async with httpx.AsyncClient(timeout=120.0) as client:` for proper cleanup. Agent card resolution is skipped since the agent URL is already available from the stored `RoomAgentMessage`.
 
 ### Risk 18: Multi-User Room Authorization Undefined
 
@@ -2572,7 +2571,7 @@ See [SYSTEM_DESIGN_REVIEW.md §5](./SYSTEM_DESIGN_REVIEW.md) for the **unified i
 | Dependency | Document | Impact on HITL |
 |------------|----------|----------------|
 | **[SDR 2.1] Redis Pub/Sub** | SYSTEM_DESIGN_REVIEW.md | **Blocker for Phase 5** — HITL SSE events won't reach users in multi-instance deployment without cross-instance fan-out |
-| **[SDR 2.3] httpx client fix** | SYSTEM_DESIGN_REVIEW.md | **Blocker for Phase 1** — `reply_to_task()` inherits the connection leak |
+| ~~**[SDR 2.3] httpx client fix**~~ | SYSTEM_DESIGN_REVIEW.md | ✅ Resolved — `reply_to_task()` uses scoped `async with httpx.AsyncClient()` |
 | **[CM Phase 1] ConversationTurn model** | CONTEXT_MEMORY_SYSTEM_DESIGN.md | **Dependency for Phase 7** — HITL turn recording requires updated model with `turn_type` field |
 
 ### 14.2 Memory Integration

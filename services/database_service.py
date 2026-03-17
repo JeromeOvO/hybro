@@ -251,6 +251,7 @@ class DatabaseService:
         query_text: str,
         count: int = 5,
         allowed_agent_ids: list[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
         active_only: bool = True,
         user_id: str | None = None,
     ) -> list[Agent]:
@@ -261,6 +262,7 @@ class DatabaseService:
             query_text: Text to find similar agents for
             count: Number of results to return
             allowed_agent_ids: Optional list of agent IDs to restrict the search to
+            excluded_agent_ids: Optional set of agent IDs to exclude ($nin filter)
             active_only: If True, only return agents with active status (default: True)
             user_id: Optional user ID to include private agents
 
@@ -280,6 +282,15 @@ class DatabaseService:
             pinecone_filter = {
                 "agent_id": {"$in": [str(aid) for aid in allowed_agent_ids]}
             }
+
+        # Exclude agents with repeated capability issues
+        if excluded_agent_ids:
+            excluded_strs = [str(aid) for aid in excluded_agent_ids]
+            nin_filter = {"agent_id": {"$nin": excluded_strs}}
+            if pinecone_filter:
+                pinecone_filter = {"$and": [pinecone_filter, nin_filter]}
+            else:
+                pinecone_filter = nin_filter
 
         # Then use the embedding with Pinecone - remove the incompatible parameter
         results = self.pinecone.query(
@@ -679,6 +690,44 @@ class DatabaseService:
             )
             return False
 
+    async def clear_room_processing_status_if_matches(
+        self, room_id: str, message_id: str
+    ) -> bool:
+        """CAS clear: only clear processing_message_id if it matches the given message_id."""
+        try:
+            return await self.mongo.clear_room_processing_status_if_matches(
+                room_id, message_id
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to CAS-clear processing status for room {room_id}: {str(e)}"
+            )
+            return False
+
+    async def claim_user_message_for_processing(self, message_id: str) -> bool:
+        """Atomically claim a user message for processing."""
+        try:
+            return await self.mongo.claim_user_message_for_processing(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to claim user message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def claim_or_reclaim_user_message(
+        self, message_id: str, stale_threshold: datetime
+    ) -> bool:
+        """Claim a never-claimed message OR reclaim a stale one."""
+        try:
+            return await self.mongo.claim_or_reclaim_user_message(
+                message_id, stale_threshold
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to claim/reclaim user message {message_id}: {str(e)}"
+            )
+            return False
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
@@ -970,6 +1019,87 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to update task fields on message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def update_agent_message_task_state(
+        self, message_id: str, state: str,
+    ) -> bool:
+        """Update only ``message_content.message_task.status.state`` on an
+        agent message.  Used by HITL to persist input-required / completed."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"message_content.message_task.status.state": state}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to update task state on agent message %s: %s",
+                message_id, e,
+            )
+            return False
+
+    async def _ensure_message_task_metadata(self, message_id: str) -> None:
+        """Ensure ``message_content.message_task.metadata`` is a dict, not null.
+
+        MongoDB's ``$set`` with dotted paths cannot create nested fields when an
+        intermediate element is explicitly ``null``.  This idempotent helper
+        converts a null metadata to ``{}`` so subsequent dotted ``$set`` calls
+        succeed.
+        """
+        await self.mongo.db.room_agent_messages.update_one(
+            {
+                "message_id": message_id,
+                "message_content.message_task.metadata": None,
+            },
+            {"$set": {"message_content.message_task.metadata": {}}},
+        )
+
+    async def persist_hitl_user_answer(
+        self, message_id: str, user_answer: str,
+    ) -> bool:
+        """Persist the user's HITL answer on the agent message for DB hydration."""
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"message_content.message_task.metadata.user_answer": user_answer}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to persist user answer on agent message %s: %s",
+                message_id, e,
+            )
+            return False
+
+    async def persist_hitl_group_metadata(
+        self,
+        message_id: str,
+        group_id: str,
+        group_total: int | None = None,
+        group_index: int | None = None,
+    ) -> bool:
+        """Persist HITL group context on the agent message for DB hydration."""
+        try:
+            await self._ensure_message_task_metadata(message_id)
+            updates: dict = {
+                "message_content.message_task.metadata.hitl_group_id": group_id,
+            }
+            if group_total is not None:
+                updates["message_content.message_task.metadata.hitl_group_total"] = group_total
+            if group_index is not None:
+                updates["message_content.message_task.metadata.hitl_group_index"] = group_index
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to persist HITL group metadata on agent message %s: %s",
+                message_id, e,
             )
             return False
 
@@ -1300,31 +1430,363 @@ class DatabaseService:
             )
             return False, "verification_error"
 
-    async def update_task_on_message(self, message_id: str, task_data: dict) -> bool:
+    async def update_task_on_message(
+        self,
+        message_id: str,
+        task_data: dict,
+        message_text: str | None = None,
+    ) -> bool:
         """
         Update the task data on a room agent message.
+
+        Includes an atomic terminal-state guard: if the document already has a
+        terminal task status (completed, failed, canceled, rejected), the update
+        is skipped to prevent a concurrent writer (e.g. stale-task poller) from
+        overwriting a final state with stale non-terminal data.
 
         Args:
             message_id: The message ID
             task_data: The task data to update (serialized Task)
+            message_text: Optional text extracted from task artifacts to persist
+                alongside the task so that DB-hydrated messages have content
+                for proper display-type resolution on the frontend.
 
         Returns:
             True if updated successfully
         """
         try:
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+            set_fields: dict = {
+                "message_content.message_task": task_data,
+                "task_updated_at": utcnow(),
+            }
+            if message_text is not None:
+                set_fields["message_content.message_text"] = message_text
             result = await self.mongo.room_agent_messages_collection.update_one(
-                {"message_id": message_id},
                 {
-                    "$set": {
-                        "message_content.message_task": task_data,
-                        "task_updated_at": utcnow(),
-                    }
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
                 },
+                {"$set": set_fields},
             )
+            if result.matched_count == 0:
+                logger.debug(
+                    "update_task_on_message: skipped %s (already terminal or not found)",
+                    message_id,
+                )
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update task on message {message_id}: {str(e)}")
             return False
+
+    async def update_task_state_on_message(
+        self,
+        message_id: str,
+        state: str,
+        *,
+        message_text: str | None = None,
+        artifacts: list[dict] | None = None,
+        task_id: str | None = None,
+        context_id: str | None = None,
+    ) -> bool:
+        """Partial update of task fields on a room agent message using dot-notation.
+
+        Unlike ``update_task_on_message`` which replaces the entire task object,
+        this method only updates the specific fields provided, preserving all
+        other existing task fields (``id``, ``contextId``, ``kind``, etc.).
+
+        Includes the same atomic terminal-state guard.
+
+        Args:
+            message_id: The message ID.
+            state: The new task state value (e.g. ``"completed"``).
+            message_text: Optional text to persist for frontend hydration.
+            artifacts: Optional artifacts list to set on the task.
+            task_id: Optional override for the task ``id`` field.
+            context_id: Optional override for the task ``contextId`` field.
+
+        Returns:
+            True if updated successfully.
+        """
+        try:
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+            set_fields: dict = {
+                "message_content.message_task.status.state": state,
+                "task_updated_at": utcnow(),
+            }
+            if message_text is not None:
+                set_fields["message_content.message_text"] = message_text
+            if artifacts is not None:
+                set_fields["message_content.message_task.artifacts"] = artifacts
+            if task_id is not None:
+                set_fields["message_content.message_task.id"] = task_id
+            if context_id is not None:
+                set_fields["message_content.message_task.contextId"] = context_id
+
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                {
+                    "message_id": message_id,
+                    "message_content.message_task.status.state": {
+                        "$nin": terminal_values,
+                    },
+                },
+                {"$set": set_fields},
+            )
+            if result.matched_count == 0:
+                logger.debug(
+                    "update_task_state_on_message: skipped %s (already terminal or not found)",
+                    message_id,
+                )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                "Failed to update task state on message %s: %s", message_id, e
+            )
+            return False
+
+    async def accumulate_artifact_on_message(
+        self,
+        message_id: str,
+        artifact: dict,
+        append: bool = False,
+    ) -> bool:
+        """Accumulate an artifact chunk per A2A streaming semantics using atomic ops.
+
+        This method properly handles the A2A artifact streaming protocol:
+        - If append=False: Create new artifact or replace existing with same artifactId
+        - If append=True: Extend parts of existing artifact with same artifactId
+
+        Uses atomic MongoDB operations to avoid race conditions under concurrent
+        delivery. No read-modify-write cycle means concurrent writers don't
+        overwrite each other's artifacts.
+
+        Args:
+            message_id: The message ID.
+            artifact: The artifact dict to accumulate.
+            append: If True, extend parts of existing artifact.
+
+        Returns:
+            True if updated successfully.
+        """
+        try:
+            from services.a2a_constants import TERMINAL_STATES
+
+            terminal_values = [s.value for s in TERMINAL_STATES]
+            artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
+
+            artifact_text = ""
+            for part in artifact.get("parts", []):
+                root = part.get("root", part)
+                if "text" in root:
+                    artifact_text += root["text"]
+
+            base_filter = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {"$nin": terminal_values},
+            }
+
+            if not artifact_id:
+                logger.warning(
+                    "Artifact missing artifactId for message %s, pushing as new",
+                    message_id,
+                )
+                update: dict = {
+                    "$push": {"message_content.message_task.artifacts": artifact},
+                    "$set": {
+                        "message_content.message_task.status.state": "working",
+                        "task_updated_at": utcnow(),
+                    },
+                }
+                if artifact_text:
+                    update["$set"]["message_content.message_text"] = artifact_text
+                result = await self.mongo.room_agent_messages_collection.update_one(
+                    base_filter, update
+                )
+                return result.modified_count > 0
+
+            if append:
+                return await self._append_parts_to_artifact(
+                    message_id, artifact_id, artifact, artifact_text, base_filter
+                )
+            else:
+                return await self._replace_or_insert_artifact(
+                    message_id, artifact_id, artifact, artifact_text, base_filter
+                )
+
+        except Exception as e:
+            logger.error(
+                "Failed to accumulate artifact on message %s: %s", message_id, e
+            )
+            return False
+
+    async def _append_parts_to_artifact(
+        self,
+        message_id: str,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        """Atomically append parts to an existing artifact by artifactId."""
+        new_parts = artifact.get("parts", [])
+        if not new_parts:
+            return False
+
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+
+        if artifact_text:
+            pipeline: list = [
+                {
+                    "$set": {
+                        "message_content.message_task.artifacts": {
+                            "$map": {
+                                "input": "$message_content.message_task.artifacts",
+                                "as": "art",
+                                "in": {
+                                    "$cond": {
+                                        "if": {
+                                            "$or": [
+                                                {"$eq": ["$$art.artifactId", artifact_id]},
+                                                {"$eq": ["$$art.artifact_id", artifact_id]},
+                                            ]
+                                        },
+                                        "then": {
+                                            "$mergeObjects": [
+                                                "$$art",
+                                                {
+                                                    "parts": {
+                                                        "$concatArrays": [
+                                                            {"$ifNull": ["$$art.parts", []]},
+                                                            new_parts,
+                                                        ]
+                                                    }
+                                                },
+                                            ]
+                                        },
+                                        "else": "$$art",
+                                    }
+                                },
+                            }
+                        },
+                        "message_content.message_task.status.state": "working",
+                        "message_content.message_text": {
+                            "$concat": [
+                                {"$ifNull": ["$message_content.message_text", ""]},
+                                artifact_text,
+                            ]
+                        },
+                        "task_updated_at": utcnow(),
+                    }
+                }
+            ]
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                filter_with_artifact, pipeline
+            )
+        else:
+            update: dict = {
+                "$push": {
+                    "message_content.message_task.artifacts.$.parts": {"$each": new_parts}
+                },
+                "$set": {
+                    "message_content.message_task.status.state": "working",
+                    "task_updated_at": utcnow(),
+                },
+            }
+            result = await self.mongo.room_agent_messages_collection.update_one(
+                filter_with_artifact, update
+            )
+
+        if result.modified_count > 0:
+            return True
+
+        logger.warning(
+            "append=True for nonexistent artifact %s on message %s, inserting new",
+            artifact_id,
+            message_id,
+        )
+        insert_update: dict = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            base_filter, insert_update
+        )
+        return result.modified_count > 0
+
+    async def _replace_or_insert_artifact(
+        self,
+        message_id: str,
+        artifact_id: str,
+        artifact: dict,
+        artifact_text: str,
+        base_filter: dict,
+    ) -> bool:
+        """Atomically replace artifact by artifactId, or insert if not found."""
+        filter_with_artifact = {
+            **base_filter,
+            "message_content.message_task.artifacts": {
+                "$elemMatch": {
+                    "$or": [
+                        {"artifactId": artifact_id},
+                        {"artifact_id": artifact_id},
+                    ]
+                }
+            },
+        }
+
+        update: dict = {
+            "$set": {
+                "message_content.message_task.artifacts.$": artifact,
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            filter_with_artifact, update
+        )
+
+        if result.modified_count > 0:
+            return True
+
+        insert_update: dict = {
+            "$push": {"message_content.message_task.artifacts": artifact},
+            "$set": {
+                "message_content.message_task.status.state": "working",
+                "task_updated_at": utcnow(),
+            },
+        }
+        if artifact_text:
+            insert_update["$set"]["message_content.message_text"] = artifact_text
+
+        result = await self.mongo.room_agent_messages_collection.update_one(
+            base_filter, insert_update
+        )
+        return result.modified_count > 0
 
     # room memory management
     async def add_room_memory(self, room_memory: RoomMemory) -> bool:
@@ -1408,6 +1870,111 @@ class DatabaseService:
             )
             return False
 
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        """
+        Atomically update turn_notes for a single conversation turn.
+        Uses MongoDB positional $ operator — no full-document rewrite.
+        """
+        try:
+            return await self.mongo.update_turn_notes(room_id, turn_id, turn_notes)
+        except Exception as e:
+            logger.error(
+                "Failed to update turn_notes for room %s turn %s: %s",
+                room_id, turn_id, e,
+            )
+            return False
+
+    # ------------------------------------------------------------------
+    # Atomic room-memory mutations (Layer A)
+    # ------------------------------------------------------------------
+
+    async def push_conversation_turn(self, room_id: str, turn: dict) -> tuple[bool, bool]:
+        """Atomically append a turn to conversation_history via $push.
+
+        Returns:
+            (modified, matched) — matched is False when the document doesn't exist.
+        """
+        try:
+            return await self.mongo.push_conversation_turn(room_id, turn)
+        except Exception as e:
+            logger.error("Failed to push conversation turn for room %s: %s", room_id, e)
+            return (False, False)
+
+    async def push_and_trim_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+        max_turns: int,
+        summary_stub: str,
+        max_summary_chars: int = 4000,
+    ) -> tuple[bool, bool]:
+        """Atomically push a turn and trim history if it exceeds max_turns.
+
+        Returns:
+            (modified, matched) — matched is False when the document doesn't exist.
+        """
+        try:
+            return await self.mongo.push_and_trim_conversation_turn(
+                room_id, turn, max_turns, summary_stub, max_summary_chars,
+            )
+        except Exception as e:
+            logger.error("Failed to push+trim conversation turn for room %s: %s", room_id, e)
+            return (False, False)
+
+    async def trim_conversation_history(
+        self, room_id: str, max_turns: int, summary_addition: str,
+        max_summary_chars: int = 4000,
+    ) -> bool:
+        """Atomically cap conversation_history at max_turns and append to summary."""
+        try:
+            return await self.mongo.trim_conversation_history(
+                room_id, max_turns, summary_addition, max_summary_chars,
+            )
+        except Exception as e:
+            logger.error("Failed to trim conversation history for room %s: %s", room_id, e)
+            return False
+
+    async def update_room_summary_atomic(
+        self, room_id: str, room_summary: dict,
+        new_facts: list[dict] | None = None, max_facts: int = 50,
+    ) -> bool:
+        """Atomically update room_summary and optionally push new facts."""
+        try:
+            return await self.mongo.update_room_summary_atomic(
+                room_id, room_summary, new_facts, max_facts,
+            )
+        except Exception as e:
+            logger.error("Failed to atomically update room summary for room %s: %s", room_id, e)
+            return False
+
+    async def compact_turns_bulk(
+        self, room_id: str, compacted_turns: list[dict],
+    ) -> bool:
+        """Mark turns as compact using arrayFilters + bulk_write (not fully atomic; see mongodb.py)."""
+        try:
+            return await self.mongo.compact_turns_bulk(room_id, compacted_turns)
+        except Exception as e:
+            logger.error("Failed to compact turns (bulk) for room %s: %s", room_id, e)
+            return False
+
+    async def get_room_summary_projection(self, room_id: str) -> dict | None:
+        """Lightweight projection: fetch only room_summary and room_facts."""
+        try:
+            return await self.mongo.get_room_summary_projection(room_id)
+        except Exception as e:
+            logger.error("Failed to get room summary projection for room %s: %s", room_id, e)
+            return None
+
+    async def get_conversation_history_length(self, room_id: str) -> int:
+        """Return the number of turns in conversation_history."""
+        try:
+            return await self.mongo.get_conversation_history_length(room_id)
+        except Exception as e:
+            logger.error("Failed to get conversation history length for room %s: %s", room_id, e)
+            return 0
+
     # Agent Group management
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
         """
@@ -1461,6 +2028,282 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to delete agent group {group_id}: {str(e)}")
             return False
+
+    # ------------------------------------------------------------------
+    # HITL request management
+    # ------------------------------------------------------------------
+
+    async def create_hitl_request(self, request_data: dict) -> bool:
+        """Insert an HITL request document into the hitl_requests collection."""
+        try:
+            result = await self.mongo.db.hitl_requests.insert_one(request_data)
+            return bool(result.inserted_id)
+        except Exception as e:
+            logger.error(f"Failed to create HITL request: {e}")
+            return False
+
+    async def get_hitl_request(self, request_id: str) -> dict | None:
+        """Get a single HITL request by request_id."""
+        try:
+            return await self.mongo.db.hitl_requests.find_one(
+                {"request_id": request_id}
+            )
+        except Exception as e:
+            logger.error(f"Failed to get HITL request {request_id}: {e}")
+            return None
+
+    async def update_hitl_request(
+        self, request_id: str, **updates
+    ) -> bool:
+        """Update fields on an HITL request document."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Failed to update HITL request {request_id}: {e}")
+            return False
+
+    async def cas_update_hitl_request(
+        self, request_id: str, expected_status: str, **updates
+    ) -> bool:
+        """CAS update: only applies if current status matches expected_status."""
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id, "status": expected_status},
+                {"$set": updates},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed CAS update HITL request {request_id} "
+                f"(expected {expected_status}): {e}"
+            )
+            return False
+
+    async def fenced_update_hitl_request(
+        self, request_id: str, claim_id: str, updates: dict | None = None, **kw_updates
+    ) -> bool:
+        """Fenced update: only applies if claim_id matches (ownership check).
+
+        Accepts updates as a dict (useful when update keys collide with
+        parameter names like ``claim_id``) and/or as keyword arguments.
+        """
+        merged = {**(updates or {}), **kw_updates}
+        try:
+            result = await self.mongo.db.hitl_requests.update_one(
+                {"request_id": request_id, "claim_id": claim_id},
+                {"$set": merged},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed fenced update HITL request {request_id} "
+                f"(claim_id {claim_id}): {e}"
+            )
+            return False
+
+    async def claim_hitl_request(
+        self, request_id: str, **updates
+    ) -> dict | None:
+        """Atomically claim a PENDING HITL request (CAS: status must be 'pending').
+
+        Returns the pre-update document if claimed, or None if already claimed
+        by another caller (race lost).
+        """
+        try:
+            doc = await self.mongo.db.hitl_requests.find_one_and_update(
+                {"request_id": request_id, "status": "pending"},
+                {"$set": updates},
+            )
+            return doc
+        except Exception as e:
+            logger.error(f"Failed to claim HITL request {request_id}: {e}")
+            return None
+
+    async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
+        """Get all pending HITL requests for a room (for SSE reconnect catch-up)."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"room_id": room_id, "status": "pending"}
+            )
+            return await cursor.to_list(length=50)
+        except Exception as e:
+            logger.error(
+                f"Failed to get pending HITL requests for room {room_id}: {e}"
+            )
+            return []
+
+    async def get_pending_hitl_requests_for_message(
+        self, user_message_id: str
+    ) -> list[dict]:
+        """Get all pending HITL requests associated with a user message."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"user_message_id": user_message_id, "status": "pending"}
+            )
+            return await cursor.to_list(length=50)
+        except Exception as e:
+            logger.error(
+                f"Failed to get pending HITL requests for message {user_message_id}: {e}"
+            )
+            return []
+
+    async def get_hitl_group_requests(
+        self, group_id: str
+    ) -> list[dict]:
+        """Get all HITL requests belonging to a group (any status)."""
+        try:
+            cursor = self.mongo.db.hitl_requests.find(
+                {"group_id": group_id}
+            ).sort("group_index", 1)
+            return await cursor.to_list(length=100)
+        except Exception as e:
+            logger.error("Failed to get HITL group %s: %s", group_id, e)
+            return []
+
+    async def count_pending_in_hitl_group(
+        self, group_id: str
+    ) -> int:
+        """Count how many requests in a group are still pending or processing."""
+        try:
+            return await self.mongo.db.hitl_requests.count_documents(
+                {"group_id": group_id, "status": {"$in": ["pending", "processing"]}}
+            )
+        except Exception as e:
+            logger.error("Failed to count pending in HITL group %s: %s", group_id, e)
+            return -1
+
+    async def count_hitl_requests_for_message(
+        self, continuation_message_id: str
+    ) -> int:
+        """Count distinct clarification rounds for a continuation message.
+
+        Each multi-question group counts as one round (only the first question,
+        ``group_index == 0``, is counted).  Non-grouped requests each count as
+        one round.  Canceled requests are excluded.
+        """
+        try:
+            return await self.mongo.db.hitl_requests.count_documents(
+                {
+                    "continuation_message_id": continuation_message_id,
+                    "status": {"$ne": "canceled"},
+                    "$or": [
+                        {"group_index": None},
+                        {"group_index": {"$exists": False}},
+                        {"group_index": 0},
+                    ],
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to count HITL requests for message {continuation_message_id}: {e}"
+            )
+            return 0
+
+    async def get_pending_continuation_on_message(
+        self, message_id: str
+    ) -> dict | None:
+        """Non-destructive peek at the pending continuation for a message.
+
+        Checks both room_agent_messages and room_user_messages collections
+        (supervisor HITL stores continuations on user messages).
+        """
+        try:
+            doc = await self.mongo.db.room_agent_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"pending_continuation": 1},
+            )
+            if doc and doc.get("pending_continuation"):
+                return doc["pending_continuation"]
+            doc = await self.mongo.db.room_user_messages.find_one(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"pending_continuation": 1},
+            )
+            if doc and doc.get("pending_continuation"):
+                return doc["pending_continuation"]
+            return None
+        except Exception as e:
+            logger.error(
+                f"Failed to peek continuation for message {message_id}: {e}"
+            )
+            return None
+
+    async def save_continuation_on_user_message(
+        self, message_id: str, continuation_data: dict
+    ) -> bool:
+        """Save continuation state on a user message (for HITL_SUPERVISOR)."""
+        try:
+            result = await self.mongo.db.room_user_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"pending_continuation": continuation_data}},
+            )
+            return result.modified_count > 0 or result.matched_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to save continuation on user message {message_id}: {e}"
+            )
+            return False
+
+    async def get_and_clear_continuation_on_user_message(
+        self, message_id: str
+    ) -> dict | None:
+        """Get and clear continuation state on a user message atomically."""
+        try:
+            doc = await self.mongo.db.room_user_messages.find_one_and_update(
+                {"message_id": message_id, "pending_continuation": {"$exists": True}},
+                {"$unset": {"pending_continuation": ""}},
+            )
+            return doc.get("pending_continuation") if doc else None
+        except Exception as e:
+            logger.error(
+                f"Failed to get/clear continuation on user message {message_id}: {e}"
+            )
+            return None
+
+    async def reset_last_notified_state(self, message_id: str) -> bool:
+        """Reset last_notified_state to None so re-notification is possible."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$unset": {"last_notified_state": ""}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to reset last_notified_state for {message_id}: {e}"
+            )
+            return False
+
+    async def update_webhook_token_hash_on_message(
+        self, message_id: str, webhook_token_hash: str
+    ) -> bool:
+        """Update the stored webhook token hash on an agent message."""
+        try:
+            result = await self.mongo.db.room_agent_messages.update_one(
+                {"message_id": message_id},
+                {"$set": {"webhook_token_hash": webhook_token_hash}},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(
+                f"Failed to update webhook token hash for {message_id}: {e}"
+            )
+            return False
+
+    async def ensure_hitl_indexes(self) -> None:
+        """Create indexes for the hitl_requests collection."""
+        try:
+            coll = self.mongo.db.hitl_requests
+            await coll.create_index("request_id", unique=True)
+            await coll.create_index([("room_id", 1), ("status", 1)])
+            await coll.create_index([("expires_at", 1), ("status", 1)])
+            await coll.create_index([("user_message_id", 1), ("status", 1)])
+            await coll.create_index("continuation_message_id")
+        except Exception as e:
+            logger.error(f"Failed to create HITL indexes: {e}")
 
 
 db_service = DatabaseService()

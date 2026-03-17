@@ -26,3 +26,8 @@ config.py
 
 # logs
 logs/
+
+# Coverage artifacts
+*.cover
+.coverage
+htmlcov/

@@ -1,4 +1,6 @@
+from datetime import datetime
 from enum import Enum
+from typing import ClassVar
 
 from a2a.types import AgentCard
 from pydantic import BaseModel, field_serializer
@@ -8,6 +10,11 @@ class AgentStatus(Enum):
     active = "active"
     inactive = "inactive"
     deleted = "deleted"
+
+
+class IssueStatus(str, Enum):
+    open = "open"
+    resolved = "resolved"
 
 
 class Agent(BaseModel):
@@ -51,9 +58,39 @@ class Agent(BaseModel):
     # Visibility: True = public (everyone can see/use), False = private (owner only)
     is_public: bool = True
 
+    # Hub Phase 2 additions (see HYBRO_HUB_DESIGN.md §5.1, §15)
+    source: str = "cloud"
+    hub_id: str | None = None
+    local_agent_id: str | None = None
+
+    # Derived at read time from the hub document — not persisted in MongoDB.
+    hub_owner_id: str | None = None
+    is_hub_online: bool = False
+
+    # Fields excluded from DB serialization (populated at read time).
+    _DB_EXCLUDE_FIELDS: ClassVar[set[str]] = {"hub_owner_id", "is_hub_online"}
+
+    def db_dump(self, **kwargs) -> dict:
+        """Serialize for MongoDB, excluding derived hub fields."""
+        kwargs.setdefault("mode", "json")
+        return self.model_dump(exclude=self._DB_EXCLUDE_FIELDS, **kwargs)
+
     @field_serializer("agent_status")
     def serialize_status(self, value: AgentStatus) -> str:
         """Convert Enum to string value for storage"""
         if value is None:
             return None
         return value.value if isinstance(value, AgentStatus) else value
+
+
+class AgentCapabilityIssue(BaseModel):
+    issue_id: str  # UUID
+    agent_id: str
+    error_message: str
+    query_text: str  # What was asked (for context)
+    room_id: str | None = None
+    message_id: str | None = None
+    status: IssueStatus = IssueStatus.open
+    created_at: datetime
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None  # provider_id who resolved it

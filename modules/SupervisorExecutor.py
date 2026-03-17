@@ -19,10 +19,12 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from models.hitl import InterruptKind
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -34,9 +36,11 @@ from models.supervisor_v2 import (
     SupervisorRunResult,
     SupervisorTrajectory,
     TrajectoryEntry,
+    TrajectoryStatus,
     V2StepResult,
 )
 from models.processing import ProcessingStatus
+from services.a2a_constants import SSEProcessingStatus
 
 if TYPE_CHECKING:
     from modules.AgentDispatcher import AgentDispatcher
@@ -119,17 +123,20 @@ class SupervisorExecutor:
         # Debate mode resume: if all paused results have been filled in,
         # the debate is complete — skip straight to DONE without calling
         # decide_next (which wouldn't know about debate mode at step > 0).
+        # Also block if any result is non-success (e.g. deferred agents
+        # marked FAILED during multi-agent HITL) — those need re-evaluation.
         if (
             resumed_trajectory is not None
             and room_config.is_debate_mode
             and step_number > 0
         ):
-            still_paused = any(
-                r.status == StepStatus.PAUSED
+            still_unresolved = any(
+                r.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+                or not r.success
                 for entry in trajectory.entries
                 for r in entry.results
             )
-            if not still_paused:
+            if not still_unresolved:
                 done_entry = TrajectoryEntry(
                     step_number=len(trajectory.entries) + 1,
                     action=SupervisorAction(
@@ -140,7 +147,7 @@ class SupervisorExecutor:
                     completed_at=utcnow(),
                 )
                 trajectory.entries.append(done_entry)
-                trajectory.status = "completed"
+                trajectory.status = TrajectoryStatus.COMPLETED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -149,11 +156,13 @@ class SupervisorExecutor:
                     debate_mode=True,
                 )
 
+        clarify_fallback_count = 0
+
         while step_number < self.MAX_STEPS:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
-                trajectory.status = "canceled"
+                trajectory.status = TrajectoryStatus.CANCELED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -207,7 +216,7 @@ class SupervisorExecutor:
                             "trajectory_id": trajectory.trajectory_id,
                         },
                     )
-                    trajectory.status = "failed"
+                    trajectory.status = TrajectoryStatus.FAILED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -242,7 +251,7 @@ class SupervisorExecutor:
                         else await decide_coro
                     )
                 except CancellationError:
-                    trajectory.status = "canceled"
+                    trajectory.status = TrajectoryStatus.CANCELED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -250,6 +259,13 @@ class SupervisorExecutor:
                         ),
                     )
                 trajectory.total_supervisor_calls += 1
+
+            # Clear one-shot HITL reply after it has been consumed by decide_next
+            # so it doesn't re-appear in subsequent loop iterations.
+            if trajectory.hitl_user_reply:
+                trajectory.hitl_user_reply = None
+            if trajectory.clarify_user_reply:
+                trajectory.clarify_user_reply = None
 
             logger.info(
                 "supervisor_action_decided",
@@ -263,6 +279,49 @@ class SupervisorExecutor:
                     "target_agents": [t.agent_name for t in action.targets],
                 },
             )
+
+            # --- Guard: DONE/SYNTHESIZE before any delegation ---
+            # The supervisor should not skip all delegations.  If it chose
+            # DONE or SYNTHESIZE before any agent has been dispatched, override
+            # to DELEGATE so the user sees at least one agent response.
+            if action.action in (ActionType.DONE, ActionType.SYNTHESIZE):
+                has_any_delegation = any(
+                    e.action.action == ActionType.DELEGATE
+                    for e in trajectory.entries
+                )
+                if not has_any_delegation:
+                    healthy_agents = [a for a in agent_registry if a.is_healthy]
+                    if healthy_agents:
+                        logger.warning(
+                            "supervisor_premature_%s_override",
+                            action.action.value,
+                            extra={
+                                "room_id": room_id,
+                                "trajectory_id": trajectory.trajectory_id,
+                                "step_number": step_number,
+                                "original_reasoning": (
+                                    action.reasoning[:120]
+                                    if action.reasoning
+                                    else ""
+                                ),
+                            },
+                        )
+                        action = SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=(
+                                f"Auto-override: supervisor chose "
+                                f"{action.action.value} before any agent "
+                                f"responded — delegating to available agents"
+                            ),
+                            targets=[
+                                DelegateTarget(
+                                    agent_id=a.agent_id,
+                                    agent_name=a.agent_name,
+                                    task=message_text,
+                                )
+                                for a in healthy_agents
+                            ],
+                        )
 
             # --- Guard: DELEGATE with empty targets is a no-op ---
             if action.action == ActionType.DELEGATE and not action.targets:
@@ -310,6 +369,64 @@ class SupervisorExecutor:
                         clarification_question=action.clarification_question,
                     )
 
+            # --- Guard: CLARIFY cap — only one round per user message ---
+            if action.action == ActionType.CLARIFY:
+                prior_clarifies = sum(
+                    1 for e in trajectory.entries
+                    if e.action.action == ActionType.CLARIFY
+                )
+                if prior_clarifies >= 1:
+                    clarify_fallback_count += 1
+                    logger.warning(
+                        "supervisor_clarify_cap_reached",
+                        extra={
+                            "room_id": room_id,
+                            "trajectory_id": trajectory.trajectory_id,
+                            "prior_clarifies": prior_clarifies,
+                            "clarify_fallback_count": clarify_fallback_count,
+                        },
+                    )
+                    if clarify_fallback_count > 1:
+                        action = SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning=(
+                                "Supervisor repeatedly requested clarification "
+                                "after cap was reached. Ending to avoid "
+                                "infinite delegation loop."
+                            ),
+                        )
+                    else:
+                        healthy_ids = {
+                            a.agent_id for a in agent_registry if a.is_healthy
+                        }
+                        target_agent = self._pick_best_fallback_agent(
+                            trajectory, agent_registry, healthy_ids,
+                        )
+                        if target_agent:
+                            action = SupervisorAction(
+                                action=ActionType.DELEGATE,
+                                reasoning=(
+                                    "Clarification cap reached. Re-delegating "
+                                    f"to {target_agent.agent_name} based on "
+                                    "prior trajectory success."
+                                ),
+                                targets=[
+                                    DelegateTarget(
+                                        agent_id=target_agent.agent_id,
+                                        agent_name=target_agent.agent_name,
+                                        task=message_text,
+                                    )
+                                ],
+                            )
+                        else:
+                            action = SupervisorAction(
+                                action=ActionType.DONE,
+                                reasoning=(
+                                    "Clarification cap reached and no suitable "
+                                    "healthy agents available."
+                                ),
+                            )
+
             # --- Execute the action ---
             match action.action:
 
@@ -355,14 +472,16 @@ class SupervisorExecutor:
                                 agent_id=result.agent_id,
                                 agent_name=result.agent_name,
                                 response_text=result.response_text,
+                                was_successful=result.success,
                             )
 
                     # Check for PAUSED (push notification agent)
                     paused = [r for r in results if r.status == StepStatus.PAUSED]
                     if paused:
                         entry.results = results
-                        trajectory.status = "running"
-                        saved = await self._save_pause_state(
+                        trajectory.status = TrajectoryStatus.RUNNING
+                        saved = await self._save_interrupted_state(
+                            kind=InterruptKind.PUSH_NOTIFICATION,
                             trajectory=trajectory,
                             paused_results=paused,
                             room_id=room_id,
@@ -375,7 +494,7 @@ class SupervisorExecutor:
                             quoted_text=quoted_text,
                         )
                         if not saved:
-                            trajectory.status = "failed"
+                            trajectory.status = TrajectoryStatus.FAILED
                             return self._log_and_return(
                                 room_id, trajectory,
                                 SupervisorRunResult(
@@ -386,6 +505,99 @@ class SupervisorExecutor:
                             room_id, trajectory,
                             SupervisorRunResult(
                                 status=RunStatus.PAUSED, trajectory=trajectory
+                            ),
+                        )
+
+                    # Check for AWAITING_INPUT (agent returned input_required)
+                    awaiting = [
+                        r for r in results
+                        if r.status == StepStatus.AWAITING_INPUT
+                    ]
+                    if awaiting:
+                        # Mark non-first awaiting agents as FAILED so the
+                        # supervisor gets clean state on resume and can
+                        # re-dispatch them (they may or may not request
+                        # input again). Only the first agent gets an HITL
+                        # request to avoid trajectory race conditions.
+                        for extra in awaiting[1:]:
+                            extra.status = StepStatus.FAILED
+                            extra.success = False
+                            extra.error_message = (
+                                "Deferred: another agent is awaiting human input first. "
+                                "Will be re-evaluated on resume."
+                            )
+
+                        entry.results = results
+                        trajectory.status = TrajectoryStatus.AWAITING_INPUT
+
+                        # Only create HITL for the FIRST awaiting agent
+                        ar = awaiting[0]
+                        from services.hitl_service import hitl_service
+
+                        request = await hitl_service.request_input(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            source="agent",
+                            prompt=(
+                                ar.status_message
+                                or "The agent needs additional information."
+                            ),
+                            agent_id=ar.agent_id,
+                            agent_name=ar.agent_name,
+                            a2a_task_id=ar.a2a_task_id,
+                            a2a_context_id=ar.a2a_context_id,
+                            continuation_message_id=ar.paused_message_id,
+                        )
+
+                        if request is None:
+                            logger.warning(
+                                "Max HITL rounds exceeded for message %s — failing trajectory",
+                                user_message_id,
+                            )
+                            entry.results = results
+                            trajectory.status = TrajectoryStatus.FAILED
+                            return self._log_and_return(
+                                room_id, trajectory,
+                                SupervisorRunResult(
+                                    status=RunStatus.FAILED, trajectory=trajectory
+                                ),
+                            )
+
+                        saved = await self._save_interrupted_state(
+                            kind=InterruptKind.HITL_AGENT,
+                            trajectory=trajectory,
+                            message_id=ar.paused_message_id,
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            message_text=message_text,
+                            agent_registry=agent_registry,
+                            room_config=room_config,
+                            conversation_context=conversation_context,
+                            request_user_id=request_user_id,
+                            quoted_text=quoted_text,
+                            hitl_request_id=(
+                                request.request_id if request else None
+                            ),
+                        )
+                        if not saved:
+                            trajectory.status = TrajectoryStatus.FAILED
+                            return self._log_and_return(
+                                room_id, trajectory,
+                                SupervisorRunResult(
+                                    status=RunStatus.FAILED, trajectory=trajectory
+                                ),
+                            )
+
+                        await self.sse_manager.send_processing_status(
+                            room_id,
+                            SSEProcessingStatus.AWAITING_INPUT,
+                            user_message_id,
+                        )
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.AWAITING_INPUT,
+                                trajectory=trajectory,
                             ),
                         )
 
@@ -410,7 +622,7 @@ class SupervisorExecutor:
                             completed_at=utcnow(),
                         )
                         trajectory.entries.append(done_entry)
-                        trajectory.status = "completed"
+                        trajectory.status = TrajectoryStatus.COMPLETED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -438,7 +650,7 @@ class SupervisorExecutor:
                         )
                         entry.completed_at = utcnow()
                         trajectory.entries.append(entry)
-                        trajectory.status = "completed"
+                        trajectory.status = TrajectoryStatus.COMPLETED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -456,7 +668,7 @@ class SupervisorExecutor:
                             else await synth_coro
                         )
                     except CancellationError:
-                        trajectory.status = "canceled"
+                        trajectory.status = TrajectoryStatus.CANCELED
                         return self._log_and_return(
                             room_id, trajectory,
                             SupervisorRunResult(
@@ -465,7 +677,7 @@ class SupervisorExecutor:
                         )
                     entry.completed_at = utcnow()
                     trajectory.entries.append(entry)
-                    trajectory.status = "completed"
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -483,11 +695,140 @@ class SupervisorExecutor:
                         completed_at=utcnow(),
                     )
                     trajectory.entries.append(entry)
-                    trajectory.status = "clarifying"
+                    trajectory.status = TrajectoryStatus.AWAITING_INPUT
+
+                    from services.hitl_service import hitl_service
+                    from models.hitl import HITLPromptType
+                    from models.supervisor_v2 import ClarifyQuestion
+
+                    # Build questions list — prefer structured questions[],
+                    # fall back to legacy clarification_question string.
+                    questions: list[ClarifyQuestion]
+                    if action.questions:
+                        questions = action.questions
+                    else:
+                        legacy_pt = action.prompt_type
+                        questions = [ClarifyQuestion(
+                            prompt=(
+                                action.clarification_question
+                                or "The supervisor needs your input."
+                            ),
+                            prompt_type=legacy_pt,
+                            choices=action.choices,
+                        )]
+
+                    group_id = uuid4().hex if len(questions) > 1 else None
+                    last_request = None
+                    created_messages: list[str] = []
+                    created_request_ids: list[str] = []
+
+                    async def _cleanup_clarify_artifacts() -> None:
+                        """Cancel HITL requests and delete agent messages created in this CLARIFY."""
+                        for rid in created_request_ids:
+                            try:
+                                await hitl_service.cancel_request(rid, room_id)
+                            except Exception:
+                                logger.warning("Failed to cancel orphaned HITL request %s", rid)
+                        for mid in created_messages:
+                            try:
+                                await self.database_service.delete_room_agent_message_by_message_id(mid)
+                            except Exception:
+                                logger.warning("Failed to delete orphaned HITL agent message %s", mid)
+
+                    for qi, q in enumerate(questions):
+                        q_prompt_type = HITLPromptType.TEXT
+                        if q.prompt_type:
+                            try:
+                                q_prompt_type = HITLPromptType(q.prompt_type)
+                            except ValueError:
+                                pass
+
+                        hitl_agent_message = self.room_services.create_agent_message(
+                            room_id=room_id,
+                            related_message_id=user_message_id,
+                            agent_id="supervisor_hitl",
+                            content=q.prompt,
+                            user_id=request_user_id,
+                            step_number=step_number + 1,
+                            task_content=q.prompt,
+                        )
+                        await self.database_service.add_room_agent_message(
+                            hitl_agent_message
+                        )
+                        created_messages.append(hitl_agent_message.message_id)
+
+                        request = await hitl_service.request_input(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            source="supervisor",
+                            prompt=q.prompt,
+                            prompt_type=q_prompt_type,
+                            choices=q.choices,
+                            agent_id="supervisor_hitl",
+                            agent_name="Question & Answer",
+                            source_step_id=str(step_number + 1),
+                            continuation_message_id=user_message_id,
+                            display_message_id=hitl_agent_message.message_id,
+                            group_id=group_id,
+                            group_total=len(questions) if group_id else None,
+                            group_index=qi if group_id else None,
+                        )
+
+                        if request is None:
+                            logger.warning(
+                                "HITL request_input failed for message %s (q %d/%d) — cleaning up",
+                                user_message_id, qi + 1, len(questions),
+                            )
+                            await _cleanup_clarify_artifacts()
+                            trajectory.status = TrajectoryStatus.FAILED
+                            return self._log_and_return(
+                                room_id, trajectory,
+                                SupervisorRunResult(
+                                    status=RunStatus.FAILED, trajectory=trajectory
+                                ),
+                            )
+                        created_request_ids.append(request.request_id)
+                        last_request = request
+
+                    saved = await self._save_interrupted_state(
+                        kind=InterruptKind.HITL_SUPERVISOR,
+                        trajectory=trajectory,
+                        message_id=user_message_id,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        message_text=message_text,
+                        agent_registry=agent_registry,
+                        room_config=room_config,
+                        conversation_context=conversation_context,
+                        request_user_id=request_user_id,
+                        quoted_text=quoted_text,
+                        hitl_request_id=(
+                            last_request.request_id if last_request else None
+                        ),
+                    )
+                    if not saved:
+                        logger.warning(
+                            "Failed to save continuation for message %s — cleaning up %d requests",
+                            user_message_id, len(created_request_ids),
+                        )
+                        await _cleanup_clarify_artifacts()
+                        trajectory.status = TrajectoryStatus.FAILED
+                        return self._log_and_return(
+                            room_id, trajectory,
+                            SupervisorRunResult(
+                                status=RunStatus.FAILED, trajectory=trajectory
+                            ),
+                        )
+
+                    await self.sse_manager.send_processing_status(
+                        room_id,
+                        SSEProcessingStatus.AWAITING_INPUT,
+                        user_message_id,
+                    )
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
-                            status=RunStatus.CLARIFYING,
+                            status=RunStatus.AWAITING_INPUT,
                             trajectory=trajectory,
                             clarification_question=action.clarification_question,
                         ),
@@ -501,7 +842,7 @@ class SupervisorExecutor:
                         completed_at=utcnow(),
                     )
                     trajectory.entries.append(entry)
-                    trajectory.status = "completed"
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
@@ -527,7 +868,7 @@ class SupervisorExecutor:
                 for r in e.results
             )
             if not has_completed_results:
-                trajectory.status = "failed"
+                trajectory.status = TrajectoryStatus.FAILED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
@@ -544,14 +885,14 @@ class SupervisorExecutor:
                     else await budget_synth_coro
                 )
             except CancellationError:
-                trajectory.status = "canceled"
+                trajectory.status = TrajectoryStatus.CANCELED
                 return self._log_and_return(
                     room_id, trajectory,
                     SupervisorRunResult(
                         status=RunStatus.CANCELED, trajectory=trajectory
                     ),
                 )
-            trajectory.status = "completed"
+            trajectory.status = TrajectoryStatus.COMPLETED
             return self._log_and_return(
                 room_id, trajectory,
                 SupervisorRunResult(
@@ -561,7 +902,7 @@ class SupervisorExecutor:
                 ),
             )
 
-        trajectory.status = "failed"
+        trajectory.status = TrajectoryStatus.FAILED
         return self._log_and_return(
             room_id, trajectory,
             SupervisorRunResult(
@@ -681,7 +1022,10 @@ class SupervisorExecutor:
                     quoted_text=quoted_text,
                 )
 
-                if result.status == ProcessingStatus.PAUSED:
+                if result.status in (
+                    ProcessingStatus.PAUSED,
+                    ProcessingStatus.RELAY_DISPATCHED,
+                ):
                     return V2StepResult(
                         step_number=step_number,
                         agent_id=target.agent_id,
@@ -692,6 +1036,22 @@ class SupervisorExecutor:
                         status=StepStatus.PAUSED,
                         paused_message_id=result.message_id,
                         agent_message_id=message.message_id,
+                    )
+
+                if result.status == ProcessingStatus.AWAITING_INPUT:
+                    return V2StepResult(
+                        step_number=step_number,
+                        agent_id=target.agent_id,
+                        agent_name=target.agent_name,
+                        task=target.task,
+                        response_text="",
+                        success=True,
+                        status=StepStatus.AWAITING_INPUT,
+                        paused_message_id=result.message_id,
+                        agent_message_id=message.message_id,
+                        a2a_task_id=result.a2a_task_id,
+                        a2a_context_id=result.a2a_context_id,
+                        status_message=result.status_message,
                     )
 
                 if result.status == ProcessingStatus.SUCCESS and request_user_id:
@@ -878,6 +1238,53 @@ class SupervisorExecutor:
         return results
 
     # ------------------------------------------------------------------
+    # Clarify-cap fallback: choose the best agent from the trajectory
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pick_best_fallback_agent(
+        trajectory: SupervisorTrajectory,
+        agent_registry: list[AgentProfile],
+        healthy_ids: set[str],
+    ) -> AgentProfile | None:
+        """Pick the best agent when the clarify cap forces a delegation.
+
+        Priority order:
+        1. An agent that previously succeeded in this trajectory and is
+           still healthy (most likely to handle the task correctly).
+        2. A healthy agent that has not failed in this trajectory.
+        3. Any healthy agent as a last resort.
+        """
+        healthy_map = {
+            a.agent_id: a for a in agent_registry if a.agent_id in healthy_ids
+        }
+        if not healthy_map:
+            return None
+
+        failed_ids: set[str] = set()
+        succeeded_id: str | None = None
+
+        for entry in reversed(trajectory.entries):
+            if entry.action.action != ActionType.DELEGATE:
+                continue
+            for result in entry.results:
+                if result.success and result.agent_id in healthy_map:
+                    succeeded_id = result.agent_id
+                if not result.success:
+                    failed_ids.add(result.agent_id)
+
+        if succeeded_id:
+            return healthy_map[succeeded_id]
+
+        non_failed = [
+            a for aid, a in healthy_map.items() if aid not in failed_ids
+        ]
+        if non_failed:
+            return non_failed[0]
+
+        return next(iter(healthy_map.values()))
+
+    # ------------------------------------------------------------------
     # Logging helper
     # ------------------------------------------------------------------
 
@@ -953,78 +1360,147 @@ class SupervisorExecutor:
             return cached_user_message
 
     # ------------------------------------------------------------------
-    # Push notification pause persistence
+    # Unified interrupt state persistence
     # ------------------------------------------------------------------
 
-    async def _save_pause_state(
+    async def _save_interrupted_state(
         self,
+        kind: InterruptKind,
+        *,
         trajectory: SupervisorTrajectory,
-        paused_results: list[V2StepResult],
         room_id: str,
         user_message_id: str,
-        request_user_id: str | None,
         message_text: str,
         agent_registry: list[AgentProfile],
         room_config: RoomConfig,
         conversation_context: str | None,
+        request_user_id: str | None,
         quoted_text: str | None = None,
+        hitl_request_id: str | None = None,
+        # For PUSH_NOTIFICATION / HITL_AGENT: list of paused results
+        paused_results: list[V2StepResult] | None = None,
+        # For HITL_AGENT / HITL_SUPERVISOR: single message_id
+        message_id: str | None = None,
     ) -> bool:
-        """Serialize the trajectory + inputs for webhook resume.
+        """Serialize trajectory + run inputs for any interrupt kind.
 
-        Returns ``True`` if at least one pause state was saved successfully,
-        ``False`` if all saves failed (webhook resume will not work).
+        For PUSH_NOTIFICATION: saves on each paused_results[i].paused_message_id.
+        For HITL_AGENT: saves on message_id (the paused agent message).
+        For HITL_SUPERVISOR: saves on message_id (the user message).
+
+        Returns True if saved successfully.
         """
-        saved_any = False
-        for pr in paused_results:
-            if not pr.paused_message_id:
-                logger.error(
-                    "SupervisorExecutor: PAUSED result has no paused_message_id — "
-                    "cannot save continuation. agent=%s, agent_message_id=%s",
-                    pr.agent_id,
-                    pr.agent_message_id,
+        interrupted_state = {
+            "supervisor_v2": True,
+            "interrupt_kind": kind.value,
+            "trajectory": trajectory.model_dump(mode="json"),
+            "room_id": room_id,
+            "user_message_id": user_message_id,
+            "message_text": message_text,
+            "agent_registry": [
+                p.model_dump(mode="json") for p in agent_registry
+            ],
+            "room_config": room_config.model_dump(mode="json"),
+            "conversation_context": conversation_context,
+            "request_user_id": request_user_id,
+            "quoted_text": quoted_text,
+        }
+        if hitl_request_id is not None:
+            interrupted_state["hitl_request_id"] = hitl_request_id
+
+        # PUSH_NOTIFICATION: save on each paused agent message
+        if kind == InterruptKind.PUSH_NOTIFICATION and paused_results:
+            saved_any = False
+            for pr in paused_results:
+                if not pr.paused_message_id:
+                    logger.error(
+                        "SupervisorExecutor: PAUSED result has no paused_message_id — "
+                        "cannot save continuation. agent=%s",
+                        pr.agent_id,
+                    )
+                    continue
+                success = await self.database_service.save_continuation_on_message(
+                    pr.paused_message_id, interrupted_state
                 )
-                continue
+                if success:
+                    saved_any = True
+                    logger.info(
+                        "supervisor_interrupted_state_saved",
+                        extra={
+                            "room_id": room_id,
+                            "message_id": pr.paused_message_id,
+                            "interrupt_kind": kind.value,
+                            "trajectory_id": trajectory.trajectory_id,
+                        },
+                    )
+                else:
+                    logger.error(
+                        "SupervisorExecutor: Failed to save interrupted state "
+                        "(kind=%s, message_id=%s)",
+                        kind.value,
+                        pr.paused_message_id,
+                    )
+            return saved_any
 
-            pause_state = {
-                "supervisor_v2": True,
-                "trajectory": trajectory.model_dump(mode="json"),
-                "room_id": room_id,
-                "user_message_id": user_message_id,
-                "message_text": message_text,
-                "agent_registry": [
-                    p.model_dump(mode="json") for p in agent_registry
-                ],
-                "room_config": room_config.model_dump(mode="json"),
-                "conversation_context": conversation_context,
-                "request_user_id": request_user_id,
-                "quoted_text": quoted_text,
-            }
-
+        # HITL_AGENT: save on the agent message
+        if kind == InterruptKind.HITL_AGENT:
+            if not message_id:
+                logger.error(
+                    "SupervisorExecutor: HITL_AGENT save missing message_id"
+                )
+                return False
             success = await self.database_service.save_continuation_on_message(
-                pr.paused_message_id, pause_state
+                message_id, interrupted_state
             )
-            if not success:
-                logger.error(
-                    "SupervisorExecutor: Failed to save pause state for message %s",
-                    pr.paused_message_id,
-                )
-            else:
-                saved_any = True
+            if success:
                 logger.info(
-                    "supervisor_pause_saved",
+                    "supervisor_interrupted_state_saved",
                     extra={
                         "room_id": room_id,
-                        "paused_message_id": pr.paused_message_id,
+                        "message_id": message_id,
+                        "interrupt_kind": kind.value,
                         "trajectory_id": trajectory.trajectory_id,
                     },
                 )
+            else:
+                logger.error(
+                    "SupervisorExecutor: Failed to save interrupted state "
+                    "(kind=%s, message_id=%s)",
+                    kind.value,
+                    message_id,
+                )
+            return success
 
-        if not saved_any:
-            logger.error(
-                "SupervisorExecutor: No pause state was saved for any paused result "
-                "— webhook resume will fail. room_id=%s, user_message_id=%s",
-                room_id,
-                user_message_id,
+        # HITL_SUPERVISOR: save on the user message
+        if kind == InterruptKind.HITL_SUPERVISOR:
+            if not message_id:
+                logger.error(
+                    "SupervisorExecutor: HITL_SUPERVISOR save missing message_id"
+                )
+                return False
+            success = await self.database_service.save_continuation_on_user_message(
+                message_id, interrupted_state
             )
+            if success:
+                logger.info(
+                    "supervisor_interrupted_state_saved",
+                    extra={
+                        "room_id": room_id,
+                        "message_id": message_id,
+                        "interrupt_kind": kind.value,
+                        "trajectory_id": trajectory.trajectory_id,
+                    },
+                )
+            else:
+                logger.error(
+                    "SupervisorExecutor: Failed to save interrupted state "
+                    "(kind=%s, message_id=%s)",
+                    kind.value,
+                    message_id,
+                )
+            return success
 
-        return saved_any
+        logger.error(
+            "SupervisorExecutor: Unknown interrupt kind %s", kind
+        )
+        return False
