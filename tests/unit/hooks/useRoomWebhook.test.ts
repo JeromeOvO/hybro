@@ -11,7 +11,6 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { streamingBuffer } from '@/stores/streaming-buffer'
 import type { SSEMessage } from '@/lib/types/sse'
 
 // Capture the onMessage callback passed to useRoomSSE
@@ -87,7 +86,6 @@ describe('useRoomWebhook SSE message handling', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
     useRoomUiStore.getState().resetAll()
-    streamingBuffer.clear()
   })
 
   afterEach(() => {
@@ -152,44 +150,6 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.content).toBe('Agent reply')
     expect(entity.messageType).toBe('agent')
     expect(entity.isEphemeral).toBe(false)
-  })
-
-  it('should handle agent_token by appending to streaming buffer', async () => {
-    await mountHook()
-
-    await act(async () => {
-      await capturedOnMessage!(makeSSEMessage({
-        type: 'agent_token',
-        data: {
-          message_id: 'msg-tok-1',
-          agent_id: 'agent-1',
-          token: 'Hello',
-        },
-      }))
-    })
-
-    // Streaming buffer should have content
-    const snapshot = streamingBuffer.get('msg-tok-1')
-    expect(snapshot).toBe('Hello')
-
-    // Should have created a placeholder entity
-    const entity = useMessageStore.getState().entities['msg-tok-1']
-    expect(entity).toBeDefined()
-    expect(entity.isEphemeral).toBe(true)
-  })
-
-  it('should ignore agent_token without message_id or token', async () => {
-    await mountHook()
-    const countBefore = useMessageStore.getState().orderedIds.length
-
-    await act(async () => {
-      await capturedOnMessage!(makeSSEMessage({
-        type: 'agent_token',
-        data: { message_id: '', token: '' },
-      }))
-    })
-
-    expect(useMessageStore.getState().orderedIds.length).toBe(countBefore)
   })
 
   it('should handle heartbeat without side effects', async () => {
@@ -271,7 +231,7 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    // Then complete it — triggers typewriter which finalizes asynchronously
+    // Then complete it
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',

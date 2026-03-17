@@ -1,4 +1,3 @@
-import type { TaskState } from '@/lib/types/sse'
 import { isTerminalState } from '@/lib/types/sse'
 import { resolveDisplayType } from './resolve-display-type'
 import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData } from './types'
@@ -62,26 +61,8 @@ export function applyUpsert(
   // agent-bubble resolution when the existing entity has input-required).
   const merged = mergeIncoming(existing, incoming)
 
-  // For displayType resolution:
-  // - If incoming explicitly provides taskStatus (including null to clear), use it.
-  // - If incoming sets isEphemeral=true without taskStatus, this is a streaming
-  //   transition (agent_token) — use undefined so resolveDisplayType sees
-  //   ephemeral-without-task → agent-bubble.
-  // - Otherwise, use the merged (existing) taskStatus to preserve the current
-  //   display card (e.g. HITL answered entities keep their task-status card).
-  let displayTaskStatus = merged.taskStatus
-  if (incoming.taskStatus !== undefined) {
-    displayTaskStatus = incoming.taskStatus ?? undefined
-  } else if (incoming.isEphemeral === true) {
-    displayTaskStatus = undefined
-  }
-
   const displayType = resolveDisplayType({
     messageType: merged.messageType,
-    taskStatus: displayTaskStatus,
-    content: merged.content,
-    isEphemeral: resolvedEphemeral,
-    artifacts: merged.artifacts,
   })
 
   const entity: MessageEntity = {
@@ -210,9 +191,6 @@ function arraysShallowEqual(a: unknown, b: unknown): boolean {
 /**
  * Detect whether an incoming update changes any rendering-visible fields.
  * Returns true if nothing visible changed — the store should skip this update.
- *
- * Gap 18: includes taskStatusMessage, taskContent, taskRequiresInput, and
- * taskRequiresAuth which are all displayed in the TaskStatusMessage component.
  */
 export function isNoOpUpdate(
   existing: MessageEntity,
@@ -220,14 +198,6 @@ export function isNoOpUpdate(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _source: MessageSource,
 ): boolean {
-  const incomingDisplayType = resolveDisplayType({
-    messageType: incoming.messageType ?? existing.messageType,
-    taskStatus: (coalesce(incoming.taskStatus, existing.taskStatus) ?? undefined) as TaskState | undefined,
-    content: incoming.content ?? existing.content,
-    isEphemeral: incoming.isEphemeral ?? existing.isEphemeral,
-    artifacts: incoming.artifacts ?? existing.artifacts,
-  })
-
   return (
     existing.content           === coalesce(incoming.content, existing.content) &&
     existing.taskStatus        === coalesce(incoming.taskStatus, existing.taskStatus) &&
@@ -251,7 +221,6 @@ export function isNoOpUpdate(
     existing.hitlUserAnswer    === coalesce(incoming.hitlUserAnswer, existing.hitlUserAnswer) &&
     existing.clientRequestId   === coalesce(incoming.clientRequestId, existing.clientRequestId) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
-    existing.displayType       === incomingDisplayType &&
     existing.artifacts         === coalesce(incoming.artifacts, existing.artifacts) &&
     existing.attachments       === coalesce(incoming.attachments, existing.attachments)
   )
@@ -299,11 +268,18 @@ export function buildSortedIds(entities: Record<string, MessageEntity>): string[
     .map(e => e.id)
 }
 
+function isTextOnlyArtifact(a: ArtifactData): boolean {
+  return a.parts.length > 0 && a.parts.every(p => p.kind === 'text')
+}
+
 /**
  * Merge an incoming artifact into an existing artifact list.
  * - If append=true and artifact already exists, append new parts.
  * - Otherwise replace the existing artifact with same ID.
  * - New artifact IDs are appended to the list.
+ * - Same-name text-only artifacts with different IDs are deduplicated
+ *   (keeps only the latest) to contain misbehaving agents that emit a
+ *   new artifact ID per streaming token instead of using append semantics.
  */
 export function mergeArtifacts(
   existing: ArtifactData[] | undefined,
@@ -315,17 +291,65 @@ export function mergeArtifacts(
 
   if (idx >= 0) {
     if (append) {
+      const merged = mergeTextParts([...list[idx].parts], incoming.parts)
       list[idx] = {
         ...list[idx],
-        parts: [...list[idx].parts, ...incoming.parts],
+        parts: merged,
         isStreaming: incoming.isStreaming ?? list[idx].isStreaming,
       }
     } else {
       list[idx] = incoming
     }
   } else {
-    list.push(incoming)
+    // Dedup: if incoming is a text-only artifact with a name that matches
+    // an existing text-only artifact, replace it instead of pushing a new entry.
+    const sameNameIdx = incoming.name && isTextOnlyArtifact(incoming)
+      ? list.findIndex(a => a.name === incoming.name && isTextOnlyArtifact(a))
+      : -1
+
+    if (sameNameIdx >= 0) {
+      list[sameNameIdx] = incoming
+    } else {
+      list.push(incoming)
+    }
   }
 
   return list
+}
+
+/**
+ * Extract the combined text from all text-only artifacts.
+ * Returns the longest single artifact's text (not concatenated across
+ * artifacts) to handle cumulative-snapshot patterns where each artifact
+ * contains all prior text plus the latest token.
+ */
+export function extractTextFromArtifacts(artifacts: ArtifactData[]): string {
+  let longest = ''
+  for (const a of artifacts) {
+    if (!isTextOnlyArtifact(a)) continue
+    const text = a.parts.map(p => p.text || '').join('')
+    if (text.length > longest.length) longest = text
+  }
+  return longest
+}
+
+/**
+ * When appending artifact parts during streaming, concatenate consecutive
+ * text parts into the trailing text part instead of creating separate
+ * `<p>` elements per token (which causes the one-word-per-line glitch).
+ */
+function mergeTextParts(
+  existingParts: ArtifactData['parts'],
+  newParts: ArtifactData['parts'],
+): ArtifactData['parts'] {
+  const result = [...existingParts]
+  for (const part of newParts) {
+    const last = result[result.length - 1]
+    if (part.kind === 'text' && last?.kind === 'text') {
+      result[result.length - 1] = { ...last, text: (last.text || '') + (part.text || '') }
+    } else {
+      result.push(part)
+    }
+  }
+  return result
 }

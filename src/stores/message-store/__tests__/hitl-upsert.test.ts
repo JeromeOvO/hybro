@@ -12,7 +12,7 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
     timestamp: '2026-02-17T10:00:00Z',
     source: 'sse',
     sourceVersion: 1,
-    displayType: 'task-status',
+    displayType: 'agent-bubble',
     isEphemeral: false,
     createdAt: 1000,
     updatedAt: 1000,

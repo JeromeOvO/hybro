@@ -17,7 +17,7 @@ import {
   isSharedPath,
   isStaticFile,
   handleSubdomainRewrite,
-} from '@/middleware'
+} from '@/proxy'
 import { NextResponse } from 'next/server'
 
 function makeRequest(

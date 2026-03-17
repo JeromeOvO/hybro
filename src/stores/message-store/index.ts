@@ -200,9 +200,6 @@ export const useMessageStore = create<MessageStoreState>()(
             taskStatus: 'canceled' as TaskState,
             displayType: resolveDisplayType({
               messageType: entity.messageType,
-              taskStatus: 'canceled' as TaskState,
-              content: entity.content,
-              isEphemeral: entity.isEphemeral,
             }),
             sourceVersion: entity.sourceVersion + 1,
             updatedAt: Date.now(),

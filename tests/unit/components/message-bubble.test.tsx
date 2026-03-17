@@ -1,11 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { EntityUserBubble, EntityAgentBubble } from '@/components/message-bubble'
+import { EntityUserBubble, EntityAgentBubble, derivePhase } from '@/components/message-bubble'
 import type { MessageEntity } from '@/stores/message-store'
-
-vi.mock('@/hooks/useStreamingContent', () => ({
-  useStreamingContent: vi.fn().mockReturnValue({ streamingText: '', isStreaming: false }),
-}))
 
 function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
   return {
@@ -51,9 +47,10 @@ describe('EntityUserBubble', () => {
 })
 
 describe('EntityAgentBubble', () => {
+
   it('should render agent message content', () => {
     const entity = makeEntity({
-      type: 'agent',
+      messageType: 'agent',
       senderName: 'Coding Agent',
       agentId: 'agent-1',
       content: 'Here is your code.',
@@ -65,7 +62,7 @@ describe('EntityAgentBubble', () => {
 
   it('should render agent initials in avatar', () => {
     const entity = makeEntity({
-      type: 'agent',
+      messageType: 'agent',
       senderName: 'Coding Agent',
       agentId: 'agent-1',
       content: 'Response',
@@ -78,7 +75,7 @@ describe('EntityAgentBubble', () => {
   it('should show "Show more" button for long messages', () => {
     const longContent = 'A'.repeat(600)
     const entity = makeEntity({
-      type: 'agent',
+      messageType: 'agent',
       agentId: 'agent-1',
       content: longContent,
     })
@@ -89,7 +86,7 @@ describe('EntityAgentBubble', () => {
 
   it('should not show expand button for very short messages', () => {
     const entity = makeEntity({
-      type: 'agent',
+      messageType: 'agent',
       agentId: 'agent-1',
       content: 'Hi',
       source: 'db',
@@ -104,7 +101,7 @@ describe('EntityAgentBubble', () => {
 
   it('should link agent name to agent profile', () => {
     const entity = makeEntity({
-      type: 'agent',
+      messageType: 'agent',
       senderName: 'Coding Agent',
       agentId: 'agent-1',
       content: 'Hi',
@@ -112,5 +109,159 @@ describe('EntityAgentBubble', () => {
     const { container } = render(<EntityAgentBubble entity={entity} />)
     const link = container.querySelector('a[href="/c/agents/agent-1"]')
     expect(link).toBeTruthy()
+  })
+
+})
+
+// ── derivePhase ─────────────────────────────────────────────────
+
+describe('derivePhase', () => {
+  it('returns "waiting" for entity with no content, no artifacts, no taskStatus', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: undefined })
+    expect(derivePhase(entity)).toBe('waiting')
+  })
+
+  it('returns "waiting" for entity with "working" taskStatus but no content', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'working' })
+    expect(derivePhase(entity)).toBe('waiting')
+  })
+
+  it('returns "waiting" for entity with "unknown" taskStatus', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'unknown' as any })
+    expect(derivePhase(entity)).toBe('waiting')
+  })
+
+  it('returns "streaming" for entity with streaming artifacts', () => {
+    const entity = makeEntity({
+      messageType: 'agent', content: '',
+      artifacts: [{ artifactId: 'a1', parts: [{ kind: 'text', text: 'hi' }], isStreaming: true }],
+    })
+    expect(derivePhase(entity)).toBe('streaming')
+  })
+
+  it('returns "streaming" for working task with accumulated content (post-refresh)', () => {
+    const entity = makeEntity({ messageType: 'agent', content: 'Partial result', taskStatus: 'working' })
+    expect(derivePhase(entity)).toBe('streaming')
+  })
+
+  it('returns "streaming" for submitted task with content', () => {
+    const entity = makeEntity({ messageType: 'agent', content: 'Some output', taskStatus: 'submitted' })
+    expect(derivePhase(entity)).toBe('streaming')
+  })
+
+  it('returns "streaming" for working task with non-text artifacts', () => {
+    const entity = makeEntity({
+      messageType: 'agent', content: '', taskStatus: 'working',
+      artifacts: [{ artifactId: 'a1', parts: [{ kind: 'file', file: { uri: 'https://example.com/img.png', mime_type: 'image/png' } }] }],
+    })
+    expect(derivePhase(entity)).toBe('streaming')
+  })
+
+  it('returns "streaming" for entity with streaming artifacts and no taskStatus', () => {
+    const entity = makeEntity({
+      messageType: 'agent', content: '',
+      artifacts: [{ artifactId: 'a1', parts: [{ kind: 'text', text: 'hi' }], isStreaming: true }],
+    })
+    expect(derivePhase(entity)).toBe('streaming')
+  })
+
+  it('returns "complete" for entity with completed taskStatus and content', () => {
+    const entity = makeEntity({ messageType: 'agent', content: 'Result', taskStatus: 'completed' })
+    expect(derivePhase(entity)).toBe('complete')
+  })
+
+  it('returns "complete" for entity with content but no taskStatus', () => {
+    const entity = makeEntity({ messageType: 'agent', content: 'Result', taskStatus: undefined })
+    expect(derivePhase(entity)).toBe('complete')
+  })
+
+  it('returns "complete-empty" for completed task with no content and no artifacts', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'completed' })
+    expect(derivePhase(entity)).toBe('complete-empty')
+  })
+
+  it('returns "interactive" for input-required task', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'input-required' })
+    expect(derivePhase(entity)).toBe('interactive')
+  })
+
+  it('returns "interactive" for auth-required task', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'auth-required' })
+    expect(derivePhase(entity)).toBe('interactive')
+  })
+
+  it('returns "interactive" for resolved HITL (preserves display)', () => {
+    const entity = makeEntity({
+      messageType: 'agent', content: '', taskStatus: 'working',
+      hitlResolved: true, hitlUserAnswer: 'Yes',
+    })
+    expect(derivePhase(entity)).toBe('interactive')
+  })
+
+  it('returns "failed" for failed task', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'failed' })
+    expect(derivePhase(entity)).toBe('failed')
+  })
+
+  it('returns "failed" for canceled task', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'canceled' })
+    expect(derivePhase(entity)).toBe('failed')
+  })
+
+  it('returns "failed" for rejected task', () => {
+    const entity = makeEntity({ messageType: 'agent', content: '', taskStatus: 'rejected' })
+    expect(derivePhase(entity)).toBe('failed')
+  })
+
+  it('failure takes precedence over resolved HITL (A2A-6)', () => {
+    const entity = makeEntity({
+      messageType: 'agent', content: '', taskStatus: 'failed',
+      hitlResolved: true, hitlUserAnswer: 'Yes',
+    })
+    expect(derivePhase(entity)).toBe('failed')
+  })
+})
+
+// ── Phase rendering ─────────────────────────────────────────────
+
+describe('EntityAgentBubble phase rendering', () => {
+  it('renders red styling for failed phase', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: '', taskStatus: 'failed', taskError: 'Something went wrong',
+    })
+    const { container } = render(<EntityAgentBubble entity={entity} />)
+    expect(container.querySelector('.border-red-200')).toBeTruthy()
+  })
+
+  it('renders amber prompt for active interactive phase', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: '', taskStatus: 'input-required',
+      hitlPrompt: 'What is your name?', hitlResolved: false,
+    })
+    const { container } = render(<EntityAgentBubble entity={entity} />)
+    expect(container.querySelector('.border-amber-200')).toBeTruthy()
+  })
+
+  it('renders prompt + answer for resolved HITL', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: '', taskStatus: 'working',
+      hitlPrompt: 'What is your name?', hitlResolved: true, hitlUserAnswer: 'Alice',
+    })
+    const { container } = render(<EntityAgentBubble entity={entity} />)
+    expect(container.textContent).toContain('Your answer:')
+    expect(container.textContent).toContain('Alice')
+  })
+
+  it('renders emerald badge for complete-empty phase', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: '', taskStatus: 'completed',
+    })
+    const { container } = render(<EntityAgentBubble entity={entity} />)
+    expect(container.querySelector('.border-emerald-200')).toBeTruthy()
+    expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1)
   })
 })

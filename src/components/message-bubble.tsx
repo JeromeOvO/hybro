@@ -1,17 +1,116 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Shield, Cloud } from 'lucide-react'
+import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Shield, Cloud, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
-import { formatTimestamp } from '@/lib/time'
+import { formatTimestamp, elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
-import { StreamingCursor } from './streaming-cursor'
-import { useStreamingContent } from '@/hooks/useStreamingContent'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
+import { TASK_STATE, isFailureState, isInteractiveState, isTerminalState } from '@/lib/types/sse'
+import type { LucideIcon } from 'lucide-react'
+
+// ---------------------------------------------------------------------------
+// Phase derivation — single source of truth for agent bubble presentation
+// ---------------------------------------------------------------------------
+
+export type AgentPhase =
+  | 'waiting'
+  | 'streaming'
+  | 'interactive'
+  | 'failed'
+  | 'complete'
+  | 'complete-empty'
+
+/**
+ * Pure O(1) function: derives the visual phase from entity fields at render time.
+ * Must never perform store lookups or iterate beyond the single `.some()` call.
+ *
+ * Tier 1: taskStatus is authoritative when present.
+ * Tier 2: no taskStatus — infer from content/streaming signals.
+ */
+export function derivePhase(entity: MessageEntity): AgentPhase {
+  const hasContent = !!entity.content?.trim()
+  const hasArtifacts = (entity.artifacts?.length ?? 0) > 0
+  const isStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
+  const hasVisibleBody = hasContent || hasArtifacts
+
+  // ── Tier 1: taskStatus is authoritative when present ──
+
+  if (entity.taskStatus && isFailureState(entity.taskStatus)) return 'failed'
+
+  if (entity.hitlResolved && entity.hitlUserAnswer) return 'interactive'
+
+  if (entity.taskStatus && isInteractiveState(entity.taskStatus)) return 'interactive'
+
+  if (entity.taskStatus === TASK_STATE.COMPLETED) {
+    return hasVisibleBody ? 'complete' : 'complete-empty'
+  }
+
+  if (entity.taskStatus && !isTerminalState(entity.taskStatus)) {
+    return hasVisibleBody ? 'streaming' : 'waiting'
+  }
+
+  // ── Tier 2: no taskStatus — infer from content signals ──
+
+  if (isStreaming) return 'streaming'
+  if (hasVisibleBody) return 'complete'
+  return 'waiting'
+}
+
+// ---------------------------------------------------------------------------
+// Phase-to-style mapping
+// ---------------------------------------------------------------------------
+
+type PhaseStyleEntry = {
+  border: string
+  bg: string
+  text: string
+  icon: LucideIcon
+  badge: string | ((entity: MessageEntity) => string)
+}
+
+const PHASE_STYLES: Partial<Record<AgentPhase, PhaseStyleEntry>> = {
+  interactive: {
+    border: 'border-amber-200 dark:border-amber-500/20',
+    bg: 'bg-amber-50 dark:bg-amber-500/12',
+    text: 'text-amber-700 dark:text-amber-400',
+    icon: MessageCircleQuestion,
+    badge: (entity) => {
+      if (entity.hitlResolved) return 'Answered'
+      if (entity.taskStatus === 'auth-required') return 'Auth needed'
+      return 'Input needed'
+    },
+  },
+  failed: {
+    border: 'border-red-200 dark:border-red-500/20',
+    bg: 'bg-red-50 dark:bg-red-500/12',
+    text: 'text-red-600 dark:text-red-400',
+    icon: XCircle,
+    badge: (entity) => {
+      if (entity.taskStatus === 'rejected') return 'Rejected'
+      if (entity.taskStatus === 'canceled') return 'Canceled'
+      return 'Failed'
+    },
+  },
+  'complete-empty': {
+    border: 'border-emerald-200 dark:border-emerald-500/20',
+    bg: 'bg-emerald-50 dark:bg-emerald-500/12',
+    text: 'text-emerald-600 dark:text-emerald-400',
+    icon: CheckCircle,
+    badge: 'Completed',
+  },
+}
+
+function getPhaseStyles(phase: AgentPhase, entity: MessageEntity) {
+  const entry = PHASE_STYLES[phase]
+  if (!entry) return null
+  const badge = typeof entry.badge === 'function' ? entry.badge(entity) : entry.badge
+  return { ...entry, badge }
+}
 
 /** Lightweight UI type for passing quote data between components. */
 export interface QuoteData {
@@ -144,8 +243,8 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
   )
 }
 
-interface EntityBubbleProps {
-  message: BubbleMessage
+interface AgentBubbleProps {
+  entity: MessageEntity
   compact?: boolean
   defaultExpanded?: boolean
   collapseSignal?: number
@@ -154,7 +253,6 @@ interface EntityBubbleProps {
   isUserExpanded?: boolean
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
-  isStreaming?: boolean
 }
 
 /**
@@ -232,11 +330,13 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
 }
 
 /**
- * Agent message bubble - internal implementation using BubbleMessage shape.
- * Supports streaming content with debounced markdown rendering.
+ * Agent message bubble - internal implementation rendering a MessageEntity.
+ * Renders all agent message phases (waiting, streaming, interactive, failed,
+ * complete, complete-empty) within a single always-mounted component so there
+ * is never a React mount/unmount between states.
  */
 function AgentMessageBubbleInner({
-  message,
+  entity,
   compact = false,
   defaultExpanded = false,
   collapseSignal = 0,
@@ -245,53 +345,40 @@ function AgentMessageBubbleInner({
   isUserExpanded = false,
   onUserToggle,
   onQuote,
-  isStreaming = false,
-}: EntityBubbleProps) {
+}: AgentBubbleProps) {
+  const phase = derivePhase(entity)
+  const showIndicator = phase === 'waiting'
+  const isArtifactStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
+
   const [isExpanded, setIsExpanded] = useState(
-    defaultExpanded || isUserExpanded || (!compact && message.content.length < 500)
+    defaultExpanded || isUserExpanded || (!compact && entity.content.length < 500)
   )
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
-  
-  // Throttled markdown rendering during streaming (Option B from design doc).
-  // We keep a ref to the latest content and run a 50ms interval that picks
-  // up whatever is current. This avoids the "cancel-on-every-frame" problem
-  // that a useEffect + setTimeout approach has when content changes at 60fps.
-  const [debouncedContent, setDebouncedContent] = useState(message.content)
-  const latestContentRef = useRef(message.content)
-  latestContentRef.current = message.content
-  
-  useEffect(() => {
-    if (!isStreaming) {
-      setDebouncedContent(message.content)
-      return
-    }
-    
-    // Immediately render the first frame
-    setDebouncedContent(message.content)
-    
-    // Then update at most every 50ms via interval
-    const interval = setInterval(() => {
-      setDebouncedContent(latestContentRef.current)
-    }, 50)
-    
-    return () => clearInterval(interval)
-  // Only re-run when streaming state changes, not on every content change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming])
-  
-  // When streaming ends, ensure we render the final content
-  useEffect(() => {
-    if (!isStreaming) {
-      setDebouncedContent(message.content)
-    }
-  }, [isStreaming, message.content])
+  const bubbleRef = useRef<HTMLDivElement>(null)
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
   const quoteBtnRef = useRef<HTMLButtonElement | null>(null)
   const selectedTextRef = useRef<string>('')
+
+  // --- Elapsed timer for WAITING and active INTERACTIVE phases ---
+  const [elapsed, setElapsed] = useState(() =>
+    entity.taskCreatedAt ? elapsedSeconds(entity.taskCreatedAt) : 0
+  )
+  useEffect(() => {
+    const needsTimer = phase === 'waiting' || (phase === 'interactive' && !entity.hitlResolved)
+    if (!needsTimer || !entity.taskCreatedAt) {
+      setElapsed(0)
+      return
+    }
+    setElapsed(elapsedSeconds(entity.taskCreatedAt))
+    const id = setInterval(() => {
+      setElapsed(elapsedSeconds(entity.taskCreatedAt!))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [phase, entity.taskCreatedAt, entity.hitlResolved])
 
   const hideQuoteButton = useCallback(() => {
     if (quoteBtnRef.current) {
@@ -326,9 +413,9 @@ function AgentMessageBubbleInner({
     
     btn.onclick = () => {
       onQuote?.({
-        messageId: message.id,
+        messageId: entity.id,
         content: selectedTextRef.current,
-        senderName: message.sender_name,
+        senderName: entity.senderName,
       })
       hideQuoteButton()
       window.getSelection()?.removeAllRanges()
@@ -336,7 +423,7 @@ function AgentMessageBubbleInner({
 
     document.body.appendChild(btn)
     quoteBtnRef.current = btn
-  }, [message.id, message.sender_name, onQuote, hideQuoteButton])
+  }, [entity.id, entity.senderName, onQuote, hideQuoteButton])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -396,8 +483,8 @@ function AgentMessageBubbleInner({
 
   useEffect(() => {
     setIsExpanded(false)
-    onUserToggle?.(message.id, false)
-  }, [collapseSignal, message.id, onUserToggle])
+    onUserToggle?.(entity.id, false)
+  }, [collapseSignal, entity.id, onUserToggle])
 
   // Sync expansion when parent marks message as user-expanded (e.g., timeline expand-all)
   useEffect(() => {
@@ -428,134 +515,278 @@ function AgentMessageBubbleInner({
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   
-  // Determine display content:
-  // - During streaming: use debounced content for markdown rendering (throttled to 50ms)
-  // - After streaming: use the final message content
-  // - Fallback to "No message content" only when not streaming and content is empty
-  const displayContent = isStreaming 
-    ? (debouncedContent || '') 
-    : (message.content || "No message content")
+  const displayContent = entity.content
   const isLongMessage = displayContent.length > 500
-  const colors = getAgentColorClasses(message.agent_id || 'unknown')
+  
+  const colors = getAgentColorClasses(entity.agentId || 'unknown')
   const textColorClass = colors.text
   const contentColorClass = colors.content
+
+  // Phase-aware styling: use PHASE_STYLES colors when available, else agent colors
+  const phaseStyle = getPhaseStyles(phase, entity)
+  const bubbleBorder = phaseStyle?.border ?? colors.border
+  const bubbleBg = phaseStyle?.bg ?? colors.bg
+  const phaseTextColor = phaseStyle?.text ?? textColorClass
 
   return (
     <div className="flex w-full">
       {/* Message Content */}
       <div
+        ref={bubbleRef}
         className={cn(
           "flex-1 min-w-0 overflow-hidden rounded-xl p-4 shadow-sm border message-bubble agent-message",
-          colors.border,
-          colors.bg
+          bubbleBorder,
+          bubbleBg
         )}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
-          <a
-            href={`/c/agents/${message.agent_id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-          >
-            <div
-              className={cn(
-                "w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0",
-                colors.bg,
-                colors.border,
-                textColorClass
-              )}
-              title={message.sender_name}
+          <div className="flex items-center gap-2">
+            <a
+              href={`/c/agents/${entity.agentId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
             >
-              <span className="text-[10px]">{getAgentInitials(message.sender_name)}</span>
-            </div>
-            <span className={cn("text-xs font-semibold underline-offset-2 hover:underline", textColorClass)}>
-              {message.sender_name}
+              <div
+                className={cn(
+                  "w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0",
+                  phaseStyle
+                    ? `${phaseStyle.bg} ${phaseStyle.border}`
+                    : `${colors.bg} ${colors.border}`,
+                  phaseTextColor
+                )}
+                title={entity.senderName}
+              >
+                {phaseStyle
+                  ? <phaseStyle.icon className="h-3 w-3" />
+                  : <span className="text-[10px]">{getAgentInitials(entity.senderName)}</span>
+                }
+              </div>
+              <span className={cn("text-xs font-semibold underline-offset-2 hover:underline", phaseTextColor)}>
+                {entity.senderName}
+              </span>
+            </a>
+            {entity.stepNumber && entity.totalSteps && entity.totalSteps > 0 && (
+              <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded bg-current/10", phaseTextColor)}>
+                Step {entity.stepNumber} / {entity.totalSteps}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {phaseStyle && (
+              <span className={cn("text-xs font-medium", phaseTextColor)}>
+                {phaseStyle.badge}
+              </span>
+            )}
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {formatTimestamp(entity.timestamp)}
             </span>
-          </a>
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            {formatTimestamp(message.timestamp)}
-          </span>
-          {message.agentSource === 'hub' && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-              <Shield className="h-2.5 w-2.5" />
-              Local
-            </span>
-          )}
-          {message.agentSource === 'cloud' && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
-              <Cloud className="h-2.5 w-2.5" />
-              Cloud
-            </span>
-          )}
+            {entity.agentSource === 'hub' && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                <Shield className="h-2.5 w-2.5" />
+                Local
+              </span>
+            )}
+            {entity.agentSource === 'cloud' && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400">
+                <Cloud className="h-2.5 w-2.5" />
+                Cloud
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* ── WAITING phase: spinner + status text ── */}
         <div
-          ref={contentRef}
           className={cn(
-            "text-sm leading-relaxed select-text",
-            contentColorClass,
-            !isExpanded && isLongMessage && "line-clamp-4"
+            "transition-opacity duration-200",
+            showIndicator ? "opacity-100" : "opacity-0 pointer-events-none h-0"
           )}
-          onMouseUp={handleMouseUp}
+          aria-hidden={!showIndicator}
         >
-          {isStreaming ? (
-            // Streaming mode: show content with cursor
-            <>
-              {displayContent && <MarkdownContent content={displayContent} />}
-              <StreamingCursor />
-            </>
+          {entity.taskStatus ? (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2">
+                <Loader2 className={cn("w-4 h-4 animate-spin mt-0.5 shrink-0", textColorClass)} />
+                <span className={cn("text-sm shimmer-text", textColorClass)}>
+                  {entity.taskStatusMessage || entity.taskContent || 'Working on your request…'}
+                </span>
+              </div>
+              {elapsed > 0 && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {formatElapsedTime(elapsed)} elapsed
+                </p>
+              )}
+            </div>
           ) : (
-            // Final mode: show content or placeholder
-            <MarkdownContent content={displayContent} />
+            <div className="flex items-center gap-0.5">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className={cn("w-1.5 h-1.5 rounded-full animate-bounce", textColorClass)}
+                  style={{ animationDelay: `${i * 150}ms` }}
+                />
+              ))}
+            </div>
           )}
         </div>
 
-        {/* Expand/Collapse button */}
-        {isLongMessage && (
-          <button
-            ref={toggleButtonRef}
-            onClick={() => {
-              const next = !isExpanded
-              const buttonEl = toggleButtonRef.current
-              const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
-              const prevBottom = buttonEl?.getBoundingClientRect().bottom
+        {/* ── INTERACTIVE phase: HITL prompt + optional answer ── */}
+        {phase === 'interactive' && (() => {
+          const promptText = entity.hitlPrompt || entity.content || entity.taskStatusMessage || 'The agent needs additional information to continue.'
+          const isResolved = entity.hitlResolved === true
+          return (
+            <div className="space-y-2">
+              <div className="text-sm text-amber-700 dark:text-amber-300">
+                <MarkdownContent content={promptText} />
+              </div>
+              {isResolved && entity.hitlUserAnswer && (
+                <div className="pt-2 border-t border-amber-200 dark:border-amber-500/20">
+                  <p className="text-xs text-amber-600 dark:text-amber-400 font-medium mb-1">Your answer:</p>
+                  <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-100/50 dark:bg-amber-500/8 rounded-md px-3 py-1.5">
+                    {entity.hitlUserAnswer}
+                  </p>
+                </div>
+              )}
+              {!isResolved && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {formatElapsedTime(elapsed)} elapsed
+                </p>
+              )}
+            </div>
+          )
+        })()}
 
-              setIsExpanded(next)
-              onUserToggle?.(message.id, next)
+        {/* ── FAILED phase: error message ── */}
+        {phase === 'failed' && (() => {
+          const failedBadge = phaseStyle?.badge ?? 'Failed'
+          const displayBody = entity.taskError || entity.content || `Task ${failedBadge.toLowerCase()}`
+          const isLong = displayBody.length > 500
+          return (
+            <div>
+              <div className={cn("text-sm text-red-700 dark:text-red-300", !isExpanded && isLong && "line-clamp-4")}>
+                <MarkdownContent content={displayBody} />
+              </div>
+              {isLong && (
+                <button
+                  ref={toggleButtonRef}
+                  onClick={() => {
+                    const next = !isExpanded
+                    const buttonEl = toggleButtonRef.current
+                    const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+                    const prevBottom = buttonEl?.getBoundingClientRect().bottom
+                    setIsExpanded(next)
+                    onUserToggle?.(entity.id, next)
+                    if (buttonEl && container && !next && typeof prevBottom === 'number') {
+                      container.dataset.programmaticScroll = 'true'
+                      requestAnimationFrame(() => {
+                        const newBottom = buttonEl.getBoundingClientRect().bottom
+                        const delta = newBottom - prevBottom
+                        if (delta !== 0) container.scrollTop += delta
+                        requestAnimationFrame(() => { container.dataset.programmaticScroll = 'false' })
+                      })
+                    }
+                  }}
+                  className="flex items-center gap-1 text-xs mt-3 font-medium transition-colors text-red-600 dark:text-red-400 hover:opacity-80"
+                >
+                  {isExpanded ? <><ChevronUp className="h-3.5 w-3.5" />Show less</> : <><ChevronDown className="h-3.5 w-3.5" />Show more</>}
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
-              // Keep collapse from jumping; let expand naturally push content downward.
-              if (buttonEl && container && !next && typeof prevBottom === 'number') {
-                container.dataset.programmaticScroll = 'true'
-                requestAnimationFrame(() => {
-                  const newBottom = buttonEl.getBoundingClientRect().bottom
-                  const delta = newBottom - prevBottom
-                  if (delta !== 0) {
-                    container.scrollTop += delta
+        {/* ── COMPLETE-EMPTY phase: minimal badge ── */}
+        {phase === 'complete-empty' && (
+          <div className="flex items-center gap-2 py-1 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle className="h-3.5 w-3.5" />
+            <span>Completed</span>
+            {entity.taskCreatedAt && (
+              <span className="flex items-center gap-0.5 opacity-60">
+                <Clock className="h-3 w-3" />
+                {formatElapsedTime(elapsedSeconds(entity.taskCreatedAt))}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* ── STREAMING / COMPLETE phases: normal content area ── */}
+        {(phase === 'streaming' || phase === 'complete') && (
+          <>
+            <div className="grid grid-rows-[1fr]">
+              <div
+                ref={contentRef}
+                className={cn(
+                  "min-h-0 overflow-hidden text-sm leading-relaxed select-text",
+                  contentColorClass,
+                  !isExpanded && isLongMessage && "line-clamp-4"
+                )}
+                onMouseUp={handleMouseUp}
+              >
+                <MarkdownContent
+                  content={displayContent}
+                />
+              </div>
+            </div>
+
+            {/* Expand/Collapse button */}
+            {isLongMessage && (
+              <button
+                ref={toggleButtonRef}
+                onClick={() => {
+                  const next = !isExpanded
+                  const buttonEl = toggleButtonRef.current
+                  const container = buttonEl?.closest('[data-message-scroll-container="true"]') as HTMLElement | null
+                  const prevBottom = buttonEl?.getBoundingClientRect().bottom
+
+                  setIsExpanded(next)
+                  onUserToggle?.(entity.id, next)
+
+                  if (buttonEl && container && !next && typeof prevBottom === 'number') {
+                    container.dataset.programmaticScroll = 'true'
+                    requestAnimationFrame(() => {
+                      const newBottom = buttonEl.getBoundingClientRect().bottom
+                      const delta = newBottom - prevBottom
+                      if (delta !== 0) {
+                        container.scrollTop += delta
+                      }
+                      requestAnimationFrame(() => {
+                        container.dataset.programmaticScroll = 'false'
+                      })
+                    })
                   }
-                  requestAnimationFrame(() => {
-                    container.dataset.programmaticScroll = 'false'
-                  })
-                })
-              }
-            }}
-            className={cn(
-              "flex items-center gap-1 text-xs mt-3 font-medium transition-colors",
-              textColorClass,
-              "hover:opacity-80"
+                }}
+                className={cn(
+                  "flex items-center gap-1 text-xs mt-3 font-medium transition-colors",
+                  textColorClass,
+                  "hover:opacity-80"
+                )}
+              >
+                {isExpanded ? (
+                  <>
+                    <ChevronUp className="h-3.5 w-3.5" />
+                    Show less
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    Show more
+                  </>
+                )}
+              </button>
             )}
-          >
-            {isExpanded ? (
-              <>
-                <ChevronUp className="h-3.5 w-3.5" />
-                Show less
-              </>
-            ) : (
-              <>
-                <ChevronDown className="h-3.5 w-3.5" />
-                Show more
-              </>
+
+            {entity.taskStatus && !isTerminalState(entity.taskStatus) &&
+             !isInteractiveState(entity.taskStatus) && !isArtifactStreaming && (
+              <div className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>{entity.taskStatusMessage || 'Still working…'}</span>
+              </div>
             )}
-          </button>
+          </>
         )}
       </div>
     </div>
@@ -586,9 +817,9 @@ export function EntityUserBubble({ entity }: { entity: MessageEntity }) {
 
 /**
  * Agent bubble that renders a MessageEntity.
- * Supports real-time token streaming via StreamingBuffer (agent_token events)
- * and typewriter-driven progressive reveal (non-streaming agents).
- * Both paths feed through useStreamingContent so the component stays simple.
+ * All phases (waiting, streaming, interactive, failed, complete, complete-empty)
+ * are rendered inside a single always-mounted AgentMessageBubbleInner so there
+ * is never a React mount/unmount between states.
  */
 export function EntityAgentBubble({
   entity,
@@ -611,24 +842,10 @@ export function EntityAgentBubble({
   onUserToggle?: (id: string, expanded: boolean) => void
   onQuote?: (data: QuoteData) => void
 }) {
-  const { streamingText, isStreaming } = useStreamingContent(entity.id)
-
-  const displayContent = isStreaming ? streamingText : entity.content
-  const showAsStreaming = isStreaming
-
-  const bubble: BubbleMessage = {
-    id: entity.id,
-    content: displayContent,
-    sender_name: entity.senderName,
-    timestamp: entity.timestamp,
-    agent_id: entity.agentId,
-    agentSource: entity.agentSource,
-  }
-
   return (
     <>
       <AgentMessageBubbleInner
-        message={bubble}
+        entity={entity}
         compact={compact}
         defaultExpanded={defaultExpanded}
         collapseSignal={collapseSignal}
@@ -637,15 +854,13 @@ export function EntityAgentBubble({
         isUserExpanded={isUserExpanded}
         onUserToggle={onUserToggle}
         onQuote={onQuote}
-        isStreaming={showAsStreaming}
       />
       {entity.artifacts && entity.artifacts.length > 0 && (() => {
         const messageText = (entity.content || '').trim()
         const nonDuplicate = entity.artifacts.filter((a) => {
           const isTextOnly = a.parts.length > 0 && a.parts.every((p) => p.kind === 'text')
-          if (!isTextOnly) return true
-          const artifactText = a.parts.map((p) => p.text || '').join('').trim()
-          return artifactText !== messageText
+          if (isTextOnly && messageText) return false
+          return true
         })
         return nonDuplicate.length > 0 ? <ArtifactList artifacts={nonDuplicate} /> : null
       })()}

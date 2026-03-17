@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyUpsert, isNoOpUpdate, buildSortedIds } from '../upsert'
+import { applyUpsert, isNoOpUpdate, buildSortedIds, mergeArtifacts, extractTextFromArtifacts } from '../upsert'
 import type { MessageEntity, IncomingMessage } from '../types'
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -96,7 +96,7 @@ describe('applyUpsert', () => {
 
     it('allows terminal-to-terminal transitions (e.g., failed → completed from DB)', () => {
       const entities = {
-        'msg-1': makeEntity({ taskStatus: 'failed', displayType: 'task-status' }),
+        'msg-1': makeEntity({ taskStatus: 'failed', displayType: 'agent-bubble' }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],
@@ -111,7 +111,7 @@ describe('applyUpsert', () => {
   describe('Rule 2: SSE wins over DB for non-terminal states', () => {
     it('rejects DB update when SSE entity is in working state', () => {
       const entities = {
-        'msg-1': makeEntity({ source: 'sse', taskStatus: 'working', displayType: 'task-status' }),
+        'msg-1': makeEntity({ source: 'sse', taskStatus: 'working', displayType: 'agent-bubble' }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],
@@ -139,7 +139,7 @@ describe('applyUpsert', () => {
 
     it('allows SSE update when entity was from DB with non-terminal state', () => {
       const entities = {
-        'msg-1': makeEntity({ source: 'db', taskStatus: 'working', displayType: 'task-status' }),
+        'msg-1': makeEntity({ source: 'db', taskStatus: 'working', displayType: 'agent-bubble' }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],
@@ -147,6 +147,19 @@ describe('applyUpsert', () => {
         'sse',
       )
       expect(result).not.toBeNull()
+    })
+
+    it('keeps working task with content as agent-bubble', () => {
+      const entities = {
+        'msg-1': makeEntity({ source: 'db', taskStatus: 'working', displayType: 'agent-bubble', content: '' }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'working', content: 'SSE update' }),
+        'sse',
+      )
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].displayType).toBe('agent-bubble')
     })
   })
 
@@ -165,7 +178,7 @@ describe('applyUpsert', () => {
 
     it('allows SSE update for ephemeral messages', () => {
       const entities = {
-        'msg-1': makeEntity({ isEphemeral: true, displayType: 'task-status', taskStatus: 'working' }),
+        'msg-1': makeEntity({ isEphemeral: true, displayType: 'agent-bubble', taskStatus: 'working' }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],
@@ -177,7 +190,7 @@ describe('applyUpsert', () => {
 
     it('allows optimistic update for ephemeral messages', () => {
       const entities = {
-        'msg-1': makeEntity({ isEphemeral: true, displayType: 'task-status', taskStatus: 'working' }),
+        'msg-1': makeEntity({ isEphemeral: true, displayType: 'agent-bubble', taskStatus: 'working' }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],
@@ -241,7 +254,7 @@ describe('applyUpsert', () => {
           stepNumber: 2,
           totalSteps: 5,
           taskContent: 'Doing work',
-          displayType: 'task-status',
+          displayType: 'agent-bubble',
           taskStatus: 'working',
         }),
       }
@@ -261,7 +274,7 @@ describe('applyUpsert', () => {
         'msg-1': makeEntity({
           taskError: 'Some error',
           taskStatus: 'failed',
-          displayType: 'task-status',
+          displayType: 'agent-bubble',
         }),
       }
       const result = applyUpsert(
@@ -300,22 +313,9 @@ describe('isNoOpUpdate', () => {
   it('returns false when taskStatus changed', () => {
     const existing = makeEntity({
       taskStatus: 'working',
-      displayType: 'task-status',
+      displayType: 'agent-bubble',
     })
     const incoming = makeIncoming({ taskStatus: 'completed', content: 'Done' })
-    expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
-  })
-
-  it('returns false when displayType would change', () => {
-    const existing = makeEntity({
-      taskStatus: 'working',
-      displayType: 'task-status',
-      content: '',
-    })
-    const incoming = makeIncoming({
-      taskStatus: 'completed',
-      content: 'Result here',
-    })
     expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
   })
 
@@ -323,7 +323,7 @@ describe('isNoOpUpdate', () => {
     const existing = makeEntity({
       taskError: 'Some error',
       taskStatus: 'failed',
-      displayType: 'task-status',
+      displayType: 'agent-bubble',
     })
     const incoming = makeIncoming({ taskError: null, taskStatus: 'failed' })
     expect(isNoOpUpdate(existing, incoming, 'db')).toBe(false)
@@ -333,7 +333,7 @@ describe('isNoOpUpdate', () => {
     const existing = makeEntity({
       taskError: 'Some error',
       taskStatus: 'failed',
-      displayType: 'task-status',
+      displayType: 'agent-bubble',
     })
     const incoming = makeIncoming({ taskStatus: 'failed' })
     // taskError not in incoming → undefined → coalesces to existing value → no change
@@ -344,7 +344,7 @@ describe('isNoOpUpdate', () => {
     const existing = makeEntity({
       stepNumber: 1,
       taskStatus: 'working',
-      displayType: 'task-status',
+      displayType: 'agent-bubble',
     })
     const incoming = makeIncoming({ stepNumber: 2, taskStatus: 'working' })
     expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
@@ -481,5 +481,70 @@ describe('buildSortedIds', () => {
     // step1 and step2 share relatedMessageId, within 60s, so sort by step
     expect(sorted[1]).toBe('step1')
     expect(sorted[2]).toBe('step2')
+  })
+})
+
+describe('mergeArtifacts — same-name text-only dedup', () => {
+  it('replaces existing text-only artifact with same name but different ID', () => {
+    const existing = [
+      { artifactId: 'id-1', name: 'current_result', parts: [{ kind: 'text' as const, text: 'Hello' }] },
+    ]
+    const incoming = { artifactId: 'id-2', name: 'current_result', parts: [{ kind: 'text' as const, text: 'Hello world' }] }
+    const result = mergeArtifacts(existing, incoming, false)
+    expect(result).toHaveLength(1)
+    expect(result[0].artifactId).toBe('id-2')
+    expect(result[0].parts[0].text).toBe('Hello world')
+  })
+
+  it('does not dedup if artifact has non-text parts', () => {
+    const existing = [
+      { artifactId: 'id-1', name: 'output', parts: [{ kind: 'text' as const, text: 'Hello' }] },
+    ]
+    const incoming = { artifactId: 'id-2', name: 'output', parts: [{ kind: 'file' as const, file: { uri: 'x' } }] }
+    const result = mergeArtifacts(existing, incoming, false)
+    expect(result).toHaveLength(2)
+  })
+
+  it('does not dedup if names differ', () => {
+    const existing = [
+      { artifactId: 'id-1', name: 'result-a', parts: [{ kind: 'text' as const, text: 'Hello' }] },
+    ]
+    const incoming = { artifactId: 'id-2', name: 'result-b', parts: [{ kind: 'text' as const, text: 'World' }] }
+    const result = mergeArtifacts(existing, incoming, false)
+    expect(result).toHaveLength(2)
+  })
+
+  it('still uses normal ID-based merge when IDs match', () => {
+    const existing = [
+      { artifactId: 'same-id', name: 'result', parts: [{ kind: 'text' as const, text: 'old' }] },
+    ]
+    const incoming = { artifactId: 'same-id', name: 'result', parts: [{ kind: 'text' as const, text: 'new' }] }
+    const result = mergeArtifacts(existing, incoming, false)
+    expect(result).toHaveLength(1)
+    expect(result[0].parts[0].text).toBe('new')
+  })
+})
+
+describe('extractTextFromArtifacts', () => {
+  it('extracts text from the longest text-only artifact', () => {
+    const artifacts = [
+      { artifactId: 'a1', parts: [{ kind: 'text' as const, text: 'short' }] },
+      { artifactId: 'a2', parts: [{ kind: 'text' as const, text: 'this is much longer text' }] },
+    ]
+    expect(extractTextFromArtifacts(artifacts as any)).toBe('this is much longer text')
+  })
+
+  it('returns empty string when no text-only artifacts exist', () => {
+    const artifacts = [
+      { artifactId: 'a1', parts: [{ kind: 'file' as const, file: { uri: 'x' } }] },
+    ]
+    expect(extractTextFromArtifacts(artifacts as any)).toBe('')
+  })
+
+  it('skips mixed artifacts (not all-text)', () => {
+    const artifacts = [
+      { artifactId: 'a1', parts: [{ kind: 'text' as const, text: 'text' }, { kind: 'file' as const, file: { uri: 'x' } }] },
+    ]
+    expect(extractTextFromArtifacts(artifacts as any)).toBe('')
   })
 })

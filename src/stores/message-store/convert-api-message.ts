@@ -2,6 +2,7 @@ import type { A2ATaskStatus } from '@/lib/api/a2a-tasks'
 import { extractTaskContent, extractTaskError } from '@/lib/api/a2a-tasks'
 import type { RoomMessage } from '@/lib/types/response'
 import type { TaskState } from '@/lib/types/sse'
+import { isTerminalState } from '@/lib/types/sse'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
@@ -29,16 +30,32 @@ export async function convertApiMessageToIncoming(
 ): Promise<IncomingMessage> {
   const { userId, userName, getAgentName, getAgentSource } = options
 
+  // ── Extract task status (before content, so we can gate error fallback) ──
+  const messageTask = apiMessage.message_content?.message_task
+  let taskStatus: TaskState | undefined
+  if (messageTask) {
+    const maybeStatus = (messageTask as A2ATaskStatus['task']).status?.state
+    if (typeof maybeStatus === 'string') {
+      taskStatus = maybeStatus as TaskState
+    }
+  }
+
   // ── Extract content ──────────────────────────────────────────
   let content = ''
   let taskError: string | undefined
   let taskContent: string | undefined
 
   if (apiMessage.message_content?.message_text) {
-    content = apiMessage.message_content.message_text
+    // For non-terminal agent tasks, message_text may contain the user's original
+    // prompt (seeded at task creation). Only use it as display content for
+    // terminal states, non-task messages, or user messages.
+    const isNonTerminalAgentTask = apiMessage.message_type === 'agent'
+      && taskStatus && !isTerminalState(taskStatus)
+    if (!isNonTerminalAgentTask) {
+      content = apiMessage.message_content.message_text
+    }
   }
 
-  const messageTask = apiMessage.message_content?.message_task
   if (messageTask) {
     const messageTaskTyped = messageTask as A2ATaskStatus['task']
     const extractedError = extractTaskError(messageTaskTyped)
@@ -49,17 +66,10 @@ export async function convertApiMessageToIncoming(
       const extractedContent = extractTaskContent(messageTaskTyped)
       if (extractedContent) {
         content = extractedContent
-      } else if (extractedError) {
+      } else if (extractedError && (!taskStatus || isTerminalState(taskStatus))) {
         content = extractedError
       }
     }
-  }
-
-  // ── Extract task status ──────────────────────────────────────
-  let taskStatus: TaskState | undefined
-  const maybeStatus = messageTask?.status?.state
-  if (typeof maybeStatus === 'string') {
-    taskStatus = maybeStatus as TaskState
   }
 
   // ── Extract task_content ─────────────────────────────────────

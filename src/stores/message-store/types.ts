@@ -25,7 +25,7 @@ export type MessageSource = 'db' | 'sse' | 'optimistic'
  * Display type — resolved once at write time.
  * Determines which React component renders this message.
  */
-export type DisplayType = 'user-bubble' | 'agent-bubble' | 'task-status'
+export type DisplayType = 'user-bubble' | 'agent-bubble'
 
 /**
  * The normalized entity stored in the message store.

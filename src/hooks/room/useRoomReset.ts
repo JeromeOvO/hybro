@@ -3,8 +3,6 @@ import type { MutableRefObject } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import { streamingBuffer } from '@/stores/streaming-buffer'
-import { typewriterManager } from './sse-handlers'
 
 export function useRoomReset(
   roomId: string,
@@ -20,10 +18,6 @@ export function useRoomReset(
     resetAgentNameCache()
     lifecycle.reset()
     hitlRequestIndex.current.clear()
-
-    // Clear streaming buffer on room switch
-    streamingBuffer.clear()
-    typewriterManager.finishAll()
 
     // Reset UI flags so the new room starts with clean state.
     setSending(false)
