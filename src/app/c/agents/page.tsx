@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Search, ChevronDown, Check, Bot, Cloud, Home } from "lucide-react"
 import { ConsumerAgentCard } from "@/components/consumer-agent-card"
@@ -88,7 +88,7 @@ function parseSourceTab(value: string | null): SourceTab | null {
   return null
 }
 
-export default function ConsumerAgentsPage() {
+function ConsumerAgentsPageContent() {
   const { getToken } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -117,15 +117,7 @@ export default function ConsumerAgentsPage() {
   const cloudAgents = useMemo(() => filteredAgents.filter(a => a.source !== 'hub'), [filteredAgents])
   const localAgents = useMemo(() => filteredAgents.filter(a => a.source === 'hub'), [filteredAgents])
 
-  const hasAppliedDefault = useRef(false)
-  if (data?.success && !hasAppliedDefault.current && !urlSourceTab) {
-    hasAppliedDefault.current = true
-    if (allAgents.some(a => a.source === 'hub')) {
-      setSourceTab("local")
-    }
-  }
-
-  const sourceTab: SourceTab = urlSourceTab ?? "all"
+  const sourceTab: SourceTab = urlSourceTab ?? (localAgents.length > 0 ? "local" : "all")
 
   const displayAgents = useMemo(() => {
     if (sourceTab === "cloud") return cloudAgents
@@ -270,5 +262,13 @@ export default function ConsumerAgentsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function ConsumerAgentsPage() {
+  return (
+    <Suspense>
+      <ConsumerAgentsPageContent />
+    </Suspense>
   )
 }
