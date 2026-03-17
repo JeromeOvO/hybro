@@ -79,6 +79,8 @@ function createWrapper() {
   }
 }
 
+const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+
 describe('useRoomWebhook double-send guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -120,7 +122,7 @@ describe('useRoomWebhook double-send guard', () => {
     })
     expect(firstResult).toBe(true)
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
-    expect(useRoomUiStore.getState().processing).toBe(true)
+    expect(flags().processing).toBe(true)
 
     let secondResult: boolean | undefined
     await act(async () => {
@@ -137,7 +139,7 @@ describe('useRoomWebhook double-send guard', () => {
     await act(async () => {
       await result.current.sendUserMessage('Hello')
     })
-    expect(useRoomUiStore.getState().processing).toBe(true)
+    expect(flags().processing).toBe(true)
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -145,7 +147,7 @@ describe('useRoomWebhook double-send guard', () => {
         data: { status: 'completed', message_id: 'msg-1' },
       }))
     })
-    expect(useRoomUiStore.getState().processing).toBe(false)
+    expect(flags().processing).toBe(false)
 
     mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-2' })
 
@@ -164,7 +166,7 @@ describe('useRoomWebhook double-send guard', () => {
     await act(async () => {
       await result.current.sendUserMessage('Hello')
     })
-    expect(useRoomUiStore.getState().processing).toBe(true)
+    expect(flags().processing).toBe(true)
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
@@ -178,7 +180,7 @@ describe('useRoomWebhook double-send guard', () => {
         },
       }))
     })
-    expect(useRoomUiStore.getState().processing).toBe(false)
+    expect(flags().processing).toBe(false)
 
     mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-2' })
 

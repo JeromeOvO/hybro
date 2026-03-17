@@ -82,6 +82,8 @@ function createWrapper() {
   }
 }
 
+const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+
 describe('Room lifecycle characterization tests', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -135,7 +137,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await result.current.sendUserMessage('Hello')
       })
-      expect(useRoomUiStore.getState().processing).toBe(true)
+      expect(flags('room-1').processing).toBe(true)
 
       // Navigate to room-2: unmount room-1, mount room-2
       cleanup()
@@ -151,10 +153,10 @@ describe('Room lifecycle characterization tests', () => {
 
       await mountAndWaitForRoom('room-2')
 
-      // After room switch, UI flags should be reset
-      expect(useRoomUiStore.getState().processing).toBe(false)
-      expect(useRoomUiStore.getState().cancelling).toBe(false)
-      expect(useRoomUiStore.getState().sending).toBe(false)
+      // After room switch, UI flags should be reset (room-1 cleaned up, room-2 starts fresh)
+      expect(flags('room-2').processing).toBe(false)
+      expect(flags('room-2').cancelling).toBe(false)
+      expect(flags('room-2').sending).toBe(false)
 
       // Store should have switched to new room
       expect(useMessageStore.getState().roomId).toBe('room-2')
@@ -197,7 +199,7 @@ describe('Room lifecycle characterization tests', () => {
       const entity = useMessageStore.getState().entities[placeholderId]
       expect(entity.taskContent).toBe('Processing your request...')
       expect(entity.isEphemeral).toBe(true)
-      expect(useRoomUiStore.getState().processing).toBe(true)
+      expect(flags('room-1').processing).toBe(true)
     })
 
     it('skips placeholder when processing message is stale (>2min)', async () => {
@@ -303,7 +305,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await result.current.sendUserMessage('Hello')
       })
-      expect(useRoomUiStore.getState().processing).toBe(true)
+      expect(flags('room-1').processing).toBe(true)
 
       // Switch to fake timers AFTER mounting (so waitFor/promises work normally)
       vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -312,7 +314,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await result.current.cancelProcessing()
       })
-      expect(useRoomUiStore.getState().cancelling).toBe(true)
+      expect(flags('room-1').cancelling).toBe(true)
 
       // Advance past the 15s cancel timeout
       await act(async () => {
@@ -323,8 +325,8 @@ describe('Room lifecycle characterization tests', () => {
       expect(banner.warning).toHaveBeenCalledWith(
         'Cancellation timed out — the agent may still be running'
       )
-      expect(useRoomUiStore.getState().cancelling).toBe(false)
-      expect(useRoomUiStore.getState().processing).toBe(false)
+      expect(flags('room-1').cancelling).toBe(false)
+      expect(flags('room-1').processing).toBe(false)
     })
 
     it('disarms cancel timeout when terminal SSE arrives before timeout', async () => {
@@ -345,7 +347,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await result.current.cancelProcessing()
       })
-      expect(useRoomUiStore.getState().cancelling).toBe(true)
+      expect(flags('room-1').cancelling).toBe(true)
 
       // Terminal SSE arrives before timeout
       await act(async () => {
@@ -355,8 +357,8 @@ describe('Room lifecycle characterization tests', () => {
         }))
       })
 
-      expect(useRoomUiStore.getState().processing).toBe(false)
-      expect(useRoomUiStore.getState().cancelling).toBe(false)
+      expect(flags('room-1').processing).toBe(false)
+      expect(flags('room-1').cancelling).toBe(false)
 
       // Advance past 15s — no warning should fire since SSE already resolved it
       vi.clearAllMocks()

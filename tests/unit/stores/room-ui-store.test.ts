@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
+const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+
 describe('RoomUiStore', () => {
   beforeEach(() => {
     useRoomUiStore.getState().resetAll()
@@ -8,73 +10,99 @@ describe('RoomUiStore', () => {
 
   describe('boolean flags', () => {
     it('should start with default values', () => {
-      const state = useRoomUiStore.getState()
-      expect(state.sending).toBe(false)
-      expect(state.processing).toBe(false)
-      expect(state.cancelling).toBe(false)
-      expect(state.updatingRoom).toBe(false)
-      expect(state.sseEnabled).toBe(true)
-      expect(state.sseConnected).toBe(false)
-      expect(state.sseError).toBeNull()
+      const f = flags()
+      expect(f.sending).toBe(false)
+      expect(f.processing).toBe(false)
+      expect(f.cancelling).toBe(false)
+      expect(f.updatingRoom).toBe(false)
+      expect(f.sseEnabled).toBe(true)
+      expect(f.sseConnected).toBe(false)
+      expect(f.sseError).toBeNull()
     })
 
     it('should update sending flag', () => {
-      useRoomUiStore.getState().setSending(true)
-      expect(useRoomUiStore.getState().sending).toBe(true)
-      useRoomUiStore.getState().setSending(false)
-      expect(useRoomUiStore.getState().sending).toBe(false)
+      useRoomUiStore.getState().setSending('room-1', true)
+      expect(flags().sending).toBe(true)
+      useRoomUiStore.getState().setSending('room-1', false)
+      expect(flags().sending).toBe(false)
     })
 
     it('should update processing flag', () => {
-      useRoomUiStore.getState().setProcessing(true)
-      expect(useRoomUiStore.getState().processing).toBe(true)
+      useRoomUiStore.getState().setProcessing('room-1', true)
+      expect(flags().processing).toBe(true)
     })
 
     it('should update cancelling flag', () => {
-      useRoomUiStore.getState().setCancelling(true)
-      expect(useRoomUiStore.getState().cancelling).toBe(true)
+      useRoomUiStore.getState().setCancelling('room-1', true)
+      expect(flags().cancelling).toBe(true)
     })
 
     it('should update updatingRoom flag', () => {
-      useRoomUiStore.getState().setUpdatingRoom(true)
-      expect(useRoomUiStore.getState().updatingRoom).toBe(true)
+      useRoomUiStore.getState().setUpdatingRoom('room-1', true)
+      expect(flags().updatingRoom).toBe(true)
     })
 
     it('should update SSE flags', () => {
-      useRoomUiStore.getState().setSseEnabled(false)
-      expect(useRoomUiStore.getState().sseEnabled).toBe(false)
+      useRoomUiStore.getState().setSseEnabled('room-1', false)
+      expect(flags().sseEnabled).toBe(false)
 
-      useRoomUiStore.getState().setSseConnected(true)
-      expect(useRoomUiStore.getState().sseConnected).toBe(true)
+      useRoomUiStore.getState().setSseConnected('room-1', true)
+      expect(flags().sseConnected).toBe(true)
 
-      useRoomUiStore.getState().setSseError('Connection failed')
-      expect(useRoomUiStore.getState().sseError).toBe('Connection failed')
+      useRoomUiStore.getState().setSseError('room-1', 'Connection failed')
+      expect(flags().sseError).toBe('Connection failed')
+    })
+  })
+
+  describe('room isolation', () => {
+    it('flags set on one room do not affect another', () => {
+      useRoomUiStore.getState().setSending('room-1', true)
+      useRoomUiStore.getState().setProcessing('room-1', true)
+      expect(flags('room-1').sending).toBe(true)
+      expect(flags('room-1').processing).toBe(true)
+      expect(flags('room-2').sending).toBe(false)
+      expect(flags('room-2').processing).toBe(false)
+    })
+  })
+
+  describe('resetRoom', () => {
+    it('deletes a single room entry, leaving others untouched', () => {
+      useRoomUiStore.getState().setSending('room-1', true)
+      useRoomUiStore.getState().setProcessing('room-2', true)
+
+      useRoomUiStore.getState().resetRoom('room-1')
+
+      // room-1 returns defaults
+      expect(flags('room-1').sending).toBe(false)
+      // room-2 untouched
+      expect(flags('room-2').processing).toBe(true)
     })
   })
 
   describe('resetAll', () => {
     it('should reset all state to defaults', () => {
       const store = useRoomUiStore.getState()
-      store.setSending(true)
-      store.setProcessing(true)
-      store.setCancelling(true)
-      store.setUpdatingRoom(true)
-      store.setSseEnabled(false)
-      store.setSseConnected(true)
-      store.setSseError('error')
+      store.setSending('room-1', true)
+      store.setProcessing('room-1', true)
+      store.setCancelling('room-1', true)
+      store.setUpdatingRoom('room-1', true)
+      store.setSseEnabled('room-1', false)
+      store.setSseConnected('room-1', true)
+      store.setSseError('room-1', 'error')
       store.setPendingRoomData('room-1', { initialMessage: 'hi' })
 
       store.resetAll()
 
-      const reset = useRoomUiStore.getState()
-      expect(reset.sending).toBe(false)
-      expect(reset.processing).toBe(false)
-      expect(reset.cancelling).toBe(false)
-      expect(reset.updatingRoom).toBe(false)
-      expect(reset.sseEnabled).toBe(true)
-      expect(reset.sseConnected).toBe(false)
-      expect(reset.sseError).toBeNull()
-      expect(reset.pendingRoomData).toEqual({})
+      const f = flags()
+      expect(f.sending).toBe(false)
+      expect(f.processing).toBe(false)
+      expect(f.cancelling).toBe(false)
+      expect(f.updatingRoom).toBe(false)
+      expect(f.sseEnabled).toBe(true)
+      expect(f.sseConnected).toBe(false)
+      expect(f.sseError).toBeNull()
+      expect(useRoomUiStore.getState().pendingRoomData).toEqual({})
+      expect(useRoomUiStore.getState().rooms).toEqual({})
     })
   })
 

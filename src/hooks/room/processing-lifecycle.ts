@@ -22,6 +22,7 @@ export interface ProcessingLifecycle {
 export function createProcessingLifecycle(
   setZustandProcessing: (v: boolean) => void
 ): ProcessingLifecycle {
+  let disposed = false
   let currentProcessingMessageId: string | null = null
   let placeholderDismissed = false
   let isProcessingGuard = false
@@ -31,6 +32,7 @@ export function createProcessingLifecycle(
 
   return {
     setProcessing(active: boolean) {
+      if (disposed) return
       setZustandProcessing(active)
       if (!active) {
         isProcessingGuard = false
@@ -38,30 +40,37 @@ export function createProcessingLifecycle(
     },
 
     setSendGuard(active: boolean) {
+      if (disposed) return
       isProcessingGuard = active
     },
 
     isSendGuardActive() {
+      if (disposed) return false
       return isProcessingGuard
     },
 
     setMessageId(id: string | null) {
+      if (disposed) return
       currentProcessingMessageId = id
     },
 
     getMessageId() {
+      if (disposed) return null
       return currentProcessingMessageId
     },
 
     dismissPlaceholder() {
+      if (disposed) return
       placeholderDismissed = true
     },
 
     resetPlaceholder() {
+      if (disposed) return
       placeholderDismissed = false
     },
 
     isPlaceholderDismissed() {
+      if (disposed) return false
       return placeholderDismissed
     },
 
@@ -70,6 +79,7 @@ export function createProcessingLifecycle(
     },
 
     armCancelTimeout(onTimeout: () => void, ms = 15000) {
+      if (disposed) return
       if (cancelTimeout) {
         clearTimeout(cancelTimeout)
       }
@@ -84,26 +94,32 @@ export function createProcessingLifecycle(
     },
 
     hasCancelTimedOut() {
+      if (disposed) return false
       return cancelTimedOut
     },
 
     setCancelTimedOut(v: boolean) {
+      if (disposed) return
       cancelTimedOut = v
     },
 
     markSseDisconnection() {
+      if (disposed) return
       sseHadDisconnection = true
     },
 
     clearSseDisconnection() {
+      if (disposed) return
       sseHadDisconnection = false
     },
 
     hadSseDisconnection() {
+      if (disposed) return false
       return sseHadDisconnection
     },
 
     reset() {
+      if (disposed) return
       setZustandProcessing(false)
       currentProcessingMessageId = null
       placeholderDismissed = false
@@ -117,6 +133,7 @@ export function createProcessingLifecycle(
     },
 
     dispose() {
+      disposed = true
       if (cancelTimeout) {
         clearTimeout(cancelTimeout)
         cancelTimeout = null
