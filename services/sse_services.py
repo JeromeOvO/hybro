@@ -140,10 +140,9 @@ class SSEManager:
         """broadcast message to room"""
         async with self.lock:
             if room_id not in self.room_connections:
-                if message_type != "agent_token":
-                    logger.warning(
-                        f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
-                    )
+                logger.warning(
+                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
+                )
                 return
 
             disconnected_connections = []
@@ -159,14 +158,9 @@ class SSEManager:
                     del self.room_connections[room_id][connection_id]
 
             active_connections = len(self.room_connections[room_id])
-            if message_type == "agent_token":
-                logger.debug(
-                    f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
-                )
-            else:
-                logger.info(
-                    f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
-                )
+            logger.info(
+                f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
+            )
 
     async def send_user_message(
         self, room_id: str, message_id: str, user_id: str, content: str
@@ -200,30 +194,6 @@ class SSEManager:
         if parts:
             data["parts"] = parts
         await self.broadcast_to_room(room_id, "agent_response", data)
-
-    async def send_agent_token(
-        self, room_id: str, message_id: str, agent_id: str, token: str
-    ):
-        """
-        Send incremental token from agent streaming response.
-
-        This is for real-time token-by-token streaming from agents.
-        Tokens are sent as they arrive from the agent, enabling
-        real-time display in the frontend.
-
-        Args:
-            room_id: The room ID
-            message_id: The message being generated
-            agent_id: The agent sending the token
-            token: The incremental text token (word, character, etc.)
-        """
-        data = {
-            "message_id": message_id,
-            "agent_id": agent_id,
-            "token": token,
-            "timestamp": utcnow().isoformat(),
-        }
-        await self.broadcast_to_room(room_id, "agent_token", data)
 
     async def send_error(self, room_id: str, error: str, message_id: str = None):
         """

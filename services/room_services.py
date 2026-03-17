@@ -1199,8 +1199,9 @@ class RoomServices:
             history=[a2a_message],
         )
 
-        # Store both the task and the text content for display
-        return MessageContent(message_task=task, message_text=content)
+        # Store the task; message_text is left empty until the agent produces output
+        # (streaming artifacts or terminal response will populate it).
+        return MessageContent(message_task=task)
 
     def _generate_new_agent_message(
         self,

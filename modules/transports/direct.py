@@ -4,9 +4,7 @@ Absorbs all response-processing logic (formerly in ``ResponseProcessor``)
 and replaces terminal ``notify_task_update`` calls with ``AgentEvent``
 emissions through ``AgentResponseHandler``.
 
-Mid-stream SSE (``send_agent_token`` during streaming) stays inside
-``DirectTransport`` via its own ``sse_manager`` reference — this is an
-accepted asymmetry (see design doc §2.8).
+Mid-stream SSE uses ``send_artifact_update`` (A2A-standard).
 """
 
 import asyncio
@@ -828,12 +826,18 @@ class DirectTransport(AgentTransport):
 
             await self.tsm.persist_message(ctx.current_message)
 
-        if ctx.send_sse:
-            await self.sse_manager.send_agent_token(
+        if ctx.send_sse and content:
+            artifact_dict = {
+                "artifact_id": f"{ctx.current_message.message_id}-stream",
+                "parts": [{"kind": "text", "text": content}],
+            }
+            await self.sse_manager.send_artifact_update(
                 ctx.room_id,
                 ctx.current_message.message_id,
                 ctx.current_message.agent_id,
-                content,
+                artifact_dict,
+                append=True,
+                last_chunk=False,
             )
 
     @staticmethod
@@ -986,6 +990,16 @@ class DirectTransport(AgentTransport):
         streaming_state: MessageStreamingState,
     ) -> tuple[ProcessingStatus, str]:
         """Finalize streaming: persist final state, send task_update SSE."""
+        if ctx.send_sse:
+            await self.sse_manager.send_artifact_update(
+                ctx.room_id,
+                ctx.current_message.message_id,
+                ctx.current_message.agent_id,
+                {"artifact_id": f"{ctx.current_message.message_id}-stream", "parts": []},
+                append=True,
+                last_chunk=True,
+            )
+
         logger.info(
             "DirectTransport: Streaming complete for message %s, text length: %d",
             ctx.current_message.message_id,

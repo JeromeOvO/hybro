@@ -87,7 +87,6 @@ def _make_relay_service(
     if sse_manager is None:
         sse_manager = MagicMock()
         sse_manager.send_agent_response = AsyncMock()
-        sse_manager.send_agent_token = AsyncMock()
         sse_manager.send_task_submitted = AsyncMock()
         sse_manager.send_processing_status = AsyncMock()
         sse_manager.send_error = AsyncMock()
@@ -518,7 +517,6 @@ class TestRelayServicePublish:
 
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
-        sse.send_agent_token = AsyncMock()
         sse.send_task_submitted = AsyncMock()
         sse.send_processing_status = AsyncMock()
 
@@ -605,13 +603,12 @@ def _make_msg(
 
 
 class TestRelayTransportNormalize:
-    def test_agent_token(self):
+    def test_agent_token_rejected_as_unknown(self):
+        """agent_token is no longer a recognized event type after Phase 5b."""
         rt = _make_relay_transport()
         msg = _make_msg()
-        event = rt._normalize("agent_token", "amsg-001", {"token": "hi"}, msg)
-        assert event is not None
-        assert event.kind == "token"
-        assert event.text == "hi"
+        event = rt._normalize("agent_token", "amsg-001", {"token": "hello"}, msg)
+        assert event is None
 
     def test_agent_response(self):
         rt = _make_relay_transport()

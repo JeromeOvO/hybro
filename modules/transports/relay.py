@@ -34,15 +34,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_EVENT_TYPE_MAP = {
-    "task_submitted": "task_submitted",
-    "agent_token": "token",
-    "agent_response": "response",
-    "agent_error": "error",
-    "artifact_update": "artifact_update",
-    "processing_status": "processing_status",
-}
-
 
 class RelayTransport(AgentTransport):
     """Relay transport for hub-connected local A2A agents."""
@@ -236,13 +227,6 @@ class RelayTransport(AgentTransport):
                 **base,
                 task_id=data.get("task_id", ""),
                 agent_name=data.get("agent_name", ""),
-            )
-
-        if event_type == "agent_token":
-            return AgentEvent(
-                kind="token",
-                **base,
-                text=data.get("token", ""),
             )
 
         if event_type == "agent_response":

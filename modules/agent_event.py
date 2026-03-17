@@ -16,7 +16,6 @@ class AgentEvent:
     """Transport-agnostic agent event. All three entry points normalize into this."""
 
     kind: Literal[
-        "token",
         "artifact_update",
         "response",
         "error",

@@ -25,10 +25,10 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
     if sse is None:
         sse = MagicMock()
-        sse.send_agent_token = AsyncMock()
         sse.send_agent_response = AsyncMock()
         sse.send_artifact_update = AsyncMock()
         sse.send_task_submitted = AsyncMock()
+        sse.send_task_update = AsyncMock()
         sse.send_processing_status = AsyncMock()
         sse.send_error = AsyncMock()
     if rmc is None:
@@ -47,30 +47,6 @@ def _base_event(**overrides):
     )
     defaults.update(overrides)
     return defaults
-
-
-# =============================================================================
-# Token events
-# =============================================================================
-
-
-class TestTokenEvent:
-    @pytest.mark.asyncio
-    async def test_sends_sse_token(self):
-        h = _make_handler()
-        event = AgentEvent(kind="token", **_base_event(), text="Hello")
-        await h.handle(event)
-        h._sse.send_agent_token.assert_awaited_once_with(
-            room_id="room-001", message_id="msg-001",
-            agent_id="agent-001", token="Hello",
-        )
-
-    @pytest.mark.asyncio
-    async def test_does_not_persist(self):
-        h = _make_handler()
-        event = AgentEvent(kind="token", **_base_event(), text="Hi")
-        await h.handle(event)
-        h._db.update_task_state_on_message.assert_not_awaited()
 
 
 # =============================================================================
@@ -98,7 +74,6 @@ class TestArtifactUpdateEvent:
             append=False,
             last_chunk=False,
         )
-        h._sse.send_agent_token.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_skip_persist_still_broadcasts(self):
@@ -138,16 +113,19 @@ class TestArtifactUpdateEvent:
         assert call_kwargs["last_chunk"] is True
 
     @pytest.mark.asyncio
-    async def test_no_artifacts_sends_token_for_text(self):
+    async def test_no_artifacts_sends_artifact_update_for_text(self):
+        """Text-only artifact_update (no artifact object) wraps text as artifact."""
         h = _make_handler()
         event = AgentEvent(
             kind="artifact_update", **_base_event(),
-            text="chunk", artifacts=None,
+            text="chunk", artifacts=None, append=True, last_chunk=False,
         )
         await h.handle(event)
         h._db.accumulate_artifact_on_message.assert_not_awaited()
-        h._sse.send_artifact_update.assert_not_awaited()
-        h._sse.send_agent_token.assert_awaited_once()
+        h._sse.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
+        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
 
     @pytest.mark.asyncio
     async def test_no_artifacts_no_text_sends_nothing(self):
@@ -159,7 +137,6 @@ class TestArtifactUpdateEvent:
         await h.handle(event)
         h._db.accumulate_artifact_on_message.assert_not_awaited()
         h._sse.send_artifact_update.assert_not_awaited()
-        h._sse.send_agent_token.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_artifact_with_file_parts_broadcasts(self):
@@ -394,13 +371,16 @@ class TestSubmittedEvent:
 
 class TestStatusUpdateEvent:
     @pytest.mark.asyncio
-    async def test_sends_token_for_text(self):
+    async def test_sends_task_update_for_text(self):
         h = _make_handler()
         event = AgentEvent(
             kind="status_update", **_base_event(), text="still working",
         )
         await h.handle(event)
-        h._sse.send_agent_token.assert_awaited_once()
+        h._sse.send_task_update.assert_awaited_once()
+        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        assert call_kwargs["status"] == "working"
+        assert call_kwargs["status_message"] == "still working"
 
     @pytest.mark.asyncio
     async def test_no_sse_for_empty_text(self):
@@ -409,7 +389,7 @@ class TestStatusUpdateEvent:
             kind="status_update", **_base_event(), text="",
         )
         await h.handle(event)
-        h._sse.send_agent_token.assert_not_awaited()
+        h._sse.send_task_update.assert_not_awaited()
 
 
 class TestProcessingStatusEvent:
@@ -448,3 +428,44 @@ class TestResumeOrchestrationErrorHandling:
             )
             # Should not raise despite resume failure
             await h.handle(event)
+
+
+# =============================================================================
+# Artifact text-only fallback (no artifact object, only text)
+# =============================================================================
+
+
+class TestArtifactTextFallback:
+    """_on_artifact with text-only (no artifact) wraps text as artifact_update."""
+
+    @pytest.mark.asyncio
+    async def test_text_only_uses_artifact_update(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            text="chunk", artifacts=None, append=True, last_chunk=False,
+        )
+        await h.handle(event)
+        h._sse.send_artifact_update.assert_awaited_once()
+        call_kwargs = h._sse.send_artifact_update.call_args.kwargs
+        assert call_kwargs["artifact"]["artifact_id"] == "msg-001-stream"
+        assert call_kwargs["artifact"]["parts"] == [{"kind": "text", "text": "chunk"}]
+        assert call_kwargs["append"] is True
+        assert call_kwargs["last_chunk"] is False
+
+
+class TestStatusUpdateSendsTaskUpdate:
+    """_on_status sends task_update for status text."""
+
+    @pytest.mark.asyncio
+    async def test_status_uses_task_update(self):
+        h = _make_handler()
+        event = AgentEvent(
+            kind="status_update", **_base_event(), text="Searching the web...",
+        )
+        await h.handle(event)
+        h._sse.send_task_update.assert_awaited_once()
+        call_kwargs = h._sse.send_task_update.call_args.kwargs
+        assert call_kwargs["status"] == "working"
+        assert call_kwargs["status_message"] == "Searching the web..."
+        assert call_kwargs["message_id"] == "msg-001"

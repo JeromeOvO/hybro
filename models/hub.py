@@ -8,11 +8,10 @@ Event type vocabularies
 
 **Hub → Cloud** (``HubPublishEvent.type``):
   task_submitted   — agent acknowledged the task
-  agent_token      — streaming text token
   agent_response   — final successful response (text + optional parts)
   agent_error      — dispatch or agent-level failure
   processing_status — terminal processing signal (completed / failed)
-  artifact_update  — A2A artifact streaming chunk
+  artifact_update  — A2A artifact streaming chunk (primary streaming path)
   task_status      — A2A task status transition
   task_interactive — agent requires user input (HITL)
 
@@ -35,6 +34,7 @@ from common.utils.time import utcnow
 # ---------------------------------------------------------------------------
 # Hub registration
 # ---------------------------------------------------------------------------
+
 
 class Hub(BaseModel):
     hub_id: str
@@ -80,7 +80,6 @@ class RelayToHubEvent(BaseModel):
 
 HubPublishEventType = Literal[
     "task_submitted",
-    "agent_token",
     "agent_response",
     "agent_error",
     "processing_status",
@@ -109,6 +108,7 @@ class HubPublishRequest(BaseModel):
 # Agent sync
 # ---------------------------------------------------------------------------
 
+
 class HubAgentSync(BaseModel):
     """Single agent entry in a sync request."""
 
@@ -135,6 +135,7 @@ class HubAgentSyncResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Hub status
 # ---------------------------------------------------------------------------
+
 
 class HubStatus(BaseModel):
     hub_id: str
