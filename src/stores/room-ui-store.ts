@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
 import type { PendingAttachment } from '@/lib/types/attachments'
 
 type RoomId = string
@@ -9,7 +10,7 @@ interface PendingRoomData {
   attachments?: PendingAttachment[]
 }
 
-interface RoomUiState {
+export interface RoomFlags {
   sending: boolean
   processing: boolean
   cancelling: boolean
@@ -17,23 +18,9 @@ interface RoomUiState {
   sseEnabled: boolean
   sseConnected: boolean
   sseError: string | null
-  /** Pending initial messages for rooms (replaces sessionStorage) */
-  pendingRoomData: Record<RoomId, PendingRoomData>
-  setSending: (v: boolean) => void
-  setProcessing: (v: boolean) => void
-  setCancelling: (v: boolean) => void
-  setUpdatingRoom: (v: boolean) => void
-  setSseEnabled: (v: boolean) => void
-  setSseConnected: (v: boolean) => void
-  setSseError: (v: string | null) => void
-  resetAll: () => void
-  /** Store a pending initial message + target group for a room */
-  setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
-  /** Consume (read + delete) pending data for a room */
-  consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
 }
 
-export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+export const DEFAULT_ROOM_FLAGS: RoomFlags = {
   sending: false,
   processing: false,
   cancelling: false,
@@ -41,25 +28,65 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   sseEnabled: true,
   sseConnected: false,
   sseError: null,
+}
+
+function patchRoom(rooms: Record<RoomId, RoomFlags>, roomId: RoomId, patch: Partial<RoomFlags>): Record<RoomId, RoomFlags> {
+  return { ...rooms, [roomId]: { ...(rooms[roomId] ?? DEFAULT_ROOM_FLAGS), ...patch } }
+}
+
+interface RoomUiState {
+  rooms: Record<RoomId, RoomFlags>
+  /** Pending initial messages for rooms (replaces sessionStorage) */
+  pendingRoomData: Record<RoomId, PendingRoomData>
+
+  // Per-room flag setters (roomId, value)
+  setSending: (roomId: RoomId, v: boolean) => void
+  setProcessing: (roomId: RoomId, v: boolean) => void
+  setCancelling: (roomId: RoomId, v: boolean) => void
+  setUpdatingRoom: (roomId: RoomId, v: boolean) => void
+  setSseEnabled: (roomId: RoomId, v: boolean) => void
+  setSseConnected: (roomId: RoomId, v: boolean) => void
+  setSseError: (roomId: RoomId, v: string | null) => void
+
+  // Non-reactive getter for getState() callers
+  getRoomFlags: (roomId: RoomId) => RoomFlags
+  // Delete a single room's entry (falls back to defaults on next read)
+  resetRoom: (roomId: RoomId) => void
+  resetAll: () => void
+
+  /** Store a pending initial message + target group for a room */
+  setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
+  /** Consume (read + delete) pending data for a room */
+  consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+}
+
+export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+  rooms: {},
   pendingRoomData: {},
-  setSending: (v) => set({ sending: v }),
-  setProcessing: (v) => set({ processing: v }),
-  setCancelling: (v) => set({ cancelling: v }),
-  setUpdatingRoom: (v) => set({ updatingRoom: v }),
-  setSseEnabled: (v) => set({ sseEnabled: v }),
-  setSseConnected: (v) => set({ sseConnected: v }),
-  setSseError: (v) => set({ sseError: v }),
+
+  setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
+  setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
+  setCancelling: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { cancelling: v }) })),
+  setUpdatingRoom: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { updatingRoom: v }) })),
+  setSseEnabled: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseEnabled: v }) })),
+  setSseConnected: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseConnected: v }) })),
+  setSseError: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseError: v }) })),
+
+  getRoomFlags: (roomId) => get().rooms[roomId] ?? DEFAULT_ROOM_FLAGS,
+
+  resetRoom: (roomId) =>
+    set(s => {
+      const copy = { ...s.rooms }
+      delete copy[roomId]
+      return { rooms: copy }
+    }),
+
   resetAll: () =>
     set({
+      rooms: {},
       pendingRoomData: {},
-      sending: false,
-      processing: false,
-      cancelling: false,
-      updatingRoom: false,
-      sseConnected: false,
-      sseError: null,
-      sseEnabled: true,
     }),
+
   setPendingRoomData: (roomId, data) =>
     set((state) => ({
       pendingRoomData: {
@@ -79,3 +106,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     return data
   },
 }))
+
+/** Reactive hook that returns room-scoped flags with shallow equality. */
+export function useRoomFlags(roomId: string): RoomFlags {
+  return useRoomUiStore(useShallow(s => s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS))
+}

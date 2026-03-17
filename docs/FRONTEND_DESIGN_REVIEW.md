@@ -290,7 +290,7 @@ Major refactoring of the frontend message state management.
 | 2.3  | No message size validation on frontend            | Resolved     | 10k-char limit with visible counter, paste truncation, and submit guard in `room-chat-input.tsx` |
 | 2.4  | No pagination for room messages                   | Open         | Design doc exists: `MESSAGE_PAGINATION_DESIGN.md`                                |
 | 2.5  | `useRoomWebhook` god hook                         | Resolved     | Decomposed into 15 focused files in `src/hooks/room/` with ~130-line orchestrator; characterization + contract tests added (commit `e0e040e`) |
-| 2.6  | `useRoomUiStore` global singleton                 | Open         | Low priority; only a risk with multi-room views                                  |
+| 2.6  | `useRoomUiStore` global singleton                 | Resolved     | All 7 UI flags keyed by `roomId` inside `rooms: Record<RoomId, RoomFlags>` map; `useRoomFlags(roomId)` convenience hook; `resetRoom()` cleanup in `useRoomReset` effect |
 
 ---
 

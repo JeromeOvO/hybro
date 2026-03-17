@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { useRoomUiStore } from '@/stores/room-ui-store'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useRoomUiStore, useRoomFlags } from '@/stores/room-ui-store'
 import { useAgentCatalog } from './useAgentCatalog'
 import { useRoomData } from './useRoomData'
 import { createProcessingLifecycle, type ProcessingLifecycle } from './processing-lifecycle'
@@ -13,20 +13,30 @@ import { useRoomActions } from './useRoomActions'
 import type { UseRoomWebhookProps } from './types'
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
-  const {
-    sending,
-    processing,
-    cancelling,
-    updatingRoom,
-    sseEnabled,
-    setSending,
-    setProcessing,
-    setCancelling,
-    setUpdatingRoom,
-    setSseEnabled,
-    setSseConnected,
-    setSseError,
-  } = useRoomUiStore()
+  // Read per-room flags reactively
+  const { sending, processing, cancelling, updatingRoom, sseEnabled } = useRoomFlags(roomId)
+
+  // Bind stable action refs to current roomId
+  const setRoomSending = useRoomUiStore(s => s.setSending)
+  const setSending = useCallback((v: boolean) => setRoomSending(roomId, v), [roomId, setRoomSending])
+
+  const setRoomProcessing = useRoomUiStore(s => s.setProcessing)
+  const setProcessing = useCallback((v: boolean) => setRoomProcessing(roomId, v), [roomId, setRoomProcessing])
+
+  const setRoomCancelling = useRoomUiStore(s => s.setCancelling)
+  const setCancelling = useCallback((v: boolean) => setRoomCancelling(roomId, v), [roomId, setRoomCancelling])
+
+  const setRoomUpdatingRoom = useRoomUiStore(s => s.setUpdatingRoom)
+  const setUpdatingRoom = useCallback((v: boolean) => setRoomUpdatingRoom(roomId, v), [roomId, setRoomUpdatingRoom])
+
+  const setRoomSseEnabled = useRoomUiStore(s => s.setSseEnabled)
+  const setSseEnabled = useCallback((v: boolean) => setRoomSseEnabled(roomId, v), [roomId, setRoomSseEnabled])
+
+  const setRoomSseConnected = useRoomUiStore(s => s.setSseConnected)
+  const setSseConnected = useCallback((v: boolean) => setRoomSseConnected(roomId, v), [roomId, setRoomSseConnected])
+
+  const setRoomSseError = useRoomUiStore(s => s.setSseError)
+  const setSseError = useCallback((v: string | null) => setRoomSseError(roomId, v), [roomId, setRoomSseError])
 
   const {
     availableAgents,
@@ -48,17 +58,39 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     refreshRoomSetting,
   } = useRoomData(roomId, getToken, primeAgentNameCache, allAgentsData)
 
-  // Processing lifecycle: encapsulates processing refs, send guard, placeholder, cancel timeout, SSE disconnection
-  const lifecycleRef = useRef<ProcessingLifecycle | null>(null)
-  if (!lifecycleRef.current) {
-    lifecycleRef.current = createProcessingLifecycle(setProcessing)
-  }
-  const lifecycle = lifecycleRef.current
+  // Processing lifecycle: one instance per roomId, keyed in a Map.
+  // Render only creates (idempotent for same roomId) — never disposes.
+  // Disposal is deferred to effect cleanup (post-commit) so a discarded
+  // concurrent render cannot kill the still-committed room's lifecycle.
+  // After dispose(), stale async callbacks (e.g. SendMessage returning
+  // after room switch) become no-ops instead of mutating the new room.
+  const lifecyclesRef = useRef(new Map<string, ProcessingLifecycle>())
 
-  // Clean up cancel timeout on unmount
+  let lifecycle = lifecyclesRef.current.get(roomId)
+  if (!lifecycle) {
+    lifecycle = createProcessingLifecycle(setProcessing)
+    lifecyclesRef.current.set(roomId, lifecycle)
+  }
+
+  // After commit: dispose lifecycles for rooms we no longer view
+  // (previous rooms + orphans from discarded concurrent renders).
+  // On unmount or before re-run: dispose current room's lifecycle.
   useEffect(() => {
-    return () => { lifecycle.dispose() }
-  }, [lifecycle])
+    const map = lifecyclesRef.current
+    for (const [id, lc] of map) {
+      if (id !== roomId) {
+        lc.dispose()
+        map.delete(id)
+      }
+    }
+    return () => {
+      const lc = map.get(roomId)
+      if (lc) {
+        lc.dispose()
+        map.delete(roomId)
+      }
+    }
+  }, [roomId])
 
   // O(1) lookup index: maps HITL request_id → message entity id
   const hitlRequestIndex = useRef(new Map<string, string>())
@@ -85,7 +117,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   )
 
   // SSE connection
-  const { sseConnected, sseConnecting, sseError } = useRoomSSEConnection(
+  const { sseConnected: sseConnectedFromSSE, sseConnecting, sseError: sseErrorFromSSE } = useRoomSSEConnection(
     roomId, getToken, sseEnabled, processing, lifecycle, handleSSEMessage,
     getAgentName, getAgentSource, hitlRequestIndex, roomQuery, reconcileWithDb,
     setSseConnected, setSseError,
@@ -93,7 +125,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
 
   // Send message
   const { sendUserMessage } = useSendMessage(
-    roomId, userId, userName, room, getToken, sending, sseConnected,
+    roomId, userId, userName, room, getToken, sending, sseConnectedFromSSE,
     lifecycle, setSending, setCancelling, reconcileWithDb,
   )
 
@@ -114,9 +146,9 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     updatingRoom,
 
     // SSE State
-    sseConnected,
+    sseConnected: sseConnectedFromSSE,
     sseConnecting,
-    sseError,
+    sseError: sseErrorFromSSE,
     sseEnabled,
 
     // Debate Mode

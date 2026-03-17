@@ -77,6 +77,8 @@ function createWrapper() {
   }
 }
 
+const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+
 describe('useRoomWebhook SSE message handling', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -211,11 +213,11 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useRoomUiStore.getState().processing).toBe(true)
+    expect(flags().processing).toBe(true)
   })
 
   it('should handle processing_status "completed" by clearing processing flag', async () => {
-    useRoomUiStore.getState().setProcessing(true)
+    useRoomUiStore.getState().setProcessing('room-1', true)
 
     await mountHook()
 
@@ -226,8 +228,8 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    expect(useRoomUiStore.getState().processing).toBe(false)
-    expect(useRoomUiStore.getState().cancelling).toBe(false)
+    expect(flags().processing).toBe(false)
+    expect(flags().cancelling).toBe(false)
   })
 
   it('should handle task_submitted by writing task entity to store', async () => {

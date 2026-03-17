@@ -128,7 +128,7 @@ export function useRoomActions(
 
       // Start cancellation timeout safety net (Gap 11)
       lifecycle.armCancelTimeout(() => {
-        const { cancelling } = useRoomUiStore.getState()
+        const cancelling = useRoomUiStore.getState().getRoomFlags(roomId).cancelling
         if (cancelling) {
           lifecycle.setCancelTimedOut(true)
           setCancelling(false)
