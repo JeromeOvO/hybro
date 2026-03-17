@@ -67,9 +67,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
 
-          if (sseMessage.data?.content !== undefined && sseMessage.data?.agent_id) {
+          if (sseMessage.data?.agent_id && (sseMessage.data?.content !== undefined || sseMessage.data?.parts)) {
             const agentName = await getAgentName(sseMessage.data.agent_id)
-            const content = sseMessage.data.content
+            const content = sseMessage.data.content ?? ''
             const msgTimestamp = normalizeTimestampOrNow(sseMessage.timestamp)
             const existing = store.entities[messageId]
             const artifacts = partsToArtifacts(

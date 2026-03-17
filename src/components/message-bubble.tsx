@@ -351,7 +351,7 @@ function AgentMessageBubbleInner({
   const isArtifactStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
 
   const [isExpanded, setIsExpanded] = useState(
-    defaultExpanded || isUserExpanded || (!compact && entity.content.length < 500)
+    defaultExpanded || isUserExpanded || (!compact && (entity.content || '').length < 500)
   )
   const prevCollapseSignal = useRef(collapseSignal)
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
@@ -515,7 +515,7 @@ function AgentMessageBubbleInner({
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   
-  const displayContent = entity.content
+  const displayContent = entity.content || ''
   const isLongMessage = displayContent.length > 500
   
   const colors = getAgentColorClasses(entity.agentId || 'unknown')
