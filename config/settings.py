@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
 
     # Agent Health Check Settings
-    agent_health_check_enabled: bool = True  # enable/disable agent health check
+    agent_health_check_enabled: bool = True # enable/disable agent health check
 
     # Discovery API Settings
     discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
@@ -51,7 +51,8 @@ class Settings(BaseSettings):
     discovery_query_expansion_threshold: int = 5  # Maximum word count for query expansion
     discovery_rate_limit_per_key: int | None = 100  # Requests per API key per hour (None = unlimited)
     discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
-    
+    hybro_timeout_seconds: float = 45.0  
+
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
