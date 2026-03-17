@@ -1,18 +1,62 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from common.auth import ClerkUser, get_current_user
+from models.file_upload import MAX_ATTACHMENT_REFS_PER_REQUEST
 from models.request import (
     OrchestrationRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
+from models.response import RoomCenterUserMessageResponse
 from modules.RoomMessageCenter import room_message_center
 from modules.RoomCenter import RoomCenter
 from services.database_service import db_service
 
 router = APIRouter()
 room_center = RoomCenter()  # Singleton instance
+
+
+def _extract_attachments(request_data: dict, message: dict | None):
+    """Extract attachment info from both top-level and inline sources.
+
+    Returns (attachments_list_or_None, inline_file_ids_or_None, error_response_or_None).
+    If error_response is not None, the caller should return it immediately.
+    """
+    attachments = request_data.get("attachments")
+
+    msg_content = (message if isinstance(message, dict) else {}).get("message_content")
+    msg_content = msg_content if isinstance(msg_content, dict) else {}
+    raw_inline_attachments = msg_content.pop("attachments", None)
+
+    top_level_count = len(attachments) if isinstance(attachments, list) else 0
+    inline_count = (
+        len(raw_inline_attachments) if isinstance(raw_inline_attachments, list) else 0
+    )
+    if top_level_count + inline_count > MAX_ATTACHMENT_REFS_PER_REQUEST:
+        return (
+            None,
+            None,
+            RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error=(
+                    f"Too many attachment references ({top_level_count + inline_count}); "
+                    f"maximum {MAX_ATTACHMENT_REFS_PER_REQUEST} per request"
+                ),
+                status_code=400,
+            ),
+        )
+
+    inline_file_ids: list[str] = []
+    if raw_inline_attachments and isinstance(raw_inline_attachments, list):
+        for item in raw_inline_attachments:
+            fid = item.get("file_id") if isinstance(item, dict) else None
+            if fid and isinstance(fid, str):
+                inline_file_ids.append(fid)
+
+    return attachments, inline_file_ids or None, None
 
 
 async def verify_room_ownership(room_id: str, user: ClerkUser) -> None:
@@ -39,23 +83,20 @@ async def create_new_room(
     request: Request, user: ClerkUser = Depends(get_current_user)
 ):
     request_data = await request.json()
-    room_name = request_data.get("room_name")
-    # Take room_owner_id from authenticated user
-    room_owner_id = user.user_id
-    room_owner_name = request_data.get("room_owner_name")
-    room_agent_set = request_data.get("room_agent_set")
-    applied_from_group = request_data.get(
-        "applied_from_group"
-    )  # Group ID if agents from a group
-    extend_info = request_data.get("extend_info")
     room_center_request = RoomCenterRoomSettingRequest(
-        room_name=room_name,
-        room_owner_id=room_owner_id,
-        room_owner_name=room_owner_name,
-        room_agent_set=room_agent_set,
-        applied_from_group=applied_from_group,
-        extend_info=extend_info,
-        requesting_user_id=user.user_id,  # Pass user for agent visibility validation
+        room_name=request_data.get("room_name"),
+        room_owner_id=user.user_id,
+        room_owner_name=request_data.get("room_owner_name"),
+        extend_info=request_data.get("extend_info"),
+        requesting_user_id=user.user_id,
+        # Legacy fields (accepted during rollout)
+        room_agent_set=request_data.get("room_agent_set"),
+        applied_from_group=request_data.get("applied_from_group"),
+        # Canonical membership write input
+        membership_seed_input=request_data.get("membership_seed_input"),
+        room_agent_ids=request_data.get("room_agent_ids"),
+        seed_group_id=request_data.get("seed_group_id"),
+        seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
     room_center_response = await room_center.create_new_room(room_center_request)
     return room_center_response
@@ -73,7 +114,7 @@ async def inquiry_room_setting(
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterRoomSettingRequest(room_id=room_id)
+    room_center_request = RoomCenterRoomSettingRequest(room_id=room_id, requesting_user_id=user.user_id)
     room_center_response = await room_center.inquiry_room_setting(room_center_request)
     return room_center_response
 
@@ -105,15 +146,20 @@ async def update_room_agent_set(
     """Update room agent set - PROTECTED (requires room ownership)"""
     request_data = await request.json()
     room_id = request_data.get("room_id")
-    room_agent_set = request_data.get("room_agent_set")
 
-    # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
-        room_agent_set=room_agent_set,
-        requesting_user_id=user.user_id,  # Pass user for agent visibility validation
+        requesting_user_id=user.user_id,
+        # Legacy fields (accepted during rollout)
+        room_agent_set=request_data.get("room_agent_set"),
+        applied_from_group=request_data.get("applied_from_group"),
+        # Canonical membership write input
+        membership_seed_input=request_data.get("membership_seed_input"),
+        room_agent_ids=request_data.get("room_agent_ids"),
+        seed_group_id=request_data.get("seed_group_id"),
+        seed_all_current_agents=request_data.get("seed_all_current_agents"),
     )
     room_center_response = await room_center.update_room_agent_set(room_center_request)
     return room_center_response
@@ -174,7 +220,17 @@ async def create_and_parse_user_message(
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    attachments, inline_file_ids, err = _extract_attachments(request_data, message)
+    if err is not None:
+        return err
+
+    room_center_request = RoomCenterUserMessageRequest(
+        room_id=room_id,
+        user_id=user.user_id,
+        message=message,
+        attachments=attachments,
+        inline_file_ids=inline_file_ids,
+    )
     room_center_response = await room_center.create_and_parse_user_message(
         room_center_request
     )
@@ -218,16 +274,53 @@ async def send_message(
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
-    target_group = request_data.get(
-        "target_group", "room_team"
-    )  # Group ID: "all_agents", "room_team", or custom group ID
+    client_request_id = request_data.get("client_request_id")
 
-    # Verify user owns the room
+    # Canonical field takes precedence; legacy target_group is fallback only.
+    message_target_mode = request_data.get("message_target_mode")
+    target_group_id = request_data.get("target_group_id")
+    mentioned_agent_ids = request_data.get("mentioned_agent_ids")
+
+    # Reject mixed payloads: mentions + target mode should not coexist.
+    if mentioned_agent_ids and message_target_mode is not None:
+        return RoomCenterUserMessageResponse(
+            message_id=None, message=None, success=False,
+            error="Cannot specify both mentioned_agent_ids and message_target_mode",
+            status_code=400,
+        )
+
+    if message_target_mode is not None:
+        if message_target_mode == "saved_group":
+            if not target_group_id:
+                return RoomCenterUserMessageResponse(
+                    message_id=None, message=None, success=False,
+                    error="target_group_id is required when message_target_mode is saved_group",
+                    status_code=400,
+                )
+            target_group = target_group_id
+        elif message_target_mode == "room_default":
+            target_group = "room_team"
+        else:
+            target_group = message_target_mode
+    else:
+        target_group = request_data.get("target_group", "room_team")
+
     await verify_room_ownership(room_id, user)
 
-    room_center_request = RoomCenterUserMessageRequest(room_id=room_id, message=message)
+    attachments, inline_file_ids, err = _extract_attachments(request_data, message)
+    if err is not None:
+        return err
+
+    room_center_request = RoomCenterUserMessageRequest(
+        room_id=room_id,
+        user_id=user.user_id,
+        message=message,
+        attachments=attachments,
+        inline_file_ids=inline_file_ids,
+        client_request_id=client_request_id,
+    )
     room_center_response = await room_center.send_message_to_room(
-        room_center_request, target_group
+        room_center_request, target_group, mentioned_agent_ids
     )
 
     # Extract related_message_id from the user message (set when quoting)
@@ -236,7 +329,6 @@ async def send_message(
         related_message_id = message.get("related_message_id") or ""
 
     # Auto-trigger processing as background task if message was created successfully
-    # This prevents orphaned messages when user refreshes before frontend calls processRoomUserMessage
     if room_center_response.success and room_center_response.message_id:
         orchestration_request = OrchestrationRequest(
             room_id=room_id,

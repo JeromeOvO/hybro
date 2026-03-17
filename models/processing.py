@@ -17,6 +17,8 @@ class ProcessingStatus(Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     PAUSED = "paused"  # Queue paused waiting for push notification task
+    RELAY_DISPATCHED = "relay_dispatched"  # Dispatched to hub via relay (async)
+    AWAITING_INPUT = "awaiting_input"  # Agent returned input_required
 
 
 @dataclass
@@ -26,6 +28,9 @@ class ProcessingResult:
     status: ProcessingStatus
     response_text: str = ""
     message_id: str | None = None
+    a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
+    status_message: str | None = None
 
 
 @dataclass

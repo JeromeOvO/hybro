@@ -10,13 +10,31 @@ class PineconeDB:
     def __init__(self):
         self.index_name = os.getenv("PINECONE_INDEX_NAME")
         self.index = None
+        self._pc: pinecone.Pinecone | None = None
+        self._indexes: dict[str, object] = {}
+
+    def _get_client(self) -> pinecone.Pinecone:
+        if self._pc is None:
+            self._pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        return self._pc
 
     def connect(self):
-        # Initialize Pinecone for serverless
-        pc = pinecone.Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-
-        # Get the existing index
+        pc = self._get_client()
         self.index = pc.Index(self.index_name)
+
+    def get_index(self, index_name: str):
+        """Get a Pinecone index by name, with lazy connection caching.
+
+        Supports multiple indexes (e.g. 'agentmatch' for discovery,
+        'room-memory' for memory search) without duplicating client init.
+        """
+        if index_name in self._indexes:
+            return self._indexes[index_name]
+
+        pc = self._get_client()
+        idx = pc.Index(index_name)
+        self._indexes[index_name] = idx
+        return idx
 
     def query(self, vector, top_k=5, filter=None):
         """Query the vector database for similar vectors with optional metadata filter"""

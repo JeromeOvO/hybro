@@ -168,9 +168,22 @@ class ChatMemoryResponse(BaseModel):
     error: str | None = None
     status_code: int = 200
 
+class RoomAgentRef(BaseModel):
+    """Resolved agent reference with availability status."""
+    id: str
+    name: str | None = None
+    availability: str = "available"  # available | inaccessible | inactive | deleted
+
+class ScopeResolutionError(BaseModel):
+    """Structured error for dispatch scope resolution failures."""
+    code: str  # invalid_target | group_not_usable | unauthorized_mention | empty_scope
+    message: str
+
 class RoomCenterRoomSettingResponse(BaseModel):
     room_id: str | None = None
     room_agent_set: list[str] | None = None
+    resolved_agents: list[RoomAgentRef] | None = None
+    room_default_status: str | None = None  # ok | degraded | empty | all_unavailable
     room: Room | None = None
     room_list: list[Room] | None = None
     success: bool
@@ -180,10 +193,12 @@ class RoomCenterRoomSettingResponse(BaseModel):
 class RoomCenterUserMessageResponse(BaseModel):
     room_id: str | None = None
     message_id: str | None = None
+    dispatch_root_message_id: str | None = None
     user_id: str | None = None
     user_name: str | None = None
     message: RoomUserMessage | None = None
     message_list: list[RoomUserMessage] | None = None
+    scope_resolution_error: ScopeResolutionError | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

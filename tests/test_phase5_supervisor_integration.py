@@ -1,0 +1,1039 @@
+"""
+Unit tests for Phase 5: Supervisor V2 Integration.
+
+Tests cover:
+1. build_supervisor_context() wiring into _prepare_for_supervisor_v2()
+2. build_agent_execution_context() wiring into process_agent_message()
+3. add_synthesis_to_history() in RoomMemoryService
+4. update_room_summary() with LLM extraction
+5. Compaction trigger in _handle_v2_run_result() for terminal statuses
+6. Prompt cache optimization (conversation_context in system prompt)
+
+See CONTEXT_MEMORY_SYSTEM_DESIGN.md §11, §12.3, §18 Phase 5 for specification.
+"""
+
+import asyncio
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from models.memory import (
+    ConversationTurn,
+    MemoryContent,
+    RoomMemory,
+    RoomSummary,
+    TurnRole,
+    TurnRepresentation,
+)
+from models.supervisor_v2 import (
+    RunStatus,
+    SupervisorRunResult,
+    SupervisorTrajectory,
+)
+
+
+# =========================================================================
+# Fixtures
+# =========================================================================
+
+
+@pytest.fixture
+def room_memory():
+    """Create a minimal RoomMemory for testing."""
+    turns = [
+        ConversationTurn(
+            role=TurnRole.USER,
+            content="Hello, I need help with testing.",
+            timestamp=datetime(2026, 2, 20, 10, 0),
+        ),
+        ConversationTurn(
+            role=TurnRole.AGENT,
+            content="Sure, I can help with that!",
+            agent_name="TestAgent",
+            timestamp=datetime(2026, 2, 20, 10, 1),
+        ),
+    ]
+    return RoomMemory(
+        room_id="test_room",
+        memory_content=MemoryContent(conversation_history=turns),
+        room_summary=RoomSummary(current_goal="Write tests"),
+    )
+
+
+@pytest.fixture
+def mock_db_service():
+    """Mock DatabaseService."""
+    db = AsyncMock()
+    return db
+
+
+@pytest.fixture
+def mock_openai_service():
+    """Mock OpenAIService."""
+    svc = AsyncMock()
+    return svc
+
+
+# =========================================================================
+# Test: add_synthesis_to_history
+# =========================================================================
+
+
+class TestAddSynthesisToHistory:
+    """Tests for RoomMemoryService.add_synthesis_to_history()."""
+
+    @pytest.mark.asyncio
+    async def test_adds_supervisor_turn_and_persists(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """Synthesis text should be atomically pushed as a SUPERVISOR turn."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        result = await service.add_synthesis_to_history(
+            room_id="test_room",
+            synthesis_text="Combined results: Agent A found X, Agent B found Y.",
+        )
+
+        assert result is not None  # Returns turn_id on success
+        mock_db_service.push_and_trim_conversation_turn.assert_awaited_once()
+
+        pushed_turn = mock_db_service.push_and_trim_conversation_turn.call_args[0][1]
+        assert pushed_turn["role"] == "supervisor"
+        assert "Combined results" in pushed_turn["content"]
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_push_fails(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Should return None when room document doesn't exist."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (False, False)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        result = await service.add_synthesis_to_history(
+            room_id="nonexistent",
+            synthesis_text="Some synthesis",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_db_update_fails(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """Should return None when DB persistence fails."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (False, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        result = await service.add_synthesis_to_history(
+            room_id="test_room",
+            synthesis_text="Some synthesis",
+        )
+
+        assert result is None
+
+
+class TestSynthesisLLMEnrichment:
+    """Tests for background LLM enrichment of synthesis turn_notes (§6.2)."""
+
+    @pytest.mark.asyncio
+    async def test_enrichment_scheduled_for_long_synthesis(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Long synthesis text should trigger background _enrich_turn_notes_background."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        long_text = "This is a very detailed synthesis. " * 50
+
+        with patch.object(
+            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+        ) as mock_enrich:
+            result = await service.add_synthesis_to_history(
+                room_id="test_room",
+                synthesis_text=long_text,
+            )
+            await asyncio.sleep(0)
+
+            assert result is not None
+            mock_enrich.assert_called_once()
+            call_args = mock_enrich.call_args
+            assert call_args[0][0] == "test_room"
+            assert call_args[0][3] == long_text
+
+    @pytest.mark.asyncio
+    async def test_enrichment_skipped_for_short_synthesis(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Short synthesis text should NOT trigger background enrichment."""
+        mock_db_service.push_and_trim_conversation_turn.return_value = (True, True)
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        with patch.object(
+            service, "_enrich_turn_notes_background", new_callable=AsyncMock
+        ) as mock_enrich:
+            result = await service.add_synthesis_to_history(
+                room_id="test_room",
+                synthesis_text="Short synthesis.",
+            )
+            await asyncio.sleep(0)
+
+            assert result is not None
+            mock_enrich.assert_not_called()
+
+
+# =========================================================================
+# Test: update_room_summary
+# =========================================================================
+
+
+class TestUpdateRoomSummary:
+    """Tests for RoomMemoryService.update_room_summary()."""
+
+    @pytest.mark.asyncio
+    async def test_extracts_and_persists_summary(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """Happy path: LLM extracts structured fields, summary is saved atomically."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {"current_goal": "Write tests"},
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
+        mock_openai_service.call_supervisor_llm_json.return_value = {
+            "current_goal": "Complete test coverage",
+            "key_decisions": ["Use pytest", "Mock external services"],
+            "open_questions": ["How to test async?"],
+            "recent_agent_contributions": ["Agent A: found 3 bugs"],
+            "important_constraints": ["Must finish by Friday"],
+        }
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        success = await service.update_room_summary(
+            room_id="test_room",
+            synthesis_text="Agents found several issues...",
+        )
+
+        assert success is True
+        mock_db_service.update_room_summary_atomic.assert_awaited_once()
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["current_goal"] == "Complete test coverage"
+        assert len(saved_summary["key_decisions"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_preserves_existing_on_llm_failure(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """On LLM failure, existing summary should be preserved (graceful degradation)."""
+        mock_openai_service.call_supervisor_llm_json.side_effect = Exception(
+            "LLM timeout"
+        )
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        success = await service.update_room_summary(
+            room_id="test_room",
+            synthesis_text="Some text",
+        )
+
+        assert success is False
+        mock_db_service.update_room_summary_atomic.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_room_not_found(
+        self, mock_db_service, mock_openai_service
+    ):
+        """Should return False when room memory doesn't exist."""
+        mock_db_service.get_room_summary_projection.return_value = None
+        mock_openai_service.call_supervisor_llm_json.return_value = {
+            "current_goal": "Test",
+            "key_decisions": [],
+            "open_questions": [],
+            "recent_agent_contributions": [],
+            "important_constraints": [],
+        }
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        success = await service.update_room_summary(
+            room_id="nonexistent",
+            synthesis_text="Some text",
+        )
+
+        assert success is False
+
+    @pytest.mark.asyncio
+    async def test_keeps_existing_fields_when_extraction_returns_empty(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """If LLM returns empty/null fields, existing values should be kept."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {
+                "current_goal": "Original goal",
+                "key_decisions": ["Original decision"],
+            },
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
+        mock_openai_service.call_supervisor_llm_json.return_value = {
+            "current_goal": None,
+            "key_decisions": [],
+            "open_questions": ["New question"],
+            "recent_agent_contributions": [],
+            "important_constraints": [],
+        }
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        success = await service.update_room_summary(
+            room_id="test_room",
+            synthesis_text="Some text",
+        )
+
+        assert success is True
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["current_goal"] == "Original goal"
+        assert saved_summary["key_decisions"] == []  # LLM explicitly returned empty list
+        assert saved_summary["open_questions"] == ["New question"]
+
+    @pytest.mark.asyncio
+    async def test_populates_updated_after_turn_id(
+        self, room_memory, mock_db_service, mock_openai_service
+    ):
+        """synthesis_turn_id should be stored in RoomSummary.updated_after_turn_id (§4.2)."""
+        mock_db_service.get_room_summary_projection.return_value = {
+            "room_summary": {},
+            "room_facts": [],
+        }
+        mock_db_service.update_room_summary_atomic.return_value = True
+        mock_openai_service.call_supervisor_llm_json.return_value = {
+            "current_goal": "Test goal",
+            "key_decisions": [],
+            "open_questions": [],
+            "recent_agent_contributions": [],
+            "important_constraints": [],
+        }
+
+        from services.memory_service import RoomMemoryService
+
+        service = RoomMemoryService()
+        service.database_service = mock_db_service
+        service.openai_service = mock_openai_service
+
+        success = await service.update_room_summary(
+            room_id="test_room",
+            synthesis_text="Some text",
+            synthesis_turn_id="turn_abc_123",
+        )
+
+        assert success is True
+        saved_summary = mock_db_service.update_room_summary_atomic.call_args[0][1]
+        assert saved_summary["updated_after_turn_id"] == "turn_abc_123"
+        assert saved_summary["last_updated_at"] is not None
+
+
+# =========================================================================
+# Test: Prompt cache optimization
+# =========================================================================
+
+
+class TestPromptCacheOptimization:
+    """Tests for §12.3: conversation_context moved to system prompt."""
+
+    def test_conversation_context_in_system_prompt(self):
+        """conversation_context placeholder should be in the system prompt template."""
+        from services.room_supervisor_service import SUPERVISOR_V2_SYSTEM_PROMPT
+
+        assert "{conversation_context}" in SUPERVISOR_V2_SYSTEM_PROMPT
+
+    def test_conversation_context_not_in_user_prompt(self):
+        """conversation_context placeholder should NOT be in the user prompt template."""
+        from services.room_supervisor_service import SUPERVISOR_V2_USER_PROMPT
+
+        assert "{conversation_context}" not in SUPERVISOR_V2_USER_PROMPT
+
+    def test_user_prompt_has_only_dynamic_fields(self):
+        """User prompt should only contain fields that change per iteration."""
+        from services.room_supervisor_service import SUPERVISOR_V2_USER_PROMPT
+
+        assert "{message_text}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{trajectory_summary}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{debate_mode_note}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{steps_completed}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{max_steps}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{steps_remaining}" in SUPERVISOR_V2_USER_PROMPT
+        assert "{budget_warning}" in SUPERVISOR_V2_USER_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_decide_next_passes_context_to_system_prompt(self):
+        """decide_next() should format conversation_context into system prompt."""
+        from services.room_supervisor_service import RoomSupervisorService
+        from models.supervisor_v2 import (
+            AgentProfile,
+            RoomConfig,
+            SupervisorTrajectory,
+        )
+
+        mock_openai = AsyncMock()
+        service = RoomSupervisorService(openai_service=mock_openai)
+
+        agents = [
+            AgentProfile(
+                agent_id="agent-1",
+                agent_name="TestAgent",
+                description="Test agent",
+                is_healthy=True,
+            )
+        ]
+        room_config = RoomConfig(is_debate_mode=False)
+        trajectory = SupervisorTrajectory()
+
+        valid_json = '{"action":"done","reasoning":"test","targets":[],"synthesis_instruction":null,"clarification_question":null}'
+
+        with patch.object(service, "_call_supervisor_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = {"action": "done", "reasoning": "test", "targets": [], "synthesis_instruction": None, "clarification_question": None}
+
+            action = await service.decide_next(
+                message_text="Test message",
+                agent_registry=agents,
+                room_config=room_config,
+                trajectory=trajectory,
+                conversation_context="This is the conversation background",
+            )
+
+            call_args = mock_llm.call_args
+            system_prompt_arg = call_args.kwargs.get("system_prompt", call_args[0][0] if call_args[0] else "")
+            user_prompt_arg = call_args.kwargs.get("user_prompt", call_args[0][1] if len(call_args[0]) > 1 else "")
+
+            assert "This is the conversation background" in system_prompt_arg
+            assert "This is the conversation background" not in user_prompt_arg
+
+
+# =========================================================================
+# Test: Compaction trigger on terminal statuses
+# =========================================================================
+
+
+class TestCompactionTrigger:
+    """Tests for compaction trigger in _handle_v2_run_result() (§6.5)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status",
+        ["completed", "failed", "canceled"],
+    )
+    async def test_compaction_triggered_on_terminal_status(self, status):
+        """Compaction should be awaited inline for all terminal statuses (§6.9)."""
+        from modules.RoomMessageCenter import RoomMessageCenter
+
+        rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+        rmc.database_service = AsyncMock()
+        rmc.sse_manager = AsyncMock()
+        rmc.sse_manager.remove_token = MagicMock()
+        rmc.sse_manager.clear_cancellation = MagicMock()
+        rmc.room_coordinator_service = AsyncMock()
+
+        rmc._trigger_compaction_safe = AsyncMock()
+        rmc._update_room_summary_safe = AsyncMock()
+
+        from models.supervisor_v2 import SupervisorTrajectory
+
+        trajectory = SupervisorTrajectory()
+
+        result = MagicMock()
+        result.status = status
+        result.trajectory = trajectory
+        result.synthesis_text = "Synthesis" if status == "completed" else None
+        result.clarification_question = None
+
+        user_message = MagicMock()
+        user_message.extend_info = {}
+
+        rmc.database_service.get_room_user_message_by_message_id.return_value = (
+            user_message
+        )
+        rmc.database_service.update_room_user_message_by_message_id.return_value = True
+        rmc.database_service.get_room_by_room_id.return_value = None
+        rmc.database_service.cancel_descendants.return_value = None
+        rmc.database_service.cancel_agent_messages_by_ids.return_value = None
+
+        from modules.RoomMessageCenter import RunStatus
+
+        mock_memory_service = AsyncMock()
+        mock_memory_service.add_synthesis_to_history.return_value = "turn_synth_123"
+
+        with patch(
+            "services.memory_service.room_memory_service",
+            mock_memory_service,
+        ):
+            await rmc._handle_v2_run_result(
+                result=result,
+                room_id="test_room",
+                user_message_id="msg-1",
+                user_message=user_message,
+            )
+
+        # Compaction is now awaited inline (not fire-and-forget) per §6.9
+        rmc._trigger_compaction_safe.assert_awaited_once_with("test_room")
+
+        # For completed status, room summary update is also awaited inline
+        # (not fire-and-forget) to avoid a race with compaction.
+        if status == "completed":
+            rmc._update_room_summary_safe.assert_awaited_once()
+
+
+# =========================================================================
+# Test: MAX_CONTEXT_CHARS enforcement in ContextAssemblyService
+# =========================================================================
+
+
+class TestMaxContextCharsEnforcement:
+    """Tests for MAX_CONTEXT_CHARS hard cap in ContextAssemblyService."""
+
+    @pytest.fixture
+    def service(self):
+        """Create a ContextAssemblyService with mock settings."""
+        with patch("models.context_config.settings") as mock_settings:
+            mock_settings.context_model_window = 128000
+            mock_settings.context_system_prompt_tokens = 2000
+            mock_settings.context_tool_schema_tokens = 1000
+            mock_settings.context_response_reserve_tokens = 4000
+            mock_settings.context_room_pct = 0.2
+            mock_settings.context_history_pct = 0.6
+            mock_settings.context_task_pct = 0.2
+            from services.context_assembly_service import ContextAssemblyService
+
+            yield ContextAssemblyService()
+
+    def test_supervisor_context_truncated_beyond_char_limit(self, service):
+        """Context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
+        from common.utils.context_utils import MAX_CONTEXT_CHARS
+
+        huge_content = "X" * (MAX_CONTEXT_CHARS + 5000)
+        turns = [
+            ConversationTurn(
+                role=TurnRole.USER,
+                content=huge_content,
+                timestamp=datetime(2026, 2, 20),
+            ),
+        ]
+        room_memory = RoomMemory(
+            room_id="test_room",
+            memory_content=MemoryContent(conversation_history=turns),
+        )
+
+        result = service.build_supervisor_context(
+            room_memory=room_memory,
+            current_task="Test",
+        )
+
+        assert len(result.context) <= MAX_CONTEXT_CHARS + 50
+        assert result.was_truncated is True
+
+    def test_agent_context_truncated_beyond_char_limit(self, service):
+        """Agent context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
+        from common.utils.context_utils import MAX_CONTEXT_CHARS
+
+        huge_content = "Y" * (MAX_CONTEXT_CHARS + 5000)
+        turns = [
+            ConversationTurn(
+                role=TurnRole.USER,
+                content=huge_content,
+                timestamp=datetime(2026, 2, 20),
+            ),
+        ]
+        room_memory = RoomMemory(
+            room_id="test_room",
+            memory_content=MemoryContent(conversation_history=turns),
+        )
+
+        result = service.build_agent_execution_context(
+            room_memory=room_memory,
+            current_task="Test",
+            agent_name="TestAgent",
+        )
+
+        assert len(result.context) <= MAX_CONTEXT_CHARS + 50
+        assert result.was_truncated is True
+
+
+# =========================================================================
+# Test: _parse_v2_action case-insensitive parsing
+# =========================================================================
+
+
+class TestParseV2ActionCaseInsensitive:
+    """Tests for case-insensitive action parsing in _parse_v2_action.
+
+    The LLM may return action strings in any case (DELEGATE, delegate, Delegate).
+    The parser must normalize to lowercase before matching the ActionType enum.
+    """
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        mock_openai = MagicMock()
+        return RoomSupervisorService(openai_service=mock_openai)
+
+    @pytest.mark.parametrize("action_str,expected_action", [
+        ("delegate", "delegate"),
+        ("DELEGATE", "delegate"),
+        ("Delegate", "delegate"),
+        ("synthesize", "synthesize"),
+        ("SYNTHESIZE", "synthesize"),
+        ("clarify", "clarify"),
+        ("CLARIFY", "clarify"),
+        ("done", "done"),
+        ("DONE", "done"),
+        ("Done", "done"),
+    ])
+    def test_parses_any_case(self, service, action_str, expected_action):
+        """Action strings in any case should be recognized."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": action_str,
+            "reasoning": "test",
+            "targets": [],
+            "synthesis_instruction": None,
+            "clarification_question": None,
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType(expected_action)
+
+    def test_unknown_action_defaults_to_done(self, service):
+        """Unrecognized action strings should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": "INVALID_ACTION",
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_missing_action_defaults_to_done(self, service):
+        """Missing action key should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_delegate_with_targets(self, service):
+        """DELEGATE (uppercase) with targets should parse targets correctly."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": "DELEGATE",
+            "reasoning": "Send to agent",
+            "targets": [
+                {"agent_id": "agent-1", "agent_name": "TestAgent", "task": "Do something"},
+            ],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DELEGATE
+        assert len(action.targets) == 1
+        assert action.targets[0].agent_id == "agent-1"
+        assert action.targets[0].task == "Do something"
+
+    def test_null_action_defaults_to_done(self, service):
+        """LLM returning null for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {"action": None, "reasoning": "test", "targets": []}
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_numeric_action_defaults_to_done(self, service):
+        """LLM returning a number for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {"action": 42, "reasoning": "test", "targets": []}
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+    def test_object_action_defaults_to_done(self, service):
+        """LLM returning an object for action should default to DONE."""
+        from models.supervisor_v2 import ActionType
+
+        response_json = {
+            "action": {"type": "delegate"},
+            "reasoning": "test",
+            "targets": [],
+        }
+        action = service._parse_v2_action(response_json)
+        assert action.action == ActionType.DONE
+
+
+# =========================================================================
+# Test: _parse_v2_action prompt_type/choices sanitization
+# =========================================================================
+
+
+class TestParseV2ActionClarifySanitization:
+    """Tests that _parse_v2_action sanitizes prompt_type and choices from LLM output."""
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        mock_openai = MagicMock()
+        return RoomSupervisorService(openai_service=mock_openai)
+
+    def _clarify_json(self, **overrides):
+        base = {
+            "action": "clarify",
+            "reasoning": "need info",
+            "targets": [],
+            "clarification_question": "Which one?",
+        }
+        base.update(overrides)
+        return base
+
+    def test_valid_prompt_type_text(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="text"))
+        assert action.prompt_type == "text"
+
+    def test_valid_prompt_type_choice_with_choices(self, service):
+        action = service._parse_v2_action(
+            self._clarify_json(prompt_type="choice", choices=["A", "B", "C"])
+        )
+        assert action.prompt_type == "choice"
+        assert action.choices == ["A", "B", "C"]
+
+    def test_valid_prompt_type_confirmation(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="confirmation"))
+        assert action.prompt_type == "confirmation"
+
+    def test_invalid_prompt_type_number_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type=42))
+        assert action.prompt_type is None
+
+    def test_invalid_prompt_type_unknown_string_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(prompt_type="multiple_choice"))
+        assert action.prompt_type is None
+
+    def test_choices_non_list_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(choices="not a list"))
+        assert action.choices is None
+
+    def test_choices_list_with_non_strings_becomes_none(self, service):
+        action = service._parse_v2_action(self._clarify_json(choices=["ok", 123, None]))
+        assert action.choices is None
+
+    def test_missing_prompt_type_is_none(self, service):
+        action = service._parse_v2_action(self._clarify_json())
+        assert action.prompt_type is None
+        assert action.choices is None
+
+
+class TestTrajectoryStatusSerialization:
+    """Verify that SupervisorTrajectory serializes cleanly when status is set
+    via TrajectoryStatus enum members (not raw strings).
+
+    Regression test for the Pydantic serialization warning:
+    'Expected `enum` - serialized value may not be as expected'
+    """
+
+    def test_enum_status_serializes_without_warning(self):
+        """model_dump(mode='json') with enum status should not warn."""
+        import warnings
+        from models.supervisor_v2 import (
+            SupervisorTrajectory,
+            TrajectoryStatus,
+        )
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = TrajectoryStatus.COMPLETED
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            data = trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) == 0
+
+        assert data["status"] == "completed"
+
+    @pytest.mark.parametrize("status", [
+        "completed", "failed", "canceled", "running", "awaiting_input",
+    ])
+    def test_all_statuses_roundtrip_cleanly(self, status):
+        """Every TrajectoryStatus value should serialize and deserialize."""
+        import warnings
+        from models.supervisor_v2 import (
+            SupervisorTrajectory,
+            TrajectoryStatus,
+        )
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = TrajectoryStatus(status)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            data = trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) == 0
+
+        assert data["status"] == status
+
+        restored = SupervisorTrajectory.model_validate(data)
+        assert restored.status == TrajectoryStatus(status)
+
+    def test_raw_string_triggers_pydantic_warning(self):
+        """Assigning a raw string (not enum) to status should trigger a
+        Pydantic serialization warning — proving the old code was broken."""
+        import warnings
+        from models.supervisor_v2 import SupervisorTrajectory
+
+        trajectory = SupervisorTrajectory()
+        trajectory.status = "completed"  # type: ignore[assignment]
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            trajectory.model_dump(mode="json")
+            pydantic_warnings = [
+                x for x in w
+                if "PydanticSerializationUnexpectedValue" in str(x.message)
+            ]
+            assert len(pydantic_warnings) > 0, (
+                "Expected Pydantic warning when status is a raw string, "
+                "not a TrajectoryStatus enum member"
+            )
+
+
+# =========================================================================
+# Tests: _handle_v2_run_result — supervisor synthesis vs default summary
+# =========================================================================
+
+
+class TestHandleV2RunResultSummaryDedup:
+    """Verify that the default coordinator summary is skipped when the
+    supervisor already emitted its own synthesis, and that it acts as a
+    fallback when synthesis emission fails."""
+
+    @pytest.fixture
+    def rmc(self):
+        """Build a RoomMessageCenter with key collaborators mocked."""
+        with (
+            patch("modules.RoomMessageCenter.db_service") as mock_db,
+            patch("modules.RoomMessageCenter.sse_manager") as mock_sse,
+            patch("modules.RoomMessageCenter.room_coordinator_service") as mock_coord,
+            patch("modules.RoomMessageCenter.room_services"),
+            patch("modules.RoomMessageCenter.notification_service"),
+            patch("modules.RoomMessageCenter.a2a_service"),
+            patch("modules.RoomMessageCenter.task_service"),
+            patch("modules.RoomMessageCenter.agent_resolver_service"),
+            patch("modules.RoomMessageCenter.room_memory_service"),
+            patch("modules.RoomMessageCenter.room_supervisor_service"),
+            patch("modules.RoomMessageCenter.rate_limit_service"),
+            patch("modules.RoomMessageCenter.debate_service"),
+        ):
+            mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
+            mock_db.update_room_user_message_by_message_id = AsyncMock()
+            mock_sse.send_task_submitted = AsyncMock()
+            mock_sse.send_processing_status = AsyncMock()
+            mock_coord.emit_synthesis_message = AsyncMock()
+            mock_coord.on_room_user_message_completed = AsyncMock()
+
+            from modules.RoomMessageCenter import RoomMessageCenter
+
+            rmc = RoomMessageCenter()
+            yield rmc
+
+    @pytest.fixture
+    def completed_result_with_synthesis(self):
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=SupervisorTrajectory(),
+            synthesis_text="Final synthesis.",
+        )
+
+    @pytest.fixture
+    def completed_result_without_synthesis(self):
+        return SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=SupervisorTrajectory(),
+            synthesis_text=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesis_emitted_skips_default_summary(
+        self, rmc, completed_result_with_synthesis
+    ):
+        await rmc._handle_v2_run_result(
+            result=completed_result_with_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_synthesis_calls_default_summary(
+        self, rmc, completed_result_without_synthesis
+    ):
+        await rmc._handle_v2_run_result(
+            result=completed_result_without_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_not_awaited()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
+            "room-1", "msg-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesis_emission_failure_falls_back_to_default_summary(
+        self, rmc, completed_result_with_synthesis
+    ):
+        rmc.room_coordinator_service.emit_synthesis_message.side_effect = RuntimeError(
+            "LLM down"
+        )
+        await rmc._handle_v2_run_result(
+            result=completed_result_with_synthesis,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
+            "room-1", "msg-1"
+        )
+
+
+# =========================================================================
+# Test: _parse_v2_action multi-question CLARIFY parsing
+# =========================================================================
+
+
+class TestParseV2ActionMultiQuestion:
+    """Tests that _parse_v2_action correctly parses the questions array."""
+
+    @pytest.fixture
+    def service(self):
+        from services.room_supervisor_service import RoomSupervisorService
+        return RoomSupervisorService(
+            openai_service=MagicMock(),
+            database_service=MagicMock(),
+        )
+
+    def test_parses_valid_questions_array(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need more info",
+            "questions": [
+                {"prompt": "Travel dates?", "prompt_type": "text"},
+                {"prompt": "Budget?", "prompt_type": "choice", "choices": ["Low", "High"]},
+                {"prompt": "Proceed?", "prompt_type": "confirmation"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 3
+        assert action.questions[0].prompt == "Travel dates?"
+        assert action.questions[0].prompt_type == "text"
+        assert action.questions[1].choices == ["Low", "High"]
+        assert action.questions[2].prompt_type == "confirmation"
+
+    def test_falls_back_to_clarification_question_when_no_questions(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "clarification_question": "What dates?",
+        })
+        assert action.questions is None
+        assert action.clarification_question == "What dates?"
+
+    def test_ignores_questions_with_invalid_prompts(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [
+                {"prompt": 123},
+                {"prompt": "Valid question?", "prompt_type": "text"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 1
+        assert action.questions[0].prompt == "Valid question?"
+
+    def test_sanitizes_invalid_prompt_type_in_questions(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [
+                {"prompt": "Q1?", "prompt_type": "invalid_type"},
+                {"prompt": "Q2?", "prompt_type": "choice", "choices": "not a list"},
+            ],
+        })
+        assert action.questions is not None
+        assert len(action.questions) == 2
+        assert action.questions[0].prompt_type is None
+        assert action.questions[1].choices is None
+
+    def test_empty_questions_array_yields_none(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": [],
+        })
+        assert action.questions is None
+
+    def test_questions_array_not_a_list_yields_none(self, service):
+        action = service._parse_v2_action({
+            "action": "clarify",
+            "reasoning": "need info",
+            "questions": "not a list",
+        })
+        assert action.questions is None

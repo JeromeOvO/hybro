@@ -1,8 +1,14 @@
 import asyncio
 from collections import deque
+from datetime import timedelta
+from uuid import uuid4
+
+from a2a.types import TaskState
 
 from common.utils.context_utils import get_context_stats
 from common.utils.logger import get_logger
+from common.utils.time import utcnow
+from config.settings import settings
 from models.request import OrchestrationRequest, RoomCenterAgentMessageRequest
 from models.response import OrchestrationResponse
 from models.room import CoordinatorAgentId
@@ -17,11 +23,12 @@ from models.supervisor_v2 import (
 )
 from modules.AgentDispatcher import AgentDispatcher
 from modules.AgentMessageProcessor import AgentMessageProcessor
+from modules.agent_response_handler import AgentResponseHandler
 from modules.QueueExecutor import QueueExecutor, QueueResult
-from modules.ResponseProcessor import ResponseProcessor
+from modules.transports.direct import DirectTransport
 from modules.SupervisorExecutor import SupervisorExecutor
 from modules.TaskStateManager import TaskStateManager
-from services.a2a_constants import SSEProcessingStatus
+from services.a2a_constants import SSEProcessingStatus, is_terminal_state
 from services.a2a_service import a2a_service
 from services.agent_resolver_service import agent_resolver_service
 from services.database_service import db_service
@@ -48,29 +55,40 @@ class RoomMessageCenter:
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
         self.tsm = TaskStateManager(room_services, notification_service)
-        self.response_processor = ResponseProcessor(
-            tsm=self.tsm,
-            sse_manager=self.sse_manager,
-            a2a_service=a2a_service,
-            task_service=task_service,
-            database_service=self.database_service,
-        )
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
             database_service=self.database_service,
         )
-        self.agent_message_processor = AgentMessageProcessor(
+
+        # Shared result handler used by all transports
+        self.agent_response_handler = AgentResponseHandler(
+            db=self.database_service,
+            sse=self.sse_manager,
+            room_message_center=self,
+        )
+
+        # DirectTransport contains all streaming/sync response processing
+        self.direct_transport = DirectTransport(
+            response_handler=self.agent_response_handler,
             tsm=self.tsm,
-            sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
             a2a_service=a2a_service,
+            task_service=task_service,
+            sse_manager=self.sse_manager,
+            database_service=self.database_service,
+        )
+
+        # Relay service + dispatch middleware are initialized eagerly in
+        # init_relay_service().  AgentMessageProcessor resolves the singleton
+        # lazily on first use and registers the already-built transport.
+        self.agent_message_processor = AgentMessageProcessor(
+            sse_manager=self.sse_manager,
             room_services=self.room_services,
             database_service=self.database_service,
+            transports={"direct": self.direct_transport},
         )
         self.queue_executor = QueueExecutor(
             tsm=self.tsm,
             sse_manager=self.sse_manager,
-            response_processor=self.response_processor,
             a2a_service=a2a_service,
             room_services=self.room_services,
             room_memory_service=room_memory_service,
@@ -125,6 +143,32 @@ class RoomMessageCenter:
         if validation_response:
             return validation_response
 
+        # Idempotency guard (SDR 2.5)
+        if request.is_recovery:
+            stale_threshold = utcnow() - timedelta(
+                minutes=settings.orphan_threshold_minutes
+            )
+            claimed = await self.database_service.claim_or_reclaim_user_message(
+                request.room_user_message_id, stale_threshold
+            )
+        else:
+            claimed = await self.database_service.claim_user_message_for_processing(
+                request.room_user_message_id
+            )
+
+        if not claimed:
+            logger.warning(
+                "Message %s: claim failed (is_recovery=%s), skipping",
+                request.room_user_message_id,
+                request.is_recovery,
+            )
+            return OrchestrationResponse(
+                room_id=request.room_id,
+                success=False,
+                error="Message is already being processed",
+                status_code=409,
+            )
+
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
 
@@ -153,24 +197,54 @@ class RoomMessageCenter:
             token = self.sse_manager.create_token(room_user_message_id)
 
         # --- V2 Supervisor branch ---
-        # Since Phase 5, all supervisor-enabled rooms use the V2 adaptive loop.
         # The primary signal is supervisor_v2=True in extend_info (set by
-        # _prepare_for_supervisor_v2).  As a safety net, also check the room's
-        # use_supervisor flag so that a missed preparation doesn't silently
-        # fall through to the QueueExecutor path (which no longer has
-        # supervisor hooks).
+        # _prepare_for_supervisor_v2).
         is_supervisor_v2 = (
             user_message
             and isinstance(user_message.extend_info, dict)
             and user_message.extend_info.get("supervisor_v2", False)
         )
-        if not is_supervisor_v2 and user_message:
+        if is_supervisor_v2:
+            return await self._process_supervisor_v2(
+                user_message=user_message,
+                room_id=room_id,
+                room_user_message_id=room_user_message_id,
+                user_id=user_id,
+                quoted_text=quoted_text,
+                token=token,
+            )
+
+        # --- QueueExecutor path (legacy routing, @mentions, etc.) ---
+        # Query pre-created agent messages.  Both the legacy parse path and
+        # the @mentions flow create RoomAgentMessage records during Phase 1
+        # (send_message_to_room).  The V2 supervisor loop does NOT pre-create
+        # agent messages — it generates them dynamically — so this query is
+        # only reached for non-V2 messages.
+        query_response = (
+            await self.room_services.inquiry_agent_messages_by_related_message_id(
+                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
+            )
+        )
+        if not query_response.success:
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=query_response.error,
+                status_code=500,
+            )
+
+        has_pending_agent_messages = bool(query_response.message_list)
+
+        # Safety net: supervisor-enabled room but no V2 flag and no
+        # pre-created agent messages (e.g. @mentions).  This catches genuine
+        # bugs where _prepare_for_supervisor_v2 was skipped.
+        if not has_pending_agent_messages and user_message:
             room = await self.database_service.get_room_by_room_id(room_id)
             if room and isinstance(room.extend_info, dict) and room.extend_info.get("use_supervisor"):
                 logger.error(
                     "RoomMessageCenter: Room %s has use_supervisor=True but user "
-                    "message %s lacks supervisor_v2 flag — V2 data was not "
-                    "prepared. Failing instead of falling through to legacy path.",
+                    "message %s lacks supervisor_v2 flag and has no pre-created "
+                    "agent messages. Failing instead of silently doing nothing.",
                     room_id,
                     room_user_message_id,
                 )
@@ -184,31 +258,6 @@ class RoomMessageCenter:
                     error="Supervisor V2 data not prepared for this message",
                     status_code=500,
                 )
-        if is_supervisor_v2:
-            return await self._process_supervisor_v2(
-                user_message=user_message,
-                room_id=room_id,
-                room_user_message_id=room_user_message_id,
-                user_id=user_id,
-                quoted_text=quoted_text,
-                token=token,
-            )
-
-        # --- V1 / legacy path (unchanged) ---
-
-        # Query agent messages to process
-        query_response = (
-            await self.room_services.inquiry_agent_messages_by_related_message_id(
-                RoomCenterAgentMessageRequest(related_message_id=room_user_message_id)
-            )
-        )
-        if not query_response.success:
-            return OrchestrationResponse(
-                room_id=room_id,
-                success=False,
-                error=query_response.error,
-                status_code=500,
-            )
 
         # Process all agent messages in sequence
         message_queue = (
@@ -263,6 +312,9 @@ class RoomMessageCenter:
                 room_user_message_id,
                 details="Failed to process agent messages",
             )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id
+            )
             return OrchestrationResponse(
                 success=False,
                 error="Failed to process agent messages",
@@ -297,6 +349,84 @@ class RoomMessageCenter:
         return OrchestrationResponse(
             room_id=room_id, success=True, error=None, status_code=200
         )
+
+    async def _notify_all_non_terminal_tasks_failed(
+        self,
+        room_id: str,
+        user_message_id: str,
+    ) -> None:
+        """Safety net: send ``task_update`` SSE for every agent message under
+        *user_message_id* whose task is still in a non-terminal state.
+
+        Called after ``processing_status: FAILED`` (or CANCELED) is sent so
+        that individual task bubbles in the frontend also transition to their
+        correct final state.  The idempotency check inside
+        ``notify_task_update`` ensures messages already notified as terminal
+        are skipped (no double-notification).
+        """
+        from services.task_notification_service import notify_task_update
+
+        try:
+            agent_messages = (
+                await self.database_service
+                .get_room_agent_messages_by_related_message_id(user_message_id)
+            )
+        except Exception:
+            logger.exception(
+                "RoomMessageCenter: Failed to query agent messages for "
+                "safety-net notification on user_message_id=%s",
+                user_message_id,
+            )
+            return
+
+        for msg in agent_messages:
+            if not msg.has_task_tracking:
+                continue
+
+            task = (
+                msg.message_content.message_task
+                if msg.message_content
+                else None
+            )
+            if not task or not task.status:
+                continue
+
+            state = task.status.state
+            if is_terminal_state(state):
+                # Already terminal — notify in case the SSE was missed,
+                # but idempotency in notify_task_update will skip duplicates.
+                try:
+                    await notify_task_update(
+                        message_id=msg.message_id,
+                        state=state,
+                        room_id=room_id,
+                        user_id=msg.user_id or "",
+                    )
+                except Exception:
+                    logger.exception(
+                        "RoomMessageCenter: safety-net notify_task_update failed "
+                        "for already-terminal message %s",
+                        msg.message_id,
+                    )
+                continue
+
+            # Non-terminal task: transition to failed in DB, then notify.
+            await self.tsm.transition_task(
+                msg, TaskState.failed, error="Processing failed"
+            )
+            try:
+                await notify_task_update(
+                    message_id=msg.message_id,
+                    state=TaskState.failed,
+                    room_id=room_id,
+                    user_id=msg.user_id or "",
+                )
+            except Exception:
+                logger.exception(
+                    "RoomMessageCenter: safety-net notify_task_update failed "
+                    "for message %s",
+                    msg.message_id,
+                )
 
     def _validate_room_message_request(
         self, request: OrchestrationRequest
@@ -432,10 +562,16 @@ class RoomMessageCenter:
                     )
 
         try:
+            from services.room_services import build_turn_content
+
+            message_text = build_turn_content(
+                user_message.message_content.message_text or "",
+                user_message.message_content.attachments,
+            )
             result = await self.supervisor_executor.run(
                 room_id=room_id,
                 user_message_id=room_user_message_id,
-                message_text=user_message.message_content.message_text or "",
+                message_text=message_text,
                 agent_registry=agent_registry,
                 room_config=room_config,
                 conversation_context=conversation_context,
@@ -559,6 +695,9 @@ class RoomMessageCenter:
                 room_user_message_id,
                 details="Supervisor execution failed unexpectedly",
             )
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id
+            )
             return OrchestrationResponse(
                 room_id=room_id,
                 success=False,
@@ -594,20 +733,22 @@ class RoomMessageCenter:
         continuation: dict,
         paused_message_id: str,
         task_result_text: str | None,
-    ) -> bool:
-        """Resume a V2 supervisor loop after a push notification webhook.
+    ) -> RunStatus:
+        """Resume a V2 supervisor loop after an interrupt.
+
+        Handles all three interrupt kinds:
+        - PUSH_NOTIFICATION: webhook result appended to trajectory
+        - HITL_AGENT: webhook result appended (same as push notification)
+        - HITL_SUPERVISOR: user reply injected into conversation context
 
         Steps:
         1. Deserialize the trajectory from continuation data.
-        2. Find the ``TrajectoryEntry`` containing the paused step and append
-           the push notification result to it.
-        3. Refresh the agent registry from the database (agents may have
-           changed while the execution was paused).
-        4. Add the completed agent's response to room memory.
-        5. Call ``SupervisorExecutor.run(..., resumed_trajectory=...)`` to
-           continue the adaptive loop.
-        6. Handle the ``RunStatus`` result (synthesis, SSE, trajectory persistence).
+        2. Branch on interrupt_kind.
+        3. Refresh agent registry and conversation context.
+        4. Call SupervisorExecutor.run(resumed_trajectory=...).
+        5. Handle the RunStatus result.
         """
+        from models.hitl import InterruptKind
         from models.supervisor_v2 import (
             SupervisorTrajectory,
         )
@@ -625,7 +766,7 @@ class RoomMessageCenter:
                 "in continuation. message_id=%s",
                 paused_message_id,
             )
-            return False
+            return RunStatus.FAILED
 
         # 1. Deserialize trajectory
         try:
@@ -643,7 +784,23 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: corrupted trajectory data",
             )
-            return False
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
+            )
+            return RunStatus.FAILED
+
+        # 2. Read and validate interrupt_kind
+        raw_kind = continuation.get("interrupt_kind", "push_notification")
+        try:
+            interrupt_kind = InterruptKind(raw_kind)
+        except ValueError:
+            logger.error(
+                "Unknown interrupt_kind=%r in continuation for message %s — "
+                "defaulting to PUSH_NOTIFICATION",
+                raw_kind,
+                paused_message_id,
+            )
+            interrupt_kind = InterruptKind.PUSH_NOTIFICATION
 
         logger.info(
             "supervisor_v2_resume_started",
@@ -652,33 +809,93 @@ class RoomMessageCenter:
                 "trajectory_id": trajectory.trajectory_id,
                 "paused_message_id": paused_message_id,
                 "user_message_id": user_message_id,
+                "interrupt_kind": interrupt_kind.value,
             },
         )
 
-        # 2. Identify the paused agent (before appending result, since the
-        #    append fills in the missing entry)
-        paused_agent_id: str | None = None
-        paused_agent_name: str | None = None
-        if task_result_text:
-            paused_agent_id, paused_agent_name = self._find_paused_agent(
-                trajectory, paused_message_id
+        # 3. Branch on interrupt_kind
+        if interrupt_kind in (
+            InterruptKind.PUSH_NOTIFICATION,
+            InterruptKind.HITL_AGENT,
+        ):
+            # Identify the paused agent before appending result
+            paused_agent_id: str | None = None
+            paused_agent_name: str | None = None
+            if task_result_text:
+                paused_agent_id, paused_agent_name = self._find_paused_agent(
+                    trajectory, paused_message_id
+                )
+
+            # Append the webhook result to the matching trajectory entry
+            self._append_paused_result_to_trajectory(
+                trajectory,
+                paused_message_id=paused_message_id,
+                task_result_text=task_result_text,
             )
 
-        # 3. Append the push notification result to the matching entry
-        self._append_paused_result_to_trajectory(
-            trajectory,
-            paused_message_id=paused_message_id,
-            task_result_text=task_result_text,
-        )
+            # Add completed agent response to room memory
+            if task_result_text and paused_agent_id:
+                await room_memory_service.add_agent_response_to_memory(
+                    room_id=room_id,
+                    agent_id=paused_agent_id,
+                    agent_name=paused_agent_name or "Agent",
+                    response_text=task_result_text,
+                    was_successful=True,
+                )
 
-        # 4. Add completed agent response to room memory
-        if task_result_text and paused_agent_id:
-            await room_memory_service.add_agent_response_to_memory(
-                room_id=room_id,
-                agent_id=paused_agent_id,
-                agent_name=paused_agent_name or "Agent",
-                response_text=task_result_text,
+        elif interrupt_kind == InterruptKind.HITL_SUPERVISOR:
+            # User reply is already patched onto trajectory by
+            # HITLService._handle_supervisor_response(). Re-fetch
+            # conversation_context to avoid staleness.
+            try:
+                from services.context_assembly_service import context_assembly_service
+
+                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                if room_memory:
+                    room_tmp = await self.database_service.get_room_by_room_id(room_id)
+                    agent_dicts = [
+                        {"agent_id": aid, "agent_name": aname}
+                        for aid, aname in ((room_tmp.room_agent_set or {}).items() if room_tmp else [])
+                    ]
+                    memory_search_results = None
+                    try:
+                        from services.memory_search_service import memory_search_service
+                        search_response = await memory_search_service.search(
+                            query=message_text, room_id=room_id,
+                        )
+                        if search_response.results:
+                            memory_search_results = search_response.results
+                    except Exception:
+                        pass
+                    result_ctx = context_assembly_service.build_supervisor_context(
+                        room_memory=room_memory,
+                        current_task=message_text,
+                        agent_registry=agent_dicts,
+                        max_turns=5,
+                        memory_search_results=memory_search_results,
+                    )
+                    conversation_context = result_ctx.context
+            except Exception as e:
+                logger.warning(
+                    "supervisor_v2_resume: failed to refresh conversation_context "
+                    "for %s (HITL_SUPERVISOR), using serialized fallback: %s",
+                    room_id, e,
+                )
+
+            # Inject the HITL user reply into conversation context
+            effective_reply = (
+                trajectory.hitl_user_reply
+                or trajectory.clarify_user_reply
             )
+            if effective_reply:
+                original_question = self._extract_clarify_question(trajectory)
+                hitl_block = ""
+                if original_question:
+                    hitl_block += f"[Supervisor asked the user]: {original_question}\n"
+                hitl_block += f"[User replied]: {effective_reply}"
+                conversation_context = (
+                    f"{conversation_context or ''}\n\n{hitl_block}"
+                ).strip()
 
         # 5. Refresh agent registry from database (not serialized)
         room = await self.database_service.get_room_by_room_id(room_id)
@@ -692,7 +909,61 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: room not found",
             )
-            return False
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
+            )
+            return RunStatus.FAILED
+
+        # 5b. Refresh conversation_context from room memory (§7.6).
+        # The serialized context may be stale after a push-notification pause
+        # (compaction, new messages, etc.). Rebuild via ContextAssemblyService
+        # with the same logic used in _prepare_for_supervisor_v2 / _prepare_clarify_resume_v2.
+        # SKIP for HITL_SUPERVISOR: that branch already refreshes context and
+        # appends the hitl_block — a second refresh would overwrite the user's reply.
+        if interrupt_kind != InterruptKind.HITL_SUPERVISOR:
+            try:
+                from services.context_assembly_service import context_assembly_service
+
+                room_memory = await self.database_service.get_room_memory_by_room_id(room_id)
+                if room_memory:
+                    agent_dicts = [
+                        {"agent_id": aid, "agent_name": aname}
+                        for aid, aname in (room.room_agent_set or {}).items()
+                    ]
+                    memory_search_results = None
+                    try:
+                        from services.memory_search_service import memory_search_service
+
+                        search_response = await memory_search_service.search(
+                            query=message_text,
+                            room_id=room_id,
+                        )
+                        if search_response.results:
+                            memory_search_results = search_response.results
+                    except Exception as search_err:
+                        logger.debug(
+                            "supervisor_v2_resume: memory search skipped: %s",
+                            search_err,
+                        )
+                    result_ctx = context_assembly_service.build_supervisor_context(
+                        room_memory=room_memory,
+                        current_task=message_text,
+                        agent_registry=agent_dicts,
+                        max_turns=5,
+                        memory_search_results=memory_search_results,
+                    )
+                    conversation_context = result_ctx.context
+                    logger.debug(
+                        "supervisor_v2_resume: refreshed conversation_context for %s "
+                        "(occupancy=%.1f%%)",
+                        room_id, result_ctx.occupancy_pct,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "supervisor_v2_resume: failed to refresh conversation_context "
+                    "for %s, using serialized fallback: %s",
+                    room_id, e,
+                )
 
         agent_registry: list[AgentProfile] = []
         room_agent_items = list((room.room_agent_set or {}).items())
@@ -788,7 +1059,10 @@ class RoomMessageCenter:
                 user_message_id,
                 details="V2 resume: executor failed",
             )
-            return False
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, user_message_id
+            )
+            return RunStatus.FAILED
 
         # 8. Handle the result
         await self._handle_v2_run_result(
@@ -809,7 +1083,7 @@ class RoomMessageCenter:
                 "status": result.status,
             },
         )
-        return result.status != RunStatus.FAILED
+        return result.status
 
     @staticmethod
     def _append_paused_result_to_trajectory(
@@ -832,7 +1106,7 @@ class RoomMessageCenter:
         for entry in trajectory.entries:
             for idx, result in enumerate(entry.results):
                 if (
-                    result.status == StepStatus.PAUSED
+                    result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
                     and result.agent_message_id == paused_message_id
                 ):
                     entry.results[idx] = V2StepResult(
@@ -855,9 +1129,10 @@ class RoomMessageCenter:
                         agent_message_id=paused_message_id,
                         completed_at=utcnow(),
                     )
-                    # Mark entry completed if no more PAUSED results remain
+                    # Mark entry completed if no more PAUSED/AWAITING results remain
                     still_paused = any(
-                        r.status == StepStatus.PAUSED for r in entry.results
+                        r.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
+                        for r in entry.results
                     )
                     if not still_paused and entry.completed_at is None:
                         entry.completed_at = utcnow()
@@ -896,11 +1171,23 @@ class RoomMessageCenter:
         for entry in trajectory.entries:
             for result in entry.results:
                 if (
-                    result.status == StepStatus.PAUSED
+                    result.status in (StepStatus.PAUSED, StepStatus.AWAITING_INPUT)
                     and result.agent_message_id == paused_message_id
                 ):
                     return result.agent_id, result.agent_name
         return None, None
+
+    @staticmethod
+    def _extract_clarify_question(
+        trajectory: SupervisorTrajectory,
+    ) -> str | None:
+        """Extract the CLARIFY question from the last CLARIFY trajectory entry."""
+        from models.supervisor_v2 import ActionType
+
+        for entry in reversed(trajectory.entries):
+            if entry.action.action == ActionType.CLARIFY:
+                return entry.action.clarification_question
+        return None
 
     async def _persist_failed_trajectory(
         self,
@@ -961,6 +1248,7 @@ class RoomMessageCenter:
         if user_message and result.status in (
             RunStatus.COMPLETED,
             RunStatus.CLARIFYING,
+            RunStatus.AWAITING_INPUT,
             RunStatus.FAILED,
             RunStatus.CANCELED,
             RunStatus.PAUSED,
@@ -1000,29 +1288,53 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
+                synthesis_emitted = False
                 if result.synthesis_text:
+                    synth_message_id = str(uuid4())
+                    try:
+                        await self.sse_manager.send_task_submitted(
+                            room_id=room_id,
+                            message_id=synth_message_id,
+                            task_id=synth_message_id,
+                            agent_name="Agent",
+                            agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+                            status="working",
+                            related_message_id=user_message_id,
+                            task_content="Summarizing agent responses…",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "RoomMessageCenter: Failed to send synthesis task_submitted SSE"
+                        )
                     try:
                         await self.room_coordinator_service.emit_synthesis_message(
                             room_id=room_id,
                             room_user_message_id=user_message_id,
                             synthesis_text=result.synthesis_text,
                             coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
+                            message_id=synth_message_id,
                         )
+                        synthesis_emitted = True
                     except Exception as e:
                         logger.error(
                             "RoomMessageCenter: V2 synthesis emission failed: %s",
                             e,
                             exc_info=True,
                         )
-                await self.room_coordinator_service.on_room_user_message_completed(
-                    room_id, user_message_id
-                )
+                if not synthesis_emitted:
+                    await self.room_coordinator_service.on_room_user_message_completed(
+                        room_id, user_message_id
+                    )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
 
             case RunStatus.PAUSED:
                 pass
+
+            case RunStatus.AWAITING_INPUT:
+                pass  # Continuation already saved; HITLService emits the SSE event.
+                      # Token stays alive — resume path creates/reuses it.
 
             case RunStatus.CLARIFYING:
                 if room is None:
@@ -1070,6 +1382,9 @@ class RoomMessageCenter:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
+                await self._notify_all_non_terminal_tasks_failed(
+                    room_id, user_message_id
+                )
                 self.sse_manager.clear_cancellation(user_message_id)
 
             case RunStatus.FAILED:
@@ -1091,12 +1406,78 @@ class RoomMessageCenter:
                     user_message_id,
                     details="V2 supervisor execution failed",
                 )
+                await self._notify_all_non_terminal_tasks_failed(
+                    room_id, user_message_id
+                )
 
         # Clean up cancellation token for all terminal statuses.
-        # PAUSED runs keep their token alive — the webhook resume path
-        # will create/reuse it.
-        if result.status != RunStatus.PAUSED:
+        # PAUSED and AWAITING_INPUT runs keep their token alive — the
+        # webhook/HITL resume path will create/reuse it.
+        if result.status not in (RunStatus.PAUSED, RunStatus.AWAITING_INPUT):
             self.sse_manager.remove_token(user_message_id)
+
+        # --- Post-loop integration (§11.3): synthesis, room summary, compaction ---
+        terminal_statuses = (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED)
+        if result.status in terminal_statuses:
+            # Add synthesis text to room memory history
+            if result.status == RunStatus.COMPLETED and result.synthesis_text:
+                try:
+                    from services.memory_service import room_memory_service
+
+                    synthesis_turn_id = await room_memory_service.add_synthesis_to_history(
+                        room_id=room_id,
+                        synthesis_text=result.synthesis_text,
+                        trajectory=result.trajectory,
+                    )
+                    if synthesis_turn_id:
+                        # Summary update and compaction are now safe to run
+                        # in any order — they write to disjoint MongoDB fields
+                        # after the Layer A atomic-operator migration.
+                        await self._update_room_summary_safe(
+                            room_id, result.synthesis_text, synthesis_turn_id
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "RoomMessageCenter: Failed to add synthesis to history: %s", e
+                    )
+
+            # Inline await: compaction MUST run while per-room lock is held (§6.9).
+            # A fire-and-forget task would race with the next message's writes.
+            await self._trigger_compaction_safe(room_id)
+
+    # ------------------------------------------------------------------
+    # Post-loop helpers (fire-and-forget tasks)
+    # ------------------------------------------------------------------
+
+    async def _update_room_summary_safe(
+        self, room_id: str, synthesis_text: str, synthesis_turn_id: str | None = None
+    ) -> None:
+        """Wrapper for room summary update (§9). Awaited before compaction."""
+        try:
+            from services.memory_service import room_memory_service
+
+            await room_memory_service.update_room_summary(
+                room_id=room_id,
+                synthesis_text=synthesis_text,
+                synthesis_turn_id=synthesis_turn_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background room summary update failed for %s: %s",
+                room_id, e,
+            )
+
+    async def _trigger_compaction_safe(self, room_id: str) -> None:
+        """Wrapper for compaction trigger (§6.5). Awaited within per-room lock."""
+        try:
+            from services.compaction_service import compaction_service
+
+            await compaction_service.compact_if_needed(room_id)
+        except Exception as e:
+            logger.warning(
+                "RoomMessageCenter: Background compaction failed for %s: %s",
+                room_id, e,
+            )
 
     # ------------------------------------------------------------------
     # Webhook resume (thin wrapper around QueueExecutor)
@@ -1106,6 +1487,8 @@ class RoomMessageCenter:
         self,
         message_id: str,
         task_result_text: str | None = None,
+        *,
+        failed: bool = False,
     ) -> bool:
         """Resume queue processing after a push notification task completes.
 
@@ -1117,8 +1500,18 @@ class RoomMessageCenter:
         trajectory, refreshes the agent registry, and resumes the adaptive
         loop via ``_resume_supervisor_v2``.
 
+        Args:
+            message_id: The agent message ID whose continuation to resume.
+            task_result_text: Text result from the completed task (None on failure).
+            failed: If True, the step that triggered the resume failed. The
+                orchestrator should treat this as an error rather than a
+                successful response.
+
         Returns ``True`` if the queue was resumed successfully.
         """
+        if failed and task_result_text is None:
+            task_result_text = ""
+
         # Peek at the continuation data to detect V2 before QueueExecutor
         # consumes it (get_and_clear is destructive). The V2 flag is checked
         # first; if present, we handle it here instead of delegating to the
@@ -1128,6 +1521,13 @@ class RoomMessageCenter:
                 message_id
             )
         )
+        # Also check user messages (HITL_SUPERVISOR stores continuations there)
+        if not continuation:
+            continuation = (
+                await self.database_service.get_and_clear_continuation_on_user_message(
+                    message_id
+                )
+            )
         if not continuation:
             logger.debug(
                 "RoomMessageCenter: No continuation found for message %s",
@@ -1138,18 +1538,37 @@ class RoomMessageCenter:
         if continuation.get("supervisor_v2"):
             # Re-save continuation before attempting resume so a process
             # crash mid-resume doesn't permanently lose the execution state.
-            await self.database_service.save_continuation_on_message(
-                message_id, continuation
-            )
+            # Use the correct collection based on interrupt_kind.
+            interrupt_kind = continuation.get("interrupt_kind", "push_notification")
+            if interrupt_kind == "hitl_supervisor":
+                await self.database_service.save_continuation_on_user_message(
+                    message_id, continuation
+                )
+            else:
+                await self.database_service.save_continuation_on_message(
+                    message_id, continuation
+                )
             try:
-                result = await self._resume_supervisor_v2(
+                resume_status = await self._resume_supervisor_v2(
                     continuation, message_id, task_result_text
                 )
-                # On success, clear the continuation (it was re-saved above).
-                await self.database_service.get_and_clear_continuation_on_message(
-                    message_id
-                )
-                return result
+                # Only clear the old continuation if the supervisor loop
+                # actually finished.  When it re-interrupted (e.g. a second
+                # HITL CLARIFY), SupervisorExecutor saved a fresh continuation
+                # that must NOT be cleared.
+                if resume_status not in (
+                    RunStatus.AWAITING_INPUT,
+                    RunStatus.PAUSED,
+                ):
+                    if interrupt_kind == "hitl_supervisor":
+                        await self.database_service.get_and_clear_continuation_on_user_message(
+                            message_id
+                        )
+                    else:
+                        await self.database_service.get_and_clear_continuation_on_message(
+                            message_id
+                        )
+                return resume_status != RunStatus.FAILED
             except Exception:
                 logger.exception(
                     "RoomMessageCenter: V2 resume failed — continuation preserved "
@@ -1170,6 +1589,10 @@ class RoomMessageCenter:
         )
 
         if not result.success:
+            if result.room_id and result.user_message_id:
+                await self._notify_all_non_terminal_tasks_failed(
+                    result.room_id, result.user_message_id
+                )
             return False
 
         if result.needs_completion and result.room_id and result.user_message_id:

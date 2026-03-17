@@ -35,7 +35,6 @@ class DiscoveryRequest(BaseModel):
     response_model=DiscoveryResponse,
     responses={
         401: {"model": DiscoveryErrorResponse, "description": "Invalid or missing API key"},
-        404: {"model": DiscoveryErrorResponse, "description": "No agents found matching query"},
         429: {"model": DiscoveryErrorResponse, "description": "Rate limit exceeded"},
         500: {"model": DiscoveryErrorResponse, "description": "Internal server error"},
     },
@@ -90,7 +89,6 @@ async def discover_agents(
         
     Raises:
         HTTPException 401: Invalid or missing API key
-        HTTPException 404: No agents found matching query
         HTTPException 429: Rate limit exceeded
         HTTPException 500: Internal server error
     """
@@ -105,39 +103,13 @@ async def discover_agents(
     await discovery_rate_limit_service.check_rate_limit(api_key)
     
     try:
-        # Perform agent discovery
         result = await discovery_service.discover_agents(
             query=request_body.query,
             limit=request_body.limit,
         )
-        
-        # Record successful request for rate limiting
-        await discovery_rate_limit_service.record_request(api_key)
-        
-        # Log success
-        logger.info(
-            f"Discovery API: Returned {result.count} agents for key {api_key.key_id[:8]}..."
-        )
-        
-        return result
-        
     except HTTPException:
-        # Re-raise HTTP exceptions (including rate limit errors from check_rate_limit)
         raise
-    except ValueError as e:
-        # No agents found matching query with sufficient confidence
-        logger.info(
-            f"Discovery API: No agents found for key {api_key.key_id[:8]}... | Error: {str(e)}"
-        )
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "no_agent_found",
-                "message": str(e),
-            },
-        ) from e
     except Exception as e:
-        # Unexpected error
         logger.error(
             f"Discovery API: Error for key {api_key.key_id[:8]}... | Error: {str(e)}"
         )
@@ -148,4 +120,12 @@ async def discover_agents(
                 "message": "An unexpected error occurred while searching for agents",
             },
         ) from e
+
+    await discovery_rate_limit_service.record_request(api_key)
+
+    logger.info(
+        f"Discovery API: Returned {result.count} agents for key {api_key.key_id[:8]}..."
+    )
+
+    return result
 

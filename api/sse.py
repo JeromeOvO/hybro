@@ -74,6 +74,7 @@ async def stream_room_messages(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Content-Type": "text/event-stream",
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -132,6 +133,10 @@ async def cancel_message(
 
         # Add to local cache immediately (for same instance)
         sse_manager.cancel_message(message_id)
+
+        # Cancel any pending HITL requests associated with this message
+        from services.hitl_service import hitl_service
+        await hitl_service.cancel_requests_for_message(message_id)
 
         # Persist to MongoDB (will trigger change stream for other instances)
         success = await mongodb.cancel_message(message_id, user.user_id)

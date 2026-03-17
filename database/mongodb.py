@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from a2a.types import AgentCard, Task, TaskState
@@ -69,6 +69,39 @@ class MongoDB:
         """Close MongoDB connection"""
         if self.client:
             self.client.close()
+
+    async def ensure_agent_indexes(self) -> None:
+        """Ensure the agents collection has the correct indexes.
+
+        Replaces the old sparse ``unique_normalized_url`` index with a partial
+        unique index that only constrains non-null string values, allowing
+        multiple agents to have ``normalized_url: null``.
+        """
+        col = self.agents_collection
+        existing = await col.index_information()
+        idx = existing.get("unique_normalized_url")
+        needs_recreate = False
+        if idx is not None:
+            pfe = idx.get("partialFilterExpression")
+            if pfe != {"normalized_url": {"$type": "string"}}:
+                needs_recreate = True
+        else:
+            needs_recreate = True
+
+        if needs_recreate:
+            try:
+                await col.drop_index("unique_normalized_url")
+            except Exception:
+                pass
+            await col.create_index(
+                "normalized_url",
+                unique=True,
+                name="unique_normalized_url",
+                partialFilterExpression={
+                    "normalized_url": {"$type": "string"},
+                },
+            )
+            print("Ensured unique_normalized_url partial index on agents")
 
     @property
     def db(self):
@@ -207,6 +240,24 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.discovery_api_requests
+    
+    @property
+    def gateway_api_requests_collection(self):
+        """Get gateway API requests collection for rate limiting"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.gateway_api_requests
+    
+    @property
+    def hubs_collection(self):
+        """Get hubs collection for hub registrations"""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.hubs
       
     @property
     def a2a_tasks_collection(self):
@@ -216,6 +267,56 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.a2a_tasks
+
+    @property
+    def conversation_content_collection(self):
+        """
+        Get conversation_content collection for lossless compaction storage.
+
+        This collection stores full content for compacted conversation turns.
+        See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 for schema.
+        """
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.conversation_content
+
+    @property
+    def user_memories_collection(self):
+        """Get user_memories collection for cross-room user preferences."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.user_memories
+
+    @property
+    def agent_memories_collection(self):
+        """Get agent_memories collection for agent performance history."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_memories
+
+    @property
+    def file_uploads_collection(self):
+        """Get file_uploads collection for multimodal file metadata."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.file_uploads
+
+    @property
+    def agent_capability_issues_collection(self):
+        """Get agent_capability_issues collection for tracking capability errors."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.agent_capability_issues
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -228,7 +329,7 @@ class MongoDB:
         Returns:
             str: inserted_id
         """
-        result = await self.agents_collection.insert_one(agent.model_dump(mode="json"))
+        result = await self.agents_collection.insert_one(agent.db_dump())
         return str(result.inserted_id)
 
     async def delete_agent_by_agent_id(self, agent_id: str) -> bool:
@@ -244,6 +345,29 @@ class MongoDB:
         result = await self.agents_collection.delete_one({"agent_id": agent_id})
         return result.deleted_count > 0
 
+    async def _enrich_hub_fields(self, agents: list[Agent]) -> list[Agent]:
+        """Populate derived hub fields (hub_owner_id, is_hub_online) from the hub document.
+
+        These fields are no longer stored on the agent document; they are
+        looked up from the canonical hubs collection at read time.
+        """
+        hub_ids = {a.hub_id for a in agents if a.hub_id}
+        if not hub_ids:
+            return agents
+        cursor = self.hubs_collection.find(
+            {"hub_id": {"$in": list(hub_ids)}},
+            {"hub_id": 1, "user_id": 1, "is_online": 1},
+        )
+        hub_map: dict[str, dict] = {}
+        async for doc in cursor:
+            hub_map[doc["hub_id"]] = doc
+        for agent in agents:
+            if agent.hub_id and agent.hub_id in hub_map:
+                hub = hub_map[agent.hub_id]
+                agent.hub_owner_id = hub.get("user_id")
+                agent.is_hub_online = hub.get("is_online", False)
+        return agents
+
     async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None:
         """
         Get an agent by AgentID
@@ -256,7 +380,11 @@ class MongoDB:
         """
         agent = await self.agents_collection.find_one({"agent_id": agent_id})
 
-        return Agent(**agent) if agent else None
+        if not agent:
+            return None
+        result = Agent(**agent)
+        await self._enrich_hub_fields([result])
+        return result
 
     async def get_agents_by_provider_id(self, provider_id: str) -> list[Agent]:
         """
@@ -270,7 +398,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": provider_id})
         agents = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in agents]
+        result = [Agent(**agent) for agent in agents]
+        await self._enrich_hub_fields(result)
+        return result
 
     async def get_all_agents(self) -> list[Agent]:
         """
@@ -278,7 +408,91 @@ class MongoDB:
         """
         cursor = self.agents_collection.find()
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
+
+    async def increment_agent_call_count(
+        self, agent_id: str, *, success: bool = True
+    ) -> None:
+        """Atomically increment call_count (and call_success_count if success) for an agent."""
+        inc_fields: dict = {"call_count": 1}
+        if success:
+            inc_fields["call_success_count"] = 1
+        await self.agents_collection.update_one(
+            {"agent_id": agent_id}, {"$inc": inc_fields}
+        )
+
+    # -------------------------------------------------------------------
+    # Hub CRUD (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub(self, hub: dict) -> None:
+        """Insert or update a hub registration keyed by hub_id."""
+        await self.hubs_collection.update_one(
+            {"hub_id": hub["hub_id"]},
+            {"$set": hub},
+            upsert=True,
+        )
+
+    async def get_hub(self, hub_id: str) -> dict | None:
+        return await self.hubs_collection.find_one({"hub_id": hub_id})
+
+    async def get_hubs_by_user(self, user_id: str) -> list[dict]:
+        cursor = self.hubs_collection.find({"user_id": user_id})
+        return await cursor.to_list(length=None)
+
+    async def update_hub_status(
+        self, hub_id: str, *, is_online: bool, **extra_fields
+    ) -> None:
+        update: dict = {"$set": {"is_online": is_online, **extra_fields}}
+        await self.hubs_collection.update_one({"hub_id": hub_id}, update)
+
+    async def update_hub_status_if_current(
+        self,
+        hub_id: str,
+        *,
+        connection_id: str,
+        is_online: bool,
+    ) -> bool:
+        """Conditionally update hub status only if connection_id matches.
+
+        Returns True if the document matched (connection_id is still current),
+        regardless of whether the is_online value actually changed.
+        """
+        result = await self.hubs_collection.update_one(
+            {"hub_id": hub_id, "connection_id": connection_id},
+            {"$set": {"is_online": is_online}},
+        )
+        return result.matched_count > 0
+
+    # -------------------------------------------------------------------
+    # Hub-agent helpers (Phase 2a)
+    # -------------------------------------------------------------------
+
+    async def upsert_hub_agent(self, hub_id: str, local_agent_id: str, agent_data: dict) -> str:
+        """Upsert an agent using (hub_id, local_agent_id) as the dedup key.
+
+        Returns the agent_id (existing or newly assigned).
+        ``agent_id`` is only written on first insert via ``$setOnInsert``
+        so that re-syncs never change an existing agent's identity.
+        """
+        new_agent_id = agent_data.pop("agent_id", None)
+        update: dict = {"$set": agent_data}
+        if new_agent_id:
+            update["$setOnInsert"] = {"agent_id": new_agent_id}
+        result = await self.agents_collection.find_one_and_update(
+            {"hub_id": hub_id, "local_agent_id": local_agent_id},
+            update,
+            upsert=True,
+            return_document=True,
+        )
+        return result["agent_id"]
+
+    async def count_hub_agents(self, hub_id: str) -> int:
+        return await self.agents_collection.count_documents(
+            {"hub_id": hub_id}
+        )
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
         """
@@ -286,7 +500,9 @@ class MongoDB:
         """
         cursor = self.agents_collection.find({"provider_id": user_id})
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def get_agents_with_conditions(
         self, query: dict[str, Any] | None = None, limit: int = 0
@@ -309,7 +525,9 @@ class MongoDB:
             cursor = cursor.limit(limit)
 
         results = await cursor.to_list(length=None)
-        return [Agent(**agent) for agent in results]
+        agents = [Agent(**agent) for agent in results]
+        await self._enrich_hub_fields(agents)
+        return agents
 
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
@@ -339,7 +557,7 @@ class MongoDB:
 
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent.model_dump(exclude_unset=True, mode="json")},
+            {"$set": agent.db_dump(exclude_unset=True)},
         )
 
         return result.modified_count > 0
@@ -579,6 +797,40 @@ class MongoDB:
         )
         return result.modified_count >= 0
 
+    async def clear_room_processing_status_if_matches(
+        self, room_id: str, message_id: str
+    ) -> bool:
+        """CAS clear: only clear processing_message_id if it matches the given message_id."""
+        result = await self.rooms_collection.update_one(
+            {"room_id": room_id, "processing_message_id": message_id},
+            {"$set": {"processing_message_id": None}},
+        )
+        return result.modified_count > 0
+
+    async def claim_user_message_for_processing(self, message_id: str) -> bool:
+        """Atomically claim a user message for processing. Returns True if this call claimed it."""
+        result = await self.room_user_messages_collection.find_one_and_update(
+            {"message_id": message_id, "processing_claimed_at": None},
+            {"$set": {"processing_claimed_at": utcnow()}},
+        )
+        return result is not None
+
+    async def claim_or_reclaim_user_message(
+        self, message_id: str, stale_threshold: datetime
+    ) -> bool:
+        """Claim a never-claimed message OR reclaim a stale one (>stale_threshold)."""
+        result = await self.room_user_messages_collection.find_one_and_update(
+            {
+                "message_id": message_id,
+                "$or": [
+                    {"processing_claimed_at": None},
+                    {"processing_claimed_at": {"$lt": stale_threshold}},
+                ],
+            },
+            {"$set": {"processing_claimed_at": utcnow()}},
+        )
+        return result is not None
+
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
         Delete a room by room_id
@@ -587,13 +839,23 @@ class MongoDB:
         return result.deleted_count > 0
 
     # room user message management
+    @staticmethod
+    def _strip_file_urls(doc: dict) -> None:
+        """Remove file_url from serialized attachments to prevent persistence."""
+        target = doc.get("$set", doc)
+        content = target.get("message_content")
+        if not content:
+            return
+        for att in content.get("attachments") or []:
+            att.pop("file_url", None)
+
     async def add_room_user_message(self, room_user_message: RoomUserMessage) -> str:
         """
         Add a room user message to the database
         """
-        result = await self.room_user_messages_collection.insert_one(
-            room_user_message.model_dump(mode="json")
-        )
+        doc = room_user_message.model_dump(mode="json")
+        self._strip_file_urls(doc)
+        result = await self.room_user_messages_collection.insert_one(doc)
         return str(result.inserted_id)
 
     async def get_room_user_messages_by_room_id(
@@ -623,9 +885,13 @@ class MongoDB:
         """
         Update a room user message by message_id
         """
+        update_doc = {
+            "$set": room_user_message.model_dump(exclude_unset=True, mode="json")
+        }
+        self._strip_file_urls(update_doc)
         result = await self.room_user_messages_collection.update_one(
             {"message_id": message_id},
-            {"$set": room_user_message.model_dump(exclude_unset=True, mode="json")},
+            update_doc,
         )
         return result.modified_count > 0
 
@@ -1259,7 +1525,7 @@ class MongoDB:
             {"memory_id": memory_id},
             {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
         )
-        return result.modified_count > 0
+        return result.matched_count > 0
 
     async def delete_room_memory_by_memory_id(self, memory_id: str) -> bool:
         """
@@ -1280,7 +1546,389 @@ class MongoDB:
             {"room_id": room_id},
             {"$set": room_memory.model_dump(exclude_unset=True, mode="json")},
         )
+        return result.matched_count > 0
+
+    async def update_turn_notes(
+        self, room_id: str, turn_id: str, turn_notes: dict
+    ) -> bool:
+        """
+        Atomically update turn_notes for a single conversation turn using the
+        MongoDB positional $ operator. Avoids the full-document read-modify-write
+        cycle used by update_room_memory_by_room_id.
+        """
+        result = await self.room_memories_collection.update_one(
+            {
+                "room_id": room_id,
+                "memory_content.conversation_history.turn_id": turn_id,
+            },
+            {
+                "$set": {
+                    "memory_content.conversation_history.$.turn_notes": turn_notes
+                }
+            },
+        )
         return result.modified_count > 0
+
+    # ------------------------------------------------------------------
+    # Atomic room-memory mutations (Layer A)
+    #
+    # These methods mutate disjoint subsets of the room_memories document
+    # using targeted MongoDB operators ($push, $set, $inc, arrayFilters)
+    # so that concurrent calls do NOT conflict.
+    #
+    # LAYER B (future): Add optimistic concurrency control via a `version`
+    #   field and conditional `{"version": expected_version}` filter on
+    #   every update. On conflict, retry with exponential backoff.
+    #   See docs/CONCURRENCY_ROADMAP.md for design sketch.
+    #
+    # LAYER C (future): For multi-instance deployments, add distributed
+    #   locking (e.g. MongoDB advisory locks or Redis SETNX) so that only
+    #   one backend instance processes a given room at a time.
+    #   See docs/CONCURRENCY_ROADMAP.md for design sketch.
+    # ------------------------------------------------------------------
+
+    async def push_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+    ) -> tuple[bool, bool]:
+        """Atomically append a turn to memory_content.conversation_history.
+
+        Uses $push to avoid full-document read-modify-write.
+
+        Returns:
+            (modified, matched) — matched is False when the room_id document
+            doesn't exist, letting callers distinguish 404 from write-failure.
+        """
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            {
+                "$push": {
+                    "memory_content.conversation_history": turn,
+                },
+                "$inc": {"total_messages": 1},
+                "$set": {"last_activity_at": utcnow()},
+            },
+        )
+        return (result.modified_count > 0, result.matched_count > 0)
+
+    async def push_and_trim_conversation_turn(
+        self,
+        room_id: str,
+        turn: dict,
+        max_turns: int,
+        summary_stub: str,
+        max_summary_chars: int = 4000,
+    ) -> tuple[bool, bool]:
+        """Atomically push a turn and trim history if it exceeds max_turns.
+
+        Combines push_conversation_turn + get_conversation_history_length +
+        trim_conversation_history into a single pipeline update, eliminating the
+        race condition where concurrent writers could interleave between push
+        and trim.
+
+        Returns:
+            (modified, matched) — matched is False when the room_id document
+            doesn't exist.
+        """
+        if max_turns <= 0:
+            return (False, False)
+        if max_summary_chars < 10:
+            max_summary_chars = 10
+
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            [
+                {
+                    "$set": {
+                        "memory_content.conversation_history": {
+                            "$concatArrays": [
+                                {"$ifNull": ["$memory_content.conversation_history", []]},
+                                [turn],
+                            ]
+                        },
+                        "total_messages": {"$add": [{"$ifNull": ["$total_messages", 0]}, 1]},
+                        "last_activity_at": utcnow(),
+                    }
+                },
+                {
+                    "$set": {
+                        "memory_content.summary": {
+                            "$cond": {
+                                "if": {
+                                    "$gt": [
+                                        {"$size": "$memory_content.conversation_history"},
+                                        max_turns,
+                                    ]
+                                },
+                                "then": {
+                                    "$let": {
+                                        "vars": {
+                                            "existing": {
+                                                "$ifNull": ["$memory_content.summary", ""]
+                                            },
+                                        },
+                                        "in": {
+                                            "$let": {
+                                                "vars": {
+                                                    "concatenated": {
+                                                        "$cond": {
+                                                            "if": {"$eq": ["$$existing", ""]},
+                                                            "then": summary_stub,
+                                                            "else": {
+                                                                "$concat": [
+                                                                    "$$existing",
+                                                                    "\n",
+                                                                    summary_stub,
+                                                                ]
+                                                            },
+                                                        }
+                                                    }
+                                                },
+                                                "in": {
+                                                    "$cond": {
+                                                        "if": {
+                                                            "$gt": [
+                                                                {"$strLenCP": "$$concatenated"},
+                                                                max_summary_chars,
+                                                            ]
+                                                        },
+                                                        "then": {
+                                                            "$concat": [
+                                                                "...",
+                                                                {
+                                                                    "$substrCP": [
+                                                                        "$$concatenated",
+                                                                        {
+                                                                            "$subtract": [
+                                                                                {"$strLenCP": "$$concatenated"},
+                                                                                max_summary_chars - 3,
+                                                                            ]
+                                                                        },
+                                                                        max_summary_chars - 3,
+                                                                    ]
+                                                                },
+                                                            ]
+                                                        },
+                                                        "else": "$$concatenated",
+                                                    }
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+                                "else": {"$ifNull": ["$memory_content.summary", ""]},
+                            }
+                        },
+                        "memory_content.conversation_history": {
+                            "$slice": [
+                                "$memory_content.conversation_history",
+                                {"$multiply": [-1, max_turns]},
+                            ]
+                        },
+                    }
+                },
+            ],
+        )
+        return (result.modified_count > 0, result.matched_count > 0)
+
+    async def trim_conversation_history(
+        self,
+        room_id: str,
+        max_turns: int,
+        summary_addition: str,
+        max_summary_chars: int = 4000,
+    ) -> bool:
+        """Atomically trim conversation_history and append to summary.
+
+        Uses a pipeline update (MongoDB 4.2+) so both the summary
+        concatenation and the array slice happen in a single atomic
+        operation — no TOCTOU race on the summary field.
+        """
+        if max_turns <= 0:
+            return False
+        if max_summary_chars < 10:
+            max_summary_chars = 10
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            [
+                {
+                    "$set": {
+                        "memory_content.summary": {
+                            "$let": {
+                                "vars": {
+                                    "existing": {
+                                        "$ifNull": ["$memory_content.summary", ""]
+                                    },
+                                },
+                                "in": {
+                                    "$let": {
+                                        "vars": {
+                                            "concatenated": {
+                                                "$cond": {
+                                                    "if": {"$eq": ["$$existing", ""]},
+                                                    "then": summary_addition,
+                                                    "else": {
+                                                        "$concat": [
+                                                            "$$existing",
+                                                            "\n",
+                                                            summary_addition,
+                                                        ]
+                                                    },
+                                                }
+                                            }
+                                        },
+                                        "in": {
+                                            "$cond": {
+                                                "if": {
+                                                    "$gt": [
+                                                        {"$strLenCP": "$$concatenated"},
+                                                        max_summary_chars,
+                                                    ]
+                                                },
+                                                "then": {
+                                                    "$concat": [
+                                                        "...",
+                                                        {
+                                                            "$substrCP": [
+                                                                "$$concatenated",
+                                                                {
+                                                                    "$subtract": [
+                                                                        {"$strLenCP": "$$concatenated"},
+                                                                        max_summary_chars - 3,
+                                                                    ]
+                                                                },
+                                                                max_summary_chars - 3,
+                                                            ]
+                                                        },
+                                                    ]
+                                                },
+                                                "else": "$$concatenated",
+                                            }
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                        "memory_content.conversation_history": {
+                            "$slice": [
+                                {"$ifNull": ["$memory_content.conversation_history", []]},
+                                {"$multiply": [-1, max_turns]},
+                            ]
+                        },
+                    }
+                }
+            ],
+        )
+        return result.modified_count > 0
+
+    async def update_room_summary_atomic(
+        self,
+        room_id: str,
+        room_summary: dict,
+        new_facts: list[dict] | None = None,
+        max_facts: int = 50,
+    ) -> bool:
+        """Atomically update room_summary and optionally push new facts.
+
+        Does NOT touch conversation_history — safe to run concurrently
+        with push_conversation_turn and compact_turns_bulk.
+        """
+        update: dict = {
+            "$set": {"room_summary": room_summary},
+        }
+
+        if new_facts:
+            update["$push"] = {
+                "room_facts": {
+                    "$each": new_facts,
+                    "$slice": -max_facts,
+                }
+            }
+
+        result = await self.room_memories_collection.update_one(
+            {"room_id": room_id},
+            update,
+        )
+        return result.modified_count > 0
+
+    async def compact_turns_bulk(
+        self,
+        room_id: str,
+        compacted_turns: list[dict],
+    ) -> bool:
+        """Mark turns as compact using arrayFilters + bulk_write.
+
+        NOTE: bulk_write(ordered=True) guarantees ordering but NOT full atomicity.
+        A crash mid-batch may leave some turns compacted and others still FULL.
+        This is safe because: (1) content is already persisted in
+        conversation_content before this call, and (2) re-running compaction on
+        an already-compacted turn is a no-op (the arrayFilter won't match).
+
+        Each entry in compacted_turns must have:
+          - turn_id: str
+          - content_ref: dict (ContentReference.model_dump())
+          - estimated_tokens_compact: int
+
+        Does NOT rewrite the entire document — only touches the specific
+        array elements being compacted plus the total_compactions counter.
+        """
+        from pymongo import UpdateOne
+
+        operations = []
+        for t in compacted_turns:
+            operations.append(
+                UpdateOne(
+                    {"room_id": room_id},
+                    {
+                        "$set": {
+                            "memory_content.conversation_history.$[elem].representation": "compact",
+                            "memory_content.conversation_history.$[elem].content": None,
+                            "memory_content.conversation_history.$[elem].content_ref": t["content_ref"],
+                            "memory_content.conversation_history.$[elem].estimated_tokens_compact": t.get(
+                                "estimated_tokens_compact", 0
+                            ),
+                        },
+                    },
+                    array_filters=[{"elem.turn_id": t["turn_id"]}],
+                )
+            )
+
+        operations.append(
+            UpdateOne(
+                {"room_id": room_id},
+                {
+                    "$inc": {"total_compactions": 1},
+                    "$set": {"last_activity_at": utcnow()},
+                },
+            )
+        )
+
+        result = await self.room_memories_collection.bulk_write(
+            operations, ordered=True
+        )
+        return result.modified_count > 0
+
+    async def get_room_summary_projection(
+        self, room_id: str
+    ) -> dict | None:
+        """Lightweight projection: fetch only room_summary and room_facts."""
+        return await self.room_memories_collection.find_one(
+            {"room_id": room_id},
+            {"room_summary": 1, "room_facts": 1},
+        )
+
+    async def get_conversation_history_length(
+        self, room_id: str
+    ) -> int:
+        """Return the number of turns in memory_content.conversation_history."""
+        pipeline = [
+            {"$match": {"room_id": room_id}},
+            {"$project": {"count": {"$size": {"$ifNull": ["$memory_content.conversation_history", []]}}}},
+        ]
+        async for doc in self.room_memories_collection.aggregate(pipeline):
+            return doc.get("count", 0)
+        return 0
 
     async def delete_room_memory_by_room_id(self, room_id: str) -> bool:
         """
@@ -1288,6 +1936,81 @@ class MongoDB:
         """
         result = await self.room_memories_collection.delete_one({"room_id": room_id})
         return result.deleted_count > 0
+
+    # ======================== User Memory management ========================
+
+    async def get_user_memory(self, user_id: str):
+        """Get or create a UserMemory document by user_id."""
+        doc = await self.user_memories_collection.find_one({"user_id": user_id})
+        if doc:
+            from models.memory import UserMemory
+            return UserMemory(**doc)
+        return None
+
+    async def upsert_user_memory(self, user_id: str, update_fields: dict) -> bool:
+        """Upsert a UserMemory document. Creates if not found."""
+        result = await self.user_memories_collection.update_one(
+            {"user_id": user_id},
+            {"$set": update_fields},
+            upsert=True,
+        )
+        return result.matched_count > 0 or result.upserted_id is not None
+
+    async def increment_user_interactions(self, user_id: str) -> bool:
+        """Atomically increment total_interactions and update last_active_at."""
+        from common.utils.time import utcnow
+
+        result = await self.user_memories_collection.update_one(
+            {"user_id": user_id},
+            {
+                "$inc": {"total_interactions": 1},
+                "$set": {"last_active_at": utcnow()},
+                "$setOnInsert": {"user_id": user_id, "created_at": utcnow()},
+            },
+            upsert=True,
+        )
+        return result.matched_count > 0 or result.upserted_id is not None
+
+    # ======================== Agent Memory management ========================
+
+    async def get_agent_memory(self, agent_id: str):
+        """Get an AgentMemory document by agent_id."""
+        doc = await self.agent_memories_collection.find_one({"agent_id": agent_id})
+        if doc:
+            from models.memory import AgentMemory
+            return AgentMemory(**doc)
+        return None
+
+    async def record_agent_call(
+        self,
+        agent_id: str,
+        success: bool,
+        response_time_ms: float,
+    ) -> bool:
+        """Atomically record an agent call outcome.
+
+        Stores total_response_time_ms alongside total_calls so that
+        average_response_time_ms can be computed without a second round-trip.
+        """
+        from common.utils.time import utcnow
+
+        inc_fields: dict = {"total_calls": 1, "total_response_time_ms": response_time_ms}
+        if success:
+            inc_fields["successful_calls"] = 1
+
+        result = await self.agent_memories_collection.update_one(
+            {"agent_id": agent_id},
+            {
+                "$inc": inc_fields,
+                "$set": {"last_called_at": utcnow()},
+                "$setOnInsert": {
+                    "agent_id": agent_id,
+                },
+            },
+            upsert=True,
+        )
+
+        return result.matched_count > 0 or result.upserted_id is not None
 
     # Agent Group management
     async def add_agent_group(self, agent_group: AgentGroup) -> str:
@@ -1606,6 +2329,185 @@ class MongoDB:
             print("Task tracking indexes created successfully on room_agent_messages")
         except Exception as e:
             print(f"Error creating task tracking indexes: {e}")
+
+    async def create_context_memory_indexes(self) -> None:
+        """
+        Create indexes for context memory system collections.
+
+        This creates indexes on:
+        - conversation_content: For lossless compaction storage
+        - user_memories: For user preferences
+        - agent_memories: For agent performance history
+        - room_memories: Unique constraint on room_id (§9.1)
+
+        See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6.6 and §9.1 for schema details.
+        Should be called on application startup.
+
+        Raises:
+            Exception: Re-raised if a critical unique index fails (indicates
+                duplicate data that must be resolved before the system can
+                guarantee data integrity).
+        """
+        critical_unique_indexes: list[tuple[str, str]] = []
+
+        async def _create_index(
+            coll,
+            keys,
+            *,
+            name: str,
+            unique: bool = False,
+            critical: bool = False,
+            **kwargs,
+        ) -> None:
+            """Helper to create an index with proper error handling."""
+            try:
+                await coll.create_index(keys, unique=unique, name=name, **kwargs)
+                logger.info("Index '%s' created on %s", name, coll.name)
+            except Exception as e:
+                if unique and critical:
+                    logger.error(
+                        "CRITICAL: Failed to create unique index '%s' on %s: %s. "
+                        "This likely means duplicate documents exist. "
+                        "Run a deduplication script before retrying.",
+                        name,
+                        coll.name,
+                        e,
+                    )
+                    critical_unique_indexes.append((coll.name, name))
+                elif unique:
+                    logger.warning(
+                        "Failed to create unique index '%s' on %s: %s. "
+                        "Duplicate documents may exist.",
+                        name,
+                        coll.name,
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to create index '%s' on %s (may already exist): %s",
+                        name,
+                        coll.name,
+                        e,
+                    )
+
+        # === conversation_content collection ===
+        content_coll = self.conversation_content_collection
+
+        # UNIQUE index for idempotent upsert in compact_room_memory (§6.3)
+        # Ensures crashed-and-retried compaction never creates duplicate documents
+        await _create_index(
+            content_coll,
+            [("room_id", 1), ("turn_id", 1)],
+            name="room_turn_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # Fast room-level queries for content retrieval
+        await _create_index(
+            content_coll,
+            [("room_id", 1), ("stored_at", -1)],
+            name="room_stored_at",
+        )
+
+        # Text index on content and turn_notes for hybrid search (§8.3)
+        # Enables keyword search on both full content and compact turn metadata
+        await _create_index(
+            content_coll,
+            [
+                ("content", "text"),
+                ("turn_notes.keywords", "text"),
+                ("turn_notes.entities", "text"),
+                ("turn_notes.one_liner", "text"),
+            ],
+            name="turn_notes_text",
+        )
+
+        # TTL index for content expiry (if configured)
+        # Only applies to documents with expires_at set
+        await _create_index(
+            content_coll,
+            "expires_at",
+            name="content_ttl",
+            expireAfterSeconds=0,
+            sparse=True,
+        )
+
+        # === user_memories collection ===
+        await _create_index(
+            self.user_memories_collection,
+            "user_id",
+            name="user_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # === agent_memories collection ===
+        await _create_index(
+            self.agent_memories_collection,
+            "agent_id",
+            name="agent_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # === room_memories collection ===
+        await _create_index(
+            self.room_memories_collection,
+            "room_id",
+            name="room_id_unique",
+            unique=True,
+            critical=True,
+        )
+
+        # If any critical unique index failed, raise to alert operators
+        if critical_unique_indexes:
+            failed = ", ".join(f"{coll}.{idx}" for coll, idx in critical_unique_indexes)
+            raise RuntimeError(
+                f"Critical unique index creation failed: {failed}. "
+                "Duplicate documents likely exist. Resolve before proceeding."
+            )
+
+
+    async def create_capability_issue_indexes(self) -> None:
+        """Create indexes for agent_capability_issues collection.
+
+        Should be called on application startup.
+        """
+        try:
+            collection = self.agent_capability_issues_collection
+
+            # Compound index for fast lookup of open issues per agent
+            await collection.create_index(
+                [("agent_id", 1), ("status", 1)],
+                name="agent_id_status",
+            )
+
+            # Compound index for the exclusion aggregation pipeline
+            # (matches on status first, then groups by agent_id)
+            await collection.create_index(
+                [("status", 1), ("agent_id", 1)],
+                name="status_agent_id",
+            )
+
+            # Index for listing/sorting by creation time
+            await collection.create_index(
+                "created_at",
+                name="created_at",
+            )
+
+            # Unique index for single-issue lookups
+            await collection.create_index(
+                "issue_id",
+                name="issue_id_unique",
+                unique=True,
+            )
+
+            logger.info(
+                "Capability issue indexes created on agent_capability_issues"
+            )
+        except Exception as e:
+            logger.error("Error creating capability issue indexes: %s", e)
 
 
 mongodb = MongoDB()

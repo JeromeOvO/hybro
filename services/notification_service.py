@@ -40,6 +40,7 @@ class NotificationService:
         total_steps: int | None = None,
         task_content: str | None = None,
         related_message_id: str | None = None,
+        parts: list[dict] | None = None,
     ) -> None:
         """
         Send a task update notification to the room via SSE.
@@ -86,7 +87,8 @@ class NotificationService:
             step_number=step_number,
             total_steps=total_steps,
             task_content=task_content,
-            related_message_id=related_message_id
+            related_message_id=related_message_id,
+            parts=parts,
         )
 
 

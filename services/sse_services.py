@@ -58,13 +58,12 @@ class SSEConnection:
             message = await asyncio.wait_for(self.queue.get(), timeout=timeout)
             return message
         except TimeoutError:
-            # send heartbeat
+            # send heartbeat (return directly, don't also queue it)
             heartbeat = {
                 "type": "heartbeat",
                 "timestamp": utcnow().isoformat(),
                 "room_id": self.room_id,
             }
-            await self.queue.put(json.dumps(heartbeat))
             return json.dumps(heartbeat)
 
     def close(self):
@@ -182,6 +181,7 @@ class SSEManager:
         agent_id: str,
         content: str,
         related_message_id: str = None,
+        parts: list[dict] | None = None,
     ):
         """send agent response"""
         data = {
@@ -191,31 +191,9 @@ class SSEManager:
             "related_message_id": related_message_id,
             "timestamp": utcnow().isoformat(),
         }
+        if parts:
+            data["parts"] = parts
         await self.broadcast_to_room(room_id, "agent_response", data)
-
-    async def send_agent_token(
-        self, room_id: str, message_id: str, agent_id: str, token: str
-    ):
-        """
-        Send incremental token from agent streaming response.
-
-        This is for real-time token-by-token streaming from agents.
-        Tokens are sent as they arrive from the agent, enabling
-        real-time display in the frontend.
-
-        Args:
-            room_id: The room ID
-            message_id: The message being generated
-            agent_id: The agent sending the token
-            token: The incremental text token (word, character, etc.)
-        """
-        data = {
-            "message_id": message_id,
-            "agent_id": agent_id,
-            "token": token,
-            "timestamp": utcnow().isoformat(),
-        }
-        await self.broadcast_to_room(room_id, "agent_token", data)
 
     async def send_error(self, room_id: str, error: str, message_id: str = None):
         """
@@ -307,7 +285,8 @@ class SSEManager:
         await self.broadcast_to_room(room_id, "artifact_update", data)
 
     async def send_processing_status(
-        self, room_id: str, status: str, message_id: str = None, details: str = None
+        self, room_id: str, status: str, message_id: str = None, details: str = None,
+        client_request_id: str | None = None,
     ):
         """Send processing status and persist to room for page refresh recovery.
 
@@ -316,6 +295,8 @@ class SSEManager:
             status: An SSEProcessingStatus value or A2A TaskState string
             message_id: The user message ID being processed
             details: Optional details about the status
+            client_request_id: Pass-through correlation ID from the frontend request.
+                Included in the SSE payload so the frontend can map temp→real message IDs.
         """
         # Deduplicate terminal statuses — once a terminal status has been
         # sent for a (room, message) pair, suppress any subsequent terminal
@@ -337,8 +318,8 @@ class SSEManager:
         # Set processing_message_id when processing starts, clear it when done
         if status == SSEProcessingStatus.PROCESSING and message_id:
             await db_service.update_room_processing_status(room_id, message_id)
-        elif status in PROCESSING_DONE_STATUSES:
-            await db_service.update_room_processing_status(room_id, None)
+        elif status in PROCESSING_DONE_STATUSES and message_id:
+            await db_service.clear_room_processing_status_if_matches(room_id, message_id)
 
         # Send SSE event to connected clients
         data = {
@@ -347,6 +328,8 @@ class SSEManager:
             "details": details,
             "timestamp": utcnow().isoformat(),
         }
+        if client_request_id is not None:
+            data["client_request_id"] = client_request_id
         await self.broadcast_to_room(room_id, "processing_status", data)
 
     async def send_task_submitted(
@@ -409,23 +392,10 @@ class SSEManager:
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
+        parts: list[dict] | None = None,
     ):
         """
         Send task update event when task state changes.
-
-        Args:
-            room_id: The room ID
-            message_id: The message ID (used for task tracking and frontend message identification)
-            status: The new task status
-            content: Content if task completed
-            error: Error message if task failed
-            requires_input: True if input_required state
-            requires_auth: True if auth_required state
-            status_message: Human-readable status message from agent
-            created_at: Task creation timestamp (for consistent ordering)
-            step_number: Current step number in the workflow (1-indexed)
-            total_steps: Total number of steps in the workflow
-            task_content: The task description/content being processed
         """
         data = {
             "message_id": message_id,
@@ -444,6 +414,8 @@ class SSEManager:
             "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
+        if parts:
+            data["parts"] = parts
         await self.broadcast_to_room(room_id, "task_update", data)
 
     def get_room_status(self, room_id: str) -> dict:
