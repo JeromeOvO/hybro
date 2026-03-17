@@ -294,7 +294,7 @@ function ChatPageContent() {
     return (
         <div className="flex flex-col h-full bg-background">
             {/* Fixed Header */}
-            <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
+            <header className="shrink-0 flex items-center justify-between py-4 px-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
                     <div className="flex items-center gap-3">
                         <div className="space-y-1">
                             {preConfiguredRoom?.roomName && (
@@ -329,8 +329,8 @@ function ChatPageContent() {
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-3xl">
                     {/* Header */}
-                    <div className="text-center mb-8">
-                        <h1 className="text-4xl font-bold mb-2">
+                    <div className="text-center mb-6 md:mb-8">
+                        <h1 className="text-3xl md:text-4xl font-bold mb-2">
                             <span
                                 className={cn(
                                     "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))] mr-2",
@@ -403,7 +403,7 @@ function ChatPageContent() {
                             <div className="flex-1 h-px bg-border/60" />
                         </div>
 
-                        <div className="flex justify-center gap-2 flex-nowrap">
+                        <div className="flex justify-center gap-2 flex-wrap px-2">
                             {quickStartTemplates.map((template) => (
                                 <Button
                                     key={template.label}
@@ -421,7 +421,7 @@ function ChatPageContent() {
                     </div>
 
                     {/* Tip */}
-                    <div className="mt-8 text-center">
+                    <div className="mt-6 md:mt-8 text-center px-2">
                         <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                             <Sparkles className="h-3 w-3" />
                             {preConfiguredRoom?.selectedAgents.length === 1
