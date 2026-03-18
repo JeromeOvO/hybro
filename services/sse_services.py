@@ -108,6 +108,7 @@ class SSEManager:
         # Cross-instance event broker (Redis Pub/Sub or future MQ)
         self._instance_id: str = str(uuid4())
         self._broker: EventBroker | None = None
+        self._broker_disconnect_warned: bool = False
 
     # ------------------------------------------------------------------
     # Event broker lifecycle
@@ -215,6 +216,7 @@ class SSEManager:
     async def broadcast_to_room(self, room_id: str, message_type: str, data: Any):
         """Broadcast message to room — publishes to broker for cross-instance fan-out, then delivers locally."""
         if self._broker and self._broker.is_connected:
+            self._broker_disconnect_warned = False
             try:
                 channel = f"{settings.redis_sse_channel_prefix}{room_id}"
                 await self._broker.publish(channel, {
@@ -231,11 +233,12 @@ class SSEManager:
                     room_id, e,
                 )
         elif self._broker and not self._broker.is_connected:
-            logger.error(
-                "Event broker disconnected — room %s event delivered locally only "
-                "(cross-instance delivery unavailable)",
-                room_id,
-            )
+            if not self._broker_disconnect_warned:
+                self._broker_disconnect_warned = True
+                logger.error(
+                    "Event broker disconnected — events delivered locally only "
+                    "(cross-instance delivery unavailable until reconnect)",
+                )
 
         # Always deliver to local connections
         await self._deliver_to_local_connections(room_id, message_type, data)
@@ -703,6 +706,7 @@ class SSEManager:
         """
         self.cancel_message(message_id)
         if self._broker and self._broker.is_connected:
+            self._broker_disconnect_warned = False
             try:
                 await self._broker.publish(settings.redis_cancel_channel, {
                     "kind": "cancellation",
@@ -715,10 +719,12 @@ class SSEManager:
                     message_id, e,
                 )
         elif self._broker and not self._broker.is_connected:
-            logger.error(
-                "Event broker disconnected — cancellation for %s is local only",
-                message_id,
-            )
+            if not self._broker_disconnect_warned:
+                self._broker_disconnect_warned = True
+                logger.error(
+                    "Event broker disconnected — events delivered locally only "
+                    "(cross-instance delivery unavailable until reconnect)",
+                )
 
     def is_cancelled(self, message_id: str) -> bool:
         """

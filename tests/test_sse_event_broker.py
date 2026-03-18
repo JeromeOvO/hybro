@@ -341,8 +341,19 @@ class TestBrokerDegradedState:
         assert result["body"]["broker_expected"] is True
         assert result["body"]["broker_connected"] is True
 
+    def test_health_status_ok_when_change_stream_disconnected(self):
+        """Pure function: change_stream_connected=False does NOT cause degraded status."""
+        from main import compute_health_status
+        result = compute_health_status(
+            broker_connected=True, redis_url="redis://localhost:6379/0",
+            change_stream_connected=False,
+        )
+        assert result["body"]["status"] == "ok"
+        assert result["status_code"] == 200
+        assert result["body"]["change_stream_connected"] is False
+
     async def test_broadcast_logs_error_when_broker_disconnected(self, sse_manager):
-        """Should log ERROR when broker was configured but is disconnected."""
+        """Should log ERROR once when broker disconnected, and still deliver locally."""
         broker = MockBroker()
         broker._connected = False
         await sse_manager.start_event_broker(broker)
@@ -354,10 +365,19 @@ class TestBrokerDegradedState:
             mock_logger.error.assert_called_once()
             assert "disconnected" in str(mock_logger.error.call_args).lower()
 
+            # Second call should NOT log again (rate-limited)
+            mock_logger.error.reset_mock()
+            await sse_manager.broadcast_to_room("room1", "test_event", {"x": 2})
+            mock_logger.error.assert_not_called()
+
+        # Local delivery should still work despite disconnected broker
+        msg = await asyncio.wait_for(conn.queue.get(), timeout=1.0)
+        assert "test_event" in msg
+
         await sse_manager.stop_event_broker()
 
     async def test_cancel_broadcast_logs_error_when_broker_disconnected(self, sse_manager):
-        """Should log ERROR when cancel broadcast can't reach other instances."""
+        """Should log ERROR once when cancel broadcast can't reach other instances."""
         broker = MockBroker()
         broker._connected = False
         await sse_manager.start_event_broker(broker)
@@ -366,5 +386,10 @@ class TestBrokerDegradedState:
             await sse_manager.cancel_message_and_broadcast("msg1")
             mock_logger.error.assert_called_once()
             assert "disconnected" in str(mock_logger.error.call_args).lower()
+
+            # Second call should NOT log again (rate-limited)
+            mock_logger.error.reset_mock()
+            await sse_manager.cancel_message_and_broadcast("msg2")
+            mock_logger.error.assert_not_called()
 
         await sse_manager.stop_event_broker()

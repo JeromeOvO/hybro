@@ -44,8 +44,8 @@ class EventBroker(Protocol):
         """Publish a message to a channel.
 
         Best-effort delivery. Implementations SHOULD NOT raise exceptions — log
-        warnings internally on failure. Callers additionally wrap publish calls
-        in try/except as defense-in-depth. This ensures local SSE delivery always
+        failures internally. Callers additionally wrap publish calls in
+        try/except as defense-in-depth. This ensures local SSE delivery always
         proceeds regardless of broker health.
 
         Args:
