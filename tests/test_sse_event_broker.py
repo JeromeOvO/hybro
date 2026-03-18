@@ -340,3 +340,31 @@ class TestBrokerDegradedState:
         assert result["status_code"] == 200
         assert result["body"]["broker_expected"] is True
         assert result["body"]["broker_connected"] is True
+
+    async def test_broadcast_logs_error_when_broker_disconnected(self, sse_manager):
+        """Should log ERROR when broker was configured but is disconnected."""
+        broker = MockBroker()
+        broker._connected = False
+        await sse_manager.start_event_broker(broker)
+
+        conn = await sse_manager.add_connection("room1")
+
+        with patch("services.sse_services.logger") as mock_logger:
+            await sse_manager.broadcast_to_room("room1", "test_event", {"x": 1})
+            mock_logger.error.assert_called_once()
+            assert "disconnected" in str(mock_logger.error.call_args).lower()
+
+        await sse_manager.stop_event_broker()
+
+    async def test_cancel_broadcast_logs_error_when_broker_disconnected(self, sse_manager):
+        """Should log ERROR when cancel broadcast can't reach other instances."""
+        broker = MockBroker()
+        broker._connected = False
+        await sse_manager.start_event_broker(broker)
+
+        with patch("services.sse_services.logger") as mock_logger:
+            await sse_manager.cancel_message_and_broadcast("msg1")
+            mock_logger.error.assert_called_once()
+            assert "disconnected" in str(mock_logger.error.call_args).lower()
+
+        await sse_manager.stop_event_broker()

@@ -43,9 +43,10 @@ class EventBroker(Protocol):
     async def publish(self, channel: str, payload: dict[str, Any]) -> None:
         """Publish a message to a channel.
 
-        Best-effort delivery. MUST NOT raise exceptions — log warnings internally
-        on failure. This ensures local SSE delivery always proceeds regardless of
-        broker health.
+        Best-effort delivery. Implementations SHOULD NOT raise exceptions — log
+        warnings internally on failure. Callers additionally wrap publish calls
+        in try/except as defense-in-depth. This ensures local SSE delivery always
+        proceeds regardless of broker health.
 
         Args:
             channel: Channel name (e.g., "sse:room:abc123" or "cancel:global")

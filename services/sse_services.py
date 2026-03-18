@@ -214,7 +214,6 @@ class SSEManager:
 
     async def broadcast_to_room(self, room_id: str, message_type: str, data: Any):
         """Broadcast message to room — publishes to broker for cross-instance fan-out, then delivers locally."""
-        # Publish to broker for other instances (best-effort, non-blocking)
         if self._broker and self._broker.is_connected:
             try:
                 channel = f"{settings.redis_sse_channel_prefix}{room_id}"
@@ -226,7 +225,17 @@ class SSEManager:
                     "data": data,
                 })
             except Exception as e:
-                logger.warning("Broker publish failed (local delivery unaffected): %s", e)
+                logger.error(
+                    "Cross-instance delivery failed for room %s: %s "
+                    "(clients on other instances will NOT receive this event)",
+                    room_id, e,
+                )
+        elif self._broker and not self._broker.is_connected:
+            logger.error(
+                "Event broker disconnected — room %s event delivered locally only "
+                "(cross-instance delivery unavailable)",
+                room_id,
+            )
 
         # Always deliver to local connections
         await self._deliver_to_local_connections(room_id, message_type, data)
@@ -701,7 +710,15 @@ class SSEManager:
                     "message_id": message_id,
                 })
             except Exception as e:
-                logger.warning("Broker cancellation publish failed (local cancel unaffected): %s", e)
+                logger.error(
+                    "Cross-instance cancellation failed for message %s: %s",
+                    message_id, e,
+                )
+        elif self._broker and not self._broker.is_connected:
+            logger.error(
+                "Event broker disconnected — cancellation for %s is local only",
+                message_id,
+            )
 
     def is_cancelled(self, message_id: str) -> bool:
         """
