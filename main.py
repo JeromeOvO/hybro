@@ -123,6 +123,15 @@ async def lifespan(app: FastAPI):
             f"Could not start change stream watcher (may not have replica set): {e}"
         )
 
+    # Start event broker for cross-instance SSE fan-out
+    from infrastructure.brokers import create_event_broker
+    _event_broker = create_event_broker()
+    if _event_broker:
+        await sse_manager.start_event_broker(_event_broker)
+        logger.info("Event broker started (cross-instance SSE fan-out enabled)")
+    else:
+        logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
+
     # Start background compaction sweep (§6 lossless compaction)
     await compaction_sweep.start()
 
@@ -160,6 +169,9 @@ async def lifespan(app: FastAPI):
         # Stop the agent health check service
         await agent_health_service.stop()
 
+        # Stop event broker
+        await sse_manager.stop_event_broker()
+
         # Stop change stream watcher
         await sse_manager.stop_change_stream_watcher()
 
@@ -190,6 +202,7 @@ async def health_check():
     return {
         "status": "ok",
         "change_stream_connected": sse_manager.change_stream_connected,
+        "broker_connected": sse_manager.broker_connected,
     }
 
 

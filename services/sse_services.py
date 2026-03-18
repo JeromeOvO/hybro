@@ -11,6 +11,7 @@ from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
+from infrastructure.event_broker import EventBroker
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
 
@@ -104,11 +105,73 @@ class SSEManager:
             maxsize=10_000, ttl=3600
         )
 
+        # Cross-instance event broker (Redis Pub/Sub or future MQ)
+        self._instance_id: str = str(uuid4())
+        self._broker: EventBroker | None = None
+
+    # ------------------------------------------------------------------
+    # Event broker lifecycle
+    # ------------------------------------------------------------------
+
+    async def start_event_broker(self, broker: EventBroker) -> None:
+        """Attach and start cross-instance event broker."""
+        self._broker = broker
+        # Register handlers for each message kind
+        self._broker.set_handler("sse_event", self._on_sse_event)
+        self._broker.set_handler("cancellation", self._on_cancellation_event)
+        await self._broker.start()
+        logger.info("Event broker attached (instance_id=%s)", self._instance_id)
+
+    async def stop_event_broker(self) -> None:
+        """Stop cross-instance event broker."""
+        if self._broker:
+            await self._broker.stop()
+            self._broker = None
+            logger.info("Event broker stopped")
+
+    @property
+    def broker_connected(self) -> bool:
+        """Whether the event broker is connected (for /health endpoint)."""
+        return self._broker is not None and self._broker.is_connected
+
+    # ------------------------------------------------------------------
+    # Broker message handlers (incoming from other instances)
+    # ------------------------------------------------------------------
+
+    async def _on_sse_event(self, payload: dict[str, Any]) -> None:
+        """Handle incoming SSE event from broker (other instances)."""
+        if payload.get("origin") == self._instance_id:
+            return  # Skip self — we already delivered locally in broadcast_to_room
+        try:
+            await self._deliver_to_local_connections(
+                payload["room_id"], payload["type"], payload["data"]
+            )
+        except KeyError as e:
+            logger.warning("Malformed sse_event from broker (missing %s), dropping", e)
+
+    async def _on_cancellation_event(self, payload: dict[str, Any]) -> None:
+        """Handle incoming cancellation from broker (other instances)."""
+        if payload.get("origin") == self._instance_id:
+            return  # Skip self — we already cancelled locally
+        message_id = payload.get("message_id")
+        if message_id:
+            self.cancelled_messages[message_id] = True
+            token = self._cancellation_tokens.get(message_id)
+            if token is not None:
+                token.cancel()
+            logger.info("Received cancellation via broker: %s", message_id)
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
+        first_for_room = False
         async with self.lock:
             if room_id not in self.room_connections:
                 self.room_connections[room_id] = {}
+                first_for_room = True
 
             connection = SSEConnection(room_id)
             self.room_connections[room_id][connection.connection_id] = connection
@@ -116,10 +179,17 @@ class SSEManager:
             logger.info(
                 f"SSE connection {connection.connection_id} added to room {room_id}"
             )
-            return connection
+
+        # Subscribe to room's broker channel (outside lock to avoid holding lock during I/O)
+        if first_for_room and self._broker:
+            channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+            await self._broker.subscribe(channel)
+
+        return connection
 
     async def remove_connection(self, room_id: str, connection_id: str):
         """remove connection"""
+        room_empty = False
         async with self.lock:
             if (
                 room_id in self.room_connections
@@ -131,19 +201,41 @@ class SSEManager:
 
                 if not self.room_connections[room_id]:
                     del self.room_connections[room_id]
+                    room_empty = True
 
                 logger.info(
                     f"SSE connection {connection_id} removed from room {room_id}"
                 )
 
+        # Unsubscribe from room's broker channel (outside lock)
+        if room_empty and self._broker:
+            channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+            await self._broker.unsubscribe(channel)
+
     async def broadcast_to_room(self, room_id: str, message_type: str, data: Any):
-        """broadcast message to room"""
+        """Broadcast message to room — publishes to broker for cross-instance fan-out, then delivers locally."""
+        # Publish to broker for other instances (best-effort, non-blocking)
+        if self._broker and self._broker.is_connected:
+            try:
+                channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+                await self._broker.publish(channel, {
+                    "kind": "sse_event",
+                    "origin": self._instance_id,
+                    "room_id": room_id,
+                    "type": message_type,
+                    "data": data,
+                })
+            except Exception as e:
+                logger.warning("Broker publish failed (local delivery unaffected): %s", e)
+
+        # Always deliver to local connections
+        await self._deliver_to_local_connections(room_id, message_type, data)
+
+    async def _deliver_to_local_connections(self, room_id: str, message_type: str, data: Any):
+        """Deliver event to local SSE connections only (no broker publish)."""
         async with self.lock:
             if room_id not in self.room_connections:
-                logger.warning(
-                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
-                )
-                return
+                return  # No local connections — silent (normal for cross-instance)
 
             disconnected_connections = []
 
@@ -158,9 +250,10 @@ class SSEManager:
                     del self.room_connections[room_id][connection_id]
 
             active_connections = len(self.room_connections[room_id])
-            logger.info(
-                f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
-            )
+            if active_connections > 0:
+                logger.info(
+                    f"SSE local delivery [{message_type}] to {active_connections} connection(s) in room {room_id}"
+                )
 
     async def send_user_message(
         self, room_id: str, message_id: str, user_id: str, content: str
@@ -592,6 +685,23 @@ class SSEManager:
         if token is not None:
             token.cancel()
         logger.info(f"Message {message_id} marked as cancelled in local cache")
+
+    async def cancel_message_and_broadcast(self, message_id: str) -> None:
+        """Cancel locally AND broadcast to other instances via broker.
+
+        Called by the cancel endpoint. The sync cancel_message() is kept
+        for internal use (change stream handler, etc.) that shouldn't re-broadcast.
+        """
+        self.cancel_message(message_id)
+        if self._broker and self._broker.is_connected:
+            try:
+                await self._broker.publish(settings.redis_cancel_channel, {
+                    "kind": "cancellation",
+                    "origin": self._instance_id,
+                    "message_id": message_id,
+                })
+            except Exception as e:
+                logger.warning("Broker cancellation publish failed (local cancel unaffected): %s", e)
 
     def is_cancelled(self, message_id: str) -> bool:
         """

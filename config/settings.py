@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     cs_backoff_factor: float = 2.0  # multiplier per retry
     cs_jitter_fraction: float = 0.25  # ±25% random jitter
 
+    # Event Broker (cross-instance SSE fan-out + cancellation)
+    redis_url: str = ""  # e.g. "redis://localhost:6379/0" — empty string disables broker
+    redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
+    redis_cancel_channel: str = "cancel:global"  # single channel for all cancellation events
+    redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
+    redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
+
     # ===========================================
     # Context & Memory System Settings
     # See CONTEXT_MEMORY_SYSTEM_DESIGN.md §14 for specification
