@@ -4,11 +4,13 @@ import { getAllActiveAgents } from '@/lib/api/agent'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
 import type { Agent } from '@/lib/types/agent'
 
+const AGENT_CATALOG_KEY = ['agents', 'active'] as const
+
 export function useAgentCatalog(userId?: string, getToken?: () => Promise<string | null>) {
   const agentNameCache = useRef<{ [agentId: string]: string }>({})
 
   const allAgentsQuery = useQuery<Agent[], Error>({
-    queryKey: ['agents', 'active'] as const,
+    queryKey: AGENT_CATALOG_KEY,
     staleTime: 1000 * 60 * 60 * 24,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,

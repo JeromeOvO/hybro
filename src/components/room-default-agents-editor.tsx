@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useMemo, useCallback } from 'react'
-import { Search, X, Users, Check, Plus, Minus, ChevronRight, AlertTriangle, Bot } from 'lucide-react'
+import { Search, X, Users, Check, Plus, Minus, ChevronRight, AlertTriangle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { deduplicateIcons } from '@/lib/agent-icon-utils'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import {
   Dialog,
   DialogContent,
@@ -226,8 +227,9 @@ export function RoomDefaultAgentsEditor({
                           <div className="relative flex-shrink-0">
                             <Avatar className="h-8 w-8 rounded-md shadow-sm shadow-primary/10 dark:shadow-white/5">
                               <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
-                              <AvatarFallback className="rounded-md text-xs">
-                                <Bot className="h-4 w-4" />
+                              <AvatarFallback className="rounded-md text-xs p-0 overflow-hidden">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
                               </AvatarFallback>
                             </Avatar>
                             <span
@@ -283,8 +285,9 @@ export function RoomDefaultAgentsEditor({
                                    bg-muted/30 opacity-60"
                       >
                         <Avatar className="h-8 w-8 rounded-md">
-                          <AvatarFallback className="rounded-md text-xs">
-                            <Bot className="h-4 w-4" />
+                          <AvatarFallback className="rounded-md text-xs p-0 overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={getAgentAvatarUri(ref.id)} alt={ref.name} className="h-full w-full" />
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex flex-col min-w-0 flex-1">
@@ -355,8 +358,9 @@ export function RoomDefaultAgentsEditor({
                         <div className="relative flex-shrink-0">
                           <Avatar className="h-8 w-8 rounded-md shadow-sm shadow-primary/10 dark:shadow-white/5">
                             <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
-                            <AvatarFallback className="rounded-md text-xs">
-                              <Bot className="h-4 w-4" />
+                            <AvatarFallback className="rounded-md text-xs p-0 overflow-hidden">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
                             </AvatarFallback>
                           </Avatar>
                           <span

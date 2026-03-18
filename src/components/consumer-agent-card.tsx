@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Bot, ChevronRight } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { deduplicateIcons } from "@/lib/agent-icon-utils"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
 import type { Agent } from "@/lib/types"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
 
 function getSkillLabel(skill: { name: string; tags: string[] }): string | null {
   const trimmed = skill.name?.trim()
@@ -74,8 +75,9 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
               alt={agent.agent_card.name}
               className="rounded-lg"
             />
-            <AvatarFallback className="rounded-lg">
-              <Bot className="h-7 w-7" />
+            <AvatarFallback className="rounded-lg p-0 overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
             </AvatarFallback>
           </Avatar>
           <span

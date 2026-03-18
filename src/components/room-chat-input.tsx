@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react'
 import Image from 'next/image'
-import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords, Bot, ChevronsUpDown } from 'lucide-react'
+import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
@@ -19,6 +19,7 @@ import type { QuoteData } from './message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
 import { AttachmentPreview } from './attachment-preview'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 
 const _parsed = parseInt(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || '10000', 10)
 export const MAX_MESSAGE_LENGTH = Number.isNaN(_parsed) || _parsed < 1 ? 10000 : _parsed
@@ -848,7 +849,8 @@ export function RoomChatInput({
                       }}
                     />
                   ) : null}
-                  <Bot className={cn("h-4 w-4 text-muted-foreground", agent.iconUrl && "hidden")} />
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={getAgentAvatarUri(agent.id)} alt="" className={cn("w-full h-full", agent.iconUrl && "hidden")} />
                 </div>
 
                 <span className="font-medium truncate text-sm flex-1">
