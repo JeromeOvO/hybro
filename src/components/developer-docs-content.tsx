@@ -1,11 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import hljs from "highlight.js/lib/core"
-import python from "highlight.js/lib/languages/python"
-import "highlight.js/styles/github-dark.css"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { VideoEmbed } from "@/components/video-embed"
 import { FrameworkBadges } from "@/components/framework-badges"
 import { GithubIcon, DiscordIcon, YoutubeIcon } from "@/components/icons"
@@ -13,19 +9,14 @@ import {
   SquareArrowOutUpRight,
   Copy,
   Check,
-  MessageCircle,
-  ClipboardList,
   Package,
   Shield,
-  Network,
   KeyRound,
-  Download,
-  Play,
-  House,
   Terminal,
-  Layers,
-  Zap,
   BookOpen,
+  ClipboardList,
+  Plug,
+  ArrowRight,
 } from "lucide-react"
 import {
   Tooltip,
@@ -63,157 +54,49 @@ function CopyButton({ text, className = "" }: { text: string; className?: string
   )
 }
 
-hljs.registerLanguage("python", python)
-
-function CodeBlock({ code, language = "python" }: { code: string; language?: string }) {
-  const highlighted = hljs.highlight(code, { language }).value
-
-  return (
-    <div className="rounded-lg border border-border/50 hover:border-border bg-muted/30 overflow-hidden transition-colors duration-200">
-      <div className="flex items-center justify-between px-4 py-2 bg-muted/50 border-b border-border/50">
-        <span className="text-xs text-muted-foreground font-mono">{language}</span>
-        <CopyButton text={code} />
-      </div>
-      <div className="p-4 text-sm font-mono overflow-x-auto">
-        <pre className="m-0 p-0 bg-transparent">
-          <code
-            className={`hljs language-${language} bg-transparent`}
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-          />
-        </pre>
-      </div>
-    </div>
-  )
-}
-
-const OPENCLAW_EXAMPLE = `from a2a_adapter import load_a2a_agent, serve_agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
-adapter = await load_a2a_agent({
-    "adapter": "openclaw",
-    "thinking": "low",
-})
-
-agent_card = AgentCard(
-    name="OpenClaw Agent",
-    description="AI agent powered by OpenClaw",
-    url="http://localhost:9008",
-    version="1.0.0",
-    capabilities=AgentCapabilities(streaming=False, pushNotifications=True),
-    skills=[AgentSkill(id="general", name="General Assistant",
-                       description="Help with any task", tags=["general"])],
-)
-
-serve_agent(agent_card=agent_card, adapter=adapter, port=9008)`
-
-const N8N_EXAMPLE = `from a2a_adapter import load_a2a_agent, serve_agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
-adapter = await load_a2a_agent({
-    "adapter": "n8n",
-    "webhook_url": "http://localhost:5678/webhook/my-webhook",
-})
-
-agent_card = AgentCard(
-    name="n8n Agent",
-    description="Agent powered by an n8n workflow",
-    url="http://localhost:9000",
-    version="1.0.0",
-    capabilities=AgentCapabilities(streaming=False),
-    skills=[AgentSkill(id="workflow", name="Workflow",
-                       description="Execute n8n workflow", tags=["automation"])],
-)
-
-serve_agent(agent_card=agent_card, adapter=adapter, port=9000)`
-
-const CREWAI_EXAMPLE = `from crewai import Agent, Crew, Process
-from a2a_adapter import load_a2a_agent, serve_agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
-crew = Crew(
-    agents=[Agent(role="Researcher", goal="Find information",
-                  backstory="Expert researcher", verbose=True)],
-    tasks=[], process=Process.sequential,
-)
-
-adapter = await load_a2a_agent({
-    "adapter": "crewai",
-    "crew": crew,
-})
-
-agent_card = AgentCard(
-    name="Research Crew",
-    description="Research crew powered by CrewAI",
-    url="http://localhost:8001",
-    version="1.0.0",
-    capabilities=AgentCapabilities(streaming=False),
-    skills=[AgentSkill(id="research", name="Research",
-                       description="Conduct research", tags=["research"])],
-)
-
-serve_agent(agent_card=agent_card, adapter=adapter, port=8001)`
-
-const LANGCHAIN_EXAMPLE = `from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
-from a2a_adapter import load_a2a_agent, serve_agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
-chain = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful assistant."),
-    ("user", "{input}"),
-]) | ChatOpenAI(model="gpt-4o-mini", streaming=True)
-
-adapter = await load_a2a_agent({
-    "adapter": "langchain",
-    "runnable": chain,
-    "input_key": "input",
-})
-
-agent_card = AgentCard(
-    name="LangChain Agent",
-    description="Chat agent powered by LangChain",
-    url="http://localhost:8002",
-    version="1.0.0",
-    capabilities=AgentCapabilities(streaming=True),
-    skills=[AgentSkill(id="chat", name="Chat",
-                       description="Conversational assistant", tags=["chat"])],
-)
-
-serve_agent(agent_card=agent_card, adapter=adapter, port=8002)`
-
-const LANGGRAPH_EXAMPLE = `from langgraph.graph import StateGraph, END
-from a2a_adapter import load_a2a_agent, serve_agent
-from a2a.types import AgentCard, AgentCapabilities, AgentSkill
-
-# Build your LangGraph workflow
-workflow = StateGraph(AgentState)
-workflow.add_node("process", process_node)
-workflow.set_entry_point("process")
-workflow.add_edge("process", END)
-graph = workflow.compile()
-
-adapter = await load_a2a_agent({
-    "adapter": "langgraph",
-    "graph": graph,
-    "input_key": "messages",
-    "output_key": "response",
-})
-
-agent_card = AgentCard(
-    name="LangGraph Agent",
-    description="Workflow agent powered by LangGraph",
-    url="http://localhost:9002",
-    version="1.0.0",
-    capabilities=AgentCapabilities(streaming=True),
-    skills=[AgentSkill(id="workflow", name="Workflow",
-                       description="Stateful workflow agent", tags=["workflow"])],
-)
-
-serve_agent(agent_card=agent_card, adapter=adapter, port=9002)`
+const QUICK_LINKS: { title: string; description: string; href: string; icon: React.ReactNode; external?: boolean }[] = [
+  {
+    title: "Build an A2A Agent",
+    description: "Quick start guide for wrapping any framework with a2a-adapter",
+    href: "https://docs.hybro.ai/a2a-adapter/quick-start",
+    icon: <Terminal className="h-5 w-5" />,
+    external: true,
+  },
+  {
+    title: "Test with Inspector",
+    description: "Validate your agent is A2A-compliant before registering",
+    href: "/inspector",
+    icon: <Shield className="h-5 w-5 text-icon-warning" />,
+  },
+  {
+    title: "Register Your Agent",
+    description: "Make your agent discoverable on the Hybro network",
+    href: "/register",
+    icon: <ClipboardList className="h-5 w-5 text-icon-workflow" />,
+  },
+  {
+    title: "Connect via Hybro Hub",
+    description: "Bridge local agents to the cloud with a lightweight daemon",
+    href: "https://docs.hybro.ai/hybro-hub",
+    icon: <Plug className="h-5 w-5" />,
+    external: true,
+  },
+  {
+    title: "API Keys",
+    description: "Authenticate with the Discovery, Gateway, or Relay APIs",
+    href: "/discovery-api-keys",
+    icon: <KeyRound className="h-5 w-5 text-icon-action" />,
+  },
+  {
+    title: "API Reference",
+    description: "BaseA2AAdapter, serve_agent, build_agent_card, and more",
+    href: "https://docs.hybro.ai/a2a-adapter/api-reference",
+    icon: <BookOpen className="h-5 w-5" />,
+    external: true,
+  },
+]
 
 export function DeveloperDocsContent() {
-  const [activeTab, setActiveTab] = useState<"openclaw" | "n8n" | "crewai" | "langchain" | "langgraph">("openclaw")
-
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-4xl mx-auto">
@@ -241,15 +124,16 @@ export function DeveloperDocsContent() {
           {/* Action buttons */}
           <div className="flex flex-wrap gap-3">
             <Button className="btn-brand-gradient" asChild>
-              <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
-                <GithubIcon className="mr-2 h-4 w-4" />
-                GitHub
+              <a href="https://docs.hybro.ai/" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="mr-2 h-4 w-4" />
+                Read the Docs
+                <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
             <Button variant="brandTint" asChild>
-              <a href="https://github.com/hybroai/a2a-adapter#readme" target="_blank" rel="noopener noreferrer">
-                Documentation
-                <SquareArrowOutUpRight className="ml-2 h-4 w-4" />
+              <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
+                <GithubIcon className="mr-2 h-4 w-4" />
+                GitHub
               </a>
             </Button>
             <Button variant="brandTint" asChild>
@@ -270,43 +154,33 @@ export function DeveloperDocsContent() {
           />
         </section>
 
-        {/* Architecture Overview */}
+        {/* Quick Links */}
         <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6">How it works</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/10 text-blue-500">
-                  <Layers className="h-5 w-5" />
+          <h2 className="text-xl font-semibold mb-6">Quick Links</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {QUICK_LINKS.map((link) => (
+              <a
+                key={link.title}
+                href={link.href}
+                {...(link.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+                className="group flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/20 p-5 hover:bg-muted/40 card-lift"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10 text-primary">
+                    {link.icon}
+                  </div>
+                  {link.external ? (
+                    <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  ) : (
+                    <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  )}
                 </div>
-                <h3 className="font-semibold">1. Wrap your agent</h3>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Import <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">a2a-adapter</code> and wrap your existing agent in 3 lines of code. No rewrite needed.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-amber-500/10 text-amber-500">
-                  <Zap className="h-5 w-5" />
+                <div>
+                  <div className="text-sm font-semibold mb-1">{link.title}</div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{link.description}</p>
                 </div>
-                <h3 className="font-semibold">2. Start the server</h3>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                The adapter exposes your agent as an A2A-compatible HTTP server. Test it with the <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Agent Inspector</a>.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-5 card-lift">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-500">
-                  <Network className="h-5 w-5" />
-                </div>
-                <h3 className="font-semibold">3. Register on HYBRO</h3>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                <a href="/register" className="text-primary hover:underline">Register your agent</a> on the network. It becomes discoverable to all other agents and users.
-              </p>
-            </div>
+              </a>
+            ))}
           </div>
         </section>
 
@@ -316,211 +190,20 @@ export function DeveloperDocsContent() {
           <FrameworkBadges />
         </section>
 
-        {/* Code Examples with Tabs */}
-        <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6">Getting Started</h2>
-
-          {/* Tab buttons */}
-          <div className="flex gap-1 mb-4 p-1 bg-muted/50 rounded-lg w-fit">
-            {([
-              ["openclaw", "OpenClaw"],
-              ["n8n", "n8n"],
-              ["crewai", "CrewAI"],
-              ["langchain", "LangChain"],
-              ["langgraph", "LangGraph"],
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                  activeTab === id
-                    ? "tab-active"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === "openclaw" && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Expose an OpenClaw agent as an A2A-compatible server:
-              </p>
-              <CodeBlock code={OPENCLAW_EXAMPLE} />
-            </div>
-          )}
-          {activeTab === "n8n" && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Wrap an n8n workflow webhook and expose it as an A2A-compatible server:
-              </p>
-              <CodeBlock code={N8N_EXAMPLE} />
-            </div>
-          )}
-          {activeTab === "crewai" && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Wrap a CrewAI crew and expose it as an A2A-compatible server:
-              </p>
-              <CodeBlock code={CREWAI_EXAMPLE} />
-            </div>
-          )}
-          {activeTab === "langchain" && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Wrap a LangChain chain and expose it as an A2A-compatible server:
-              </p>
-              <CodeBlock code={LANGCHAIN_EXAMPLE} />
-            </div>
-          )}
-          {activeTab === "langgraph" && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Wrap a LangGraph workflow and expose it as an A2A-compatible server:
-              </p>
-              <CodeBlock code={LANGGRAPH_EXAMPLE} />
-            </div>
-          )}
-        </section>
-
-        {/* Connect via Hybro Hub */}
-        <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-3">Connect via Hybro Hub</h2>
-          <p className="text-sm text-muted-foreground mb-6 max-w-2xl">
-            Hybro Hub is a lightweight daemon that bridges local agents to{' '}
-            <span className="font-medium text-foreground">hybro.ai</span>. Your data stays on your machine — the hub only relays messages.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
-                  <KeyRound className="h-3.5 w-3.5" />
-                </div>
-                <span className="text-sm font-semibold">1. API Key</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Create a key in{' '}
-                <a href="/discovery-api-keys" className="text-primary hover:underline">API Keys</a>.
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
-                  <Download className="h-3.5 w-3.5" />
-                </div>
-                <span className="text-sm font-semibold">2. Install</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">pip install hybro-hub</code>
-                <CopyButton text="pip install hybro-hub" />
-              </div>
-            </div>
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
-                  <Play className="h-3.5 w-3.5" />
-                </div>
-                <span className="text-sm font-semibold">3. Start Hub</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">hybro-hub start --api-key YOUR_KEY</code>
-                <CopyButton text="hybro-hub start --api-key " />
-              </div>
-            </div>
-            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
-                  <House className="h-3.5 w-3.5" />
-                </div>
-                <span className="text-sm font-semibold">4. Run Agent</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">hybro-hub agent start ollama</code>
-                <CopyButton text="hybro-hub agent start ollama" />
-              </div>
-            </div>
-          </div>
-
-          <p className="text-xs text-muted-foreground mt-4">
-            Your local agent appears on{' '}
-            <a href="/c/agents?source=local" className="text-primary hover:underline">hybro.ai</a>{' '}
-            automatically. It supports Ollama, OpenClaw, n8n, and any A2A-compatible agent.
-          </p>
-        </section>
-
-        {/* Next Steps - Developer Funnel */}
-        <section className="section-divider">
-          <h2 className="text-xl font-semibold mb-6">Next Steps</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="border-border/50 card-lift flex flex-col">
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">1</div>
-                  <CardTitle className="text-base">Test Your Agent</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col flex-1">
-                <p className="text-sm text-muted-foreground mb-4 flex-1">
-                  Use the A2A Agent Inspector to verify your agent is A2A-compliant before registering.
-                </p>
-                <Button variant="brandTint" size="sm" className="w-full" asChild>
-                  <a href="https://inspector.hybro.ai/" target="_blank" rel="noopener noreferrer" className="truncate">
-                    <Shield className="mr-2 h-4 w-4 shrink-0 text-icon-warning" />
-                    Launch Inspector
-                  </a>
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50 card-lift flex flex-col">
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">2</div>
-                  <CardTitle className="text-base">Register on HYBRO</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col flex-1">
-                <p className="text-sm text-muted-foreground mb-4 flex-1">
-                  Add your agent to the network so other agents and users can discover and collaborate with it.
-                </p>
-                <Button variant="brandTint" size="sm" className="w-full" asChild>
-                  <a href="/register" className="truncate">
-                    <ClipboardList className="mr-2 h-4 w-4 shrink-0 text-icon-workflow" />
-                    Register Agent
-                  </a>
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50 card-lift flex flex-col">
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full btn-brand-gradient text-sm font-bold">3</div>
-                  <CardTitle className="text-base">Try the Chat</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col flex-1">
-                <p className="text-sm text-muted-foreground mb-4 flex-1">
-                  Switch to the HYBRO chat portal to interact with your agent alongside other agents in real time.
-                </p>
-                <Button size="sm" className="w-full btn-brand-gradient" asChild>
-                  <a href="/c/chat" className="truncate">
-                    <MessageCircle className="mr-2 h-4 w-4 shrink-0" />
-                    Open Chat
-                  </a>
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
-
         {/* Resources */}
         <section className="section-divider">
           <h2 className="text-xl font-semibold mb-6">Resources</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <a
+              href="https://docs.hybro.ai/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
+            >
+              <BookOpen className="h-5 w-5 text-primary transition-colors" />
+              <span className="text-sm font-medium">Hybro Documentation</span>
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
+            </a>
             <a
               href="https://github.com/hybroai/a2a-adapter"
               target="_blank"
@@ -563,7 +246,7 @@ export function DeveloperDocsContent() {
             </a>
             <a
               href="mailto:info@hybro.ai"
-              className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200 sm:col-span-2"
+              className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
             >
               <svg className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect width="20" height="16" x="2" y="4" rx="2" />

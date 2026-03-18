@@ -1,7 +1,7 @@
 "use client"
 
 import { type ReactNode } from "react"
-import { OpenClawIcon, N8nIcon, LangChainIcon, LangGraphIcon, CrewAIIcon } from "@/components/icons"
+import { OpenClawIcon, OllamaIcon, N8nIcon, LangChainIcon, LangGraphIcon, CrewAIIcon } from "@/components/icons"
 import { Plus } from "lucide-react"
 import {
   Tooltip,
@@ -12,6 +12,7 @@ import {
 
 const FRAMEWORKS: { name: string; description: string; color: string; icon?: ReactNode; url?: string }[] = [
   { name: "OpenClaw", description: "Local standalone agents", color: "text-violet-500 dark:text-violet-400", icon: <OpenClawIcon className="h-10 w-10" />, url: "https://openclaw.ai/" },
+  { name: "Ollama", description: "Run LLMs locally", color: "text-slate-600 dark:text-slate-300", icon: <OllamaIcon className="h-10 w-10" />, url: "https://ollama.com/" },
   { name: "n8n", description: "Workflow automation", color: "text-rose-500 dark:text-rose-400", icon: <N8nIcon className="h-10 w-10" />, url: "https://n8n.io/" },
   { name: "CrewAI", description: "Multi-agent orchestration", color: "text-orange-500 dark:text-orange-400", icon: <CrewAIIcon className="h-10 w-10" />, url: "https://www.crewai.com/" },
   { name: "LangChain", description: "LLM application framework", color: "text-emerald-500 dark:text-emerald-400", icon: <LangChainIcon className="h-10 w-10" />, url: "https://www.langchain.com/" },
@@ -54,7 +55,7 @@ export function FrameworkBadges({ compact = false, className = "" }: FrameworkBa
 
   return (
     <TooltipProvider delayDuration={0}>
-      <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 ${className}`}>
+      <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 ${className}`}>
         {FRAMEWORKS.map((fw) => {
           const tileContent = fw.icon ? (
             <div className="flex flex-col items-center gap-2">

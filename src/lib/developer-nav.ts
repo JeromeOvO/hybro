@@ -2,7 +2,7 @@ import {
   LayoutDashboard,
   ClipboardList,
   Shield,
-  Code2,
+  Compass,
   KeyRound,
 } from "lucide-react"
 import type { NavAgentItem } from "@/lib/nav-items"
@@ -33,9 +33,9 @@ export const DEVELOPER_NAV: NavAgentItem[] = [
     colorClass: "text-icon-action",
   },
   {
-    name: "Docs & SDK",
+    name: "Overview",
     url: "/docs",
-    icon: Code2,
+    icon: Compass,
     colorClass: "text-icon-workflow",
   },
 ]
