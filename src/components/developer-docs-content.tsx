@@ -108,17 +108,17 @@ export function DeveloperDocsContent() {
             <span className="text-sm font-medium text-primary uppercase tracking-wider">Developer Documentation</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight">
-            Build interoperable AI agents
+            Unify all AI agents — local &amp; remote
           </h1>
           <p className="text-lg text-muted-foreground mb-6 max-w-2xl">
-            Use <span className="font-mono font-medium text-foreground">a2a-adapter</span> to convert agents built with any framework into A2A-compatible, interoperable agents. Open source. Framework agnostic.
+            <span className="font-mono font-medium text-foreground">Hybro Hub</span> bridges your local agents to the cloud. <span className="font-mono font-medium text-foreground">a2a-adapter</span> (included) wraps any framework into an A2A server. One install. Open source.
           </p>
 
           {/* Install command */}
           <div className="inline-flex items-center gap-3 bg-muted/50 border border-border/50 rounded-lg px-5 py-3 mb-6">
             <Terminal className="h-4 w-4 text-muted-foreground" />
-            <code className="font-mono text-sm font-medium">pip install a2a-adapter</code>
-            <CopyButton text="pip install a2a-adapter" />
+            <code className="font-mono text-sm font-medium">pip install hybro-hub</code>
+            <CopyButton text="pip install hybro-hub" />
           </div>
 
           {/* Action buttons */}
@@ -137,7 +137,7 @@ export function DeveloperDocsContent() {
               </a>
             </Button>
             <Button variant="brandTint" asChild>
-              <a href="https://pypi.org/project/a2a-adapter/" target="_blank" rel="noopener noreferrer">
+              <a href="https://pypi.org/project/hybro-hub/" target="_blank" rel="noopener noreferrer">
                 <Package className="mr-2 h-4 w-4" />
                 PyPI
               </a>
