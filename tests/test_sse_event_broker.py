@@ -2,7 +2,7 @@
 
 Covers: broker factory, SSEManager broker integration, self-dedup,
 cross-instance delivery, cancellation broadcast, dynamic subscribe/unsubscribe,
-and graceful publish failure.
+graceful publish failure, and degraded state observability.
 """
 
 import asyncio
@@ -293,3 +293,50 @@ class TestNoDuplicateDbWrites:
                 "processing_status",
                 {"status": "processing", "message_id": "m1"},
             )
+
+
+class TestBrokerDegradedState:
+    """Test that broker disconnection is observable."""
+
+    async def test_broker_connected_false_when_disconnected(self, sse_manager):
+        """broker_connected should be False when broker is attached but disconnected."""
+        broker = MockBroker()
+        broker._connected = False
+        await sse_manager.start_event_broker(broker)
+
+        assert sse_manager.broker_connected is False
+
+        await sse_manager.stop_event_broker()
+
+    def test_health_status_ok_when_broker_not_expected(self):
+        """Pure function: health returns 'ok'/200 when REDIS_URL is empty."""
+        from main import compute_health_status
+        result = compute_health_status(
+            broker_connected=False, redis_url="", change_stream_connected=True,
+        )
+        assert result["body"]["status"] == "ok"
+        assert result["status_code"] == 200
+        assert result["body"]["broker_expected"] is False
+
+    def test_health_status_degraded_when_broker_expected_but_down(self):
+        """Pure function: health returns 'degraded'/503 when REDIS_URL set but broker down."""
+        from main import compute_health_status
+        result = compute_health_status(
+            broker_connected=False, redis_url="redis://localhost:6379/0",
+            change_stream_connected=True,
+        )
+        assert result["body"]["status"] == "degraded"
+        assert result["status_code"] == 503
+        assert result["body"]["broker_expected"] is True
+
+    def test_health_status_ok_when_broker_connected(self):
+        """Pure function: health returns 'ok'/200 when broker is up and running."""
+        from main import compute_health_status
+        result = compute_health_status(
+            broker_connected=True, redis_url="redis://localhost:6379/0",
+            change_stream_connected=True,
+        )
+        assert result["body"]["status"] == "ok"
+        assert result["status_code"] == 200
+        assert result["body"]["broker_expected"] is True
+        assert result["body"]["broker_connected"] is True

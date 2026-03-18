@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
@@ -196,14 +197,33 @@ app.add_middleware(
 )
 
 
+# Pure function — trivially testable without lifespan/DB
+def compute_health_status(
+    *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
+) -> dict:
+    """Compute health status body and HTTP status code."""
+    broker_expected = bool(redis_url)
+    degraded = broker_expected and not broker_connected
+    return {
+        "body": {
+            "status": "degraded" if degraded else "ok",
+            "change_stream_connected": change_stream_connected,
+            "broker_connected": broker_connected,
+            "broker_expected": broker_expected,
+        },
+        "status_code": 503 if degraded else 200,
+    }
+
+
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
-        "change_stream_connected": sse_manager.change_stream_connected,
-        "broker_connected": sse_manager.broker_connected,
-    }
+    result = compute_health_status(
+        broker_connected=sse_manager.broker_connected,
+        redis_url=settings.redis_url,
+        change_stream_connected=sse_manager.change_stream_connected,
+    )
+    return JSONResponse(content=result["body"], status_code=result["status_code"])
 
 
 # Include API routers with /api/v1 prefix and global authentication
