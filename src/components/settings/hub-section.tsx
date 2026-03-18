@@ -2,13 +2,32 @@
 
 import { useAuth } from '@clerk/nextjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { House, RefreshCw, Wifi, WifiOff, Terminal } from 'lucide-react'
+import { useState } from 'react'
+import { House, RefreshCw, Wifi, WifiOff, Terminal, KeyRound, Download, Play, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SettingsCard } from '@/components/settings/settings-card'
 import { getMyHubStatus, type HubStatusResponse } from '@/lib/api/hub'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { formatTimestamp } from '@/lib/time'
 import type { Agent } from '@/lib/types'
+
+function InlineCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex items-center p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+      aria-label="Copy to clipboard"
+    >
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+    </button>
+  )
+}
 
 export function HubSection() {
   const { getToken } = useAuth()
@@ -61,26 +80,49 @@ export function HubSection() {
             <div className="space-y-1">
               <p className="text-sm font-medium">No hub connected</p>
               <p className="text-xs text-muted-foreground">
-                Install and start the Hybro Hub daemon to run agents locally.
+                Install and start the Hybro Hub to run agents locally.
               </p>
             </div>
           </div>
 
-          <div className="rounded-lg bg-muted/50 p-3 space-y-2">
+          <div className="rounded-lg bg-muted/50 p-4 space-y-3">
             <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Terminal className="h-3.5 w-3.5" />
-              Quick Start
+              Setup Guide
             </div>
-            <div className="font-mono text-xs space-y-1 text-muted-foreground">
-              <p>pip install hybro-hub</p>
-              <p>hybro-hub start --api-key &lt;your-key&gt;</p>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Generate an API key in{' '}
-              <a href="/d/discovery-api-keys" className="underline hover:text-foreground">
-                Developer Portal &rarr; API Keys
-              </a>
-            </p>
+            <ol className="space-y-2.5 text-xs">
+              <li className="flex gap-2.5">
+                <KeyRound className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-medium text-foreground">Create an API key</span>
+                  {' — '}
+                  <a href="/d/discovery-api-keys" className="text-primary hover:underline">
+                    Developer Portal &rarr; API Keys
+                  </a>
+                </div>
+              </li>
+              <li className="flex gap-2.5">
+                <Download className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">pip install hybro-hub</code>
+                  <InlineCopyButton text="pip install hybro-hub" />
+                </div>
+              </li>
+              <li className="flex gap-2.5">
+                <Play className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">hybro-hub start --api-key YOUR_KEY</code>
+                  <InlineCopyButton text="hybro-hub start --api-key " />
+                </div>
+              </li>
+              <li className="flex gap-2.5">
+                <House className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                <div className="flex items-center gap-1.5">
+                  <code className="font-mono bg-muted px-1.5 py-0.5 rounded text-foreground">hybro-hub agent start ollama</code>
+                  <InlineCopyButton text="hybro-hub agent start ollama" />
+                </div>
+              </li>
+            </ol>
           </div>
         </div>
       </SettingsCard>
@@ -134,9 +176,13 @@ export function HubSection() {
         )}
 
         {!isOnline && (
-          <p className="text-xs text-muted-foreground">
-            Start your hub to use local agents.
-          </p>
+          <div className="rounded-lg bg-muted/50 p-3 space-y-1.5">
+            <p className="text-xs font-medium text-foreground">Hub is offline</p>
+            <p className="text-xs text-muted-foreground">
+              Restart it with:{' '}
+              <code className="font-mono bg-muted px-1.5 py-0.5 rounded">hybro-hub start</code>
+            </p>
+          </div>
         )}
 
         {/* Hub agents list */}
