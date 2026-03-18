@@ -10,6 +10,7 @@ import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
+import { DocsButton } from "@/components/nav-docs-button"
 import { DEVELOPER_NAV } from "@/lib/developer-nav"
 import { consumerUrl } from "@/lib/urls"
 import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN, SIDEBAR_PORTAL_ICON, SIDEBAR_PORTAL_TEXT } from "@/lib/sidebar-styles"
@@ -112,6 +113,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
           </SidebarMenuItem>
         </SidebarMenu>
 
+        <DocsButton />
         <DiscordButton />
         <NavUser />
       </SidebarFooter>
