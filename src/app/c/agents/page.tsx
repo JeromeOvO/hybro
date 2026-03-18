@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
-import { Search, ChevronDown, Check, Bot, Cloud, Home } from "lucide-react"
+import { Search, ChevronDown, Check, Bot, Cloud, Home, Terminal, KeyRound, Download, Play } from "lucide-react"
 import { ConsumerAgentCard } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -247,8 +247,74 @@ function ConsumerAgentsPageContent() {
           </div>
         )}
 
-        {/* Empty State */}
-        {displayAgents.length === 0 && !isLoading && (
+        {/* Empty State — Local tab setup guide */}
+        {sourceTab === "local" && displayAgents.length === 0 && !isLoading && (
+          <div className="rounded-xl border border-dashed p-6 md:p-8 space-y-6 max-w-lg mx-auto">
+            <div className="text-center space-y-1.5">
+              <Home className="h-8 w-8 mx-auto text-emerald-500/60 mb-2" />
+              <h3 className="font-semibold text-base">Run agents locally</h3>
+              <p className="text-sm text-muted-foreground">
+                Keep your data private and reduce latency by running agents on your own machine.
+              </p>
+            </div>
+            <ol className="space-y-4 text-sm">
+              <li className="flex gap-3">
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0 mt-0.5">
+                  <KeyRound className="h-3 w-3" />
+                </div>
+                <div>
+                  <p className="font-medium">Create an API key</p>
+                  <p className="text-muted-foreground text-xs mt-0.5">
+                    Go to{' '}
+                    <a href="/d/discovery-api-keys" className="text-primary hover:underline">
+                      Developer Portal &rarr; API Keys
+                    </a>{' '}
+                    and create a new key.
+                  </p>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0 mt-0.5">
+                  <Download className="h-3 w-3" />
+                </div>
+                <div>
+                  <p className="font-medium">Install Hybro Hub</p>
+                  <code className="text-xs bg-muted px-2 py-1 rounded block mt-1 w-fit font-mono">
+                    pip install hybro-hub
+                  </code>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0 mt-0.5">
+                  <Terminal className="h-3 w-3" />
+                </div>
+                <div>
+                  <p className="font-medium">Start the hub</p>
+                  <code className="text-xs bg-muted px-2 py-1 rounded block mt-1 w-fit font-mono">
+                    hybro-hub start --api-key YOUR_KEY
+                  </code>
+                </div>
+              </li>
+              <li className="flex gap-3">
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0 mt-0.5">
+                  <Play className="h-3 w-3" />
+                </div>
+                <div>
+                  <p className="font-medium">Start a local agent</p>
+                  <code className="text-xs bg-muted px-2 py-1 rounded block mt-1 w-fit font-mono">
+                    hybro-hub agent start ollama
+                  </code>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    Your agent appears here automatically.
+                  </p>
+                </div>
+              </li>
+            </ol>
+          </div>
+        )}
+
+        {/* Empty State — generic */}
+        {!(sourceTab === "local" && displayAgents.length === 0 && !isLoading) && displayAgents.length === 0 && !isLoading && (
           <div className="flex flex-col items-center justify-center py-8 gap-3">
             <Bot className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">

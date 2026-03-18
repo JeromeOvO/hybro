@@ -18,6 +18,10 @@ import {
   Package,
   Shield,
   Network,
+  KeyRound,
+  Download,
+  Play,
+  House,
   Terminal,
   Layers,
   Zap,
@@ -379,6 +383,72 @@ export function DeveloperDocsContent() {
               <CodeBlock code={LANGGRAPH_EXAMPLE} />
             </div>
           )}
+        </section>
+
+        {/* Connect via Hybro Hub */}
+        <section className="section-divider">
+          <h2 className="text-xl font-semibold mb-3">Connect via Hybro Hub</h2>
+          <p className="text-sm text-muted-foreground mb-6 max-w-2xl">
+            Hybro Hub is a lightweight daemon that bridges local agents to{' '}
+            <span className="font-medium text-foreground">hybro.ai</span>. Your data stays on your machine — the hub only relays messages.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
+                  <KeyRound className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-sm font-semibold">1. API Key</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Create a key in{' '}
+                <a href="/discovery-api-keys" className="text-primary hover:underline">API Keys</a>.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
+                  <Download className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-sm font-semibold">2. Install</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">pip install hybro-hub</code>
+                <CopyButton text="pip install hybro-hub" />
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
+                  <Play className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-sm font-semibold">3. Start Hub</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">hybro-hub start --api-key YOUR_KEY</code>
+                <CopyButton text="hybro-hub start --api-key " />
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-4 card-lift">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center justify-center w-7 h-7 rounded-md bg-primary/10 text-primary">
+                  <House className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-sm font-semibold">4. Run Agent</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <code className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded">hybro-hub agent start ollama</code>
+                <CopyButton text="hybro-hub agent start ollama" />
+              </div>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground mt-4">
+            Your local agent appears on{' '}
+            <a href="/c/agents?source=local" className="text-primary hover:underline">hybro.ai</a>{' '}
+            automatically. It supports Ollama, OpenClaw, n8n, and any A2A-compatible agent.
+          </p>
         </section>
 
         {/* Next Steps - Developer Funnel */}

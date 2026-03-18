@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAuth } from "@clerk/nextjs"
-import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2, Terminal } from "lucide-react"
 import { toast } from "sonner"
 
 import { createApiKey, deleteApiKey, listApiKeys } from "@/lib/api"
@@ -188,6 +188,16 @@ export default function DeveloperApiKeysPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="rounded-lg bg-muted/40 border border-border/50 p-3 flex items-start gap-3">
+              <Terminal className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                API keys authenticate your{' '}
+                <span className="font-medium text-foreground">Hybro Hub</span>{' '}
+                to connect local agents to hybro.ai. After creating a key, run{' '}
+                <code className="font-mono bg-muted px-1 py-0.5 rounded text-foreground">hybro-hub start --api-key YOUR_KEY</code>{' '}
+                to get started.
+              </p>
+            </div>
             <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
               <Input
                 value={newKeyName}
