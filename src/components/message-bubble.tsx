@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { formatTimestamp, elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent, LinkifiedContent } from './markdown-content'
@@ -547,7 +548,7 @@ function AgentMessageBubbleInner({
             >
               <div
                 className={cn(
-                  "w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0",
+                  "w-6 h-6 rounded-full flex items-center justify-center font-semibold border shrink-0 overflow-hidden",
                   phaseStyle
                     ? `${phaseStyle.bg} ${phaseStyle.border}`
                     : `${colors.bg} ${colors.border}`,
@@ -557,7 +558,9 @@ function AgentMessageBubbleInner({
               >
                 {phaseStyle
                   ? <phaseStyle.icon className="h-3 w-3" />
-                  : <span className="text-[10px]">{getAgentInitials(entity.senderName)}</span>
+                  : entity.agentId
+                    ? <img src={getAgentAvatarUri(entity.agentId)} alt="" className="h-full w-full" />
+                    : <span className="text-[10px]">{getAgentInitials(entity.senderName)}</span>
                 }
               </div>
               <span className={cn("text-xs font-semibold underline-offset-2 hover:underline", phaseTextColor)}>

@@ -16,6 +16,7 @@ import { useAuth } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
 import { Badge } from "@/components/ui/badge"
 import {
   AlertDialog,
@@ -270,8 +271,9 @@ export default function DeveloperAgentManagePage() {
             <div className="flex items-start gap-4">
               <Avatar className="h-16 w-16 border-2 border-background shadow-lg">
                 <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
-                <AvatarFallback className="bg-primary/5 text-primary">
-                  <Bot className="h-8 w-8" />
+                <AvatarFallback className="bg-primary/5 text-primary p-0 overflow-hidden">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 space-y-1">

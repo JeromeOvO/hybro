@@ -11,6 +11,7 @@ import {
   HoverCardTrigger,
 } from '@/components/ui/hover-card'
 import type { Agent } from '@/lib/types/agent'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { AgentSourceBadge } from './agent-source-badge'
 
 interface AgentSelectorProps {
@@ -48,8 +49,9 @@ function AgentCardHover({ agent, children }: AgentCardHoverProps) {
           <div className="flex items-start gap-4">
             <Avatar className="w-12 h-12">
               <AvatarImage src={agent.agent_card.iconUrl || undefined} />
-              <AvatarFallback className="text-lg">
-                {agent.agent_card.name.charAt(0).toUpperCase()}
+              <AvatarFallback className="text-lg p-0 overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
               </AvatarFallback>
             </Avatar>
             <div className="space-y-1 flex-1 min-w-0">

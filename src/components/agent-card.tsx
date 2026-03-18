@@ -1,8 +1,5 @@
 import Image from "next/image"
 import {
-  Bot,
-} from "lucide-react"
-import {
   Card,
   CardDescription,
   CardTitle,
@@ -11,6 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import type { Agent } from '@/lib/types'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { deduplicateIcons } from '@/lib/agent-icon-utils'
 import { AgentSourceBadge } from './agent-source-badge'
 
@@ -58,8 +56,9 @@ export function AgentCard({ agent }: AgentCardProps) {
                                group-hover:shadow-lg group-hover:shadow-primary/20
                                dark:group-hover:shadow-primary/20">
               <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
-              <AvatarFallback className="rounded-md group-hover:bg-primary/20 transition-colors duration-300">
-                <Bot className="h-6 w-6 group-hover:text-primary transition-colors duration-300" />
+              <AvatarFallback className="rounded-md p-0 overflow-hidden group-hover:opacity-90 transition-opacity duration-300">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
               </AvatarFallback>
             </Avatar>
             <span
