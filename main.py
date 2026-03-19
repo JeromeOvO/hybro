@@ -217,6 +217,7 @@ async def lifespan(app: FastAPI):
         await agent_health_service.stop()
 
         # Release any leader locks
+        # NOTE: Keep this list in sync when adding new leader-elected jobs.
         if _leader:
             await _leader.release_all([
                 "stale_task_checker",

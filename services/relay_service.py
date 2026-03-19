@@ -181,7 +181,8 @@ class RelayService:
 
             yield {"type": "connection_ready"}
 
-            start_id = last_event_id or "0-0"
+            # "$" = only new messages (fresh connection); explicit ID = resume
+            start_id = last_event_id or "$"
             try:
                 while not self._shutdown and not disconnect.is_set():
                     entries = await self._streams.read_events(
@@ -732,7 +733,12 @@ class RelayService:
                 logger.exception("Error in heartbeat loop")
 
     async def _run_heartbeat_iteration(self, stale_threshold: float) -> None:
-        """Run a single heartbeat iteration, gated by leader election if available."""
+        """Run a single heartbeat iteration, gated by leader election if available.
+
+        Uses acquire/release (not hold()) because the check is fast relative
+        to TTL (interval * 2). If profiling shows checks exceeding TTL,
+        switch to leader.hold() with renewal.
+        """
         if self._leader:
             ttl = settings.relay_heartbeat_interval * 2
             acquired = await self._leader.try_acquire("relay_heartbeat_monitor", ttl)
@@ -748,7 +754,13 @@ class RelayService:
             await self.sweep_offline_queues()
 
     async def _do_heartbeat_check(self, stale_threshold: float) -> None:
-        """Check for unresponsive hubs and signal disconnection."""
+        """Check for unresponsive hubs and signal disconnection.
+
+        Note: On the Redis Streams path, _hub_queues is empty so this is
+        a no-op. Streams-path liveness is handled lazily: push_to_hub()
+        checks is_hub_alive() (TTL key), and the SSE generator's finally
+        block marks the hub offline when the connection drops.
+        """
         now = time.monotonic()
         for hub_id in list(self._hub_queues.keys()):
             last = self._last_hub_heartbeat.get(hub_id)

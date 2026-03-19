@@ -67,6 +67,7 @@ class RelayStreamService:
             return []
         entries = []
         # result format: [(stream_name, [(entry_id, {field: value}), ...])]
+        # Safe to index [0] — we always pass a single stream to xread.
         for entry_id, data in result[0][1]:
             payload = json.loads(data.get("payload", "{}"))
             entries.append((entry_id, payload))

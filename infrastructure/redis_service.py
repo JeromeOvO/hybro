@@ -39,7 +39,12 @@ class RedisService:
 
     @property
     def is_connected(self) -> bool:
-        """Whether the client is currently connected and operational."""
+        """Whether the client was initialized successfully.
+
+        Note: This checks initialization, not live connectivity. If Redis
+        goes down after start(), this remains True until stop() is called.
+        Per-method try/except handles actual connection failures gracefully.
+        """
         return self._client is not None
 
     async def start(self) -> None:
