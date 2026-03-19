@@ -89,8 +89,9 @@ async def lifespan(app: FastAPI):
     await mongodb.connect()
     pinecone_db.connect()
 
-    # Initialize RedisService variable (used later in startup and finally block)
+    # Initialize RedisService variables (used later in startup and finally block)
     _redis_service = None
+    _redis_streams_service = None
 
     await mongodb.create_context_memory_indexes()
     await mongodb.ensure_agent_indexes()
@@ -146,6 +147,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("RedisService disabled (REDIS_URL not set)")
 
+    # Initialize leader election for background jobs
+    from infrastructure.leader_election import LeaderElection
+    _leader: LeaderElection | None = None
+    if _redis_service and _redis_service.is_connected:
+        _leader = LeaderElection(_redis_service, instance_id=sse_manager._instance_id)
+        logger.info("Leader election enabled for background jobs")
+
+    # Attach leader election to all background jobs
+    stale_task_checker.set_leader_election(_leader)
+    compaction_sweep.set_leader_election(_leader)
+    orphaned_upload_cleaner.set_leader_election(_leader)
+    agent_health_service.set_leader_election(_leader)
+
     # Start background compaction sweep (§6 lossless compaction)
     await compaction_sweep.start()
 
@@ -160,8 +174,22 @@ async def lifespan(app: FastAPI):
         mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
         room_message_center=_rmc,
     )
+    _relay_svc.set_leader_election(_leader)
     await _relay_svc.start()
     logger.info("Relay service initialized and heartbeat checker started")
+
+    # Start separate RedisService for blocking XREAD (hub relay streams)
+    _redis_streams_service = create_redis_service()  # separate pool
+    if _redis_streams_service:
+        await _redis_streams_service.start()
+        from infrastructure.relay_streams import RelayStreamService
+        _relay_streams = RelayStreamService(
+            _redis_streams_service,
+            maxlen=settings.relay_stream_maxlen,
+            heartbeat_ttl=settings.relay_hub_heartbeat_ttl,
+        )
+        _relay_svc.set_stream_service(_relay_streams)
+        logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
 
     try:
         yield
@@ -170,6 +198,10 @@ async def lifespan(app: FastAPI):
         from services.relay_service import relay_service as _relay_svc_shutdown
         if _relay_svc_shutdown:
             await _relay_svc_shutdown.stop()
+
+        # Stop Redis Streams service (hub relay)
+        if _redis_streams_service:
+            await _redis_streams_service.stop()
 
         # Stop the stale task checker
         await stale_task_checker.stop()
@@ -182,6 +214,16 @@ async def lifespan(app: FastAPI):
 
         # Stop the agent health check service
         await agent_health_service.stop()
+
+        # Release any leader locks
+        if _leader:
+            await _leader.release_all([
+                "stale_task_checker",
+                "compaction_sweep",
+                "orphaned_upload_cleaner",
+                "agent_health_checker",
+                "relay_heartbeat_monitor",
+            ])
 
         # Stop RedisService
         await sse_manager.stop_redis_service()

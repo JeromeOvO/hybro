@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import os
+from typing import TYPE_CHECKING
 
 import httpx
 from a2a.utils.constants import (
@@ -11,6 +14,9 @@ from loguru import logger
 from config.settings import settings
 from database.mongodb import mongodb
 from models.agent import Agent, AgentStatus
+
+if TYPE_CHECKING:
+    from infrastructure.leader_election import LeaderElection
 
 
 class AgentHealthService:
@@ -59,6 +65,11 @@ class AgentHealthService:
         self._failure_counts: dict[str, int] = {}
         # Track active retry tasks per agent to avoid duplicates
         self._retry_tasks: dict[str, asyncio.Task] = {}
+        self._leader: LeaderElection | None = None
+
+    def set_leader_election(self, leader: LeaderElection | None) -> None:
+        """Attach a LeaderElection instance for distributed leader gating."""
+        self._leader = leader
 
     async def check_agent_health(self, agent: Agent, *, timeout: float | None = None) -> bool:
         """
@@ -291,11 +302,25 @@ class AgentHealthService:
 
         while self._running:
             try:
-                await self.run_health_check_cycle()
+                await self._run_one_iteration()
                 await asyncio.sleep(self.check_interval)
             except Exception as e:
                 logger.error(f"Health check loop failed: {e}", exc_info=True)
                 await asyncio.sleep(60)
+
+    async def _run_one_iteration(self) -> None:
+        """Run a single iteration, gated by leader election if available."""
+        if self._leader:
+            ttl = self.check_interval * 2
+            acquired = await self._leader.try_acquire("agent_health_checker", ttl)
+            if not acquired:
+                return  # another instance is the leader
+            try:
+                await self.run_health_check_cycle()
+            finally:
+                await self._leader.release("agent_health_checker")
+        else:
+            await self.run_health_check_cycle()
 
     async def start(self):
         """Start the health check background task."""
