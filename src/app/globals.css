@@ -75,13 +75,12 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 6px);
+
+  /* Font families */
+  --font-spaceGrotesk: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {
-  /* Fonts */
-  --font-family-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-family-mono: ui-monospace, SFMono-Regular, monospace;
-
   /* Comfortable Light Mode - Softer, eye-friendly tones */
   --color-background: 220 15% 96%;
   --color-foreground: 220 20% 15%;
@@ -158,10 +157,6 @@
   --color-icon-collaboration: 320 55% 48%;
   --color-icon-architecture: 235 50% 45%;
   --color-icon-contact: 220 35% 38%;
-
-  /* Smooth animations */
-  --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  --animate-spin: spin 1s linear infinite;
 }
 
 .dark {
