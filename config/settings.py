@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     redis_cancel_channel: str = "cancel:global"  # single channel for all cancellation events
     redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
     redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
+    redis_cancel_key_prefix: str = "cancelled:"
+    redis_terminal_key_prefix: str = "terminal:"
 
     # ===========================================
     # Context & Memory System Settings

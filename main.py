@@ -89,6 +89,9 @@ async def lifespan(app: FastAPI):
     await mongodb.connect()
     pinecone_db.connect()
 
+    # Initialize RedisService variable (used later in startup and finally block)
+    _redis_service = None
+
     await mongodb.create_context_memory_indexes()
     await mongodb.ensure_agent_indexes()
     await mongodb.create_capability_issue_indexes()
@@ -133,6 +136,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
 
+    # Start RedisService for shared cancellation/dedup state
+    from infrastructure.redis_service import create_redis_service
+    _redis_service = create_redis_service()
+    if _redis_service:
+        await _redis_service.start()
+        await sse_manager.start_redis_service(_redis_service)
+        logger.info("RedisService started (shared cancellation/dedup enabled)")
+    else:
+        logger.info("RedisService disabled (REDIS_URL not set)")
+
     # Start background compaction sweep (§6 lossless compaction)
     await compaction_sweep.start()
 
@@ -170,6 +183,11 @@ async def lifespan(app: FastAPI):
         # Stop the agent health check service
         await agent_health_service.stop()
 
+        # Stop RedisService
+        await sse_manager.stop_redis_service()
+        if _redis_service:
+            await _redis_service.stop()
+
         # Stop event broker
         await sse_manager.stop_event_broker()
 
@@ -200,6 +218,7 @@ app.add_middleware(
 # Pure function — trivially testable without lifespan/DB
 def compute_health_status(
     *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
+    redis_service_connected: bool = False,
 ) -> dict:
     """Compute health status body and HTTP status code."""
     broker_expected = bool(redis_url)
@@ -210,6 +229,7 @@ def compute_health_status(
             "change_stream_connected": change_stream_connected,
             "broker_connected": broker_connected,
             "broker_expected": broker_expected,
+            "redis_service_connected": redis_service_connected,
         },
         "status_code": 503 if degraded else 200,
     }
@@ -222,6 +242,7 @@ async def health_check():
         broker_connected=sse_manager.broker_connected,
         redis_url=settings.redis_url,
         change_stream_connected=sse_manager.change_stream_connected,
+        redis_service_connected=sse_manager.redis_connected,
     )
     return JSONResponse(content=result["body"], status_code=result["status_code"])
 

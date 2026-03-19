@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import random
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from cachetools import TTLCache
@@ -14,6 +16,9 @@ from config.settings import settings
 from infrastructure.event_broker import EventBroker
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
+
+if TYPE_CHECKING:
+    from infrastructure.redis_service import RedisService
 
 
 def _enum_value(v: Any) -> Any:
@@ -110,6 +115,9 @@ class SSEManager:
         self._broker: EventBroker | None = None
         self._broker_disconnect_warned: bool = False
 
+        # Shared Redis key-value service (cancellation/dedup L2 cache)
+        self._redis: RedisService | None = None
+
     # ------------------------------------------------------------------
     # Event broker lifecycle
     # ------------------------------------------------------------------
@@ -134,6 +142,20 @@ class SSEManager:
     def broker_connected(self) -> bool:
         """Whether the event broker is connected (for /health endpoint)."""
         return self._broker is not None and self._broker.is_connected
+
+    async def start_redis_service(self, redis_service: RedisService) -> None:
+        """Attach RedisService for shared cancellation and dedup state."""
+        self._redis = redis_service
+        logger.info("SSEManager: RedisService attached for shared state")
+
+    async def stop_redis_service(self) -> None:
+        """Detach RedisService."""
+        self._redis = None
+
+    @property
+    def redis_connected(self) -> bool:
+        """Whether RedisService is connected (for /health endpoint)."""
+        return self._redis is not None and self._redis.is_connected
 
     # ------------------------------------------------------------------
     # Broker message handlers (incoming from other instances)
