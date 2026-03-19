@@ -675,7 +675,7 @@ class DirectTransport(AgentTransport):
         streaming_state = MessageStreamingState()
 
         async for a2a_response in self.a2a_service.send_message_streaming(
-            agent_card, prepared_message
+            agent_card, prepared_message, agent_id=current_message.agent_id,
         ):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
@@ -1302,6 +1302,7 @@ class DirectTransport(AgentTransport):
                     message_id=message_id,
                     webhook_token=task_info["webhook_token"],
                     context_id=task_info["context_id"],
+                    agent_id=current_message.agent_id,
                 )
             else:
 
@@ -1309,6 +1310,7 @@ class DirectTransport(AgentTransport):
                     raw = await self.a2a_service.send_message_sync(
                         agent_card=agent_card,
                         message=prepared_message,
+                        agent_id=current_message.agent_id,
                     )
                     return self._parse_sync_fallback_response(raw, message_id)
 

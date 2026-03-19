@@ -14,6 +14,7 @@ from a2a.types import TaskState
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from database.mongodb import mongodb
 from models.hub import RelayToHubEvent
 from models.processing import ProcessingResult, ProcessingStatus
 from modules.agent_event import AgentEvent
@@ -95,6 +96,13 @@ class RelayTransport(AgentTransport):
         delivered = await self.relay_service.push_to_hub(
             ctx.agent.hub_id, event
         )
+
+        try:
+            await mongodb.increment_agent_call_count(
+                ctx.agent.agent_id, success=delivered,
+            )
+        except Exception as e:
+            logger.warning("Failed to record hub agent call for %s: %s", ctx.agent.agent_id, e)
 
         if not delivered and not queued_offline:
             await self._sse.send_error(
