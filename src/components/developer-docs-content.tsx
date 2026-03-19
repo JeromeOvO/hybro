@@ -131,7 +131,7 @@ export function DeveloperDocsContent() {
               </a>
             </Button>
             <Button variant="brandTint" asChild>
-              <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/hybroai/hybro-hub" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="mr-2 h-4 w-4" />
                 GitHub
               </a>
@@ -212,6 +212,16 @@ export function DeveloperDocsContent() {
             >
               <GithubIcon className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
               <span className="text-sm font-medium">a2a-adapter</span>
+              <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
+            </a>
+            <a
+              href="https://github.com/hybro-ai/hybro-hub"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 hover:bg-muted/40 card-lift"
+            >
+              <GithubIcon className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+              <span className="text-sm font-medium">hybro-hub</span>
               <SquareArrowOutUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors ml-auto" />
             </a>
             <a

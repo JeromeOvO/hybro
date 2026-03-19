@@ -81,7 +81,7 @@ export default function ConsumerLandingPage() {
               <div className="w-14 h-14 rounded-full bg-[hsl(var(--color-hybro-hy)/0.1)] flex items-center justify-center mb-5">
                 <Rocket className="h-7 w-7 text-[hsl(var(--color-hybro-hy))]" />
               </div>
-              <h2 className="text-2xl font-bold mb-2">Build & Deploy</h2>
+              <h2 className="text-2xl font-bold mb-2">Build & Connect</h2>
               <p className="text-muted-foreground mb-6 leading-relaxed">
                 Connect any agent to the Hybro network. One install, any framework, open source.
               </p>
