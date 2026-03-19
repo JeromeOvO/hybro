@@ -162,7 +162,9 @@ class GatewayService:
         await self._check_agent_rate_limit(agent, user_id)
 
         try:
-            response = await self.a2a_service.send_message_sync(agent.agent_card, message)
+            response = await self.a2a_service.send_message_sync(
+                agent.agent_card, message, agent_id=agent_id,
+            )
         except Exception as e:
             logger.error(f"Gateway send_message failed for agent {agent_id}: {e}")
             raise HTTPException(
@@ -170,7 +172,6 @@ class GatewayService:
                 detail={"error": "agent_error", "message": f"Agent communication failed: {e}"},
             ) from e
 
-        await self._record_agent_call(agent_id, success=response is not None)
         return response
 
     async def prepare_stream(
@@ -198,16 +199,14 @@ class GatewayService:
         self, agent: Agent, message: Message, agent_id: str
     ) -> AsyncGenerator[SendStreamingMessageResponse | SendMessageResponse, None]:
         """Lazily stream events from the upstream agent."""
-        success = False
         try:
-            async for event in self.a2a_service.send_message(agent.agent_card, message):
-                success = True
+            async for event in self.a2a_service.send_message(
+                agent.agent_card, message, agent_id=agent_id,
+            ):
                 yield event
         except Exception as e:
             logger.error(f"Gateway stream_message failed for agent {agent_id}: {e}")
             raise
-        finally:
-            await self._record_agent_call(agent_id, success=success)
 
     async def _check_agent_rate_limit(self, agent: Agent, user_id: str) -> None:
         if agent.rate_limit_per_user_per_hour is None and agent.rate_limit_system_per_hour is None:
@@ -224,12 +223,6 @@ class GatewayService:
                 detail={"error": "rate_limit_exceeded", "message": result.reason or "Rate limit exceeded"},
                 headers={"Retry-After": str(result.retry_after_seconds or 60)},
             )
-
-    async def _record_agent_call(self, agent_id: str, *, success: bool) -> None:
-        try:
-            await mongodb.increment_agent_call_count(agent_id, success=success)
-        except Exception as e:
-            logger.warning(f"Failed to record agent call for {agent_id}: {e}")
 
 
 gateway_service = GatewayService()
