@@ -19,6 +19,7 @@ vi.mock('@/lib/api/hub', () => ({
 
 const mockGetAllActiveAgents = vi.fn<() => Promise<AgentCenterResponse>>()
 vi.mock('@/lib/api/agent', () => ({
+  getAllAgents: vi.fn().mockResolvedValue({ success: true, agents: [] }),
   getAllActiveAgents: (...args: unknown[]) => mockGetAllActiveAgents(...args),
 }))
 
@@ -126,7 +127,7 @@ describe('HubSection', () => {
     await waitFor(() => {
       expect(screen.getByText('Hub Offline')).toBeInTheDocument()
     })
-    expect(screen.getByText('Start your hub to use local agents.')).toBeInTheDocument()
+    expect(screen.getByText('Hub is offline')).toBeInTheDocument()
   })
 
   it('shows "Connected since" timestamp when online', async () => {

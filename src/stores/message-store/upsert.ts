@@ -204,6 +204,7 @@ export function isNoOpUpdate(
     existing.taskError         === coalesce(incoming.taskError, existing.taskError) &&
     existing.taskStatusMessage === coalesce(incoming.taskStatusMessage, existing.taskStatusMessage) &&
     existing.senderName        === coalesce(incoming.senderName, existing.senderName) &&
+    existing.agentSource       === coalesce(incoming.agentSource, existing.agentSource) &&
     existing.stepNumber        === coalesce(incoming.stepNumber, existing.stepNumber) &&
     existing.totalSteps        === coalesce(incoming.totalSteps, existing.totalSteps) &&
     existing.taskContent       === coalesce(incoming.taskContent, existing.taskContent) &&

@@ -9,6 +9,7 @@ vi.mock('@/lib/api/agent-group', () => ({
 }))
 
 vi.mock('@/lib/api/agent', () => ({
+  getAllAgents: vi.fn().mockResolvedValue({ success: true, agents: [] }),
   getAllActiveAgents: (...args: unknown[]) => mockGetAllActiveAgents(...args),
 }))
 

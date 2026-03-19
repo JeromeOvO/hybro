@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle } from 'lucide-react'
+import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle, House, Cloud } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
@@ -11,6 +11,7 @@ import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { TASK_STATE, isFailureState, isInteractiveState, isTerminalState } from '@/lib/types/sse'
 import type { LucideIcon } from 'lucide-react'
 
@@ -571,6 +572,20 @@ function AgentMessageBubbleInner({
               <span className={cn("text-[10px] font-medium px-1.5 py-0.5 rounded bg-current/10", phaseTextColor)}>
                 Step {entity.stepNumber} / {entity.totalSteps}
               </span>
+            )}
+            {entity.agentSource && (
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {entity.agentSource === 'hub'
+                      ? <House className={cn("h-3 w-3 shrink-0", phaseTextColor)} />
+                      : <Cloud className={cn("h-3 w-3 shrink-0", phaseTextColor)} />}
+                  </TooltipTrigger>
+                  <TooltipContent side="top" sideOffset={4}>
+                    {entity.agentSource === 'hub' ? 'Local agent' : 'Cloud agent'}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
           <div className="flex items-center gap-2">

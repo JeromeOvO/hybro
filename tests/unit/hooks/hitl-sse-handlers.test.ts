@@ -38,6 +38,7 @@ vi.mock('@/lib/api/room', () => ({
 }))
 
 vi.mock('@/lib/api/agent', () => ({
+  getAllAgents: vi.fn().mockResolvedValue({ success: true, agents: [] }),
   getAllActiveAgents: vi.fn().mockResolvedValue({ success: true, agents: [] }),
 }))
 

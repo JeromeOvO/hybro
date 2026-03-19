@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useRoomUiStore, useRoomFlags } from '@/stores/room-ui-store'
+import { useMessageStore } from '@/stores/message-store'
 import { useAgentCatalog } from './useAgentCatalog'
 import { useRoomData } from './useRoomData'
 import { createProcessingLifecycle, type ProcessingLifecycle } from './processing-lifecycle'
@@ -102,6 +103,36 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   const { reconcileWithDb } = useRoomHydration(
     roomId, userId, userName, getToken, room, hitlRequestIndex, getAgentName, getAgentSource,
   )
+
+  // Backfill agentSource on entities once the agent catalog arrives.
+  // DB hydration may run before the catalog query completes, leaving
+  // agentSource undefined on hydrated entities. We depend on hydratedFromDb
+  // so the effect also fires when hydration finishes after the catalog.
+  const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
+  useEffect(() => {
+    if (!allAgentsData?.length || !hydratedFromDb) return
+    const store = useMessageStore.getState()
+    if (store.roomId !== roomId) return
+    const patches: { id: string; agentSource: 'cloud' | 'hub' }[] = []
+    for (const entity of Object.values(store.entities)) {
+      if (entity.messageType === 'agent' && entity.agentId && !entity.agentSource) {
+        const src = getAgentSource(entity.agentId)
+        if (src) patches.push({ id: entity.id, agentSource: src })
+      }
+    }
+    if (patches.length === 0) return
+    for (const { id, agentSource } of patches) {
+      store.upsertMessage({
+        id,
+        roomId,
+        messageType: 'agent',
+        content: store.entities[id].content,
+        senderName: store.entities[id].senderName,
+        timestamp: store.entities[id].timestamp,
+        agentSource,
+      }, 'db')
+    }
+  }, [roomId, allAgentsData, getAgentSource, hydratedFromDb])
 
   // Processing restore
   useProcessingRestore(roomId, room, loading, lifecycle)

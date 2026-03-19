@@ -12,6 +12,7 @@ vi.mock('@/lib/api/room', () => ({
 }))
 
 vi.mock('@/lib/api/agent', () => ({
+  getAllAgents: vi.fn(),
   getAllActiveAgents: vi.fn(),
 }))
 

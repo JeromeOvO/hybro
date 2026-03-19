@@ -358,6 +358,16 @@ describe('isNoOpUpdate', () => {
     const incoming = makeIncoming({ content: 'Hello', clientRequestId: 'cr-new' })
     expect(isNoOpUpdate(existing, incoming, 'sse')).toBe(false)
   })
+
+  it('returns false when agentSource changes', () => {
+    const existing = makeEntity({
+      content: 'Hello',
+      agentSource: undefined,
+      displayType: 'agent-bubble',
+    })
+    const incoming = makeIncoming({ content: 'Hello', agentSource: 'hub' })
+    expect(isNoOpUpdate(existing, incoming, 'db')).toBe(false)
+  })
 })
 
 // ── mergeIncoming clientRequestId ─────────────────────────────

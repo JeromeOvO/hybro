@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getAllActiveAgents } from '@/lib/api/agent'
+import { getAllAgents } from '@/lib/api/agent'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
 import type { Agent } from '@/lib/types/agent'
 
-const AGENT_CATALOG_KEY = ['agents', 'active'] as const
+const AGENT_CATALOG_KEY = ['agents', 'all'] as const
 
 export function useAgentCatalog(userId?: string, getToken?: () => Promise<string | null>) {
   const agentNameCache = useRef<{ [agentId: string]: string }>({})
@@ -17,9 +17,9 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     retry: 0,
     enabled: !!userId,
     queryFn: async ({ signal }): Promise<Agent[]> => {
-      console.log('🤖 Loading global active agents catalog')
+      console.log('🤖 Loading global agents catalog')
       try {
-        const res = await getAllActiveAgents(signal, 15000, getToken)
+        const res = await getAllAgents(signal, 15000, getToken)
         if (!res.success || !res.agents) {
           throw new Error(res.error || 'Failed to load agents')
         }
@@ -34,6 +34,11 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
       }
     },
   })
+
+  const availableAgents = useMemo(
+    () => (allAgentsQuery.data || []).filter(a => a.agent_status === 'active'),
+    [allAgentsQuery.data],
+  )
 
   const getAgentName = useCallback(async (agentId: string): Promise<string> => {
     if (SYSTEM_AGENTS[agentId]) {
@@ -57,9 +62,11 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
   const getAgentSource = useCallback((agentId: string | undefined): 'cloud' | 'hub' | undefined => {
     if (!agentId) return undefined
     const agents = allAgentsQuery.data
-    if (agents) {
-      const found = agents.find(a => a.agent_id === agentId)
-      if (found?.source) return found.source as 'cloud' | 'hub'
+    if (!agents) return undefined
+    const found = agents.find(a => a.agent_id === agentId)
+    if (found) {
+      if (found.source === 'hub' || found.hub_id) return 'hub'
+      return (found.source as 'cloud' | 'hub') || 'cloud'
     }
     return undefined
   }, [allAgentsQuery.data])
@@ -84,7 +91,7 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
   }, [])
 
   return {
-    availableAgents: allAgentsQuery.data || [],
+    availableAgents,
     allAgentsData: allAgentsQuery.data,
     getAgentName,
     getAgentSource,
