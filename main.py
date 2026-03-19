@@ -38,6 +38,7 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from jobs.compaction_sweep import compaction_sweep
+from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import stale_task_checker
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
@@ -217,15 +218,8 @@ async def lifespan(app: FastAPI):
         await agent_health_service.stop()
 
         # Release any leader locks
-        # NOTE: Keep this list in sync when adding new leader-elected jobs.
         if _leader:
-            await _leader.release_all([
-                "stale_task_checker",
-                "compaction_sweep",
-                "orphaned_upload_cleaner",
-                "agent_health_checker",
-                "relay_heartbeat_monitor",
-            ])
+            await _leader.release_all(ALL_JOB_NAMES)
 
         # Drain: stop accepting new SSE connections and allow in-flight events to finish
         sse_manager.set_draining(True)

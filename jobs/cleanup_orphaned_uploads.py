@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from jobs.constants import ORPHANED_UPLOAD_CLEANER
 
 if TYPE_CHECKING:
     from infrastructure.leader_election import LeaderElection

@@ -91,11 +91,11 @@ What was built:
 - Graceful shutdown draining: `SSEManager._draining` flag rejects new connections; configurable `shutdown_drain_seconds` (default 5s) before tearing down infrastructure
 - Shutdown sequence: stop jobs → release leader locks → drain SSE → stop broker/Redis/MongoDB
 
-### Remaining Phases (Not Yet Implemented)
+### Remaining Phases
 
-- §4.8: `notify_task_update` bypass fix
-- §4.9: `processing_status` side-effect separation
-- §4.10: Persistence path unification
+- ~~§4.8: `notify_task_update` bypass fix~~ — **COMPLETED.** Shared `_notify_task_update_impl` extracted; `AgentResponseHandler.notify_task_update()` is the handler-owned entry point; `QueueExecutor` routes through handler; standalone wrapper preserved for background jobs.
+- ~~§4.9: `processing_status` side-effect separation~~ — **COMPLETED (functionally resolved).** Broker subscriber uses `_deliver_to_local_connections` (pure broadcast); side effects only run on originating instance. `broadcast_processing_status` self-documenting method deprioritized.
+- ~~§4.10: Persistence path unification~~ — **COMPLETED (narrowed scope).** `_handle_stream_artifact_update` routes artifact chunks through `AgentResponseHandler` (atomic `accumulate_artifact_on_message` + SSE). `s3_converted` flag on `AgentEvent` prevents double S3 conversion. Message-chunk persistence (line 827) deferred to future `accumulate_history_on_message` atomic op.
 - MongoDB change stream removal (deferred — keep as safety net until Redis-backed cancellation is proven in production)
 
 ---

@@ -28,9 +28,9 @@ from modules.AgentMessageProcessor import AgentMessageProcessor
 from modules.TaskStateManager import TaskStateManager
 from models.processing import ProcessingResult, ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
-from services.task_notification_service import notify_task_update
 
 if TYPE_CHECKING:
+    from modules.agent_response_handler import AgentResponseHandler
     from services.a2a_service import A2AService
     from services.database_service import DatabaseService
     from services.debate_service import DebateService
@@ -99,6 +99,7 @@ class QueueExecutor:
         rate_limit_service: RateLimitService,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
+        response_handler: AgentResponseHandler,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -110,6 +111,7 @@ class QueueExecutor:
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self._agent_message_processor = agent_message_processor
+        self.response_handler = response_handler
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -368,7 +370,7 @@ class QueueExecutor:
                     error=error_text,
                     persist=True,
                 )
-                await notify_task_update(
+                await self.response_handler.notify_task_update(
                     message_id=current_message.message_id,
                     state=TaskState.failed,
                     room_id=room_id,
@@ -392,7 +394,7 @@ class QueueExecutor:
                 error="The assigned agent could not be found.",
                 persist=True,
             )
-            await notify_task_update(
+            await self.response_handler.notify_task_update(
                 message_id=current_message.message_id,
                 state=TaskState.failed,
                 room_id=room_id,
@@ -424,7 +426,7 @@ class QueueExecutor:
                     error=error_text,
                     persist=True,
                 )
-                await notify_task_update(
+                await self.response_handler.notify_task_update(
                     message_id=current_message.message_id,
                     state=TaskState.failed,
                     room_id=room_id,

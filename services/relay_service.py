@@ -22,6 +22,7 @@ from uuid import uuid4
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
+from jobs.constants import RELAY_HEARTBEAT_MONITOR
 from models.hub import (
     Hub,
     HubAgentSync,
@@ -292,7 +293,8 @@ class RelayService:
 
     def is_hub_connected(self, hub_id: str) -> bool:
         """Live check — is this hub currently connected via SSE?"""
-        return hub_id in self._hub_queues
+        # Streams path uses _hub_disconnect_events; queue path uses _hub_queues
+        return hub_id in self._hub_disconnect_events or hub_id in self._hub_queues
 
     async def mark_hub_agents_offline(self, hub_id: str) -> None:
         """Eagerly correct stale agent status for a disconnected hub."""
@@ -432,7 +434,7 @@ class RelayService:
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
 
         # Activate synced agents if this hub is still connected.
-        if hub_id in self._hub_queues and synced:
+        if self.is_hub_connected(hub_id) and synced:
             synced_ids = [item["agent_id"] for item in synced]
             await self._mongo.agents_collection.update_many(
                 {"hub_id": hub_id, "agent_id": {"$in": synced_ids}},
@@ -741,14 +743,14 @@ class RelayService:
         """
         if self._leader:
             ttl = settings.relay_heartbeat_interval * 2
-            acquired = await self._leader.try_acquire("relay_heartbeat_monitor", ttl)
+            acquired = await self._leader.try_acquire(RELAY_HEARTBEAT_MONITOR, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
                 await self._do_heartbeat_check(stale_threshold)
                 await self.sweep_offline_queues()
             finally:
-                await self._leader.release("relay_heartbeat_monitor")
+                await self._leader.release(RELAY_HEARTBEAT_MONITOR)
         else:
             await self._do_heartbeat_check(stale_threshold)
             await self.sweep_offline_queues()

@@ -13,9 +13,9 @@ from services.task_notification_service import notify_task_update
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
 
-PATCH_DB = "services.task_notification_service.db_service"
-PATCH_NOTIF = "services.task_notification_service.notification_service"
-PATCH_SSE = "services.task_notification_service.sse_manager"
+PATCH_DB = "services.database_service.db_service"
+PATCH_NOTIF = "services.notification_service.notification_service"
+PATCH_SSE = "services.sse_services.sse_manager"
 PATCH_EXTRACT_ERR = "services.task_notification_service.extract_error_message"
 PATCH_EXTRACT_STATUS = "services.task_notification_service.extract_status_message"
 PATCH_SLEEP = "services.task_notification_service.asyncio.sleep"

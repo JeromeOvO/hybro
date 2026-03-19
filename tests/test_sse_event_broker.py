@@ -574,3 +574,36 @@ class TestSharedTerminalDedup:
             # Second send — should be suppressed by L1
             await sse_manager.send_processing_status("room-1", "completed", "msg-1")
             assert conn.queue.empty()
+
+
+# ---------------------------------------------------------------------------
+# Draining behavior
+# ---------------------------------------------------------------------------
+
+
+class TestDrainingBehavior:
+    """Tests for graceful shutdown draining (set_draining / ConnectionRefusedError)."""
+
+    @pytest.mark.asyncio
+    async def test_add_connection_rejects_when_draining(self, sse_manager):
+        """New connections are refused with ConnectionRefusedError while draining."""
+        sse_manager.set_draining(True)
+        with pytest.raises(ConnectionRefusedError, match="draining"):
+            await sse_manager.add_connection("room-1")
+
+    @pytest.mark.asyncio
+    async def test_add_connection_works_when_not_draining(self, sse_manager):
+        """Connections are accepted normally when not draining."""
+        conn = await sse_manager.add_connection("room-1")
+        assert conn is not None
+
+    @pytest.mark.asyncio
+    async def test_draining_can_be_toggled(self, sse_manager):
+        """set_draining(True) then set_draining(False) re-enables connections."""
+        sse_manager.set_draining(True)
+        with pytest.raises(ConnectionRefusedError):
+            await sse_manager.add_connection("room-1")
+
+        sse_manager.set_draining(False)
+        conn = await sse_manager.add_connection("room-1")
+        assert conn is not None

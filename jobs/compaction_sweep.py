@@ -17,6 +17,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
+from jobs.constants import COMPACTION_SWEEP
 from models.context_config import compaction_config
 
 if TYPE_CHECKING:
@@ -79,13 +80,13 @@ class CompactionSweep:
         """Run a single iteration, gated by leader election if available."""
         if self._leader:
             ttl = int(self.interval_minutes * 60 * 2)
-            acquired = await self._leader.try_acquire("compaction_sweep", ttl)
+            acquired = await self._leader.try_acquire(COMPACTION_SWEEP, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
                 await self.sweep()
             finally:
-                await self._leader.release("compaction_sweep")
+                await self._leader.release(COMPACTION_SWEEP)
         else:
             await self.sweep()
 

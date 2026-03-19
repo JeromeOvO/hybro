@@ -522,6 +522,108 @@ class TestMessageChunkEmitsArtifactUpdate:
         proc.sse_manager.send_artifact_update.assert_not_awaited()
 
 
+class TestArtifactUpdateRoutedThroughHandler:
+    """_handle_stream_artifact_update routes through response_handler.handle
+    instead of using tsm.persist_message + sse_manager.send_artifact_update."""
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_routes_through_handler(self):
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.sse_manager.send_artifact_update = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info=task_info,
+            send_sse=True,
+        )
+
+        streaming_state = MessageStreamingState()
+
+        artifact = MagicMock()
+        artifact.artifact_id = "art-1"
+        artifact.parts = []
+        artifact.model_dump = MagicMock(return_value={"artifact_id": "art-1", "parts": []})
+
+        result = MagicMock()
+        result.artifact = artifact
+        result.append = True
+        result.last_chunk = False
+
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+
+        await proc._handle_stream_artifact_update(result, ctx, streaming_state)
+
+        # Handler receives the event, NOT direct sse_manager or persist_message
+        proc.response_handler.handle.assert_awaited_once()
+        event = proc.response_handler.handle.call_args[0][0]
+        assert event.kind == "artifact_update"
+        assert event.s3_converted is True
+        assert event.append is True
+        assert event.last_chunk is False
+        assert event.artifacts == [{"artifact_id": "art-1", "parts": []}]
+
+        # Old paths should NOT be called
+        proc.tsm.persist_message.assert_not_awaited()
+        proc.sse_manager.send_artifact_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_artifact_chunk_no_sse_uses_atomic_persist(self):
+        """When send_sse=False, persists via accumulate_artifact_on_message (atomic)."""
+        proc = _make_processor()
+        proc.response_handler.handle = AsyncMock()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        proc.database_service.accumulate_artifact_on_message = AsyncMock(return_value=True)
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info=task_info,
+            send_sse=False,
+        )
+
+        streaming_state = MessageStreamingState()
+
+        artifact = MagicMock()
+        artifact.artifact_id = "art-1"
+        artifact.parts = []
+        artifact.model_dump = MagicMock(return_value={"artifact_id": "art-1", "parts": []})
+
+        result = MagicMock()
+        result.artifact = artifact
+        result.append = False
+        result.last_chunk = False
+
+        proc._convert_inline_bytes_to_s3 = AsyncMock()
+
+        await proc._handle_stream_artifact_update(result, ctx, streaming_state)
+
+        # Handler NOT called (no SSE)
+        proc.response_handler.handle.assert_not_awaited()
+        # Old persist_message NOT called
+        proc.tsm.persist_message.assert_not_awaited()
+        # Instead uses atomic accumulate
+        proc.database_service.accumulate_artifact_on_message.assert_awaited_once_with(
+            "msg-1", {"artifact_id": "art-1", "parts": []}, append=False,
+        )
+
+
 class TestFinalizeStreamingEmitsLastChunk:
     """_finalize_streaming sends a last_chunk=True artifact_update event."""
 

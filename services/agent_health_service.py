@@ -13,6 +13,7 @@ from loguru import logger
 
 from config.settings import settings
 from database.mongodb import mongodb
+from jobs.constants import AGENT_HEALTH_CHECKER
 from models.agent import Agent, AgentStatus
 
 if TYPE_CHECKING:
@@ -312,13 +313,13 @@ class AgentHealthService:
         """Run a single iteration, gated by leader election if available."""
         if self._leader:
             ttl = self.check_interval * 2
-            acquired = await self._leader.try_acquire("agent_health_checker", ttl)
+            acquired = await self._leader.try_acquire(AGENT_HEALTH_CHECKER, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
                 await self.run_health_check_cycle()
             finally:
-                await self._leader.release("agent_health_checker")
+                await self._leader.release(AGENT_HEALTH_CHECKER)
         else:
             await self.run_health_check_cycle()
 

@@ -61,8 +61,9 @@ class AgentResponseHandler:
     async def _on_artifact(self, e: AgentEvent) -> None:
         artifact = e.artifacts[0] if e.artifacts else None
 
-        # Convert inline bytes to S3 before persisting AND broadcasting
-        if artifact:
+        # Convert inline bytes to S3 before persisting AND broadcasting.
+        # Skip if the transport already performed conversion (s3_converted=True).
+        if artifact and not e.s3_converted:
             artifact_parts = artifact.get("parts", [])
             if artifact_parts:
                 try:
@@ -247,15 +248,44 @@ class AgentResponseHandler:
 
     # --- Helpers ---
 
+    async def notify_task_update(
+        self,
+        message_id: str,
+        state: TaskState,
+        room_id: str,
+        user_id: str,
+        error: str | None = None,
+        send_processing_status: bool = False,
+        parts: list[dict] | None = None,
+    ) -> bool:
+        """Handler-owned task notification — delegates to shared impl.
+
+        Preferred over the standalone ``notify_task_update`` function
+        because it uses injected services instead of global singletons.
+        """
+        from services.notification_service import notification_service
+        from services.task_notification_service import _notify_task_update_impl
+
+        return await _notify_task_update_impl(
+            self._db,
+            notification_service,
+            self._sse,
+            message_id=message_id,
+            state=state,
+            room_id=room_id,
+            user_id=user_id,
+            error=error,
+            send_processing_status=send_processing_status,
+            parts=parts,
+        )
+
     async def _notify(
         self,
         e: AgentEvent,
         state: TaskState,
         error: str | None = None,
     ) -> None:
-        from services.task_notification_service import notify_task_update
-
-        await notify_task_update(
+        await self.notify_task_update(
             message_id=e.message_id,
             state=state,
             room_id=e.room_id,

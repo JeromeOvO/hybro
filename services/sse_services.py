@@ -286,28 +286,37 @@ class SSEManager:
         await self._deliver_to_local_connections(room_id, message_type, data)
 
     async def _deliver_to_local_connections(self, room_id: str, message_type: str, data: Any):
-        """Deliver event to local SSE connections only (no broker publish)."""
+        """Deliver event to local SSE connections only (no broker publish).
+
+        Snapshots connections under lock, then delivers outside the lock to
+        avoid holding it during async I/O (send_message awaits).
+        """
+        # Snapshot under lock — fast, no I/O
         async with self.lock:
-            if room_id not in self.room_connections:
+            room_conns = self.room_connections.get(room_id)
+            if not room_conns:
                 return  # No local connections — silent (normal for cross-instance)
+            snapshot = list(room_conns.items())
 
-            disconnected_connections = []
+        # Deliver outside lock — I/O-bound, does not block other rooms
+        disconnected_ids: list[str] = []
+        for connection_id, connection in snapshot:
+            success = await connection.send_message(message_type, data)
+            if not success:
+                disconnected_ids.append(connection_id)
 
-            for connection_id, connection in self.room_connections[room_id].items():
-                success = await connection.send_message(message_type, data)
-                if not success:
-                    disconnected_connections.append(connection_id)
+        # Re-acquire lock to clean up disconnected connections
+        if disconnected_ids:
+            async with self.lock:
+                room_conns = self.room_connections.get(room_id)
+                if room_conns:
+                    for connection_id in disconnected_ids:
+                        room_conns.pop(connection_id, None)
 
-            # clean up disconnected connections
-            for connection_id in disconnected_connections:
-                if connection_id in self.room_connections[room_id]:
-                    del self.room_connections[room_id][connection_id]
-
-            active_connections = len(self.room_connections[room_id])
-            if active_connections > 0:
-                logger.info(
-                    f"SSE local delivery [{message_type}] to {active_connections} connection(s) in room {room_id}"
-                )
+        if len(snapshot) - len(disconnected_ids) > 0:
+            logger.info(
+                f"SSE local delivery [{message_type}] to {len(snapshot) - len(disconnected_ids)} connection(s) in room {room_id}"
+            )
 
     async def send_user_message(
         self, room_id: str, message_id: str, user_id: str, content: str

@@ -38,7 +38,8 @@ class LeaderElection:
     automatically renews the lock. Safe to use across multiple instances.
 
     Example:
-        async with leader.hold("stale_task_checker", ttl_seconds=60):
+        from jobs.constants import STALE_TASK_CHECKER
+        async with leader.hold(STALE_TASK_CHECKER, ttl_seconds=60):
             # Run job logic here
             # Lock is automatically renewed every 30 seconds
             pass

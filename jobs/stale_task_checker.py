@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from jobs.constants import STALE_TASK_CHECKER
 from services.task_notification_service import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
@@ -129,13 +130,13 @@ class StaleTaskChecker:
         """Run a single iteration, gated by leader election if available."""
         if self._leader:
             ttl = int(self.check_interval_minutes * 60 * 2)
-            acquired = await self._leader.try_acquire("stale_task_checker", ttl)
+            acquired = await self._leader.try_acquire(STALE_TASK_CHECKER, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
                 await self.check_stale_tasks()
             finally:
-                await self._leader.release("stale_task_checker")
+                await self._leader.release(STALE_TASK_CHECKER)
         else:
             await self.check_stale_tasks()
 
