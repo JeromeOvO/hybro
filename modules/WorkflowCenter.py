@@ -657,7 +657,8 @@ class WorkflowCenter:
             )
 
             send_response = await self.a2a_service.send_message_sync(
-                agent_query_result.agent.agent_card, message
+                agent_query_result.agent.agent_card, message,
+                agent_id=meta_task.agent_id,
             )
             logger.info("WorkflowCenter: send response: %s", send_response)
 

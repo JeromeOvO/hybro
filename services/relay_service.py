@@ -271,8 +271,8 @@ class RelayService:
             normalized = normalize_agent_url(agent_url) if agent_url else None
 
             # Check if an agent with this URL already exists (e.g. registered
-            # via the web UI).  If so, enrich it with hub metadata but keep its
-            # original source so that direct-call routing continues to work.
+            # via the web UI).  If so, enrich it with hub metadata and mark it
+            # as a hub agent so the frontend correctly shows its source.
             existing = None
             if normalized:
                 existing = await self._mongo.agents_collection.find_one(
@@ -283,6 +283,7 @@ class RelayService:
                 await self._mongo.agents_collection.update_one(
                     {"agent_id": existing["agent_id"]},
                     {"$set": {
+                        "source": "hub",
                         "hub_id": hub_id,
                         "local_agent_id": ag.local_agent_id,
                         "agent_card": ag.agent_card,
