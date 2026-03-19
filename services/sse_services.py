@@ -438,16 +438,33 @@ class SSEManager:
         # status.  This is the safety net that makes double-send bugs harmless.
         if status in PROCESSING_DONE_STATUSES and message_id:
             dedup_key = f"{room_id}:{message_id}"
+            # L1 fast check
             already_sent = self._terminal_status_sent.get(dedup_key)
             if already_sent is not None:
                 logger.warning(
-                    "Suppressing duplicate terminal status %s for %s (already sent %s)",
+                    "Suppressing duplicate terminal status %s for %s (already sent %s, L1 hit)",
                     status,
                     dedup_key,
                     already_sent,
                 )
                 return
-            self._terminal_status_sent[dedup_key] = status
+            # L2 Redis check (cross-instance dedup)
+            if self._redis:
+                try:
+                    was_first = await self._redis.set_nx(
+                        f"{settings.redis_terminal_key_prefix}{dedup_key}", status, ex=300,
+                    )
+                    if not was_first:
+                        logger.warning(
+                            "Suppressing duplicate terminal status %s for %s (Redis hit)",
+                            status,
+                            dedup_key,
+                        )
+                        self._terminal_status_sent[dedup_key] = status  # populate L1
+                        return
+                except Exception as e:
+                    logger.warning("Redis terminal dedup check failed: %s", e)
+            self._terminal_status_sent[dedup_key] = status  # L1 cache
 
         # Persist processing state to room for page refresh recovery
         # Set processing_message_id when processing starts, clear it when done

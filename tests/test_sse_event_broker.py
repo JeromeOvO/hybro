@@ -506,3 +506,71 @@ class TestSharedCancellationRedis:
         })
 
         assert "cancelled:msg-1" in mock_redis._store
+
+
+# ---------------------------------------------------------------------------
+# Shared Terminal Status Dedup (Redis L2) Tests
+# ---------------------------------------------------------------------------
+
+class TestSharedTerminalDedup:
+    """Tests for Redis-backed terminal status deduplication."""
+
+    async def test_first_terminal_status_proceeds(self, sse_manager):
+        """First terminal status for a message passes through (Redis set_nx returns True)."""
+        mock_redis = MockRedisService()
+        await sse_manager.start_redis_service(mock_redis)
+
+        conn = await sse_manager.add_connection("room-1")
+        with patch("services.sse_services.db_service") as mock_db:
+            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+            await sse_manager.send_processing_status("room-1", "completed", "msg-1")
+
+        # Connection queue should have the status event
+        msg = await asyncio.wait_for(conn.queue.get(), timeout=1.0)
+        assert "completed" in msg
+        # Redis should have the terminal key
+        assert "terminal:room-1:msg-1" in mock_redis._store
+
+    async def test_duplicate_terminal_status_suppressed_by_redis(self, sse_manager):
+        """Duplicate terminal status is suppressed when Redis reports key exists."""
+        mock_redis = MockRedisService()
+        mock_redis._store["terminal:room-1:msg-1"] = "completed"  # pre-populate Redis
+        await sse_manager.start_redis_service(mock_redis)
+
+        conn = await sse_manager.add_connection("room-1")
+        with patch("services.sse_services.db_service") as mock_db:
+            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+            await sse_manager.send_processing_status("room-1", "completed", "msg-1")
+
+        # Queue should be empty — dedup suppressed the send
+        assert conn.queue.empty()
+
+    async def test_l1_cache_fast_path_suppresses_without_redis(self, sse_manager):
+        """L1 cache hit suppresses without Redis roundtrip."""
+        mock_redis = MockRedisService()
+        await sse_manager.start_redis_service(mock_redis)
+        sse_manager._terminal_status_sent["room-1:msg-1"] = "completed"  # pre-populate L1
+
+        conn = await sse_manager.add_connection("room-1")
+        with patch("services.sse_services.db_service") as mock_db:
+            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+            await sse_manager.send_processing_status("room-1", "completed", "msg-1")
+
+        # Queue should be empty — L1 cache suppressed the send
+        assert conn.queue.empty()
+        # Redis set_nx should NOT have been called (L1 fast path)
+        assert len(mock_redis._set_nx_calls) == 0
+
+    async def test_terminal_dedup_works_without_redis(self, sse_manager):
+        """Terminal dedup still works with just L1 when Redis not attached."""
+        conn = await sse_manager.add_connection("room-1")
+        with patch("services.sse_services.db_service") as mock_db:
+            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+            # First send — should go through
+            await sse_manager.send_processing_status("room-1", "completed", "msg-1")
+            msg = await asyncio.wait_for(conn.queue.get(), timeout=1.0)
+            assert "completed" in msg
+
+            # Second send — should be suppressed by L1
+            await sse_manager.send_processing_status("room-1", "completed", "msg-1")
+            assert conn.queue.empty()
