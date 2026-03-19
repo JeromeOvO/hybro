@@ -261,6 +261,7 @@ app.add_middleware(
 def compute_health_status(
     *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
     redis_service_connected: bool = False,
+    relay_streams_available: bool = False,
 ) -> dict:
     """Compute health status body and HTTP status code."""
     broker_expected = bool(redis_url)
@@ -272,6 +273,7 @@ def compute_health_status(
             "broker_connected": broker_connected,
             "broker_expected": broker_expected,
             "redis_service_connected": redis_service_connected,
+            "relay_streams_available": relay_streams_available,
         },
         "status_code": 503 if degraded else 200,
     }
@@ -280,11 +282,13 @@ def compute_health_status(
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
 async def health_check():
+    from services.relay_service import relay_service as _relay_svc_health
     result = compute_health_status(
         broker_connected=sse_manager.broker_connected,
         redis_url=settings.redis_url,
         change_stream_connected=sse_manager.change_stream_connected,
         redis_service_connected=sse_manager.redis_connected,
+        relay_streams_available=bool(_relay_svc_health and _relay_svc_health._streams),
     )
     return JSONResponse(content=result["body"], status_code=result["status_code"])
 
