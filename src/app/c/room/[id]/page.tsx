@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, usePathname } from 'next/navigation'
 import { useUser, useClerk, useAuth } from '@clerk/nextjs'
 import { toast } from 'sonner'
 import { Users, Pencil, Check, X as XIcon } from 'lucide-react'
@@ -35,6 +35,7 @@ export default function RoomChatPage() {
   const { getToken } = useAuth()
   const [editorOpen, setEditorOpen] = useState(false)
   const { openWaitlist } = useClerk()
+  const currentPath = usePathname()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
 
@@ -54,6 +55,15 @@ export default function RoomChatPage() {
   // Local debate mode toggle (synced from room, lazy-persist-on-send like supervisor)
   const [localDebateMode, setLocalDebateMode] = useState(false)
   const confirmedDebateModeRef = useRef(false)
+
+  const handleRequireAuth = useCallback(() => {
+    if (isWaitlistEnabled()) {
+      openWaitlist()
+    } else {
+      window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
+    }
+  }, [openWaitlist, currentPath])
+
   const {
     room,
     loading,
@@ -108,6 +118,7 @@ export default function RoomChatPage() {
     defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
     roomId,
     roomAgentCount,
+    onRequireAuth: handleRequireAuth,
   })
 
   // Set default group based on stored selection or room's agent set (runs once when room loads)
@@ -342,7 +353,7 @@ export default function RoomChatPage() {
       openWaitlist()
     } else {
       if (typeof window !== "undefined") {
-        window.location.href = "/sign-in"
+        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
       }
     }
     return

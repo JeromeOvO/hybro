@@ -1,15 +1,20 @@
 import { SignUp, Waitlist } from '@clerk/nextjs'
 import { isWaitlistEnabled } from '@/lib/utils'
 
-export default function Page () {
+export default async function Page ({
+  searchParams,
+}: {
+  searchParams: Promise<{ redirect_url?: string }>
+}) {
+  const { redirect_url } = await searchParams
   const waitlistEnabled = isWaitlistEnabled()
+  const redirectUrl = redirect_url || '/'
 
   if (!waitlistEnabled) {
-    // When waitlist is disabled, render a standard sign-up form instead
     return (
       <div className="flex flex-col items-center justify-center gap-4">
         <SignUp
-          forceRedirectUrl="/"
+          forceRedirectUrl={redirectUrl}
           appearance={{
             elements: {
               rootBox: "mx-auto",

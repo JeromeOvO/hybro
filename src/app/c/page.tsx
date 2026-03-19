@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { useUser, useClerk } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, Code2, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
+import { ArrowRight, BookOpen, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { VideoEmbed } from "@/components/video-embed"
 import { developerUrl } from "@/lib/urls"
@@ -50,10 +50,11 @@ export default function ConsumerLandingPage() {
             <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
           </h1>
           <p className="text-xl md:text-2xl font-medium mb-3">
-            The interoperability layer for AI agents.
+            Unify all AI agents &mdash; local &amp; remote
           </p>
           <p className="text-base text-muted-foreground mb-10 max-w-2xl mx-auto">
-            Enable reliable agent-to-agent and human-agent collaboration across tools, environments, and organizations.
+            Local and remote AI agents that collaborate seamlessly.<br />
+            Your data, your privacy, your control.
           </p>
         </section>
 
@@ -67,7 +68,7 @@ export default function ConsumerLandingPage() {
               </div>
               <h2 className="text-2xl font-bold mb-2">Use Agents</h2>
               <p className="text-muted-foreground mb-6 leading-relaxed">
-                Chat with AI agents that collaborate to solve complex tasks together.
+                Work with AI agents that collaborate to solve complex tasks together.
               </p>
               <Button size="lg" onClick={handleGetStarted} className="btn-brand-gradient w-full max-w-[220px]">
                 {isWaitlistEnabled() ? "Join Waitlist" : "Start Chatting"}
@@ -80,9 +81,9 @@ export default function ConsumerLandingPage() {
               <div className="w-14 h-14 rounded-full bg-[hsl(var(--color-hybro-hy)/0.1)] flex items-center justify-center mb-5">
                 <Rocket className="h-7 w-7 text-[hsl(var(--color-hybro-hy))]" />
               </div>
-              <h2 className="text-2xl font-bold mb-2">Build & Deploy</h2>
+              <h2 className="text-2xl font-bold mb-2">Build & Connect</h2>
               <p className="text-muted-foreground mb-6 leading-relaxed">
-                Make your agent interoperable in 3 lines of code. Open source. Framework agnostic.
+                Connect any agent to the Hybro network. One install, any framework, open source.
               </p>
               <Button size="lg" variant="brandTint" asChild className="w-full max-w-[220px]">
                 <a href={developerUrl("/")}>
@@ -142,15 +143,23 @@ export default function ConsumerLandingPage() {
           </h2>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button variant="brandTint" size="sm" asChild>
-              <a href={developerUrl("/docs")}>
-                <Code2 className="mr-2 h-4 w-4 text-icon-workflow" />
-                Developer Docs
+              <a href="https://docs.hybro.ai/" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="mr-2 h-4 w-4 text-primary" />
+                Documentation
+                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
               </a>
             </Button>
             <Button variant="brandTint" size="sm" asChild>
               <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="mr-2 h-4 w-4" />
                 a2a-adapter
+                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
+              </a>
+            </Button>
+            <Button variant="brandTint" size="sm" asChild>
+              <a href="https://github.com/hybroai/hybro-hub" target="_blank" rel="noopener noreferrer">
+                <GithubIcon className="mr-2 h-4 w-4" />
+                hybro-hub
                 <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
               </a>
             </Button>

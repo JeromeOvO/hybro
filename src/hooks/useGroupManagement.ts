@@ -21,6 +21,8 @@ interface UseGroupManagementOptions {
   roomId?: string
   /** Number of room agents to determine default group */
   roomAgentCount?: number
+  /** Called when an action requires authentication but user is not signed in */
+  onRequireAuth?: () => void
 }
 
 interface GroupManagementState {
@@ -58,7 +60,7 @@ interface GroupManagementActions {
 export function useGroupManagement(
   options: UseGroupManagementOptions
 ): GroupManagementState & GroupManagementActions {
-  const { userId, getToken, isLoaded, defaultGroup, roomId, roomAgentCount = 0 } = options
+  const { userId, getToken, isLoaded, defaultGroup, roomId, roomAgentCount = 0, onRequireAuth } = options
 
   // Group state
   const [groups, setGroups] = useState<AgentGroup[]>([])
@@ -150,22 +152,34 @@ export function useGroupManagement(
 
   // Group management entry points
   const handleCreateGroup = useCallback(() => {
+    if (!userId) {
+      onRequireAuth?.()
+      return
+    }
     loadAvailableAgents()
     setGroupAction({ type: 'create' })
     setGroupManagementOpen(true)
-  }, [loadAvailableAgents])
+  }, [userId, onRequireAuth, loadAvailableAgents])
 
   const handleEditGroup = useCallback((group: AgentGroup) => {
+    if (!userId) {
+      onRequireAuth?.()
+      return
+    }
     loadAvailableAgents()
     setGroupAction({ type: 'edit', group })
     setGroupManagementOpen(true)
-  }, [loadAvailableAgents])
+  }, [userId, onRequireAuth, loadAvailableAgents])
 
   const handleDeleteGroup = useCallback((group: AgentGroup) => {
+    if (!userId) {
+      onRequireAuth?.()
+      return
+    }
     loadAvailableAgents()
     setGroupAction({ type: 'delete', group })
     setGroupManagementOpen(true)
-  }, [loadAvailableAgents])
+  }, [userId, onRequireAuth, loadAvailableAgents])
 
   const handleGroupCreated = useCallback((group: AgentGroup) => {
     setGroups(prev => {

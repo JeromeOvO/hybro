@@ -25,7 +25,7 @@ export default async function Page ({
       <div className="text-sm text-muted-foreground text-center">
         <p>Don&apos;t have an account?{' '}
           <Link 
-            href="/sign-up"
+            href={redirect_url ? `/sign-up?redirect_url=${encodeURIComponent(redirect_url)}` : "/sign-up"}
             className="text-primary hover:underline font-medium"
           >
             {waitlistEnabled ? "Join the waitlist" : "Create an account"}

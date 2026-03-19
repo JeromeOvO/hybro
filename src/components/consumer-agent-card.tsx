@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ChevronRight } from "lucide-react"
+import { Activity, ChevronRight } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -37,6 +37,7 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
   const overflowCount = displayableSkills.length - visibleSkills.length
 
   const provider = agent.agent_card.provider?.organization
+  const callCount = agent.call_count ?? 0
 
   return (
     <Link
@@ -95,6 +96,13 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
         <p className="text-xs text-muted-foreground text-center min-h-[1rem] leading-normal">
           {provider || "\u00A0"}
         </p>
+
+        {callCount > 0 && (
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
+            <Activity className="h-3 w-3" />
+            <span>{callCount.toLocaleString()} {callCount === 1 ? "call" : "calls"}</span>
+          </div>
+        )}
 
         {agent.agent_card.description ? (
           <p className="mt-2 text-sm text-muted-foreground text-center line-clamp-2 w-full min-h-[2.5rem]">

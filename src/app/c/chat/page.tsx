@@ -1,7 +1,7 @@
 "use client"
 
 import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, usePathname } from "next/navigation"
 import { useUser, useClerk, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
@@ -102,6 +102,7 @@ function ChatPageContent() {
     const { getToken } = useAuth()
     const { openWaitlist } = useClerk()
     const searchParams = useSearchParams()
+    const currentPath = usePathname()
     const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
@@ -155,6 +156,14 @@ function ChatPageContent() {
         }
     }, [agentIdParam, loadAgentForChat])
 
+    const handleRequireAuth = useCallback(() => {
+        if (isWaitlistEnabled()) {
+            openWaitlist()
+        } else {
+            window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
+        }
+    }, [openWaitlist, currentPath])
+
     const {
         creating,
         createAndNavigate,
@@ -170,6 +179,7 @@ function ChatPageContent() {
         getToken,
         isLoaded,
         roomAgentCount: preConfiguredRoom?.selectedAgents.length || 0,
+        onRequireAuth: handleRequireAuth,
     })
 
     // Agent list for mentions
@@ -187,11 +197,7 @@ function ChatPageContent() {
             return
         }
         if (!user?.id) {
-            if (isWaitlistEnabled()) {
-                openWaitlist()
-            } else {
-                window.location.href = "/sign-in"
-            }
+            handleRequireAuth()
             return
         }
 
