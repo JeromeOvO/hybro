@@ -182,6 +182,14 @@ class SSEManager:
             token = self._cancellation_tokens.get(message_id)
             if token is not None:
                 token.cancel()
+            # Persist to Redis L2 (ensures late-joining instances see it)
+            if self._redis:
+                try:
+                    await self._redis.set_nx(
+                        f"{settings.redis_cancel_key_prefix}{message_id}", "1", ex=3600,
+                    )
+                except Exception:
+                    pass
             logger.info("Received cancellation via broker: %s", message_id)
 
     # ------------------------------------------------------------------
@@ -727,6 +735,16 @@ class SSEManager:
         for internal use (change stream handler, etc.) that shouldn't re-broadcast.
         """
         self.cancel_message(message_id)
+
+        # L2 Redis key (durable even if Pub/Sub missed)
+        if self._redis:
+            try:
+                await self._redis.set_nx(
+                    f"{settings.redis_cancel_key_prefix}{message_id}", "1", ex=3600,
+                )
+            except Exception as e:
+                logger.warning("Redis cancel key write failed: %s", e)
+
         if self._broker and self._broker.is_connected:
             self._broker_disconnect_warned = False
             try:
@@ -765,6 +783,24 @@ class SSEManager:
             True if message is cancelled, False otherwise
         """
         return message_id in self.cancelled_messages
+
+    async def check_cancelled(self, message_id: str) -> bool:
+        """Async cancellation check: L1 TTLCache -> Redis L2.
+
+        Use this for non-hot-path checks. Hot-path code should use
+        ``message_id in self.cancelled_messages`` (L1 only) which is
+        populated by broker handlers and cancel_message callers.
+        """
+        if message_id in self.cancelled_messages:
+            return True
+        if self._redis:
+            try:
+                if await self._redis.exists(f"{settings.redis_cancel_key_prefix}{message_id}"):
+                    self.cancelled_messages[message_id] = True  # populate L1
+                    return True
+            except Exception:
+                pass
+        return False
 
     def clear_cancellation(self, message_id: str) -> None:
         """

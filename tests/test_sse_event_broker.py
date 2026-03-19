@@ -393,3 +393,116 @@ class TestBrokerDegradedState:
             mock_logger.error.assert_not_called()
 
         await sse_manager.stop_event_broker()
+
+
+# ---------------------------------------------------------------------------
+# MockRedisService for Redis-backed state tests
+# ---------------------------------------------------------------------------
+
+class MockRedisService:
+    """In-memory mock of RedisService for testing."""
+
+    def __init__(self):
+        self._store: dict[str, str] = {}
+        self._set_nx_calls: list[tuple] = []
+        self._exists_calls: list[str] = []
+        self._is_connected = True
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_connected
+
+    async def set_nx(self, key: str, value: str, ex: int | None = None) -> bool:
+        self._set_nx_calls.append((key, value, ex))
+        if key in self._store:
+            return False
+        self._store[key] = value
+        return True
+
+    async def exists(self, key: str) -> bool:
+        self._exists_calls.append(key)
+        return key in self._store
+
+    async def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+
+# ---------------------------------------------------------------------------
+# Shared Cancellation (Redis L2) Tests
+# ---------------------------------------------------------------------------
+
+class TestSharedCancellationRedis:
+    """Tests for Redis-backed cancellation state."""
+
+    async def test_cancel_broadcast_writes_redis_key(self, sse_with_broker):
+        """cancel_message_and_broadcast sets Redis key when RedisService attached."""
+        mgr, broker = sse_with_broker
+        mock_redis = MockRedisService()
+        await mgr.start_redis_service(mock_redis)
+
+        await mgr.cancel_message_and_broadcast("msg-1")
+
+        assert len(mock_redis._set_nx_calls) == 1
+        key, val, ex = mock_redis._set_nx_calls[0]
+        assert key == "cancelled:msg-1"
+        assert val == "1"
+        assert ex == 3600
+
+    async def test_cancel_broadcast_no_redis_write_without_service(self, sse_with_broker):
+        """cancel_message_and_broadcast skips Redis when no RedisService attached."""
+        mgr, broker = sse_with_broker
+        # No Redis attached
+        await mgr.cancel_message_and_broadcast("msg-1")
+        # Should not raise — just skip Redis
+
+    async def test_check_cancelled_hits_redis_on_l1_miss(self, sse_manager):
+        """check_cancelled queries Redis when L1 cache misses."""
+        mock_redis = MockRedisService()
+        mock_redis._store["cancelled:msg-1"] = "1"  # pre-populate Redis
+        await sse_manager.start_redis_service(mock_redis)
+
+        result = await sse_manager.check_cancelled("msg-1")
+        assert result is True
+        # L1 cache should now be populated
+        assert "msg-1" in sse_manager.cancelled_messages
+
+    async def test_check_cancelled_uses_l1_fast_path(self, sse_manager):
+        """check_cancelled returns True from L1 without Redis call."""
+        mock_redis = MockRedisService()
+        await sse_manager.start_redis_service(mock_redis)
+        sse_manager.cancelled_messages["msg-1"] = True  # pre-populate L1
+
+        result = await sse_manager.check_cancelled("msg-1")
+        assert result is True
+        assert len(mock_redis._exists_calls) == 0  # no Redis roundtrip
+
+    async def test_check_cancelled_returns_false_when_not_found(self, sse_manager):
+        """check_cancelled returns False when neither L1 nor Redis has it."""
+        mock_redis = MockRedisService()
+        await sse_manager.start_redis_service(mock_redis)
+
+        result = await sse_manager.check_cancelled("msg-999")
+        assert result is False
+
+    async def test_check_cancelled_without_redis_service(self, sse_manager):
+        """check_cancelled works without Redis (L1 only, no Redis fallback)."""
+        result = await sse_manager.check_cancelled("msg-1")
+        assert result is False
+
+        sse_manager.cancelled_messages["msg-1"] = True
+        result = await sse_manager.check_cancelled("msg-1")
+        assert result is True
+
+    async def test_on_cancellation_event_writes_redis_key(self, sse_with_broker):
+        """Incoming broker cancellation also persists to Redis L2."""
+        mgr, broker = sse_with_broker
+        mock_redis = MockRedisService()
+        await mgr.start_redis_service(mock_redis)
+
+        await mgr._on_cancellation_event({
+            "kind": "cancellation",
+            "origin": "other-instance",
+            "message_id": "msg-1",
+        })
+
+        assert "cancelled:msg-1" in mock_redis._store
