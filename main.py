@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -224,6 +225,10 @@ async def lifespan(app: FastAPI):
                 "agent_health_checker",
                 "relay_heartbeat_monitor",
             ])
+
+        # Drain: stop accepting new SSE connections and allow in-flight events to finish
+        sse_manager.set_draining(True)
+        await asyncio.sleep(settings.shutdown_drain_seconds)
 
         # Stop RedisService
         await sse_manager.stop_redis_service()

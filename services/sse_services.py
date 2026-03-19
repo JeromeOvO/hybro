@@ -118,6 +118,9 @@ class SSEManager:
         # Shared Redis key-value service (cancellation/dedup L2 cache)
         self._redis: RedisService | None = None
 
+        # Draining flag — reject new connections during shutdown
+        self._draining: bool = False
+
     # ------------------------------------------------------------------
     # Event broker lifecycle
     # ------------------------------------------------------------------
@@ -156,6 +159,12 @@ class SSEManager:
     def redis_connected(self) -> bool:
         """Whether RedisService is connected (for /health endpoint)."""
         return self._redis is not None and self._redis.is_connected
+
+    def set_draining(self, flag: bool) -> None:
+        """Set draining mode. When draining, new connections are rejected."""
+        self._draining = flag
+        if flag:
+            logger.info("SSEManager entering drain mode — rejecting new connections")
 
     # ------------------------------------------------------------------
     # Broker message handlers (incoming from other instances)
@@ -198,6 +207,9 @@ class SSEManager:
 
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
+        if self._draining:
+            raise ConnectionRefusedError("Server is draining — rejecting new SSE connections")
+
         first_for_room = False
         async with self.lock:
             if room_id not in self.room_connections:

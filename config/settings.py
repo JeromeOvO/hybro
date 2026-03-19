@@ -147,6 +147,9 @@ class Settings(BaseSettings):
     bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     use_bedrock_supervisor: bool = False
 
+    # Graceful Shutdown Settings
+    shutdown_drain_seconds: float = 5.0  # Drain period for SSE connections during shutdown
+
     class Config:
         env_file = ".env"
         extra = "ignore"
