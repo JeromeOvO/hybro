@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Bot, Search, X } from 'lucide-react'
+import { Plus, Minus, Pencil, Trash2, Users, Loader2, AlertTriangle, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { deduplicateIcons } from '@/lib/agent-icon-utils'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { banner } from "@/components/ui/banner"
 import type { Agent } from '@/lib/types/agent'
 import type { AgentGroup, StaleAgentRef } from '@/lib/types/agent-group'
@@ -417,8 +418,9 @@ export function GroupManagementModal({
               <div className="relative flex-shrink-0">
                 <Avatar className="h-8 w-8 rounded-md shadow-sm shadow-primary/10 dark:shadow-white/5">
                   <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} className="rounded-md" />
-                  <AvatarFallback className="rounded-md text-xs">
-                    <Bot className="h-4 w-4" />
+                  <AvatarFallback className="rounded-md text-xs p-0 overflow-hidden">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
                   </AvatarFallback>
                 </Avatar>
                 <span
@@ -527,8 +529,9 @@ export function GroupManagementModal({
                                      bg-muted/30 opacity-60"
                         >
                           <Avatar className="h-8 w-8 rounded-md">
-                            <AvatarFallback className="rounded-md text-xs">
-                              <Bot className="h-4 w-4" />
+                            <AvatarFallback className="rounded-md text-xs p-0 overflow-hidden">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={getAgentAvatarUri(ref.id)} alt={ref.name} className="h-full w-full" />
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex flex-col min-w-0 flex-1">
