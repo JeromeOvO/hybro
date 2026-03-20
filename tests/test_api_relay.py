@@ -70,7 +70,7 @@ def _make_relay_service(
         mongo.update_hub_status = AsyncMock()
         mongo.update_hub_status_if_current = AsyncMock(return_value=True)
         mongo.upsert_hub_agent = AsyncMock(return_value="agent-new-001")
-        mongo.count_hub_agents = AsyncMock(return_value=0)
+        mongo.count_hub_agents = AsyncMock(return_value=(0, 0))
         mongo.agents_collection = MagicMock()
         mongo.agents_collection.find_one = AsyncMock(return_value=None)
         mongo.agents_collection.update_one = AsyncMock()
@@ -587,12 +587,14 @@ class TestRelayServiceStatus:
         svc._mongo.get_hubs_by_user.return_value = [
             {"hub_id": "hub-001", "is_online": True, "last_connected_at": None},
         ]
-        svc._mongo.count_hub_agents.return_value = 3
+        svc._mongo.count_hub_agents.return_value = (3, 1)
 
         result = await svc.get_hub_status("user-001")
         assert len(result) == 1
         assert result[0].hub_id == "hub-001"
-        assert result[0].agent_count == 3
+        assert result[0].agent_count == 4
+        assert result[0].active_agent_count == 3
+        assert result[0].inactive_agent_count == 1
 
 
 # ===========================================================================
