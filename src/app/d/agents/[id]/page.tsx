@@ -362,7 +362,7 @@ export default function DeveloperAgentManagePage() {
                   <Button
                     variant="default"
                     className="mt-4"
-                    onClick={() => router.push(`/sign-in?redirect_url=/d/agents/${agentId}`)}
+                    onClick={() => router.push(`/sign-in?redirect_url=${encodeURIComponent(`/d/agents/${agentId}`)}`)}
                   >
                     Sign In
                   </Button>

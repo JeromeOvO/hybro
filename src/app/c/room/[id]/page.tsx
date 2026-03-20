@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { useParams, usePathname } from 'next/navigation'
-import { useUser, useClerk, useAuth } from '@clerk/nextjs'
+import { useParams } from 'next/navigation'
+import { useUser, useAuth } from '@clerk/nextjs'
+import { RequireAuth } from '@/components/require-auth'
 import { toast } from 'sonner'
 import { Users, Pencil, Check, X as XIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -25,7 +26,6 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
-import { isWaitlistEnabled } from "@/lib/utils"
 import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
 
 export default function RoomChatPage() {
@@ -34,8 +34,6 @@ export default function RoomChatPage() {
   const { user, isLoaded } = useUser()
   const { getToken } = useAuth()
   const [editorOpen, setEditorOpen] = useState(false)
-  const { openWaitlist } = useClerk()
-  const currentPath = usePathname()
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
 
@@ -55,14 +53,6 @@ export default function RoomChatPage() {
   // Local debate mode toggle (synced from room, lazy-persist-on-send like supervisor)
   const [localDebateMode, setLocalDebateMode] = useState(false)
   const confirmedDebateModeRef = useRef(false)
-
-  const handleRequireAuth = useCallback(() => {
-    if (isWaitlistEnabled()) {
-      openWaitlist()
-    } else {
-      window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
-    }
-  }, [openWaitlist, currentPath])
 
   const {
     room,
@@ -118,7 +108,6 @@ export default function RoomChatPage() {
     defaultGroup: roomAgentCount > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
     roomId,
     roomAgentCount,
-    onRequireAuth: handleRequireAuth,
   })
 
   // Set default group based on stored selection or room's agent set (runs once when room loads)
@@ -334,32 +323,26 @@ export default function RoomChatPage() {
 
   if (!isLoaded || loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-muted-foreground">Loading room...</div>
-      </div>
+      <RequireAuth>
+        <div className="flex items-center justify-center h-full">
+          <div className="text-muted-foreground">Loading room...</div>
+        </div>
+      </RequireAuth>
     )
   }
 
   if (!room) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-destructive">Room not found</div>
-      </div>
+      <RequireAuth>
+        <div className="flex items-center justify-center h-full">
+          <div className="text-destructive">Room not found</div>
+        </div>
+      </RequireAuth>
     )
   }
 
-  if (isLoaded && !user?.id) {
-    if (isWaitlistEnabled()) {
-      openWaitlist()
-    } else {
-      if (typeof window !== "undefined") {
-        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
-      }
-    }
-    return
-  }
-
   return (
+    <RequireAuth>
     <div className="flex flex-col h-screen bg-background">
       <div className="flex-1 overflow-hidden">
         <div className="w-full h-full flex flex-col">
@@ -541,5 +524,6 @@ export default function RoomChatPage() {
         initialAction={gm.groupAction || undefined}
       />
     </div>
+    </RequireAuth>
   )
 }
