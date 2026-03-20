@@ -97,6 +97,7 @@ class RoomMessageCenter:
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
+            response_handler=self.agent_response_handler,
         )
         self.supervisor_executor = SupervisorExecutor(
             supervisor_service=room_supervisor_service,

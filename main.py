@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -6,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from uvicorn.config import LOGGING_CONFIG
@@ -36,6 +38,7 @@ from database.mongodb import mongodb
 from database.pinecone_db import pinecone_db
 from jobs.cleanup_orphaned_uploads import orphaned_upload_cleaner
 from jobs.compaction_sweep import compaction_sweep
+from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import stale_task_checker
 from services.agent_health_service import agent_health_service
 from services.sse_services import sse_manager
@@ -88,6 +91,10 @@ async def lifespan(app: FastAPI):
     await mongodb.connect()
     pinecone_db.connect()
 
+    # Initialize RedisService variables (used later in startup and finally block)
+    _redis_service = None
+    _redis_streams_service = None
+
     await mongodb.create_context_memory_indexes()
     await mongodb.ensure_agent_indexes()
     await mongodb.create_capability_issue_indexes()
@@ -123,6 +130,38 @@ async def lifespan(app: FastAPI):
             f"Could not start change stream watcher (may not have replica set): {e}"
         )
 
+    # Start event broker for cross-instance SSE fan-out
+    from infrastructure.brokers import create_event_broker
+    _event_broker = create_event_broker()
+    if _event_broker:
+        await sse_manager.start_event_broker(_event_broker)
+        logger.info("Event broker started (cross-instance SSE fan-out enabled)")
+    else:
+        logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
+
+    # Start RedisService for shared cancellation/dedup state
+    from infrastructure.redis_service import create_redis_service
+    _redis_service = create_redis_service()
+    if _redis_service:
+        await _redis_service.start()
+        await sse_manager.start_redis_service(_redis_service)
+        logger.info("RedisService started (shared cancellation/dedup enabled)")
+    else:
+        logger.info("RedisService disabled (REDIS_URL not set)")
+
+    # Initialize leader election for background jobs
+    from infrastructure.leader_election import LeaderElection
+    _leader: LeaderElection | None = None
+    if _redis_service and _redis_service.is_connected:
+        _leader = LeaderElection(_redis_service, instance_id=sse_manager._instance_id)
+        logger.info("Leader election enabled for background jobs")
+
+    # Attach leader election to all background jobs
+    stale_task_checker.set_leader_election(_leader)
+    compaction_sweep.set_leader_election(_leader)
+    orphaned_upload_cleaner.set_leader_election(_leader)
+    agent_health_service.set_leader_election(_leader)
+
     # Start background compaction sweep (§6 lossless compaction)
     await compaction_sweep.start()
 
@@ -137,8 +176,22 @@ async def lifespan(app: FastAPI):
         mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
         room_message_center=_rmc,
     )
+    _relay_svc.set_leader_election(_leader)
     await _relay_svc.start()
     logger.info("Relay service initialized and heartbeat checker started")
+
+    # Start separate RedisService for blocking XREAD (hub relay streams)
+    _redis_streams_service = create_redis_service()  # separate pool
+    if _redis_streams_service:
+        await _redis_streams_service.start()
+        from infrastructure.relay_streams import RelayStreamService
+        _relay_streams = RelayStreamService(
+            _redis_streams_service,
+            maxlen=settings.relay_stream_maxlen,
+            heartbeat_ttl=settings.relay_hub_heartbeat_ttl,
+        )
+        _relay_svc.set_stream_service(_relay_streams)
+        logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
 
     try:
         yield
@@ -147,6 +200,10 @@ async def lifespan(app: FastAPI):
         from services.relay_service import relay_service as _relay_svc_shutdown
         if _relay_svc_shutdown:
             await _relay_svc_shutdown.stop()
+
+        # Stop Redis Streams service (hub relay)
+        if _redis_streams_service:
+            await _redis_streams_service.stop()
 
         # Stop the stale task checker
         await stale_task_checker.stop()
@@ -159,6 +216,22 @@ async def lifespan(app: FastAPI):
 
         # Stop the agent health check service
         await agent_health_service.stop()
+
+        # Release any leader locks
+        if _leader:
+            await _leader.release_all(ALL_JOB_NAMES)
+
+        # Drain: stop accepting new SSE connections and allow in-flight events to finish
+        sse_manager.set_draining(True)
+        await asyncio.sleep(settings.shutdown_drain_seconds)
+
+        # Stop RedisService
+        await sse_manager.stop_redis_service()
+        if _redis_service:
+            await _redis_service.stop()
+
+        # Stop event broker
+        await sse_manager.stop_event_broker()
 
         # Stop change stream watcher
         await sse_manager.stop_change_stream_watcher()
@@ -184,13 +257,40 @@ app.add_middleware(
 )
 
 
+# Pure function — trivially testable without lifespan/DB
+def compute_health_status(
+    *, broker_connected: bool, redis_url: str, change_stream_connected: bool,
+    redis_service_connected: bool = False,
+    relay_streams_available: bool = False,
+) -> dict:
+    """Compute health status body and HTTP status code."""
+    broker_expected = bool(redis_url)
+    degraded = broker_expected and not broker_connected
+    return {
+        "body": {
+            "status": "degraded" if degraded else "ok",
+            "change_stream_connected": change_stream_connected,
+            "broker_connected": broker_connected,
+            "broker_expected": broker_expected,
+            "redis_service_connected": redis_service_connected,
+            "relay_streams_available": relay_streams_available,
+        },
+        "status_code": 503 if degraded else 200,
+    }
+
+
 # Health check endpoint (no prefix, no dependencies)
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "ok",
-        "change_stream_connected": sse_manager.change_stream_connected,
-    }
+    from services.relay_service import relay_service as _relay_svc_health
+    result = compute_health_status(
+        broker_connected=sse_manager.broker_connected,
+        redis_url=settings.redis_url,
+        change_stream_connected=sse_manager.change_stream_connected,
+        redis_service_connected=sse_manager.redis_connected,
+        relay_streams_available=bool(_relay_svc_health and _relay_svc_health._streams),
+    )
+    return JSONResponse(content=result["body"], status_code=result["status_code"])
 
 
 # Include API routers with /api/v1 prefix and global authentication

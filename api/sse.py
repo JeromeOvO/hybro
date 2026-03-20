@@ -131,8 +131,8 @@ async def cancel_message(
                 detail="You do not have permission to cancel this message",
             )
 
-        # Add to local cache immediately (for same instance)
-        sse_manager.cancel_message(message_id)
+        # Cancel locally + broadcast to other instances via broker
+        await sse_manager.cancel_message_and_broadcast(message_id)
 
         # Cancel any pending HITL requests associated with this message
         from services.hitl_service import hitl_service

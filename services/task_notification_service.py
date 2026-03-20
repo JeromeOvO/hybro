@@ -1,11 +1,14 @@
 """Canonical, idempotent task notification service.
 
-``notify_task_update`` is the **single entry point** for all ``task_update``
-SSE events.  Every code path that transitions a task to a terminal or
-interactive state should call this function after persisting the new state
-to the DB.
+``notify_task_update`` is the **standalone entry point** for background jobs
+and safety-net paths.  ``AgentResponseHandler.notify_task_update`` is the
+preferred entry point when a handler instance is available.
 
-Idempotency is provided by ``db_service.update_last_notified_state``:
+Both delegate to ``_notify_task_update_impl`` — the shared core that
+performs idempotency checks, DB reads, artifact backfill, S3 conversion,
+and SSE emission.
+
+Idempotency is provided by ``db.update_last_notified_state``:
 calling the function twice with the same state for the same message is a
 safe no-op.
 """
@@ -14,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import TYPE_CHECKING
 
 from a2a.types import (
     Artifact,
@@ -30,14 +34,26 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from services.a2a_constants import is_terminal_state
-from services.database_service import db_service
-from services.notification_service import notification_service
-from services.sse_services import sse_manager
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+    from services.notification_service import NotificationService
+    from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
 
 
-async def notify_task_update(
+# ---------------------------------------------------------------------------
+# Shared implementation — called by both the handler method and the
+# standalone wrapper below.
+# ---------------------------------------------------------------------------
+
+
+async def _notify_task_update_impl(
+    db: DatabaseService,
+    notification_svc: NotificationService,
+    sse: SSEManager,
+    *,
     message_id: str,
     state: TaskState,
     room_id: str,
@@ -46,40 +62,10 @@ async def notify_task_update(
     send_processing_status: bool = False,
     parts: list[dict] | None = None,
 ) -> bool:
-    """Idempotent, DB-backed SSE notification for task state changes.
+    """Shared core: idempotency check, DB read, backfill, SSE emission.
 
-    Single canonical entry point for all ``task_update`` SSE events.
-    Safe to call multiple times with the same state (no-op on duplicate).
-
-    **PREREQUISITE:** The task must already be persisted to the DB with its
-    current state, artifacts, and status message BEFORE calling this function.
-    The function reads the full Task object from the DB to extract content,
-    error messages, and status messages.
-
-    Parameters
-    ----------
-    message_id : str
-        The agent-message ID that carries the task.
-    state : TaskState
-        The state to notify about.  Must match what is persisted in the DB.
-    room_id : str
-        Room to broadcast the SSE to.
-    user_id : str
-        Owner of the task (currently unused but kept for future audit).
-    error : str | None
-        Optional override for the error text.  When *None*, the function
-        extracts the error from the persisted Task's ``status.message``.
-    send_processing_status : bool
-        When *True*, also broadcasts a ``processing_status`` SSE for
-        terminal states.  Set to *True* only from the webhook path which
-        lacks a queue-level sender; defaults to *False* for inline callers
-        that already have a queue-level ``send_processing_status`` call.
-
-    Returns
-    -------
-    bool
-        *True* if the notification was sent; *False* if it was a duplicate
-        or the message has no task tracking.
+    Both ``notify_task_update`` (standalone) and
+    ``AgentResponseHandler.notify_task_update`` delegate here.
     """
     state_value = state.value if hasattr(state, "value") else str(state)
 
@@ -95,7 +81,7 @@ async def notify_task_update(
     # notification anyway — a duplicate SSE is harmless whereas a missed SSE
     # causes a stuck bubble in the UI.
     try:
-        is_new = await db_service.update_last_notified_state(
+        is_new = await db.update_last_notified_state(
             message_id, state_value
         )
     except Exception:
@@ -119,7 +105,7 @@ async def notify_task_update(
     room_agent_message = None
     for attempt in range(3):
         room_agent_message = (
-            await db_service.get_room_agent_message_by_message_id(message_id)
+            await db.get_room_agent_message_by_message_id(message_id)
         )
         if room_agent_message and room_agent_message.has_task_tracking:
             break
@@ -224,7 +210,7 @@ async def notify_task_update(
             elif status_message:
                 room_agent_message.message_content.message_text = status_message
 
-        update_ok = await db_service.update_room_agent_message_by_message_id(
+        update_ok = await db.update_room_agent_message_by_message_id(
             room_agent_message.message_id, room_agent_message
         )
         if not update_ok:
@@ -238,7 +224,7 @@ async def notify_task_update(
     agent_id = room_agent_message.agent_id
     if agent_id:
         try:
-            room = await db_service.get_room_by_room_id(room_id)
+            room = await db.get_room_by_room_id(room_id)
             if room and room.room_agent_set:
                 agent_name = room.room_agent_set.get(agent_id)
         except Exception:
@@ -262,7 +248,7 @@ async def notify_task_update(
 
         await convert_inline_bytes_to_s3(parts, room_id, message_id)
 
-    await notification_service.send_task_update(
+    await notification_svc.send_task_update(
         room_id=room_id,
         message_id=message_id,
         status=state,
@@ -284,6 +270,46 @@ async def notify_task_update(
     logger.info("Sent SSE notification for task %s state %s", message_id, state)
 
     if send_processing_status and is_terminal_state(state):
-        await sse_manager.send_processing_status(room_id, state, message_id)
+        await sse.send_processing_status(room_id, state, message_id)
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Standalone wrapper — for background jobs and safety-net paths that lack
+# a handler instance.
+# ---------------------------------------------------------------------------
+
+
+async def notify_task_update(
+    message_id: str,
+    state: TaskState,
+    room_id: str,
+    user_id: str,
+    error: str | None = None,
+    send_processing_status: bool = False,
+    parts: list[dict] | None = None,
+) -> bool:
+    """Standalone entry point — thin wrapper passing global singletons.
+
+    Prefer ``AgentResponseHandler.notify_task_update`` when a handler
+    instance is available.  This wrapper exists for background jobs
+    (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
+    that have no handler context.
+    """
+    from services.database_service import db_service
+    from services.notification_service import notification_service
+    from services.sse_services import sse_manager
+
+    return await _notify_task_update_impl(
+        db_service,
+        notification_service,
+        sse_manager,
+        message_id=message_id,
+        state=state,
+        room_id=room_id,
+        user_id=user_id,
+        error=error,
+        send_processing_status=send_processing_status,
+        parts=parts,
+    )

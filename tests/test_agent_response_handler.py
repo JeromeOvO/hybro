@@ -163,6 +163,34 @@ class TestArtifactUpdateEvent:
         h._db.accumulate_artifact_on_message.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_s3_converted_flag_skips_conversion(self):
+        """When s3_converted=True, handler skips S3 conversion."""
+        h = _make_handler()
+        artifact = {
+            "artifactId": "a1",
+            "parts": [{"kind": "file", "file": {"bytes": "dGVzdA==", "mime_type": "text/plain"}}],
+        }
+        event = AgentEvent(
+            kind="artifact_update", **_base_event(),
+            artifacts=[artifact],
+            s3_converted=True,
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_convert = AsyncMock(return_value=1)
+            mp.setattr(
+                "common.utils.a2a_helpers.convert_inline_bytes_to_s3",
+                mock_convert,
+            )
+            await h.handle(event)
+
+        # S3 conversion should NOT be called (already done by transport)
+        mock_convert.assert_not_awaited()
+        # But SSE and DB should still fire
+        h._sse.send_artifact_update.assert_awaited_once()
+        h._db.accumulate_artifact_on_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_s3_conversion_failure_does_not_block_sse(self):
         """S3 conversion failure should not prevent SSE broadcast or DB persist."""
         h = _make_handler()
@@ -469,3 +497,66 @@ class TestStatusUpdateSendsTaskUpdate:
         assert call_kwargs["status"] == "working"
         assert call_kwargs["status_message"] == "Searching the web..."
         assert call_kwargs["message_id"] == "msg-001"
+
+
+# =============================================================================
+# Handler-owned notify_task_update method
+# =============================================================================
+
+
+class TestHandlerNotifyTaskUpdate:
+    """notify_task_update method delegates to _notify_task_update_impl."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_shared_impl(self):
+        h = _make_handler()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_impl = AsyncMock(return_value=True)
+            mp.setattr(
+                "services.task_notification_service._notify_task_update_impl",
+                mock_impl,
+            )
+            result = await h.notify_task_update(
+                message_id="msg-001",
+                state=MagicMock(value="completed"),
+                room_id="room-001",
+                user_id="user-001",
+                error=None,
+                send_processing_status=False,
+                parts=None,
+            )
+
+        assert result is True
+        mock_impl.assert_awaited_once()
+        call_args = mock_impl.call_args
+        # First positional arg is the handler's db instance
+        assert call_args[0][0] is h._db
+        # Third positional arg is the handler's sse instance
+        assert call_args[0][2] is h._sse
+
+    @pytest.mark.asyncio
+    async def test_notify_helper_delegates_to_method(self):
+        """_notify helper calls self.notify_task_update with event fields."""
+        h = _make_handler()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mock_impl = AsyncMock(return_value=True)
+            mp.setattr(
+                "services.task_notification_service._notify_task_update_impl",
+                mock_impl,
+            )
+            from a2a.types import TaskState
+
+            event = AgentEvent(
+                kind="response", **_base_event(),
+                text="Done!", send_processing_status=True,
+                parts=[{"kind": "text"}],
+            )
+            await h._notify(event, TaskState.completed)
+
+        mock_impl.assert_awaited_once()
+        call_kw = mock_impl.call_args.kwargs
+        assert call_kw["message_id"] == "msg-001"
+        assert call_kw["room_id"] == "room-001"
+        assert call_kw["send_processing_status"] is True

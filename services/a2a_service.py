@@ -33,6 +33,7 @@ from a2a.utils.constants import (
 
 from common.utils.logger import get_logger
 from config.settings import settings
+from database.mongodb import mongodb
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
 from models.room import RoomAgentMessage
@@ -299,6 +300,15 @@ class A2AService:
             "total_steps": total_steps,
         }
 
+    async def _record_call(self, agent_id: str | None, *, success: bool) -> None:
+        """Atomically increment call_count (and call_success_count) for an agent."""
+        if not agent_id:
+            return
+        try:
+            await mongodb.increment_agent_call_count(agent_id, success=success)
+        except Exception as e:
+            logger.warning("Failed to record agent call for %s: %s", agent_id, e)
+
     async def send_message_to_tracked_agent(
         self,
         agent_card: AgentCard,
@@ -307,6 +317,7 @@ class A2AService:
         webhook_token: str,
         context_id: str,
         room_id: str | None = None,
+        agent_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Send message to agent with an existing task record.
@@ -389,6 +400,7 @@ class A2AService:
             async with self.create_a2a_client(agent_card, timeout=dispatch_timeout) as a2a_client:
                 response = await a2a_client.send_message(send_message_request)
         except Exception as e:
+            await self._record_call(agent_id, success=False)
             # Mark task as failed IMMEDIATELY (don't wait for stale checker)
             failed_task = Task(
                 id=SyntheticTaskId.FAILED,
@@ -410,6 +422,7 @@ class A2AService:
 
         # Handle error response
         if isinstance(response.root, JSONRPCErrorResponse):
+            await self._record_call(agent_id, success=False)
             error_msg = str(response.root.error.message)
             failed_task = Task(
                 id=SyntheticTaskId.FAILED,
@@ -428,6 +441,7 @@ class A2AService:
             )
             raise A2AServiceError(error_msg)
 
+        await self._record_call(agent_id, success=True)
         result = response.root.result
 
         # Handle Message response (fast path)
@@ -578,6 +592,7 @@ class A2AService:
         self,
         agent_card: AgentCard,
         message: Message,
+        agent_id: str | None = None,
     ) -> SendMessageResponse | None:
         """
         Send message to agent using synchronous (non-streaming) endpoint.
@@ -585,6 +600,7 @@ class A2AService:
         Args:
             agent_card: The card of the target agent
             message: A2A Message to send
+            agent_id: Optional agent_id for call count tracking
 
         Returns:
             Task data as dict
@@ -592,7 +608,7 @@ class A2AService:
         Raises:
             A2AServiceError: If sending fails
         """
-
+        success = False
         try:
             async with self.create_a2a_client(agent_card) as a2a_client:
                 payload = MessageSendParams(
@@ -617,6 +633,7 @@ class A2AService:
                     error_msg = str(response.root.error.message)
                     logger.error(f"a2a_service: Agent error: {error_msg}")
                     raise A2AServiceError(error_msg)
+                success = True
                 return response
 
         except A2AServiceError:
@@ -624,11 +641,14 @@ class A2AService:
         except Exception as e:
             logger.error(f"Failed to send sync message: {e}", exc_info=True)
             raise A2AServiceError(str(e)) from e
+        finally:
+            await self._record_call(agent_id, success=success)
 
     async def send_message_streaming(
         self,
         agent_card: AgentCard,
         message: Message,
+        agent_id: str | None = None,
     ) -> AsyncGenerator[SendStreamingMessageResponse, None]:
         """
         Send message to agent with TRUE passthrough streaming.
@@ -643,32 +663,38 @@ class A2AService:
         Args:
             agent_card: The card of the target agent
             message: A2A Message to send
+            agent_id: Optional agent_id for call count tracking
 
         Yields:
             Dict events in our internal format (TokenStreamingEvent, TaskUpdateStreamingEvent, etc.)
         """
-        async with self.create_a2a_client(agent_card) as a2a_client:
-            payload = MessageSendParams(
-                message=message,
-                configuration=MessageSendConfiguration(
-                    accepted_output_modes=self._resolve_accepted_modes(agent_card)
-                ),
-            )
+        success = False
+        try:
+            async with self.create_a2a_client(agent_card) as a2a_client:
+                payload = MessageSendParams(
+                    message=message,
+                    configuration=MessageSendConfiguration(
+                        accepted_output_modes=self._resolve_accepted_modes(agent_card)
+                    ),
+                )
 
-            stream_request = SendStreamingMessageRequest(
-                id=str(uuid4()),
-                method="message/stream",
-                jsonrpc="2.0",
-                params=payload,
-            )
+                stream_request = SendStreamingMessageRequest(
+                    id=str(uuid4()),
+                    method="message/stream",
+                    jsonrpc="2.0",
+                    params=payload,
+                )
 
-            logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
-            response_stream = a2a_client.send_message_streaming(stream_request)
-            async for response in response_stream:
-                yield response
+                logger.debug(f"a2a_service: Starting streaming from agent: {agent_card}")
+                response_stream = a2a_client.send_message_streaming(stream_request)
+                async for response in response_stream:
+                    success = True
+                    yield response
+        finally:
+            await self._record_call(agent_id, success=success)
 
     async def send_message(
-        self, agent_card: AgentCard, message: Message
+        self, agent_card: AgentCard, message: Message, agent_id: str | None = None,
     ) -> AsyncGenerator[SendStreamingMessageResponse | SendMessageResponse, None]:
         """
         Send message to agent with automatic capability detection.
@@ -682,6 +708,7 @@ class A2AService:
         Args:
             agent_card: The card of the target agent
             message: A2A Message to send
+            agent_id: Optional agent_id for call count tracking
 
         Yields:
             Dict events (TokenStreamingEvent, TaskUpdateStreamingEvent, etc.)
@@ -689,7 +716,7 @@ class A2AService:
         # Check agent capability and route to appropriate method
         if self.has_streaming_capability(agent_card):
             logger.debug(f"a2a_service: Agent supports streaming: {agent_card.url}")
-            async for event in self.send_message_streaming(agent_card, message):
+            async for event in self.send_message_streaming(agent_card, message, agent_id=agent_id):
                 yield event
 
         else:
@@ -697,7 +724,7 @@ class A2AService:
                 f"a2a_service: Agent doesn't support streaming, using sync: {agent_card.url}"
             )
             try:
-                event = await self.send_message_sync(agent_card, message)
+                event = await self.send_message_sync(agent_card, message, agent_id=agent_id)
                 yield event
 
             except Exception as e:

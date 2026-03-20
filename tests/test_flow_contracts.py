@@ -533,7 +533,7 @@ class TestMessageCancellationFlow:
         mock_mongodb.cancel_message = AsyncMock(return_value=True)
 
         mock_sse = MagicMock()
-        mock_sse.cancel_message = MagicMock()
+        mock_sse.cancel_message_and_broadcast = AsyncMock()
 
         mock_hitl = MagicMock()
         mock_hitl.cancel_requests_for_message = AsyncMock()
@@ -546,7 +546,7 @@ class TestMessageCancellationFlow:
 
         assert result["success"] is True
         assert result["message_id"] == msg_id
-        mock_sse.cancel_message.assert_called_once_with(msg_id)
+        mock_sse.cancel_message_and_broadcast.assert_called_once_with(msg_id)
         mock_hitl.cancel_requests_for_message.assert_called_once_with(msg_id)
 
 

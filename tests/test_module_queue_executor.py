@@ -45,6 +45,8 @@ def _make_queue_executor():
     qe.room_services = MagicMock()
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
+    qe.response_handler = MagicMock()
+    qe.response_handler.notify_task_update = AsyncMock(return_value=True)
     return qe
 
 

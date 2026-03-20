@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import random
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from cachetools import TTLCache
@@ -11,8 +13,12 @@ from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
+from infrastructure.event_broker import EventBroker
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
+
+if TYPE_CHECKING:
+    from infrastructure.redis_service import RedisService
 
 
 def _enum_value(v: Any) -> Any:
@@ -104,11 +110,111 @@ class SSEManager:
             maxsize=10_000, ttl=3600
         )
 
+        # Cross-instance event broker (Redis Pub/Sub or future MQ)
+        self._instance_id: str = str(uuid4())
+        self._broker: EventBroker | None = None
+        self._broker_disconnect_warned: bool = False
+
+        # Shared Redis key-value service (cancellation/dedup L2 cache)
+        self._redis: RedisService | None = None
+
+        # Draining flag — reject new connections during shutdown
+        self._draining: bool = False
+
+    # ------------------------------------------------------------------
+    # Event broker lifecycle
+    # ------------------------------------------------------------------
+
+    async def start_event_broker(self, broker: EventBroker) -> None:
+        """Attach and start cross-instance event broker."""
+        self._broker = broker
+        # Register handlers for each message kind
+        self._broker.set_handler("sse_event", self._on_sse_event)
+        self._broker.set_handler("cancellation", self._on_cancellation_event)
+        await self._broker.start()
+        logger.info("Event broker attached (instance_id=%s)", self._instance_id)
+
+    async def stop_event_broker(self) -> None:
+        """Stop cross-instance event broker."""
+        if self._broker:
+            await self._broker.stop()
+            self._broker = None
+            logger.info("Event broker stopped")
+
+    @property
+    def broker_connected(self) -> bool:
+        """Whether the event broker is connected (for /health endpoint)."""
+        return self._broker is not None and self._broker.is_connected
+
+    async def start_redis_service(self, redis_service: RedisService) -> None:
+        """Attach RedisService for shared cancellation and dedup state."""
+        self._redis = redis_service
+        logger.info("SSEManager: RedisService attached for shared state")
+
+    async def stop_redis_service(self) -> None:
+        """Detach RedisService."""
+        self._redis = None
+
+    @property
+    def redis_connected(self) -> bool:
+        """Whether RedisService is connected (for /health endpoint)."""
+        return self._redis is not None and self._redis.is_connected
+
+    def set_draining(self, flag: bool) -> None:
+        """Set draining mode. When draining, new connections are rejected."""
+        self._draining = flag
+        if flag:
+            logger.info("SSEManager entering drain mode — rejecting new connections")
+
+    # ------------------------------------------------------------------
+    # Broker message handlers (incoming from other instances)
+    # ------------------------------------------------------------------
+
+    async def _on_sse_event(self, payload: dict[str, Any]) -> None:
+        """Handle incoming SSE event from broker (other instances)."""
+        if payload.get("origin") == self._instance_id:
+            return  # Skip self — we already delivered locally in broadcast_to_room
+        try:
+            await self._deliver_to_local_connections(
+                payload["room_id"], payload["type"], payload["data"]
+            )
+        except KeyError as e:
+            logger.warning("Malformed sse_event from broker (missing %s), dropping", e)
+
+    async def _on_cancellation_event(self, payload: dict[str, Any]) -> None:
+        """Handle incoming cancellation from broker (other instances)."""
+        if payload.get("origin") == self._instance_id:
+            return  # Skip self — we already cancelled locally
+        message_id = payload.get("message_id")
+        if message_id:
+            self.cancelled_messages[message_id] = True
+            token = self._cancellation_tokens.get(message_id)
+            if token is not None:
+                token.cancel()
+            # Persist to Redis L2 (ensures late-joining instances see it)
+            if self._redis:
+                try:
+                    await self._redis.set_nx(
+                        f"{settings.redis_cancel_key_prefix}{message_id}", "1", ex=3600,
+                    )
+                except Exception:
+                    pass
+            logger.info("Received cancellation via broker: %s", message_id)
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
     async def add_connection(self, room_id: str) -> SSEConnection:
         """add connection"""
+        if self._draining:
+            raise ConnectionRefusedError("Server is draining — rejecting new SSE connections")
+
+        first_for_room = False
         async with self.lock:
             if room_id not in self.room_connections:
                 self.room_connections[room_id] = {}
+                first_for_room = True
 
             connection = SSEConnection(room_id)
             self.room_connections[room_id][connection.connection_id] = connection
@@ -116,10 +222,17 @@ class SSEManager:
             logger.info(
                 f"SSE connection {connection.connection_id} added to room {room_id}"
             )
-            return connection
+
+        # Subscribe to room's broker channel (outside lock to avoid holding lock during I/O)
+        if first_for_room and self._broker:
+            channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+            await self._broker.subscribe(channel)
+
+        return connection
 
     async def remove_connection(self, room_id: str, connection_id: str):
         """remove connection"""
+        room_empty = False
         async with self.lock:
             if (
                 room_id in self.room_connections
@@ -131,35 +244,78 @@ class SSEManager:
 
                 if not self.room_connections[room_id]:
                     del self.room_connections[room_id]
+                    room_empty = True
 
                 logger.info(
                     f"SSE connection {connection_id} removed from room {room_id}"
                 )
 
+        # Unsubscribe from room's broker channel (outside lock)
+        if room_empty and self._broker:
+            channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+            await self._broker.unsubscribe(channel)
+
     async def broadcast_to_room(self, room_id: str, message_type: str, data: Any):
-        """broadcast message to room"""
-        async with self.lock:
-            if room_id not in self.room_connections:
-                logger.warning(
-                    f"SSE broadcast [{message_type}] - NO connections for room {room_id}, event DROPPED!"
+        """Broadcast message to room — publishes to broker for cross-instance fan-out, then delivers locally."""
+        if self._broker and self._broker.is_connected:
+            self._broker_disconnect_warned = False
+            try:
+                channel = f"{settings.redis_sse_channel_prefix}{room_id}"
+                await self._broker.publish(channel, {
+                    "kind": "sse_event",
+                    "origin": self._instance_id,
+                    "room_id": room_id,
+                    "type": message_type,
+                    "data": data,
+                })
+            except Exception as e:
+                logger.error(
+                    "Cross-instance delivery failed for room %s: %s "
+                    "(clients on other instances will NOT receive this event)",
+                    room_id, e,
                 )
-                return
+        elif self._broker and not self._broker.is_connected:
+            if not self._broker_disconnect_warned:
+                self._broker_disconnect_warned = True
+                logger.error(
+                    "Event broker disconnected — events delivered locally only "
+                    "(cross-instance delivery unavailable until reconnect)",
+                )
 
-            disconnected_connections = []
+        # Always deliver to local connections
+        await self._deliver_to_local_connections(room_id, message_type, data)
 
-            for connection_id, connection in self.room_connections[room_id].items():
-                success = await connection.send_message(message_type, data)
-                if not success:
-                    disconnected_connections.append(connection_id)
+    async def _deliver_to_local_connections(self, room_id: str, message_type: str, data: Any):
+        """Deliver event to local SSE connections only (no broker publish).
 
-            # clean up disconnected connections
-            for connection_id in disconnected_connections:
-                if connection_id in self.room_connections[room_id]:
-                    del self.room_connections[room_id][connection_id]
+        Snapshots connections under lock, then delivers outside the lock to
+        avoid holding it during async I/O (send_message awaits).
+        """
+        # Snapshot under lock — fast, no I/O
+        async with self.lock:
+            room_conns = self.room_connections.get(room_id)
+            if not room_conns:
+                return  # No local connections — silent (normal for cross-instance)
+            snapshot = list(room_conns.items())
 
-            active_connections = len(self.room_connections[room_id])
+        # Deliver outside lock — I/O-bound, does not block other rooms
+        disconnected_ids: list[str] = []
+        for connection_id, connection in snapshot:
+            success = await connection.send_message(message_type, data)
+            if not success:
+                disconnected_ids.append(connection_id)
+
+        # Re-acquire lock to clean up disconnected connections
+        if disconnected_ids:
+            async with self.lock:
+                room_conns = self.room_connections.get(room_id)
+                if room_conns:
+                    for connection_id in disconnected_ids:
+                        room_conns.pop(connection_id, None)
+
+        if len(snapshot) - len(disconnected_ids) > 0:
             logger.info(
-                f"SSE broadcast [{message_type}] to {active_connections} connection(s) in room {room_id}"
+                f"SSE local delivery [{message_type}] to {len(snapshot) - len(disconnected_ids)} connection(s) in room {room_id}"
             )
 
     async def send_user_message(
@@ -303,16 +459,33 @@ class SSEManager:
         # status.  This is the safety net that makes double-send bugs harmless.
         if status in PROCESSING_DONE_STATUSES and message_id:
             dedup_key = f"{room_id}:{message_id}"
+            # L1 fast check
             already_sent = self._terminal_status_sent.get(dedup_key)
             if already_sent is not None:
                 logger.warning(
-                    "Suppressing duplicate terminal status %s for %s (already sent %s)",
+                    "Suppressing duplicate terminal status %s for %s (already sent %s, L1 hit)",
                     status,
                     dedup_key,
                     already_sent,
                 )
                 return
-            self._terminal_status_sent[dedup_key] = status
+            # L2 Redis check (cross-instance dedup)
+            if self._redis:
+                try:
+                    was_first = await self._redis.set_nx(
+                        f"{settings.redis_terminal_key_prefix}{dedup_key}", status, ex=300,
+                    )
+                    if not was_first:
+                        logger.warning(
+                            "Suppressing duplicate terminal status %s for %s (Redis hit)",
+                            status,
+                            dedup_key,
+                        )
+                        self._terminal_status_sent[dedup_key] = status  # populate L1
+                        return
+                except Exception as e:
+                    logger.warning("Redis terminal dedup check failed: %s", e)
+            self._terminal_status_sent[dedup_key] = status  # L1 cache
 
         # Persist processing state to room for page refresh recovery
         # Set processing_message_id when processing starts, clear it when done
@@ -593,6 +766,44 @@ class SSEManager:
             token.cancel()
         logger.info(f"Message {message_id} marked as cancelled in local cache")
 
+    async def cancel_message_and_broadcast(self, message_id: str) -> None:
+        """Cancel locally AND broadcast to other instances via broker.
+
+        Called by the cancel endpoint. The sync cancel_message() is kept
+        for internal use (change stream handler, etc.) that shouldn't re-broadcast.
+        """
+        self.cancel_message(message_id)
+
+        # L2 Redis key (durable even if Pub/Sub missed)
+        if self._redis:
+            try:
+                await self._redis.set_nx(
+                    f"{settings.redis_cancel_key_prefix}{message_id}", "1", ex=3600,
+                )
+            except Exception as e:
+                logger.warning("Redis cancel key write failed: %s", e)
+
+        if self._broker and self._broker.is_connected:
+            self._broker_disconnect_warned = False
+            try:
+                await self._broker.publish(settings.redis_cancel_channel, {
+                    "kind": "cancellation",
+                    "origin": self._instance_id,
+                    "message_id": message_id,
+                })
+            except Exception as e:
+                logger.error(
+                    "Cross-instance cancellation failed for message %s: %s",
+                    message_id, e,
+                )
+        elif self._broker and not self._broker.is_connected:
+            if not self._broker_disconnect_warned:
+                self._broker_disconnect_warned = True
+                logger.error(
+                    "Event broker disconnected — events delivered locally only "
+                    "(cross-instance delivery unavailable until reconnect)",
+                )
+
     def is_cancelled(self, message_id: str) -> bool:
         """
         Check if a message has been cancelled.
@@ -610,6 +821,24 @@ class SSEManager:
             True if message is cancelled, False otherwise
         """
         return message_id in self.cancelled_messages
+
+    async def check_cancelled(self, message_id: str) -> bool:
+        """Async cancellation check: L1 TTLCache -> Redis L2.
+
+        Use this for non-hot-path checks. Hot-path code should use
+        ``message_id in self.cancelled_messages`` (L1 only) which is
+        populated by broker handlers and cancel_message callers.
+        """
+        if message_id in self.cancelled_messages:
+            return True
+        if self._redis:
+            try:
+                if await self._redis.exists(f"{settings.redis_cancel_key_prefix}{message_id}"):
+                    self.cancelled_messages[message_id] = True  # populate L1
+                    return True
+            except Exception:
+                pass
+        return False
 
     def clear_cancellation(self, message_id: str) -> None:
         """

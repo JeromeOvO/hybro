@@ -9,12 +9,16 @@ This module provides a background job that:
 5. Cleans up stuck room processing status
 """
 
+from __future__ import annotations
+
 import asyncio
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from jobs.constants import STALE_TASK_CHECKER
 from services.task_notification_service import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
@@ -31,6 +35,9 @@ from services.a2a_constants import (
 )
 from services.a2a_service import a2a_service
 from services.database_service import db_service
+
+if TYPE_CHECKING:
+    from infrastructure.leader_election import LeaderElection
 
 logger = get_logger(__name__)
 
@@ -79,6 +86,11 @@ class StaleTaskChecker:
         self._running = False
         self._task: asyncio.Task | None = None
         self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
+        self._leader: LeaderElection | None = None
+
+    def set_leader_election(self, leader: LeaderElection | None) -> None:
+        """Attach a LeaderElection instance for distributed leader gating."""
+        self._leader = leader
 
     async def start(self) -> None:
         """Start the background checker."""
@@ -107,12 +119,26 @@ class StaleTaskChecker:
         """Main loop that runs the check periodically."""
         while self._running:
             try:
-                await self.check_stale_tasks()
+                await self._run_one_iteration()
             except Exception as e:
                 logger.error(f"Error in stale task checker: {e}", exc_info=True)
 
             # Wait for next check
             await asyncio.sleep(self.check_interval_minutes * 60)
+
+    async def _run_one_iteration(self) -> None:
+        """Run a single iteration, gated by leader election if available."""
+        if self._leader:
+            ttl = int(self.check_interval_minutes * 60 * 2)
+            acquired = await self._leader.try_acquire(STALE_TASK_CHECKER, ttl)
+            if not acquired:
+                return  # another instance is the leader
+            try:
+                await self.check_stale_tasks()
+            finally:
+                await self._leader.release(STALE_TASK_CHECKER)
+        else:
+            await self.check_stale_tasks()
 
     async def check_stale_tasks(self) -> None:
         """
