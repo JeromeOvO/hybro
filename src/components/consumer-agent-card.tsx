@@ -89,8 +89,9 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           />
         </div>
 
-        <p className="mt-3 text-base font-semibold text-center truncate w-full leading-tight">
+        <p className="mt-3 text-base font-semibold text-center truncate w-full leading-tight flex items-center justify-center gap-0.5">
           {agent.agent_card.name}
+          <ChevronRight className="h-4 w-4 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity duration-200 text-muted-foreground" />
         </p>
 
         <p className="text-xs text-muted-foreground text-center min-h-[1rem] leading-normal">
@@ -133,19 +134,6 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
           </div>
         )}
 
-        <div className="mt-auto pt-4">
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium transition-colors",
-              isActive
-                ? "bg-primary/60 text-primary-foreground/80 group-hover:bg-primary group-hover:text-primary-foreground"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            View Agent
-            <ChevronRight className="h-4 w-4" />
-          </span>
-        </div>
       </Card>
     </Link>
   )
@@ -164,9 +152,6 @@ export function ConsumerAgentCardSkeleton() {
       <div className="flex gap-2 mt-1">
         <Skeleton className="h-5 w-16 rounded-md" />
         <Skeleton className="h-5 w-20 rounded-md" />
-      </div>
-      <div className="mt-auto">
-        <Skeleton className="h-9 w-32 rounded-full" />
       </div>
     </Card>
   )
