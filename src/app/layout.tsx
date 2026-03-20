@@ -1,6 +1,6 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Inter } from "next/font/google"
+import { Inter, Space_Grotesk } from "next/font/google"
 import Script from "next/script"
 import "./globals.css"
 import "streamdown/styles.css"
@@ -18,6 +18,7 @@ declare global {
 }
 
 const inter = Inter({ subsets: ["latin"] })
+const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["700"], variable: "--font-space-grotesk" })
 
 export const metadata: Metadata = {
   title: "Hybro AI",
@@ -51,7 +52,7 @@ export default function RootLayout({
           `}
         </Script>
       </head>
-      <body className={inter.className}>
+      <body className={`${inter.className} ${spaceGrotesk.variable}`}>
         <ClerkProvider>
           <ClerkAuthProvider>
             <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
