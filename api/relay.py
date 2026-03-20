@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from common.api_key_auth import get_api_key
+from common.api_key_auth import get_api_key, get_api_key_no_track
 from common.utils.logger import get_logger
 from models.api_key import APIKey
 from models.hub import (
@@ -48,7 +48,7 @@ class RegisterHubResponse(BaseModel):
 @router.post("/hub/register", response_model=RegisterHubResponse)
 async def relay_register(
     body: RegisterHubRequest,
-    api_key: APIKey = Depends(get_api_key),
+    api_key: APIKey = Depends(get_api_key_no_track),
 ):
     svc = _get_relay_service()
     hub = await svc.register_hub(body.hub_id, api_key)
@@ -64,7 +64,7 @@ async def relay_events(
     hub_id: str,
     request: Request,
     last_event_id: str | None = Query(None),
-    api_key: APIKey = Depends(get_api_key),
+    api_key: APIKey = Depends(get_api_key_no_track),
 ):
     svc = _get_relay_service()
 
@@ -132,7 +132,7 @@ async def relay_publish(
 async def relay_sync_agents(
     hub_id: str,
     body: HubAgentSyncRequest,
-    api_key: APIKey = Depends(get_api_key),
+    api_key: APIKey = Depends(get_api_key_no_track),
 ):
     svc = _get_relay_service()
     try:
@@ -166,7 +166,7 @@ async def relay_status(
 @router.post("/hub/{hub_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
 async def relay_heartbeat(
     hub_id: str,
-    api_key: APIKey = Depends(get_api_key),
+    api_key: APIKey = Depends(get_api_key_no_track),
 ):
     """Lightweight liveness signal from the hub daemon."""
     svc = _get_relay_service()

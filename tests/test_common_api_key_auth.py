@@ -3,8 +3,10 @@ Unit tests for API Key Auth (common/api_key_auth.py).
 
 Tests cover:
 - hash_api_key: deterministic SHA-256 hashing
-- validate_api_key: valid key, missing key, inactive key, usage update failure
+- validate_api_key: valid key, missing key, inactive key, usage update failure,
+  track_usage=False skips increment
 - get_api_key: header extraction and delegation
+- get_api_key_no_track: header extraction and delegation without usage tracking
 """
 
 import hashlib
@@ -13,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
-from common.api_key_auth import hash_api_key, validate_api_key, get_api_key
+from common.api_key_auth import hash_api_key, validate_api_key, get_api_key, get_api_key_no_track
 
 
 # =============================================================================
@@ -95,6 +97,20 @@ class TestValidateApiKey:
             result = await validate_api_key("valid-key")
             assert result is mock_key
 
+    @pytest.mark.asyncio
+    async def test_skips_usage_update_when_track_usage_false(self):
+        mock_key = MagicMock()
+        mock_key.is_active = True
+
+        with patch("common.api_key_auth.mongodb") as mock_mongo:
+            mock_mongo.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+            mock_mongo.update_api_key_usage = AsyncMock()
+
+            result = await validate_api_key("raw-key", track_usage=False)
+
+        assert result is mock_key
+        mock_mongo.update_api_key_usage.assert_not_called()
+
 
 # =============================================================================
 # get_api_key Tests
@@ -127,3 +143,52 @@ class TestGetApiKey:
 
         assert result is mock_key
         mock_validate.assert_called_once_with("my-key")
+
+
+# =============================================================================
+# get_api_key_no_track Tests
+# =============================================================================
+
+
+class TestGetApiKeyNoTrack:
+    @pytest.mark.asyncio
+    async def test_raises_401_when_header_missing(self):
+        request = MagicMock()
+        request.headers = {}
+
+        with pytest.raises(HTTPException) as exc:
+            await get_api_key_no_track(request)
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail["error"] == "missing_key"
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_validate_with_track_usage_false(self):
+        mock_key = MagicMock()
+        mock_key.is_active = True
+
+        request = MagicMock()
+        request.headers = {"X-API-Key": "my-key"}
+
+        with patch("common.api_key_auth.validate_api_key", new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = mock_key
+            result = await get_api_key_no_track(request)
+
+        assert result is mock_key
+        mock_validate.assert_called_once_with("my-key", track_usage=False)
+
+    @pytest.mark.asyncio
+    async def test_does_not_call_update_api_key_usage(self):
+        mock_key = MagicMock()
+        mock_key.is_active = True
+
+        request = MagicMock()
+        request.headers = {"X-API-Key": "infra-key"}
+
+        with patch("common.api_key_auth.mongodb") as mock_mongo:
+            mock_mongo.get_api_key_by_hash = AsyncMock(return_value=mock_key)
+            mock_mongo.update_api_key_usage = AsyncMock()
+
+            await get_api_key_no_track(request)
+
+        mock_mongo.update_api_key_usage.assert_not_called()

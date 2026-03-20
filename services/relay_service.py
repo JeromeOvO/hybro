@@ -705,13 +705,15 @@ class RelayService:
         hubs = await self._mongo.get_hubs_by_user(user_id)
         result: list[HubStatus] = []
         for h in hubs:
-            agent_count = await self._mongo.count_hub_agents(h["hub_id"])
+            active, inactive = await self._mongo.count_hub_agents(h["hub_id"])
             result.append(
                 HubStatus(
                     hub_id=h["hub_id"],
                     is_online=h.get("is_online", False),
                     last_connected_at=h.get("last_connected_at"),
-                    agent_count=agent_count,
+                    agent_count=active + inactive,
+                    active_agent_count=active,
+                    inactive_agent_count=inactive,
                 )
             )
         return result

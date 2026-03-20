@@ -489,10 +489,15 @@ class MongoDB:
         )
         return result["agent_id"]
 
-    async def count_hub_agents(self, hub_id: str) -> int:
-        return await self.agents_collection.count_documents(
-            {"hub_id": hub_id}
+    async def count_hub_agents(self, hub_id: str) -> tuple[int, int]:
+        """Returns (active_count, inactive_count) for the given hub."""
+        active = await self.agents_collection.count_documents(
+            {"hub_id": hub_id, "agent_status": "active"}
         )
+        inactive = await self.agents_collection.count_documents(
+            {"hub_id": hub_id, "agent_status": "inactive"}
+        )
+        return active, inactive
 
     async def get_all_agents_by_user_id(self, user_id: str) -> list[Agent]:
         """

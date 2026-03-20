@@ -142,6 +142,8 @@ class HubStatus(BaseModel):
     is_online: bool
     last_connected_at: datetime | None = None
     agent_count: int = 0
+    active_agent_count: int = 0
+    inactive_agent_count: int = 0
 
 
 class HubStatusResponse(BaseModel):
