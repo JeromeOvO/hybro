@@ -11,10 +11,17 @@ where the inline trigger was skipped due to an error.
 See CONTEXT_MEMORY_SYSTEM_DESIGN.md §6 for compaction design.
 """
 
+from __future__ import annotations
+
 import asyncio
+from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
+from jobs.constants import COMPACTION_SWEEP
 from models.context_config import compaction_config
+
+if TYPE_CHECKING:
+    from infrastructure.leader_election import LeaderElection
 
 logger = get_logger(__name__)
 
@@ -29,6 +36,11 @@ class CompactionSweep:
         self.interval_minutes = interval_minutes
         self._running = False
         self._task: asyncio.Task | None = None
+        self._leader: LeaderElection | None = None
+
+    def set_leader_election(self, leader: LeaderElection | None) -> None:
+        """Attach a LeaderElection instance for distributed leader gating."""
+        self._leader = leader
 
     async def start(self) -> None:
         if self._running:
@@ -57,12 +69,26 @@ class CompactionSweep:
         while self._running:
             try:
                 await asyncio.sleep(self.interval_minutes * 60)
-                await self.sweep()
+                await self._run_one_iteration()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("Compaction sweep error: %s", e, exc_info=True)
                 await asyncio.sleep(60)
+
+    async def _run_one_iteration(self) -> None:
+        """Run a single iteration, gated by leader election if available."""
+        if self._leader:
+            ttl = int(self.interval_minutes * 60 * 2)
+            acquired = await self._leader.try_acquire(COMPACTION_SWEEP, ttl)
+            if not acquired:
+                return  # another instance is the leader
+            try:
+                await self.sweep()
+            finally:
+                await self._leader.release(COMPACTION_SWEEP)
+        else:
+            await self.sweep()
 
     async def sweep(self) -> dict:
         """Scan all rooms with memory and compact where needed.

@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
     relay_hub_agent_heartbeat_miss_limit: int = 3
     relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
-    
+    relay_stream_maxlen: int = 10_000
+    relay_hub_heartbeat_ttl: int = 90  # 3x relay_heartbeat_interval
+
     # A2A Long-Running Tasks Settings
     webhook_base_url: str = (
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
@@ -92,6 +94,15 @@ class Settings(BaseSettings):
     cs_backoff_max: float = 30.0  # ceiling delay in seconds
     cs_backoff_factor: float = 2.0  # multiplier per retry
     cs_jitter_fraction: float = 0.25  # ±25% random jitter
+
+    # Event Broker (cross-instance SSE fan-out + cancellation)
+    redis_url: str = ""  # e.g. "redis://localhost:6379/0" — empty string disables broker
+    redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
+    redis_cancel_channel: str = "cancel:global"  # single channel for all cancellation events
+    redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
+    redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
+    redis_cancel_key_prefix: str = "cancelled:"
+    redis_terminal_key_prefix: str = "terminal:"
 
     # ===========================================
     # Context & Memory System Settings
@@ -137,6 +148,9 @@ class Settings(BaseSettings):
     bedrock_region: str = "us-east-1"
     bedrock_supervisor_model: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     use_bedrock_supervisor: bool = False
+
+    # Graceful Shutdown Settings
+    shutdown_drain_seconds: float = 5.0  # Drain period for SSE connections during shutdown
 
     class Config:
         env_file = ".env"

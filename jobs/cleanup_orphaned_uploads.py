@@ -4,11 +4,18 @@ Deletes file_uploads records (and their S3 objects) that are older than
 24 hours and not referenced by any message attachment.
 """
 
+from __future__ import annotations
+
 import asyncio
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from jobs.constants import ORPHANED_UPLOAD_CLEANER
+
+if TYPE_CHECKING:
+    from infrastructure.leader_election import LeaderElection
 
 logger = get_logger(__name__)
 
@@ -21,6 +28,11 @@ class OrphanedUploadCleaner:
         self.interval_hours = interval_hours
         self._running = False
         self._task: asyncio.Task | None = None
+        self._leader: LeaderElection | None = None
+
+    def set_leader_election(self, leader: LeaderElection | None) -> None:
+        """Attach a LeaderElection instance for distributed leader gating."""
+        self._leader = leader
 
     async def start(self) -> None:
         if self._running:
@@ -47,9 +59,7 @@ class OrphanedUploadCleaner:
     async def _run_loop(self) -> None:
         while self._running:
             try:
-                deleted = await self.cleanup_orphaned_uploads()
-                if deleted:
-                    logger.info("Cleaned up %d orphaned uploads", deleted)
+                await self._run_one_iteration()
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -59,6 +69,24 @@ class OrphanedUploadCleaner:
                 await asyncio.sleep(self.interval_hours * 3600)
             except asyncio.CancelledError:
                 break
+
+    async def _run_one_iteration(self) -> None:
+        """Run a single iteration, gated by leader election if available."""
+        if self._leader:
+            ttl = int(self.interval_hours * 3600 * 2)
+            acquired = await self._leader.try_acquire("orphaned_upload_cleaner", ttl)
+            if not acquired:
+                return  # another instance is the leader
+            try:
+                deleted = await self.cleanup_orphaned_uploads()
+                if deleted:
+                    logger.info("Cleaned up %d orphaned uploads", deleted)
+            finally:
+                await self._leader.release("orphaned_upload_cleaner")
+        else:
+            deleted = await self.cleanup_orphaned_uploads()
+            if deleted:
+                logger.info("Cleaned up %d orphaned uploads", deleted)
 
     async def cleanup_orphaned_uploads(
         self, max_age_hours: int = MAX_AGE_HOURS

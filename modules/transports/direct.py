@@ -675,7 +675,7 @@ class DirectTransport(AgentTransport):
         streaming_state = MessageStreamingState()
 
         async for a2a_response in self.a2a_service.send_message_streaming(
-            agent_card, prepared_message
+            agent_card, prepared_message, agent_id=current_message.agent_id,
         ):
             if token and token.is_cancelled:
                 return await self._handle_streaming_cancellation(ctx, streaming_state)
@@ -966,22 +966,28 @@ class DirectTransport(AgentTransport):
         )
         streaming_state.inline_conversion_count = shared_counter[0]
 
-        await self.tsm.persist_message(ctx.current_message)
-
+        # Route persistence + SSE through handler (atomic DB ops + broadcast).
+        # S3 conversion was already done above, so set s3_converted=True.
+        artifact_dict = (
+            artifact_result.model_dump()
+            if hasattr(artifact_result, "model_dump")
+            else artifact_result
+        )
         if ctx.send_sse:
-            # Explicitly serialize to dict so json.dumps doesn't choke on Pydantic models
-            artifact_dict = (
-                artifact_result.model_dump()
-                if hasattr(artifact_result, "model_dump")
-                else artifact_result
-            )
-            await self.sse_manager.send_artifact_update(
-                ctx.room_id,
-                ctx.current_message.message_id,
-                ctx.current_message.agent_id,
-                artifact_dict,
+            await self.response_handler.handle(AgentEvent(
+                kind="artifact_update",
+                message_id=ctx.current_message.message_id,
+                room_id=ctx.room_id,
+                agent_id=ctx.current_message.agent_id or "",
+                artifacts=[artifact_dict],
                 append=append,
                 last_chunk=last_chunk,
+                s3_converted=True,
+            ))
+        else:
+            # No SSE but still persist via atomic op (replaces full-doc persist_message)
+            await self.database_service.accumulate_artifact_on_message(
+                ctx.current_message.message_id, artifact_dict, append=append,
             )
 
     async def _finalize_streaming(
@@ -1296,6 +1302,7 @@ class DirectTransport(AgentTransport):
                     message_id=message_id,
                     webhook_token=task_info["webhook_token"],
                     context_id=task_info["context_id"],
+                    agent_id=current_message.agent_id,
                 )
             else:
 
@@ -1303,6 +1310,7 @@ class DirectTransport(AgentTransport):
                     raw = await self.a2a_service.send_message_sync(
                         agent_card=agent_card,
                         message=prepared_message,
+                        agent_id=current_message.agent_id,
                     )
                     return self._parse_sync_fallback_response(raw, message_id)
 

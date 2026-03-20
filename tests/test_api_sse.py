@@ -115,7 +115,7 @@ class TestCancelMessage:
 
         assert result["success"] is True
         assert result["message_id"] == sample_user_message.message_id
-        deps["sse_manager"].cancel_message.assert_called_once_with(
+        deps["sse_manager"].cancel_message_and_broadcast.assert_called_once_with(
             sample_user_message.message_id
         )
 
@@ -219,7 +219,7 @@ class TestCancelMessage:
         deps = patch_sse_deps
         deps["db_service"].get_room_user_message_by_message_id.return_value = sample_user_message
         deps["db_service"].get_room_by_room_id.return_value = sample_room
-        deps["sse_manager"].cancel_message = MagicMock(
+        deps["sse_manager"].cancel_message_and_broadcast = AsyncMock(
             side_effect=Exception("SSE error")
         )
 
