@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     discovery_query_expansion_threshold: int = 5  # Maximum word count for query expansion
     discovery_rate_limit_per_key: int | None = 100  # Requests per API key per hour (None = unlimited)
     discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
+    hybro_timeout_seconds: float = 45.0  
+
 
     # Gateway API Settings
     gateway_base_url: str = ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime

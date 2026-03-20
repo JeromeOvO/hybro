@@ -361,6 +361,7 @@ dependencies = [
 
 [project.scripts]
 multi-agents-backend = "main:main"
+discover = "scripts.discovery_cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -417,6 +418,7 @@ packages = [
     "database",
     "services",
     "config",
+    "scripts",
     "infrastructure",
     "infrastructure.brokers",
 ]
