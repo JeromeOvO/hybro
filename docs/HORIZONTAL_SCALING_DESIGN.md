@@ -1,8 +1,102 @@
 # Horizontal Scaling Design — Multi-Instance Hybro Backend
 
-**Status**: Proposed
+**Status**: Phases 1-5 Implemented
 **Author**: Kevin Lu & Cursor with Opus 4.6
 **Related docs**: `SYSTEM_DESIGN_REVIEW.md` §2.1, §2.2, §2.15 · `EVENT_PIPELINE_DESIGN.md` · `NATIVE_SSE_MIGRATION_DESIGN.md` · `CONCURRENCY_ROADMAP.md` Layer C
+
+---
+
+## Implementation Status
+
+**Phase 1 (Alternative A — Redis Pub/Sub for SSE fan-out + cancellation)** — COMPLETED on `feature/redis-implement`
+
+What was built:
+- `EventBroker` Protocol (`infrastructure/event_broker.py`) — generic publish/subscribe with kind-based message dispatch
+- `RedisBroker` (`infrastructure/brokers/redis_broker.py`) — Redis Pub/Sub implementation with reconnect, exponential backoff
+- SSEManager integration — broker publish in `broadcast_to_room()`, dynamic per-room channel subscribe/unsubscribe
+- Cross-instance cancellation — broker fast path via `cancel:global` channel + MongoDB change stream safety net (both idempotent)
+- Factory pattern (`infrastructure/brokers/__init__.py`) — swappable for NATS/RabbitMQ/Kafka
+- Health endpoint reports `broker_connected` and returns `"degraded"` status when broker expected but down
+
+### Divergences from this Document
+
+| This Document Proposed | What Was Built | Rationale |
+|----------------------|----------------|-----------|
+| `EventBroadcaster` Protocol (typed methods like `artifact_update()`) | `EventBroker` Protocol (generic `publish/subscribe` with `kind` field) | Generic interface is simpler, MQ-agnostic. Kind-based handler dispatch in SSEManager provides type safety. EventBroadcaster remains valid as a future application-layer wrapper around EventBroker. |
+| `RedisBroadcaster` + separate `EventSubscriber` classes | Single `RedisBroker` class + handler registration in SSEManager | Simpler: one class handles both pub and sub. SSEManager registers `_on_sse_event` and `_on_cancellation_event` handlers. |
+| Per-message cancel channels (`cancel:{message_id}`) | Single global `cancel:global` channel | Cancellation volume is low; per-message channels add subscribe/unsubscribe overhead with no benefit. |
+| `asyncio.gather` for parallel local + Redis publish (§4.4) | Sequential: broker publish → local delivery | Ensures broker failures never affect local delivery. No failure isolation complexity needed. See review feedback below. |
+| `msgpack` serialization | `json` serialization | JSON is simpler to debug, sufficient for SSE payloads. Can switch to msgpack later if profiling shows need. |
+| Graceful degradation to local-only (silent) | Degraded health status + ERROR logging | Silent degradation = split-brain in multi-instance. See review feedback below. |
+
+### Review Feedback Addressed
+
+**@JeromeOvO's concerns (PR review):**
+
+1. **Last-Event-ID / SSE replay**: Both this doc (NG4) and EVENT_PIPELINE_DESIGN (NG2) explicitly defer this. Note: implementation requires frontend migration from custom fetch-based SSE client to `EventSource` API — not achievable with backend changes alone. Tracked in `NATIVE_SSE_MIGRATION_DESIGN.md`.
+
+2. **Graceful degradation = split-brain**: Fixed. When `REDIS_URL` is configured but Redis is down, health endpoint returns `"status": "degraded"` and all publish failures log at ERROR level. Local delivery continues (better than total failure) but the broken state is visible to ALB health checks and monitoring.
+
+3. **`asyncio.gather` failure semantics**: Does not apply — implementation uses sequential publish (broker first, then local). Broker failures are caught and logged; local delivery always proceeds.
+
+### Phase 2 (Shared Cancellation/Dedup State) — COMPLETED on `feature/redis-implement`
+
+What was built:
+- `RedisService` (`infrastructure/redis_service.py`) — shared Redis client for KV + stream ops, separate from RedisBroker's Pub/Sub connection
+- L1/L2 cancellation cache: L1 = in-memory TTLCache (sync, fast), L2 = Redis key (async, cross-instance)
+- `check_cancelled()` async method — L1 → Redis L2 fallback for non-hot-path callers
+- `cancel_message_and_broadcast()` writes Redis L2 key before broker publish
+- `_on_cancellation_event()` persists incoming broker cancellations to Redis L2
+- Terminal status dedup via Redis `set_nx` in `send_processing_status()` — cross-instance L1/L2 pattern
+
+Divergences:
+- `cancel_message()` and `create_token()` remain **sync** (plan preserved this to avoid breaking 5+ call sites)
+- `RedisService` gracefully degrades (returns safe defaults when disconnected) matching RedisBroker pattern
+
+### Phase 3 (Hub Relay via Redis Streams) — COMPLETED on `feature/redis-implement`
+
+What was built:
+- `RelayStreamService` (`infrastructure/relay_streams.py`) — Redis Streams adapter (push_event, read_events, heartbeat TTL keys)
+- Dual-path `connect_hub()` — Redis Streams path (XREAD with blocking, `Last-Event-ID` resume) or in-memory Queue fallback
+- Dual-path `push_to_hub()` — Redis Streams with heartbeat TTL check, or existing Queue + offline grace period
+- `record_hub_heartbeat()` changed to async — Redis path delegates to stream service, Queue path unchanged
+- `api/relay.py` — `Last-Event-ID` header + query param support, `id:` field in SSE frames for stream events
+- Separate `RedisService` pool for blocking XREAD to avoid starving KV operations
+
+Divergences:
+- Hub heartbeat TTL (90s = 3× interval) naturally replaces `relay_offline_grace_period` on Redis path
+- No explicit offline queue on Redis path — the stream IS the durable queue (capped at `relay_stream_maxlen`)
+
+### Phase 4 (Leader Election for Background Jobs) — COMPLETED on `feature/redis-implement`
+
+What was built:
+- `LeaderElection` (`infrastructure/leader_election.py`) — SETNX + Lua scripts for safe renewal/release
+- `hold()` context manager with automatic renewal task for long-running operations
+- Leader wrapping on all 5 background jobs:
+  - `StaleTaskChecker` (key: `stale_task_checker`, TTL: 2× check interval)
+  - `CompactionSweep` (key: `compaction_sweep`, TTL: 2× interval)
+  - `OrphanedUploadCleaner` (key: `orphaned_upload_cleaner`, TTL: 2× interval)
+  - `AgentHealthService` (key: `agent_health_checker`, TTL: 2× check interval)
+  - `RelayService._heartbeat_loop` (key: `relay_heartbeat_monitor`, TTL: 2× heartbeat interval)
+- Shutdown order: stop jobs (sets `_running=False`, awaits current iteration) → release locks → drain SSE → close Redis
+
+Divergences:
+- Simple acquire/release pattern (not `hold()`) for most jobs since TTL = 2× interval and MongoDB claims are atomic
+- Only relay heartbeat monitor gets leader election; `connect_hub` is NOT gated (any instance serves hub SSE)
+
+### Phase 5 (Operational Hardening) — COMPLETED on `feature/redis-implement`
+
+What was built:
+- Enhanced `/health` endpoint: reports `redis_service_connected`, `relay_streams_available` alongside existing `broker_connected`
+- Graceful shutdown draining: `SSEManager._draining` flag rejects new connections; configurable `shutdown_drain_seconds` (default 5s) before tearing down infrastructure
+- Shutdown sequence: stop jobs → release leader locks → drain SSE → stop broker/Redis/MongoDB
+
+### Remaining Phases
+
+- ~~§4.8: `notify_task_update` bypass fix~~ — **COMPLETED.** Shared `_notify_task_update_impl` extracted; `AgentResponseHandler.notify_task_update()` is the handler-owned entry point; `QueueExecutor` routes through handler; standalone wrapper preserved for background jobs.
+- ~~§4.9: `processing_status` side-effect separation~~ — **COMPLETED (functionally resolved).** Broker subscriber uses `_deliver_to_local_connections` (pure broadcast); side effects only run on originating instance. `broadcast_processing_status` self-documenting method deprioritized.
+- ~~§4.10: Persistence path unification~~ — **COMPLETED (narrowed scope).** `_handle_stream_artifact_update` routes artifact chunks through `AgentResponseHandler` (atomic `accumulate_artifact_on_message` + SSE). `s3_converted` flag on `AgentEvent` prevents double S3 conversion. Message-chunk persistence (line 827) deferred to future `accumulate_history_on_message` atomic op.
+- MongoDB change stream removal (deferred — keep as safety net until Redis-backed cancellation is proven in production)
 
 ---
 
@@ -231,6 +325,8 @@ class RedisBroadcaster:
     # ... remaining protocol methods follow the same pattern
 ```
 
+> **Implementation note (2026-03):** The actual implementation uses sequential publish (broker first, then local delivery) instead of `asyncio.gather`. This eliminates the need for failure isolation between the two paths. See "Divergences from this Document" above.
+
 **Serialization**: msgpack (not JSON) for the pub/sub payload. Artifact chunks can contain binary-like data; msgpack handles bytes natively and is ~2× faster to encode/decode than JSON for typical SSE payloads.
 
 > **Note**: The constructor accepts `local_sse` for the self-publish optimization detailed in §4.4. Every protocol method delivers locally AND publishes to Redis in parallel — the subscriber skips messages from the same `origin`.
@@ -353,6 +449,8 @@ The `RedisBroadcaster` publishes to Redis, and the `EventSubscriber` receives th
 **Decision**: The `RedisBroadcaster` delivers to the local `SSEManager` **and** publishes to Redis in parallel (see the `asyncio.gather` calls in the §4.2 code above). The subscriber skips messages from its own `instance_id` (the `origin` field in the payload).
 
 This ensures local clients see events with zero additional latency while remote clients receive them via Redis.
+
+> **Implementation note (2026-03):** The actual implementation uses sequential publish (broker first, then local delivery) instead of `asyncio.gather`. This eliminates the need for failure isolation between the two paths. See "Divergences from this Document" above.
 
 ### 4.5 Hub Relay via Redis Streams
 
@@ -831,6 +929,8 @@ Set `maxmemory 512mb` with `maxmemory-policy noeviction` to prevent silent data 
 
 **Fallback**: If `REDIS_URL` is not configured, fall back to `LocalBroadcaster` (single-instance mode). This allows gradual rollout and local development without Redis.
 
+> **Implementation note (2026-03):** Silent fallback to local-only was identified as a split-brain risk in PR review. The implementation logs broker failures at ERROR level and returns `"status": "degraded"` from the health endpoint when `REDIS_URL` is configured but the broker is disconnected.
+
 ### Phase 2: Shared Cancellation and Dedup State
 
 **Scope**: 2–3 modified files (`services/sse_services.py`, `common/utils/cancellation.py`, cancel API endpoint).
@@ -881,6 +981,9 @@ Set `maxmemory 512mb` with `maxmemory-policy noeviction` to prevent silent data 
    - `hybro_leader_election_acquisitions_total` — leader elections won
    - `hybro_sse_connections_active` — per-instance SSE connection count
 3. Add graceful degradation: if Redis is unreachable, fall back to local-only delivery (single-instance mode) with a health status flag that alerts operators.
+
+> **Implementation note (2026-03):** Silent fallback to local-only was identified as a split-brain risk in PR review. The implementation logs broker failures at ERROR level and returns `"status": "degraded"` from the health endpoint when `REDIS_URL` is configured but the broker is disconnected.
+
 4. Add connection draining on shutdown: stop accepting new SSE connections, wait for in-flight events, then close.
 
 ---

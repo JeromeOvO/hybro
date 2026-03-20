@@ -6,6 +6,31 @@
 
 ---
 
+## Implementation Status
+
+**Cross-instance transport (Layer C)** — COMPLETED on `feature/redis-implement`
+
+The cross-instance event delivery layer has been implemented via the `EventBroker` Protocol, fulfilling Goal G3's "seam for future multi-instance delivery" using a different abstraction than the `EventBroadcaster` proposed here.
+
+**Implemented:**
+- `EventBroker` Protocol (`infrastructure/event_broker.py`) — generic `publish(channel, payload)` / `subscribe(channel)` interface
+- `RedisBroker` (`infrastructure/brokers/redis_broker.py`) — Redis Pub/Sub with reconnect, exponential backoff
+- SSEManager registers kind-based handlers (`_on_sse_event`, `_on_cancellation_event`) for message dispatch
+- Factory pattern for swapping broker implementations
+
+**Not yet implemented (future work from this document):**
+- `EventBroadcaster` application-layer protocol (typed methods like `artifact_update()`, `task_submitted()`)
+- `LocalBroadcaster` wrapping SSEManager for single-instance mode
+- Consolidation of DirectTransport's 10 direct `sse_manager` calls through the handler (§4 main refactor)
+- `AgentEvent.kind` alignment to A2A spec (§4.1)
+
+**Relationship between EventBroker and EventBroadcaster:**
+- `EventBroker` = infrastructure/transport layer (generic publish/subscribe, MQ-agnostic)
+- `EventBroadcaster` = application layer (typed methods, caller-facing, decouples handler from SSEManager)
+- These are **complementary layers**, not alternatives. A future `EventBroadcaster` implementation could use `EventBroker` as its cross-instance transport internally while providing typed methods to callers.
+
+---
+
 ## 1. Motivation
 
 `AgentResponseHandler` is documented as the "single source of truth for processing agent results," but in practice only **terminal events** from `DirectTransport` flow through it. All streaming events (artifact updates, status updates, message chunks, task submissions) bypass the handler and call `SSEManager` directly — **10 direct `sse_manager` calls** in `DirectTransport` alone.
@@ -42,7 +67,12 @@ Meanwhile `RelayTransport` and `WebhookTransport` route **every** event through 
 ### Non-Goals
 
 - **NG1**: Multi-instance scaling (Redis broadcaster) — deferred per `CONCURRENCY_ROADMAP.md` Layer C.
+
+> **Update (2026-03):** Cross-instance Redis Pub/Sub was implemented directly in SSEManager (see `HORIZONTAL_SCALING_DESIGN.md` Implementation Status) rather than via the `EventBroadcaster` swap proposed here. The EventBroadcaster refactor remains valuable for its other goals (handler consolidation, type safety).
+
 - **NG2**: Event log / replay / sequence numbers — deferred per `NATIVE_SSE_MIGRATION_DESIGN.md`.
+
+> **Note:** This also means no `id:` field in SSE events and no `Last-Event-ID` support. The frontend uses a custom fetch-based SSE client that does not send `Last-Event-ID` headers, so backend-only changes cannot enable replay. Requires frontend migration to `EventSource` API.
 - **NG3**: Middleware pipeline — no concrete middlewares to write today; can be added inside the handler later.
 - **NG4**: Changing the SSE event format seen by the frontend — the broadcaster emits the same SSE payloads.
 

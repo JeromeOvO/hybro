@@ -443,6 +443,7 @@ def mock_sse_manager():
     mock.remove_connection = AsyncMock()
     mock.broadcast_to_room = AsyncMock()
     mock.cancel_message = MagicMock()
+    mock.cancel_message_and_broadcast = AsyncMock()
     mock.clear_cancellation = MagicMock()
     mock.get_room_status = MagicMock(return_value={"connections": 0})
     return mock

@@ -291,6 +291,7 @@ dependencies = [
     "pytz>=2025.2",
     "pyvis>=0.3.2",
     "queuelib>=1.8.0",
+    "redis>=5.2.0",
     "referencing>=0.36.2",
     "regex>=2024.11.6",
     "requests>=2.32.4",
@@ -415,7 +416,9 @@ packages = [
     "modules",
     "database",
     "services",
-    "config"
+    "config",
+    "infrastructure",
+    "infrastructure.brokers",
 ]
 
 [tool.uv]
