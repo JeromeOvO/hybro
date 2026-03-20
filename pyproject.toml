@@ -417,7 +417,7 @@ packages = [
     "database",
     "services",
     "config",
-    "scripts"
+    "scripts",
 ]
 
 [tool.uv]

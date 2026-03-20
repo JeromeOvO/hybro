@@ -7,6 +7,7 @@ call logic used by both the CLI and the MCP server.
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,9 +38,6 @@ class DiscoveryConfig:
         return f"{base}{prefix}/discovery/agents"
 
 
-_CONFIG: DiscoveryConfig | None = None
-
-
 def load_env_file() -> None:
     """Load repo-root .env if python-dotenv is available."""
     if load_dotenv is None:
@@ -50,15 +48,12 @@ def load_env_file() -> None:
         load_dotenv(dotenv_path=env_path, override=False)
 
 
+@functools.lru_cache(maxsize=1)
 def get_config() -> DiscoveryConfig:
     """Build config from env vars (cached after first call).
 
     Raises RuntimeError when HYBRO_API_KEY is empty.
     """
-    global _CONFIG
-    if _CONFIG is not None:
-        return _CONFIG
-
     load_env_file()
     api_key = os.getenv("HYBRO_API_KEY", "").strip()
     api_url = os.getenv("HYBRO_API_URL", "http://localhost:8000").strip()
@@ -71,13 +66,12 @@ def get_config() -> DiscoveryConfig:
             "Set it in your .env or export it."
         )
 
-    _CONFIG = DiscoveryConfig(
+    return DiscoveryConfig(
         api_key=api_key,
         api_url=api_url,
         api_prefix=api_prefix,
         timeout_seconds=timeout_seconds,
-    )
-    return _CONFIG
+    )    
 
 
 def normalize_error(payload: Any) -> dict[str, str]:

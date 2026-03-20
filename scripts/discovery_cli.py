@@ -73,7 +73,7 @@ async def _run(query: str, limit: int | None, output_json: bool) -> int:
     except RuntimeError as exc:
         msg = str(exc)
         if "HYBRO_API_KEY" in msg:
-            _print_json({"error": "missing_API_Key", "message": msg})
+            _print_json({"error": "missing_api_key", "message": msg})
             return EXIT_MISSING_CONFIG
         if msg.startswith("service_unavailable:"):
             _print_json({"error": "service_unavailable", "message": msg.split(":", 1)[1].strip()})
