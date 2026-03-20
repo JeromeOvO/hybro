@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useAuth } from "@clerk/nextjs"
+import { RequireAuth } from "@/components/require-auth"
 import { Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2, Terminal } from "lucide-react"
 import { toast } from "sonner"
 
@@ -175,6 +176,7 @@ export default function DeveloperApiKeysPage() {
   ]
 
   return (
+    <RequireAuth>
     <div className="page-container">
       <div className="page-content space-y-6">
         <Card>
@@ -417,5 +419,6 @@ export default function DeveloperApiKeysPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </RequireAuth>
   )
 }

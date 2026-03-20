@@ -128,7 +128,7 @@ export function NavUser() {
                   openWaitlist()
                 } else {
                   // When waitlist is disabled, redirect to regular sign-in
-                  window.location.href = "/sign-in"
+                  window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname)}`
                 }
               }}
             >
