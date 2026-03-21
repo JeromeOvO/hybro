@@ -149,6 +149,65 @@ async def cancel_message(
 
         logger.info(f"Message {message_id} cancelled by user {user.user_id}")
 
+        # Clear room processing status for the user message (must use user message ID)
+        await sse_manager.send_processing_status(
+            message.room_id, "canceled", message_id
+        )
+
+        # Immediately mark any paused agent messages as canceled and notify frontend
+        try:
+            from a2a.types import TaskState
+            from services.a2a_service import a2a_service
+            from services.task_notification_service import notify_task_update
+
+            agent_msgs = await db_service.get_room_agent_messages_by_related_message_id(
+                message_id
+            )
+            for agent_msg in agent_msgs:
+                if not agent_msg.has_task_tracking:
+                    continue
+                # Update task state in DB to canceled (terminal)
+                await db_service.update_task_state_on_message(
+                    agent_msg.message_id,
+                    TaskState.canceled.value,
+                    message_text="Task was canceled",
+                )
+                # Notify frontend via SSE (no need for send_processing_status
+                # since we already cleared it above with the user message ID)
+                await notify_task_update(
+                    message_id=agent_msg.message_id,
+                    state=TaskState.canceled,
+                    room_id=agent_msg.room_id,
+                    user_id=agent_msg.user_id or "",
+                    send_processing_status=False,
+                )
+                # Best-effort: tell remote agent to stop processing
+                if agent_msg.agent_url:
+                    task = (
+                        agent_msg.message_content.message_task
+                        if agent_msg.message_content
+                        else None
+                    )
+                    if task and task.id:
+                        try:
+                            agent_card = await a2a_service.get_agent_card_from_url(
+                                agent_msg.agent_url
+                            )
+                            await a2a_service.cancel_remote_task(agent_card, task.id)
+                            logger.info(
+                                "Sent remote cancel for task %s (agent %s)",
+                                task.id,
+                                agent_msg.agent_url,
+                            )
+                        except Exception as cancel_err:
+                            logger.debug(
+                                "Remote cancel failed for task %s: %s (best-effort)",
+                                task.id,
+                                cancel_err,
+                            )
+        except Exception as e:
+            logger.debug("Failed to cancel agent tasks: %s (best-effort)", e)
+
         return {
             "success": True,
             "message_id": message_id,

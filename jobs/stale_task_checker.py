@@ -256,6 +256,26 @@ class StaleTaskChecker:
             return
 
         try:
+            # Check if the message was cancelled while the agent was processing
+            is_cancelled = await db_service.is_message_cancelled(message_id)
+            if not is_cancelled and msg.related_message_id:
+                is_cancelled = await db_service.is_message_cancelled(
+                    msg.related_message_id
+                )
+            if is_cancelled:
+                logger.info(
+                    "Stale task for message %s was cancelled — notifying as canceled",
+                    message_id,
+                )
+                await notify_task_update(
+                    message_id=message_id,
+                    state=TaskState.canceled,
+                    room_id=msg.room_id,
+                    user_id=msg.user_id or "",
+                    send_processing_status=True,
+                )
+                return
+
             # Poll agent for current status
             agent_card = await a2a_service.get_agent_card_from_url(agent_url)
             current_task = await self._get_task_from_agent(agent_card, agent_task_id)
@@ -283,6 +303,14 @@ class StaleTaskChecker:
             # Notify if terminal or interactive state changed
             new_state = current_task.status.state
             if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
+                # Re-check cancellation — user may have cancelled between poll and now
+                re_cancelled = await db_service.is_message_cancelled(message_id)
+                if not re_cancelled and msg.related_message_id:
+                    re_cancelled = await db_service.is_message_cancelled(
+                        msg.related_message_id
+                    )
+                if re_cancelled:
+                    new_state = TaskState.canceled
                 await notify_task_update(
                     message_id=message_id,
                     state=new_state,

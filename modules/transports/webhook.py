@@ -108,6 +108,28 @@ class WebhookTransport(AgentTransport):
             logger.warning("Webhook for unknown task %s", message_id)
             raise HTTPException(status_code=404, detail="Task not found")
 
+        # 3a. Check if the message was cancelled while the agent was processing
+        is_cancelled = await self._db.is_message_cancelled(message_id)
+        if not is_cancelled and current_msg.related_message_id:
+            is_cancelled = await self._db.is_message_cancelled(
+                current_msg.related_message_id
+            )
+        if is_cancelled:
+            logger.info(
+                "Webhook for task %s: message was cancelled — discarding payload",
+                message_id,
+            )
+            from services.task_notification_service import notify_task_update
+
+            await notify_task_update(
+                message_id=message_id,
+                state=TaskState.canceled,
+                room_id=current_msg.room_id,
+                user_id=current_msg.user_id or "",
+                send_processing_status=True,
+            )
+            return {"status": "canceled"}
+
         current_task = (
             current_msg.message_content.message_task
             if current_msg.message_content
