@@ -543,6 +543,147 @@ No schema migrations. No changes to execution infrastructure. No changes to othe
 
 ---
 
+## Future Extensibility Foundations
+
+These are **cheap hedges to build now** (Phase 1–2) that unlock significant future flexibility without over-engineering. Each is a small addition to the data model or factory pattern that avoids a costly retrofit later.
+
+### 1. `parent_invocation_id` on Every Agent Invocation
+
+The current and PR #127 designs have no way to trace a nested call chain: if supervisor calls agent A, and A internally calls B, there is no parent link. Add one field:
+
+```python
+class AgentInvocation:
+    invocation_id: str
+    run_id: str
+    agent_id: str
+    parent_invocation_id: str | None  # ← ADD THIS (null for top-level)
+    status: InvocationStatus
+    ...
+```
+
+Cost: one nullable FK on the invocation table. Benefit: enables hierarchical trace trees in the dashboard, sub-agent nesting in AG-UI (`parentRunId`), and a path toward composable multi-agent graphs later.
+
+### 2. Open `WorkflowStepType` Registry
+
+Today the workflow engine has a closed set of step types (`agent`, `fan_out`, `approval`). Add an explicit registry instead of an enum:
+
+```python
+# registry.py
+_step_handlers: dict[str, StepHandler] = {}
+
+def register_step_type(name: str, handler: StepHandler) -> None:
+    _step_handlers[name] = handler
+
+# Built-in registrations (supervisor.py, fan_out.py, etc.):
+register_step_type("agent", AgentStepHandler())
+register_step_type("fan_out", FanOutStepHandler())
+register_step_type("approval", ApprovalStepHandler())
+
+# Adding debate/voting later = one new file + one register call:
+register_step_type("debate", DebateStepHandler())
+```
+
+This is the difference between multi-agent collaboration patterns being top-level modes (current) vs. composable step types (future). The registry costs ~20 lines now and avoids a significant refactor when debate/voting need to be embedded inside a `WorkflowTemplate`.
+
+### 3. Domain Event Bus Placeholder
+
+The current architecture has no internal event bus — modules communicate by direct function calls. As modules multiply, this creates coupling. Add a no-op bus now, wire it in Phase 2, fill it out in Phase 4:
+
+```python
+# common/events.py
+class DomainEventBus:
+    def publish(self, event: DomainEvent) -> None:
+        pass  # Phase 1: no-op. Phase 2: Redis Pub/Sub or in-process queue.
+
+# Emit from orchestration layer (Phase 1):
+event_bus.publish(AgentInvocationCompleted(invocation_id=..., run_id=...))
+
+# Consume in billing, governance, monitoring (Phase 4+):
+@event_bus.subscribe(AgentInvocationCompleted)
+async def record_billable_event(event): ...
+```
+
+The interface is the investment. The implementation can start as a no-op dict and be wired to Redis Streams or Kafka later without touching callers.
+
+### 4. `scope` Field for Multi-Tenancy
+
+Every resource that will eventually need tenant isolation (rooms, runs, templates, agents) should have a `scope` field now, even if enforcement is a no-op today:
+
+```python
+class ExecutionRun:
+    run_id: str
+    scope: str  # "user:{user_id}" | "org:{org_id}" | "workspace:{ws_id}"
+    ...
+```
+
+Adding this to a live schema later requires a data migration. Adding it to a new schema during Path C costs zero.
+
+### Summary: What to Do in Phase 1–2 vs What to Wait For
+
+| Item | When | Reason |
+|---|---|---|
+| `parent_invocation_id` nullable field | Phase 1 (data model) | Schema migration is cheap now, painful later |
+| Open `WorkflowStepType` registry | Phase 2 | Natural refactor as debate/voting get extracted to workflow steps |
+| `DomainEventBus` no-op placeholder | Phase 1 | Interface is the investment; implementation evolves |
+| `scope` field on all major entities | Phase 1 (data model) | Migration cost grows with user count |
+| Full debate/voting as composable step types | Wait for user signal | Only if users actually create templates with them |
+| Plugin registry UI / dev portal | Phase 4 | Only after external developers are a real customer segment |
+| Observable reasoning / telemetry hooks | Phase 3 | When users ask for it |
+
+---
+
+## Multi-Agent Collaboration: Primitives Gap
+
+### Current State
+
+Multi-agent collaboration modes (supervisor, debate, voting) are **top-level orchestration strategies**, not composable primitives. The current design treats them as parallel sibling workflows:
+
+```
+OrchestratorFactory.get("supervisor") → SupervisorWorkflow
+OrchestratorFactory.get("debate")     → DebateWorkflow
+OrchestratorFactory.get("direct")     → DirectWorkflow
+```
+
+A `WorkflowTemplate` user **cannot** embed a debate round inside a supervisor step, or nest a supervisor inside a fan-out. The two systems (Supervisor and Workflow Engine) are not composed — they are two separate entry points.
+
+### Why This Is Intentional for Now
+
+At PMF stage, forcing all collaboration modes through a unified primitive model would require:
+- Formal typed output contracts for each mode (what does `debate` return? a consensus string? a ranked list?)
+- A UI that understands nested collaboration
+- Cross-mode continuation semantics (HITL inside a debate inside a supervisor)
+
+This is expensive to build correctly and the user demand for nested collaboration is unproven.
+
+### The Forward Path (When Signal Appears)
+
+The `WorkflowStepType` registry (§ Future Extensibility Foundations, item 2) is the key enabler. Once collaboration modes are registered as step types, they become composable:
+
+```yaml
+# User-defined WorkflowTemplate (future):
+steps:
+  - id: gather_perspectives
+    type: debate              # ← collaboration mode as a step type
+    agents: [researcher, analyst, critic]
+    rounds: 2
+
+  - id: final_decision
+    type: supervisor          # ← orchestration mode as a step type
+    depends_on: [gather_perspectives]
+    agents: [decision_maker]
+    context: "{{ steps.gather_perspectives.consensus }}"
+```
+
+The `parent_invocation_id` field (§ Future Extensibility Foundations, item 1) enables the trace tree needed to reason about nested collaboration.
+
+### What to Do Now
+
+1. **Build the `WorkflowStepType` registry** in Phase 2 (see above). This is the prerequisite.
+2. **Track usage of existing collaboration modes** — add analytics on which modes users actually invoke and how often. This is the signal to watch before investing in composability.
+3. **Defer nested collaboration design** until at least one user explicitly asks for it or a WorkflowTemplate user tries to combine modes.
+
+---
+
 ## Interaction Modes — A Roadmap
 
 The architecture supports these modes without redesign:

@@ -50,13 +50,21 @@ Several structural properties make this specific system harder than a typical ba
 
 ### What Has Already Been Built
 
-The `feature/redis-implement` branch completed Phases 1–5 of `HORIZONTAL_SCALING_DESIGN.md`, delivering:
+**Horizontal scaling** (`feature/redis-implement`, merged): All 5 phases of `HORIZONTAL_SCALING_DESIGN.md`:
 - Redis Pub/Sub for cross-instance SSE fan-out
 - Redis Streams for hub relay durability
 - Redis-based leader election for background jobs
 - Cross-instance cancellation and terminal dedup
 
-The next layer of designed-but-not-implemented work is in PR #127: a full execution plane redesign (`ExecutionRun/Step/Invocation/Interruption`), runtime consistency model (outbox/inbox), and 8-module business capability architecture.
+**Hub / local-remote hybrid** (`HYBRO_HUB_DESIGN.md`, all phases merged):
+- Phase 1 ✅ — Gateway API: hub code can discover and call cloud agents via `api.hybro.ai/v1/gateway`
+- Phase 2a ✅ — Cloud Relay Service + `DispatchMiddleware` architecture; per-agent local/cloud routing via `agent.source`
+- Phase 2b ✅ — Hub daemon (`pip install hybro-hub`), Ollama A2A adapter, auto-discovery, relay client
+- Phase 2c ✅ — Frontend hub/cloud badges, offline dimming, privacy indicators, hub settings section
+
+The next layer of designed-but-not-yet-implemented work is in PR #127: a full execution plane redesign (`ExecutionRun/Step/Invocation/Interruption`), runtime consistency model (outbox/inbox), and 8-module business capability architecture.
+
+**Note**: The recommended target for Path C is NOT the PR #127 design as written, but the revised architecture in `RECOMMENDED_ARCHITECTURE.md` (DBOS instead of custom runtime + arq, AG-UI instead of custom SSE schema, plus workflow authoring layer). The core issues with PR #127 are documented there.
 
 ### The Business Context
 
@@ -75,10 +83,10 @@ The team is preparing a significant marketing push. This changes the calculus in
 Incrementally hollow out the existing system by routing subsystems through new abstractions while the old execution paths remain functional. The new architecture grows its share of responsibility piece by piece until the old code can be deleted. This is what PR #127's migration plan proposes.
 
 **Path B — Parallel Rebuild (Hard Cutover)**  
-Keep the current backend running exactly as-is. Build a new backend targeting the PR #127 architecture from scratch, using the current codebase as a reference specification. When complete and tested, perform a hard cutover and shut down the old system.
+Keep the current backend running exactly as-is. Build a new backend targeting the `RECOMMENDED_ARCHITECTURE.md` design (DBOS + AG-UI + workflow authoring) from scratch, using the current codebase as a reference specification. When complete and tested, perform a hard cutover and shut down the old system.
 
 **Path C — Greenfield New Build (Intentional Redesign)**  
-Build a new backend implementing the new design without a requirement to reproduce all existing behavior. Explicitly decide what to keep, what to improve, and what to drop. Not a rewrite of the old system — a new product serving the same user needs with a better execution model.
+Build a new backend implementing the `RECOMMENDED_ARCHITECTURE.md` design without a requirement to reproduce all existing behavior. Explicitly decide what to keep, what to improve, and what to drop. Not a rewrite of the old system — a new product serving the same user needs with a better execution model. The recommended target is NOT the PR #127 design as written: DBOS replaces the custom runtime+arq, AG-UI replaces the custom SSE schema, and workflow authoring is an additive layer.
 
 ---
 
@@ -99,6 +107,8 @@ The PR #127 migration plan phases this as:
 - **Phase 1c**: Migrate supervisor V2, debate, HITL workflows
 - **Phase 2 (Scalable)**: Full multi-instance horizontal scaling
 - **Phase 3 (Fast Iteration)**: Module boundary enforcement, developer tooling
+
+> **Note on arq**: arq has been in maintenance-only mode since October 2025. Phase 1a of the PR #127 plan builds on a dying dependency. The recommended replacement is SAQ (drop-in, same Redis API) for the short term, or DBOS (preferred — replaces the entire custom runtime, not just the queue). See `RECOMMENDED_ARCHITECTURE.md`.
 
 ### Strengths
 
@@ -144,7 +154,7 @@ This is 4–8 weeks of engineering for Phase 1b alone before a single user workf
 
 ### How It Works
 
-Build a complete new backend implementing the PR #127 architecture from scratch. The existing backend continues running in production. When the new backend reaches full feature parity and passes integration tests, perform a hard cutover: migrate data, update DNS/load balancer, shut down old system.
+Build a complete new backend implementing the `RECOMMENDED_ARCHITECTURE.md` design (DBOS + AG-UI + workflow authoring) from scratch. The existing backend continues running in production. When the new backend reaches full feature parity and passes integration tests, perform a hard cutover: migrate data, update DNS/load balancer, shut down old system.
 
 The existing codebase serves as the behavioral specification: every method, every edge case, every SSE event format is a reference to be reproduced in the new system.
 
@@ -214,7 +224,7 @@ Similar total LOE to Path A, but with the risk concentrated in a single cutover 
 
 ### How It Works
 
-Build a new backend implementing the PR #127 architecture, making explicit decisions about which existing behaviors to keep, which to improve, and which to drop. Not constrained by parity — constrained by explicit product decisions.
+Build a new backend implementing the `RECOMMENDED_ARCHITECTURE.md` design (DBOS + AG-UI + workflow authoring), making explicit decisions about which existing behaviors to keep, which to improve, and which to drop. Not constrained by parity — constrained by explicit product decisions.
 
 The key difference from Path B is the starting posture: **"we will knowingly change some behaviors"** rather than "we must reproduce everything exactly."
 
@@ -412,12 +422,15 @@ Week 0–2:    Behavioral decision audit (BEHAVIORAL_DECISIONS.md)
 Week 2–14:   New backend MVP (direct workflow, core SSE, API surface)
              New rooms routed to new backend (shadowed: same DB, separate execution)
              Old backend handles all existing rooms
+             Target: RECOMMENDED_ARCHITECTURE (DBOS + AG-UI) — NOT PR #127 as written
 
 Week 14–18:  Extended workflows (supervisor, debate, HITL)
              Parallel shadow mode on new backend for validation
+             (Hub/relay is already fully implemented — only DBOS integration gap remains)
 
 Week 18–20:  Data migration tooling + rehearsal
              Frontend alignment for any intentional contract changes
+             (Coordinate AG-UI SSE event shape changes with frontend team)
 
 Week 20–22:  Cutover: new rooms → new backend (permanent)
              Old rooms migrate over 2–4 weeks
@@ -473,7 +486,7 @@ These behaviors are embedded in code, not documented, and have material user-fac
 | SSE event ordering: `task_submitted` before `artifact_update` before `task_update(completed)` | `direct.py`, `AgentResponseHandler` | Keep (frontend depends on this) |
 | `processing_status` side effects: dedup + DB persistence alongside broadcast | `sse_services.py` | Improve (separate concerns) |
 | Continuation blob storage variants (message-level vs. user-message-level) | `SupervisorExecutor.py`, `RoomMessageCenter.py` | Replace with ExecutionRun inbox |
-| Hub relay offline queue and reconnection semantics | `relay_service.py` | Keep (Redis Streams already designed) |
+| Hub relay offline queue and reconnection semantics | `relay_service.py` | Keep (upgrade offline queue to DBOS `@DBOS.workflow()` — Phase 2 of RECOMMENDED_ARCHITECTURE) |
 | A2A agent health check and capability issue detection | `agent_health_service.py`, `agent_capability_issue_service.py` | Keep |
 
 ### SSE Events Requiring Frontend Contract Tests
