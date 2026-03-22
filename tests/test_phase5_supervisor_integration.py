@@ -550,54 +550,54 @@ class TestMaxContextCharsEnforcement:
 
     def test_supervisor_context_truncated_beyond_char_limit(self, service):
         """Context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
-        from common.utils.context_utils import MAX_CONTEXT_CHARS
+        small_cap = 1_000
+        with patch("services.context_assembly_service.MAX_CONTEXT_CHARS", small_cap):
+            huge_content = "X" * (small_cap + 500)
+            turns = [
+                ConversationTurn(
+                    role=TurnRole.USER,
+                    content=huge_content,
+                    timestamp=datetime(2026, 2, 20),
+                ),
+            ]
+            room_memory = RoomMemory(
+                room_id="test_room",
+                memory_content=MemoryContent(conversation_history=turns),
+            )
 
-        huge_content = "X" * (MAX_CONTEXT_CHARS + 5000)
-        turns = [
-            ConversationTurn(
-                role=TurnRole.USER,
-                content=huge_content,
-                timestamp=datetime(2026, 2, 20),
-            ),
-        ]
-        room_memory = RoomMemory(
-            room_id="test_room",
-            memory_content=MemoryContent(conversation_history=turns),
-        )
+            result = service.build_supervisor_context(
+                room_memory=room_memory,
+                current_task="Test",
+            )
 
-        result = service.build_supervisor_context(
-            room_memory=room_memory,
-            current_task="Test",
-        )
-
-        assert len(result.context) <= MAX_CONTEXT_CHARS + 50
-        assert result.was_truncated is True
+            assert len(result.context) <= small_cap + 50
+            assert result.was_truncated is True
 
     def test_agent_context_truncated_beyond_char_limit(self, service):
         """Agent context exceeding MAX_CONTEXT_CHARS should be hard-capped."""
-        from common.utils.context_utils import MAX_CONTEXT_CHARS
+        small_cap = 1_000
+        with patch("services.context_assembly_service.MAX_CONTEXT_CHARS", small_cap):
+            huge_content = "Y" * (small_cap + 500)
+            turns = [
+                ConversationTurn(
+                    role=TurnRole.USER,
+                    content=huge_content,
+                    timestamp=datetime(2026, 2, 20),
+                ),
+            ]
+            room_memory = RoomMemory(
+                room_id="test_room",
+                memory_content=MemoryContent(conversation_history=turns),
+            )
 
-        huge_content = "Y" * (MAX_CONTEXT_CHARS + 5000)
-        turns = [
-            ConversationTurn(
-                role=TurnRole.USER,
-                content=huge_content,
-                timestamp=datetime(2026, 2, 20),
-            ),
-        ]
-        room_memory = RoomMemory(
-            room_id="test_room",
-            memory_content=MemoryContent(conversation_history=turns),
-        )
+            result = service.build_agent_execution_context(
+                room_memory=room_memory,
+                current_task="Test",
+                agent_name="TestAgent",
+            )
 
-        result = service.build_agent_execution_context(
-            room_memory=room_memory,
-            current_task="Test",
-            agent_name="TestAgent",
-        )
-
-        assert len(result.context) <= MAX_CONTEXT_CHARS + 50
-        assert result.was_truncated is True
+            assert len(result.context) <= small_cap + 50
+            assert result.was_truncated is True
 
 
 # =========================================================================
