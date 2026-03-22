@@ -41,7 +41,7 @@ export default function ConsumerLandingPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-5xl mx-auto px-4 sm:px-8">
 
         {/* Hero Section */}
         <section className="pt-20 pb-12 text-center">

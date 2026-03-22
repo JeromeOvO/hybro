@@ -68,7 +68,7 @@ test.describe('Page Content', () => {
 
     // The c/ layout renders two <main> elements:
     //   1. SidebarInset: <main data-slot="sidebar-inset">
-    //   2. Layout content: <main class="flex flex-1 flex-col min-w-0">
+    //   2. Layout content: <main class="flex flex-1 flex-col min-w-0"> (no side padding — pages own their own padding)
     // Target the inner content main via :not([data-slot]).
     const contentMain = page.locator('main:not([data-slot])')
     await expect(contentMain).toBeVisible()
