@@ -90,7 +90,7 @@ Hybro's unique value sits ABOVE this stack:
 
 ┌───────────────────────────────────────────────────────────────┐
 │                      Infrastructure                           │
-│   MongoDB   (conversations · agents · rooms)                  │
+│   MongoDB   (conversations · agents · rooms · messages · artifacts) │
 │   Postgres  (DBOS: execution state · HITL · scheduling)       │
 │   Redis     (SSE fan-out · Hub relay · cache · rate limiting) │
 │   Pinecone · S3                                               │
@@ -422,8 +422,9 @@ This is low priority at current scale. For enterprise fleet deployments (Hub Pha
 The key principle: **Postgres is the execution store, Redis is the delivery and operational store.**
 
 ```
-MongoDB   — conversations, agents, rooms, marketplace
-           (document model, unchanged)
+MongoDB   — agents, rooms, marketplace, conversation records
+           (document model; `messages` + `artifacts` collections introduced in Phase 3
+            replacing `room_agent_messages` — see PERSISTENCE_UNIFICATION_DESIGN.md)
 
 Postgres  — workflow execution ONLY (via DBOS)
            • DBOS workflow state + durability
@@ -723,13 +724,15 @@ The architecture supports these modes without redesign:
 7. **Migrate relay offline queue to DBOS** — replace the in-memory offline queue in `relay_service.py` with a `@DBOS.workflow()` that durably waits for hub reconnect via `DBOS.recv()`. Removes the periodic sweep job and the 100-message in-memory cap.
 8. **Explicit hub agent step semantics** — design `invoke_agent` DBOS step retry policy for `RELAY_DISPATCHED` status: `retries_allowed=0` + durable wait via `DBOS.recv(f"hub_response:{agent_message_id}")` instead of retry.
 
-### Phase 3: AG-UI + Module Extraction (8–12 weeks)
-*Goal: adopt open protocol, complete module boundaries, add state sync*
+### Phase 3: AG-UI + Streaming Unification + Module Extraction (8–12 weeks)
+*Goal: adopt open protocol, unify streaming persistence, complete module boundaries, add state sync*
 
 1. **Replace custom SSE schema with AG-UI** — `InteractionAdapter` emits AG-UI events; frontend adopts AG-UI client.
 2. **Add `STATE_SNAPSHOT/DELTA`** — enables generative UI, structured task dashboards, future document collaboration.
-3. **Module directory restructuring** (PR #127 Phase 3) — now that boundaries are stable and DBOS handles execution, the directory moves are safe.
-4. **`WorkflowTemplate` data model** — storable user-defined workflow graphs. No editor yet; just the backend model and execution.
+3. **Streaming path unification** — introduce Redis accumulation buffer in `invoke_agent` step; replace per-chunk MongoDB writes with a single finalized write on step completion; introduce new `messages` and `artifacts` MongoDB collections (see `PERSISTENCE_UNIFICATION_DESIGN.md §Phase 2`).
+4. **Remove per-chunk persistence writes** — remove `tsm.persist_message()` from DirectTransport; remove `accumulate_artifact_on_message()` from handler path.
+5. **Module directory restructuring** (PR #127 Phase 3) — now that boundaries are stable and DBOS handles execution, the directory moves are safe.
+6. **`WorkflowTemplate` data model** — storable user-defined workflow graphs. No editor yet; just the backend model and execution.
 
 ### Phase 4: Product Expansion (when PMF signals appear)
 *Build when you know what users actually want*
@@ -810,3 +813,4 @@ These are real capabilities that should wait until product direction is clearer:
 | Module architecture | PR #127 boundaries (keep) | The module decomposition is correct |
 | Migration strategy | Strangler pattern (keep) | PR #127's approach is right |
 | What to build now | Phase 1 only | Pre-PMF; avoid over-engineering |
+|| Persistence model | Three-layer (DBOS + Redis buffer + MongoDB) | See `PERSISTENCE_UNIFICATION_DESIGN.md` |

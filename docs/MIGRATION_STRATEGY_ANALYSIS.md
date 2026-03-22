@@ -130,14 +130,16 @@ The PR #127 migration plan phases this as:
 Phase 1b alone is substantial:
 - Contract tests for all existing execution behavior (prerequisite to any migration)
 - `ExecutionRun/Step/Invocation/HumanInterruption` table creation and lifecycle management
-- `RunInboxEvent` durable inbox for all external inputs
-- `run_outbox_events` atomic outbox for state+event commits
-- `arq` worker for durable background task processing
+- `RunInboxEvent` durable inbox for all external inputs  ← **replaced by `DBOS.send/recv`** in `RECOMMENDED_ARCHITECTURE.md`
+- `run_outbox_events` atomic outbox for state+event commits  ← **replaced by DBOS atomic step semantics** in `RECOMMENDED_ARCHITECTURE.md`
+- `arq` worker for durable background task processing  ← **replaced by `@DBOS.workflow()`**; see arq note in §3
 - Projection layer mapping new entities → existing `RoomAgentMessage` schema
 
 This is 4–8 weeks of engineering for Phase 1b alone before a single user workflow is migrated.
 
 ### LOE Estimate
+
+> **Note**: These LOE estimates were written against the original PR #127 architecture and do not account for the additional scope in `RECOMMENDED_ARCHITECTURE.md`. Specifically: (a) DBOS introduction replaces Phase 1a/1b machinery and reduces that effort, but (b) AG-UI adoption + streaming unification (`PERSISTENCE_UNIFICATION_DESIGN.md`) adds 3–5 weeks not reflected below. Net effect is roughly neutral, but the work is different in character — less custom infrastructure, more integration and migration.
 
 | Phase | Description | Estimated Duration |
 |---|---|---|
@@ -485,11 +487,13 @@ These behaviors are embedded in code, not documented, and have material user-fac
 | Compaction trigger conditions and context window heuristics | `compaction_service.py`, `room_services.py` | Keep / Improve |
 | SSE event ordering: `task_submitted` before `artifact_update` before `task_update(completed)` | `direct.py`, `AgentResponseHandler` | Keep (frontend depends on this) |
 | `processing_status` side effects: dedup + DB persistence alongside broadcast | `sse_services.py` | Improve (separate concerns) |
-| Continuation blob storage variants (message-level vs. user-message-level) | `SupervisorExecutor.py`, `RoomMessageCenter.py` | Replace with ExecutionRun inbox |
+| Continuation blob storage variants (message-level vs. user-message-level) | `SupervisorExecutor.py`, `RoomMessageCenter.py` | Replace with DBOS `send/recv` — continuation blob storage disappears entirely when DBOS handles resume state |
 | Hub relay offline queue and reconnection semantics | `relay_service.py` | Keep (upgrade offline queue to DBOS `@DBOS.workflow()` — Phase 2 of RECOMMENDED_ARCHITECTURE) |
 | A2A agent health check and capability issue detection | `agent_health_service.py`, `agent_capability_issue_service.py` | Keep |
 
 ### SSE Events Requiring Frontend Contract Tests
+
+> **Note**: This list reflects the **current** (pre-AG-UI) SSE event schema. Once `RECOMMENDED_ARCHITECTURE.md` Phase 3 is complete, these custom events are **replaced** by AG-UI protocol events (`RUN_STARTED`, `TEXT_MESSAGE_CONTENT`, `TOOL_CALL_START`, `RUN_FINISHED`, etc.). The contract tests listed here serve as the **baseline** that AG-UI adoption must match or supersede; they are still required to gate Phase 1 → Phase 2 migration but become obsolete after Phase 3.
 
 Before any cutover, these events must have automated contract tests validating shape and timing:
 
