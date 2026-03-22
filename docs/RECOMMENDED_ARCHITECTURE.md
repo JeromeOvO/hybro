@@ -23,13 +23,19 @@ This document proposes an architecture that:
 
 ## The Protocol Stack (Where Hybro Fits)
 
-The industry has converged on a three-layer agent protocol stack. Hybro should be a **consumer and integrator** of the bottom two layers, and own the top one:
+The industry has converged on a four-layer agent protocol stack. Hybro should be a **consumer and integrator** of the bottom three layers, and own the top one:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     AG-UI Protocol                      │
 │         Agents ↔ User-facing applications               │
 │   (adopt this — don't reinvent your SSE schema)         │
+├─────────────────────────────────────────────────────────┤
+│                      A2UI Protocol                      │
+│         Generative UI payload format                    │
+│   Agents describe rich UI surfaces; client renders      │
+│   natively using its own component library              │
+│   (AG-UI is the pipe — A2UI is the content)             │
 ├─────────────────────────────────────────────────────────┤
 │                     A2A Protocol                        │
 │              Agent ↔ Agent communication                │
@@ -55,9 +61,11 @@ Hybro's unique value sits ABOVE this stack:
 ┌──────────────────────────────────────────────────────────────┐
 │                        Frontend                              │
 │              AG-UI Client (CopilotKit or custom)             │
-│   Chat · Workflow Editor · Task Dashboard · State Sync UI    │
+│   Chat · A2UI Surfaces · Workflow Editor · Task Dashboard    │
+│   @a2ui/react renderer · State Sync UI                       │
 └──────────────────────────┬───────────────────────────────────┘
                            │  AG-UI events (SSE / WebSocket)
+                           │  A2UI surface payloads (via AG-UI CUSTOM)
                            │  RunAgentInput (threadId, state, tools, context)
 ┌──────────────────────────▼───────────────────────────────────┐
 │                     API Surface (thin)                       │
@@ -76,11 +84,14 @@ Hybro's unique value sits ABOVE this stack:
 │  Translates domain facts → AG-UI event stream                 │
 │  STATE_SNAPSHOT · STATE_DELTA · TEXT_MESSAGE_* · TOOL_CALL_*  │
 │  STEP_STARTED · RUN_STARTED · CUSTOM · ACTIVITY_*             │
+│  emit_a2ui_surface() → CUSTOM event carrying A2UI payload     │
 └──────────────────────────────┬────────────────────────────────┘
                                │
 ┌──────────────────────────────▼────────────────────────────────┐
 │                   A2A Protocol Adapter                        │
 │           Direct · Relay (Hub) · Webhook transports           │
+│   A2UI DataParts detected by mimeType application/json+a2ui   │
+│   and forwarded through InteractionAdapter to browser         │
 └──────────────────────────────┬────────────────────────────────┘
                                │
 ┌──────────────────────────────▼────────────────────────────────┐
@@ -203,9 +214,10 @@ async def supervisor_run(run_id: str, request: OrchestrationRequest):
         match action:
             case Delegate(targets=targets):
                 # Dispatch agents — each is a durable step
+                # invocation_id generated here (in the workflow) for DBOS retry idempotency
                 results = await asyncio.gather(*[
-                    invoke_agent(run_id, agent_id, request)
-                    for agent_id in targets
+                    invoke_agent(run_id, agent_id, f"{run_id}:{agent_id}:{step}", request)
+                    for step, agent_id in enumerate(targets)
                 ])
                 trajectory.append((action, results))
                 
@@ -225,9 +237,9 @@ async def supervisor_run(run_id: str, request: OrchestrationRequest):
                 return OrchestrationResult(status="completed", trajectory=trajectory)
 
 @DBOS.step()
-async def invoke_agent(run_id: str, agent_id: str, request: OrchestrationRequest):
-    # Each agent invocation is a durable, retryable step
-    # If this step fails and retries, it won't re-run completed work
+async def invoke_agent(run_id: str, agent_id: str, invocation_id: str, request: OrchestrationRequest):
+    # invocation_id passed in from workflow — deterministic across DBOS retries
+    # (see PERSISTENCE_UNIFICATION_DESIGN.md §6 for idempotency details)
     return await a2a_protocol.dispatch(agent_id, request)
 
 # Adding a new workflow mode is just a new DBOS workflow function:
@@ -412,6 +424,289 @@ This is low priority at current scale. For enterprise fleet deployments (Hub Pha
 | Streaming token latency (relay overhead) | ⚠️ Known issue | Phase 3 fix |
 | Hybrid orchestration (privacy-aware routing) | ❌ Not implemented | Phase 3 |
 | Multi-hub coordination | ❌ Not designed | Phase 3 / Enterprise |
+
+---
+
+## Error Recovery, Cancellation, and Observability
+
+### When DBOS Steps Exhaust Retries
+
+When a `@DBOS.step()` fails all retries (default: 3 for cloud agents), DBOS marks the step `ERROR` and propagates the exception to the calling `@DBOS.workflow()`. The workflow catches it and the orchestration layer is responsible for producing the user-facing AG-UI event:
+
+```python
+@DBOS.workflow()
+async def supervisor_run(run_id: str, request: OrchestrationRequest):
+    try:
+        for agent_id in action.targets:
+            invocation_id = f"{run_id}:{agent_id}:{step}"
+            result = await invoke_cloud_agent(run_id, agent_id, invocation_id, request)
+    except Exception as exc:
+        # Step exhausted retries — emit error event to browser and mark run failed
+        await interaction_adapter.emit(RunFinished(
+            run_id=run_id,
+            thread_id=request.thread_id,
+            outcome="error",
+            error=str(exc),
+        ))
+        await postgres.execute(
+            "UPDATE agent_invocations SET status='failed', error=:err WHERE invocation_id=:id",
+            {"id": invocation_id, "err": str(exc)},
+        )
+        return OrchestrationResult(status="error", error=str(exc))
+```
+
+**User-facing AG-UI event**: `RUN_FINISHED { outcome: "error", error: { message, code } }`. The browser receives this and displays an error state. No partial MongoDB writes remain — the Redis buffer TTL (60 min) expires and the buffer is silently garbage-collected.
+
+**Hub agent step failure** (`retries_allowed=0`): when the DBOS step waiting on `DBOS.recv(f"hub_response:{agent_message_id}")` times out (24h timeout), the same pattern applies — the workflow catches the `TimeoutError` and emits `RUN_FINISHED(outcome="error")`.
+
+### Cancellation Design
+
+User-initiated cancellation works through a two-step signal:
+
+**Step 1 — Cancel signal (Redis, unchanged from current design):**
+```python
+# API endpoint: POST /api/v1/runs/{run_id}/cancel
+await redis.set(f"cancel:{run_id}", "1", ex=3600)  # existing mechanism, unchanged
+```
+
+**Step 2 — DBOS workflow cooperation (new):**
+
+The supervisor workflow must poll the cancel signal at step boundaries:
+
+```python
+@DBOS.workflow()
+async def supervisor_run(run_id: str, request: OrchestrationRequest):
+    for step in range(request.config.max_steps):
+        # Check cancellation before dispatching each step
+        if await redis.exists(f"cancel:{run_id}"):
+            await interaction_adapter.emit(RunFinished(
+                run_id=run_id, thread_id=request.thread_id, outcome="cancelled"
+            ))
+            return OrchestrationResult(status="cancelled")
+
+        action = await decide_next(request, trajectory)
+        ...
+```
+
+For steps that are already in-flight when cancel arrives, the pattern is:
+- **Cloud agents**: the A2A protocol call is interrupted when the DBOS step's network call returns an error or is abandoned on the next retry check. The Redis `cancel:{run_id}` key is checked at the top of each step retry.
+- **Hub agents**: `DBOS.send(run_id, {"cancelled": True}, f"cancel_hub:{run_id}")` wakes the waiting `DBOS.recv()` in `invoke_hub_agent` immediately.
+
+**Browser receives**: `RUN_FINISHED { outcome: "cancelled" }` via the `interaction_adapter.emit()` above.
+
+### Operational Observability
+
+DBOS ships a built-in dashboard that shows all workflow executions, step statuses, and inputs/outputs in Postgres. No custom monitoring infrastructure is needed for execution state.
+
+For Hybro-owned alerting:
+
+| Signal | Detection | Action |
+|---|---|---|
+| Workflow stuck > N minutes | Query `dbos.workflow_status WHERE status='PENDING' AND created_at < now - interval` | Alert + auto-cancel via `DBOS.cancel_workflow(workflow_id)` |
+| High step retry rate | Query `dbos.operation_outputs WHERE error IS NOT NULL` count per window | Alert for agent reliability issues |
+| Redis buffer TTL expiry without MongoDB write | Compare `agent_invocations WHERE status='running'` age vs buffer TTL | Indicates crashed workflow; DBOS recovery handles it |
+| HITL timeout | `DBOS.recv()` timeout fires; workflow emits `RUN_FINISHED(outcome="error")` | Frontend shows "Request timed out" |
+
+---
+
+
+
+### What A2UI Is
+
+**A2UI** (Agent-to-User Interface, Google / Apache 2.0, v0.8 stable) is an open **generative UI payload format** that lets agents describe rich, interactive UI surfaces — forms, cards, approval dialogs, dashboards — as declarative JSON. The client renders them using its own native components; no iframes, no arbitrary code execution.
+
+The relationship to the other protocols:
+
+```
+AG-UI  ← the pipe   (transport; events flow here)
+A2UI   ← the content (payload format; what the UI looks like)
+A2A    ← the carrier (A2UI DataParts ride inside A2A messages)
+```
+
+### Why A2UI Fits Hybro's Architecture
+
+**1. It directly solves the interaction-modes gap.**
+
+Chat forces multi-turn Q&A for tasks that should be single-step:
+
+```
+Text-only:         Agent-driven form (A2UI):
+  Agent: Date?       ┌─────────────────────────────┐
+  User: Tomorrow     │  Book a Table               │
+  Agent: Time?       │  Date: [ 2026-04-01     ▼ ] │
+  User: 7pm          │  Guests: [ 2           ▾ ] │
+  Agent: Party?      │  Time: [ 7:00 PM       ▼ ] │
+  ...                │          [ Confirm ]         │
+                     └─────────────────────────────┘
+```
+
+**2. A2UI surfaces are already carried by A2A.**
+
+An agent signals it supports A2UI via its A2A Agent Card extension (`https://a2ui.org/a2a-extension/a2ui/v0.8`). Responses with UI intent come back as A2A `DataPart`s with `mimeType: application/json+a2ui`. The `invoke_agent` step already receives and reassembles these parts — detecting them is a small addition.
+
+**3. The Surface Ownership Pattern maps to Hybro's supervisor.**
+
+A2UI defines exactly the multi-agent routing Hybro needs: when a sub-agent emits a `createSurface`, the supervisor records `surfaceId → agentId` in session state, then routes `action` messages back to the owning agent. This is the same session-state mechanism Hybro's supervisor already maintains for routing.
+
+**4. The Catalog system is the extension point for the marketplace.**
+
+Each marketplace agent advertises supported `catalogId`s. Hybro defines a `hybro-standard-catalog` that agents implement to participate in the marketplace UI layer. Premium agents can extend it with their own components.
+
+### How It Plugs Into the Hybro Stack
+
+**Backend (`invoke_agent` step):**
+
+> **Note on retries and hub agents**: The snippet below shows the cloud-agent path (`retries_allowed=3`). Hub (relay) agents must use `retries_allowed=0` because `RELAY_DISPATCHED` is not a transient failure. In practice `invoke_agent` should be split into `invoke_cloud_agent` and `invoke_hub_agent` with different retry policies (see `§ Gap 2` and `PERSISTENCE_UNIFICATION_DESIGN.md §6`). The A2UI DataPart detection logic below applies to both variants identically.
+>
+> **Note on `invocation_id`**: It must be generated by the **workflow** (caller) and passed into the step — not generated inside the step — so the buffer key and MongoDB message ID are stable across DBOS retries (see `PERSISTENCE_UNIFICATION_DESIGN.md §6`).
+
+```python
+from a2ui.a2a import is_a2ui_part, get_a2ui_datapart
+from a2ui.core.parser.parser import parse_response
+
+@DBOS.step(retries_allowed=3)   # cloud agents; use retries_allowed=0 for hub agents
+async def invoke_cloud_agent(run_id, agent_id, invocation_id, request):
+    # invocation_id is passed in from the workflow (deterministic, stable across retries)
+    ...
+    # After assembling the A2A response parts:
+    for part in a2a_response.parts:
+        if is_a2ui_part(part):
+            a2ui_messages = get_a2ui_datapart(part).data  # list of A2UI messages
+            await interaction_adapter.emit_a2ui_surface(
+                invocation_id=invocation_id,
+                surface_id=a2ui_messages[0].get("createSurface", {}).get("surfaceId"),
+                messages=a2ui_messages,
+            )
+        else:
+            # existing text streaming path (Redis buffer → single MongoDB write on completion)
+            ...
+```
+
+**`InteractionAdapter` — new `emit_a2ui_surface()` method (Phase 4):**
+
+```python
+async def emit_a2ui_surface(
+    self,
+    invocation_id: str,
+    surface_id: str,
+    messages: list[dict],
+) -> None:
+    """Emit an A2UI surface payload to the browser via AG-UI CUSTOM event."""
+    await self.emit(CustomEvent(
+        name="a2ui_surface",
+        value={
+            "invocation_id": invocation_id,
+            "surface_id": surface_id,
+            "messages": messages,   # list of A2UI JSON messages (createSurface, updateComponents, etc.)
+        },
+    ))
+```
+
+**Frontend (`@a2ui/react` renderer, Phase 4):**
+
+```tsx
+import { A2UIProvider, A2UIRenderer, useA2UI } from '@a2ui/react';
+
+// In the message bubble, when a message contains an a2ui_surface custom event:
+function A2UISurfaceMessage({ messages, surfaceId, onAction }) {
+  const { processMessages } = useA2UI();
+  useEffect(() => { processMessages(messages); }, [messages]);
+
+  return (
+    <A2UIProvider onAction={onAction}>
+      <A2UIRenderer surfaceId={surfaceId} />
+    </A2UIProvider>
+  );
+}
+
+// User actions (button clicks, form submits) route back to the agent
+// via the same SSE connection as text messages.
+function handleA2UIAction(action) {
+  sendToBackend({
+    type: "a2ui_action",
+    surface_id: action.surfaceId,
+    action_name: action.name,
+    context: action.context,
+  });
+}
+```
+
+**Action routing (supervisor):**
+
+```python
+# surface_owners is stored in the DBOS workflow's operation outputs (not in-memory dict)
+# so it survives crash-and-replay correctly. The supervisor passes it as a mutable
+# step parameter or reads/writes it via a dedicated @DBOS.step() to ensure DBOS
+# records the mutation in operation_outputs before proceeding.
+
+@DBOS.step()
+async def record_surface_owner(run_id: str, surface_id: str, agent_id: str):
+    """Durably record surface ownership so it survives workflow replay."""
+    await postgres.execute(
+        "INSERT INTO surface_owners (run_id, surface_id, agent_id) VALUES (:run_id, :sid, :aid)"
+        " ON CONFLICT (run_id, surface_id) DO NOTHING",
+        {"run_id": run_id, "sid": surface_id, "aid": agent_id},
+    )
+
+# Supervisor calls this step when a sub-agent creates a surface:
+if event.name == "a2ui_surface":
+    await record_surface_owner(run_id, event.value["surface_id"], agent_id)
+
+# Incoming a2ui_action messages route to the owning agent:
+if request.type == "a2ui_action":
+    owner = await postgres.fetchone(
+        "SELECT agent_id FROM surface_owners WHERE run_id=:run_id AND surface_id=:sid",
+        {"run_id": run_id, "sid": request.surface_id},
+    )
+    await invoke_cloud_agent(run_id, owner.agent_id, new_invocation_id, ActionRequest(
+        text=f"User submitted action '{request.action_name}' with context: {request.context}"
+    ))
+```
+
+> **Why a Postgres table, not in-memory dict**: `@DBOS.workflow()` is replayed on crash. Any in-memory mutation inside the workflow (e.g. `session_state[key] = value`) is re-executed on replay — which is fine for idempotent assignments. But for correct behavior after a crash-and-resume where the browser reconnects mid-session, the supervisor needs to know which surfaces already exist. Storing ownership in Postgres (via a `@DBOS.step()`) means DBOS records the mutation in `operation_outputs` and the step is not re-executed on replay, making the ownership map durable. The `surface_owners: dict[str, str]` field in the supervisor session model (Phase 3 prep hook) is still useful as an in-memory cache for non-crash paths.
+
+### What A2UI Enables (Use Cases for Hybro)
+
+| Use Case | A2UI Component | Replaces |
+|---|---|---|
+| HITL confirmation dialog | `Button` (Confirm/Reject) + data card | Text "do you approve?" + text reply |
+| Agent configuration form | `TextField`, `Slider`, `DateTimeInput` | Multi-turn Q&A setup flow |
+| Structured agent results | `Card`, `List`, `Tabs`, `Image` | Markdown-only response |
+| Booking / scheduling flow | `DateTimeInput`, `MultipleChoice` | Back-and-forth date parsing |
+| Approval workflow step | `Button` with `checks` (validation) + data display | Custom HITL UI |
+| Marketplace agent UI | Agent-defined custom catalog | Hardcoded per-agent frontend code |
+| Workflow editor canvas (Phase 4) | Custom catalog with `WorkflowNode`, `EdgeConnector` | ReactFlow from scratch |
+
+### Hybro Catalog Strategy
+
+Start with the **A2UI Basic Catalog** (pre-built, open-source renderer already in `@a2ui/react`) — it covers Button, TextField, Card, List, DateTimeInput, Slider, Tabs, Modal, Image, and more. Define a **`hybro-standard-catalog`** in Phase 4 that extends Basic with Hybro-specific components (agent card, run status, approval widget). Agents advertise catalog support in their A2A Agent Card.
+
+### Integration Status
+
+| Layer | Status | Phase |
+|---|---|---|
+| A2A DataPart detection in `invoke_agent` | ⬜ Not started | Phase 3 prep |
+| `emit_a2ui_surface()` on `InteractionAdapter` | ⬜ Not started | Phase 3 prep |
+| `Message.parts` schema supports DataPart (`application/json+a2ui`) | ⬜ Not started | Phase 3 prep |
+| `@a2ui/react` renderer in frontend | ⬜ Not started | Phase 4 |
+| `a2ui_surface` CUSTOM event handling in AG-UI client | ⬜ Not started | Phase 4 |
+| `a2ui_action` routing in supervisor | ⬜ Not started | Phase 4 |
+| `hybro-standard-catalog` definition | ⬜ Not started | Phase 4 |
+| Agent marketplace catalog negotiation | ⬜ Not started | Phase 4+ |
+
+### Phase 3 Extension Points to Preserve (No-Regret Hooks)
+
+Three small additions during Phase 3 cost almost nothing but prevent a painful retrofit when A2UI lands in Phase 4:
+
+1. **`emit_a2ui_surface()` stub on `InteractionAdapter`** — add the method signature (raises `NotImplementedError`), so the interface is declared and Phase 4 wiring is a one-line fill-in.
+2. **`Message.parts` accepts `DataPart`** — the `parts: list[MessagePart]` field in the new MongoDB `messages` schema (see `PERSISTENCE_UNIFICATION_DESIGN.md §Layer 3`) should include a `DataPart` variant alongside `TextPart` and `FilePart`:
+   ```python
+   class DataPart(BaseModel):
+       type: Literal["data"] = "data"
+       mime_type: str              # "application/json+a2ui" for A2UI surfaces
+       data: dict[str, Any]        # the raw A2UI JSON payload
+   ```
+3. **Surface ownership map in supervisor session state** — add a `surface_owners: dict[str, str]` field to the supervisor's session model now (defaulting to `{}`). This is a schema addition, not a behavioral change, and avoids a migration when action routing is wired up.
 
 ---
 
@@ -696,7 +991,9 @@ The architecture supports these modes without redesign:
 | **Scheduled task** | `@DBOS.scheduled("cron")` workflow | Phase 2 |
 | **Webhook-triggered** | HTTP endpoint → `DBOS.start_workflow()` | Phase 2 |
 | **User-defined workflow** | `WorkflowTemplate` + `run_workflow_template()` | Phase 3 |
-| **Generative UI** | `STATE_SNAPSHOT/DELTA` from AG-UI | Phase 3 |
+| **Generative UI (text)** | `STATE_SNAPSHOT/DELTA` from AG-UI | Phase 3 |
+| **Generative UI (rich surfaces)** | A2UI surfaces via `emit_a2ui_surface()` → `@a2ui/react` renderer | Phase 4 |
+| **HITL (structured)** | A2UI confirmation surface + `action` event routing | Phase 4 |
 | **Voice** | STT preprocessing → existing chat path | Phase 3 |
 | **Document canvas** | `STATE_SNAPSHOT` of document object + agent edits | Phase 4 |
 
@@ -707,10 +1004,11 @@ The architecture supports these modes without redesign:
 ### Phase 1: Fix the Foundation (4–6 weeks)
 *Goal: stop the bleeding, establish safe refactoring base*
 
-1. **Replace arq with SAQ** (1 day) — arq is in maintenance-only mode; SAQ is a drop-in replacement with the same Redis-based API. This is a prerequisite before any other work.
+1. **Replace arq with SAQ** (1 day) — arq is in maintenance-only mode; SAQ is a drop-in replacement with the same Redis-based API. SAQ runs the *same jobs* arq was running (background task processing, scheduled sweeps). It is a stopgap: SAQ itself is replaced by DBOS workflows in Phase 2, so no new jobs should be added to SAQ — they should wait for DBOS. The only thing SAQ provides over arq is that it is actively maintained.
 2. **Contract tests** — write integration tests for all high-risk paths (V2 resume, HITL, cancel, hub relay) before touching any code. This is the safety net.
 3. **Centralize SSE via InteractionAdapter** — stop emitting SSE from 3+ scattered locations. Single adapter. This is in PR #127 Phase 1d and is the right call.
 4. **Freeze frontend contract** — document and test the AG-UI-compatible event shapes. Planning the AG-UI migration now means the contract test shapes AG-UI-compatible events from day one.
+5. **Complete `BEHAVIORAL_DECISIONS.md`** — resolve all TBD items before Phase 2 code is written (see `BEHAVIORAL_DECISIONS.md §Open Questions`).
 
 ### Phase 2: DBOS Introduction (6–10 weeks)
 *Goal: replace custom execution runtime with proven infrastructure*
@@ -720,9 +1018,10 @@ The architecture supports these modes without redesign:
 3. **Migrate new runs to DBOS workflows** (strangler pattern) — new `ExecutionRun`s go through DBOS; legacy paths continue on old code.
 4. **Migrate HITL to `DBOS.send/recv`** — replace `HITLRequest` collection; simpler and correct.
 5. **Migrate background jobs to `@DBOS.scheduled()`** — remove `StaleTaskChecker`, `CompactionSweep`, etc. from the custom Redis leader-election pattern.
-6. **Migrate arq task queue to DBOS workflows** — Redis Pub/Sub (SSE fan-out), Streams (Hub relay), and all other Redis uses remain as-is per `HORIZONTAL_SCALING_DESIGN.md`.
+6. **Migrate arq/SAQ task queue to DBOS workflows** — Redis Pub/Sub (SSE fan-out), Streams (Hub relay), and all other Redis uses remain as-is per `HORIZONTAL_SCALING_DESIGN.md`.
 7. **Migrate relay offline queue to DBOS** — replace the in-memory offline queue in `relay_service.py` with a `@DBOS.workflow()` that durably waits for hub reconnect via `DBOS.recv()`. Removes the periodic sweep job and the 100-message in-memory cap.
 8. **Explicit hub agent step semantics** — design `invoke_agent` DBOS step retry policy for `RELAY_DISPATCHED` status: `retries_allowed=0` + durable wait via `DBOS.recv(f"hub_response:{agent_message_id}")` instead of retry.
+9. **A2A v1.0 upgrade** — consolidate the dual type-system (`common/types.py` legacy path + `a2a-sdk` path) into a single SDK-backed module. Upgrade `a2a-sdk` and `a2a-server` to latest. See `A2A_UPGRADE_ROADMAP.md` for the full change list. Phase 2 is the right time: DBOS has stabilized the execution substrate, but before Phase 3 adds AG-UI event remapping that touches the same transport layer.
 
 ### Phase 3: AG-UI + Streaming Unification + Module Extraction (8–12 weeks)
 *Goal: adopt open protocol, unify streaming persistence, complete module boundaries, add state sync*
@@ -733,15 +1032,23 @@ The architecture supports these modes without redesign:
 4. **Remove per-chunk persistence writes** — remove `tsm.persist_message()` from DirectTransport; remove `accumulate_artifact_on_message()` from handler path.
 5. **Module directory restructuring** (PR #127 Phase 3) — now that boundaries are stable and DBOS handles execution, the directory moves are safe.
 6. **`WorkflowTemplate` data model** — storable user-defined workflow graphs. No editor yet; just the backend model and execution.
+7. **A2UI Phase 3 prep hooks** (no-regret, low cost) — see `§ A2UI — Phase 3 Extension Points`:
+   - Add `emit_a2ui_surface()` stub on `InteractionAdapter` (raises `NotImplementedError`)
+   - Add `DataPart` variant to `Message.parts` schema in MongoDB
+   - Add `surface_owners: dict[str, str]` field to supervisor session model
 
 ### Phase 4: Product Expansion (when PMF signals appear)
 *Build when you know what users actually want*
 
-- Drag-and-drop workflow editor (ReactFlow + `WorkflowTemplate` backend)
-- Additional interaction modes (background tasks, scheduled, event-triggered)
-- Generative UI components (AG-UI `STATE_SNAPSHOT` + frontend component library)
-- Premium service modules (identity/SSO, governance/policy, billing/metering)
-- Hub deep integration (offline execution, data residency model)
+- **A2UI renderer integration** — install `@a2ui/react`; wire `a2ui_surface` CUSTOM event to `A2UIProvider` + `A2UIRenderer` in the chat message bubble; implement `emit_a2ui_surface()` in `InteractionAdapter`
+- **A2UI action routing** — handle `a2ui_action` requests in the supervisor; route to surface-owning agent via `surface_owners` session map
+- **`hybro-standard-catalog`** — define Hybro's catalog extending A2UI Basic Catalog; publish so marketplace agents can advertise support
+- **A2UI HITL surfaces** — replace text-based HITL confirmation with structured A2UI approval surface
+- **Drag-and-drop workflow editor** (ReactFlow + `WorkflowTemplate` backend, or A2UI custom catalog `WorkflowCanvas` component)
+- **Additional interaction modes** (background tasks, scheduled, event-triggered)
+- **Generative UI components** (AG-UI `STATE_SNAPSHOT` + frontend component library)
+- **Premium service modules** (identity/SSO, governance/policy, billing/metering)
+- **Hub deep integration** (offline execution, data residency model)
 
 ---
 
@@ -758,12 +1065,15 @@ The architecture supports these modes without redesign:
 | Add generative UI to any agent | `STATE_SNAPSHOT` event from InteractionAdapter | ~30 |
 | Add new LLM provider | `llm/providers/new_provider.py` + router | ~100 |
 | User creates custom workflow | WorkflowTemplate CRUD + executor | New module |
-| A2A v1.0 protocol upgrade | `a2a_protocol/version_adapter.py` | ~300 |
+| A2A v1.0 protocol upgrade | `a2a_protocol/version_adapter.py` + consolidate dual type-system | ~300 (Phase 2) |
 | Scale to 10x traffic | Add instances behind LB | 0 (config) |
 | Add governance module | New module consuming domain events | Additive |
 | Add new agent runtime (e.g. WASM, Docker) | New transport in `AgentMessageProcessor` + `agent.source` type | ~200 |
 | Durable relay offline queue | `@DBOS.workflow()` wrapping relay dispatch | ~50 (replaces ~300 sweep machinery) |
 | Add privacy-aware hybrid orchestration | `local_only` flag on messages + routing in `AgentMessageProcessor` | ~150 |
+| Add rich UI surface to any agent | Agent returns A2UI DataPart; `emit_a2ui_surface()` in InteractionAdapter; `@a2ui/react` renders it | ~50 backend + ~100 frontend |
+| Add agent with custom UI components | Agent defines custom A2UI catalog; registers in Agent Card extension; frontend adds catalog to `@a2ui/react` registry | New catalog file + renderer registration |
+| Replace text HITL with structured form | Wrap existing `DBOS.send/recv` with A2UI surface emission | ~80 |
 
 ### PMF Flexibility
 
@@ -789,6 +1099,8 @@ These are real capabilities that should wait until product direction is clearer:
 - **Billing / metering hooks** — `AgentInvocation` records are the raw material; the billing module comes when the pricing model is stable
 - **Voice / audio pipeline** — real interaction mode; additive when there's user demand
 - **Observable reasoning / explainability** — AG-UI `REASONING_*` events + UI components when users ask for it
+- **A2UI renderer in frontend** — `@a2ui/react` integration; `a2ui_surface` CUSTOM event handling; `a2ui_action` routing in supervisor. Phase 3 adds the three no-regret hooks (stub method, `DataPart` schema, session field). Full integration waits for Phase 4 when there is user demand for rich interaction surfaces.
+- **`hybro-standard-catalog`** — Hybro's custom A2UI catalog extending Basic Catalog. Build when agents in the marketplace actually need differentiated UI components.
 
 ---
 
@@ -814,3 +1126,4 @@ These are real capabilities that should wait until product direction is clearer:
 | Migration strategy | Strangler pattern (keep) | PR #127's approach is right |
 | What to build now | Phase 1 only | Pre-PMF; avoid over-engineering |
 || Persistence model | Three-layer (DBOS + Redis buffer + MongoDB) | See `PERSISTENCE_UNIFICATION_DESIGN.md` |
+| Generative UI format | A2UI (Phase 4, hooks in Phase 3) | Declarative surfaces over A2A DataParts; `@a2ui/react` renderer; avoids per-agent custom UI code |

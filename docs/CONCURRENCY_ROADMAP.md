@@ -4,6 +4,12 @@ This document describes the three-layer strategy for making room memory
 mutations safe under concurrent access. **Layer A is implemented.** Layers B
 and C are documented here for future multi-instance deployments.
 
+> ⚠️ **Schema migration notice (Phase 3)**: This document describes concurrency protection for `room_agent_messages` documents. During `RECOMMENDED_ARCHITECTURE.md` Phase 3 (Persistence Unification), streaming accumulation moves from MongoDB to a Redis List buffer (`stream:{run_id}:{invocation_id}`), and the final write to MongoDB is a single atomic `insert_one` per invocation (not a read-modify-write). As a result:
+> - **Layer A** (atomic MongoDB operators) is superseded for streaming writes — Redis RPUSH replaces `$push` per chunk, and a single `insert_one` replaces `$set` per chunk.
+> - **Layers B and C** (optimistic concurrency, distributed locking) become irrelevant for the streaming path as there are no concurrent in-flight writes to the same document.
+> - Layer A operators remain relevant for `room_memories` compaction writes (`compact_turns_bulk`, `update_room_summary_atomic`), which are unchanged.
+> Update this document after Phase 3 is implemented to reflect the new write model.
+
 ---
 
 ## Problem Statement

@@ -5,6 +5,8 @@
 **Scope**: Unified context and memory management for multi-agent A2A rooms  
 **Predecessor**: [SUPERVISOR_V2_DESIGN.md](./SUPERVISOR_V2_DESIGN.md) (Phase 5 complete)
 
+> ⚠️ **Schema migration notice (Phase 3)**: This document describes the fully-implemented context memory system reading from `room_agent_messages.memory_content.conversation_history`. During `RECOMMENDED_ARCHITECTURE.md` Phase 3 (Persistence Unification), the `messages` and `artifacts` MongoDB collections replace `room_agent_messages`. The `context_memory/` module absorbs this change internally (see `PERSISTENCE_UNIFICATION_DESIGN.md §9`): `context_assembly.py` will read from `db.messages` instead of `db.room_agent_messages`, and the compaction trigger will use `messages` collection length instead of `conversation_history` array length. All public `ContextMemory` facade APIs remain unchanged. This document should be updated after Phase 3 is implemented.
+
 ---
 
 ## 1. Executive Summary
