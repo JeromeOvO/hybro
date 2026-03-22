@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle, House, Cloud } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
@@ -14,6 +15,7 @@ import { ArtifactList } from './artifact-list'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { TASK_STATE, isFailureState, isInteractiveState, isTerminalState } from '@/lib/types/sse'
 import type { LucideIcon } from 'lucide-react'
+import type { Agent } from '@/lib/types/agent'
 
 // ---------------------------------------------------------------------------
 // Phase derivation — single source of truth for agent bubble presentation
@@ -346,6 +348,13 @@ function AgentMessageBubbleInner({
   onUserToggle,
   onQuote,
 }: AgentBubbleProps) {
+  const queryClient = useQueryClient()
+  const agentIconUrl = entity.agentId
+    ? (queryClient.getQueryData<Agent[]>(['agents', 'all'])
+        ?.find(a => a.agent_id === entity.agentId)
+        ?.agent_card?.iconUrl ?? null)
+    : null
+
   const phase = derivePhase(entity)
   const showIndicator = phase === 'waiting'
   const isArtifactStreaming = entity.artifacts?.some(a => a.isStreaming) ?? false
@@ -560,7 +569,7 @@ function AgentMessageBubbleInner({
                 {phaseStyle
                   ? <phaseStyle.icon className="h-3 w-3" />
                   : entity.agentId
-                    ? <img src={getAgentAvatarUri(entity.agentId)} alt="" className="h-full w-full" />
+                    ? <img src={agentIconUrl ?? getAgentAvatarUri(entity.agentId)} alt="" className="h-full w-full object-cover" />
                     : <span className="text-[10px]">{getAgentInitials(entity.senderName)}</span>
                 }
               </div>
