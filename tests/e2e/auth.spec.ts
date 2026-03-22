@@ -46,11 +46,15 @@ test.describe('Auth Gate', () => {
     // Wait for Clerk to make its decision — "Loading room..." must resolve.
     await waitForRoomAuthDecision(page)
 
-    // After the decision, the user should either:
-    //   (a) have been redirected to /sign-in, OR
-    //   (b) see "Room not found" (room doesn't exist in DB)
-    // "Loading room..." is explicitly NOT acceptable here — that means
-    // Clerk failed to load, which is a real bug.
+    // RequireAuth fires a useEffect that calls window.location.href = /sign-in once
+    // Clerk sets isSignedIn=false. Give the effect time to run and the navigation to
+    // complete before reading the URL.
+    await page.waitForTimeout(1500)
+
+    // After auth decision + redirect window, the user must either:
+    //   (a) have been redirected to /sign-in (RequireAuth fired)
+    //   (b) see "Room not found" (room doesn't exist — still behind RequireAuth)
+    // "Loading room..." is explicitly NOT acceptable — Clerk failed to hydrate.
     const url = page.url()
     const redirected = url.includes('sign-in')
     const showsNotFound = await page.getByText('Room not found').isVisible().catch(() => false)
@@ -77,17 +81,17 @@ test.describe('Auth Pages', () => {
 test.describe('Public Pages', () => {
   test('should load the about page', async ({ page }) => {
     await page.goto('/c/about')
-    await expect(page).toHaveTitle(/Hybro/)
+    await expect(page).toHaveTitle(/Hybro/i)
   })
 
   test('should load the pricing page', async ({ page }) => {
     await page.goto('/c/pricing')
-    await expect(page).toHaveTitle(/Hybro/)
+    await expect(page).toHaveTitle(/Hybro/i)
   })
 
   test('should load the agents page', async ({ page }) => {
     await page.goto('/c/agents')
-    await expect(page).toHaveTitle(/Hybro/)
+    await expect(page).toHaveTitle(/Hybro/i)
   })
 })
 

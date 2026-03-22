@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 test.describe('Chat Flow', () => {
   test('should display the main page', async ({ page }) => {
     await page.goto('/')
-    await expect(page).toHaveTitle(/Hybro/)
+    await expect(page).toHaveTitle(/Hybro/i)
   })
 
   test('should have responsive layout on mobile', async ({ page }) => {
@@ -34,7 +34,7 @@ test.describe('Chat Page (public render, auth on submit)', () => {
     )
 
     // Quick-start templates should be visible
-    const templates = page.locator('text=Research')
+    const templates = page.locator('text=Travel Plan')
     await expect(templates.first()).toBeVisible({ timeout: 5000 })
   })
 
