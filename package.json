@@ -1,6 +1,6 @@
 {
   "name": "hybro-frontend",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -17,7 +17,7 @@
     "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {
-    "@a2a-js/sdk": "^0.3.10",
+    "@a2a-js/sdk": "^0.3.13",
     "@clerk/nextjs": "^7.0.4",
     "@clerk/types": "^4.101.20",
     "@dicebear/collection": "^9.4.0",
