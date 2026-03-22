@@ -118,6 +118,13 @@ function ChatPageContent() {
 
     // Pre-configure room when agentId is in URL params
     const agentIdParam = searchParams.get("agentId")
+    const promptParam = searchParams.get("prompt")
+
+    useEffect(() => {
+        if (promptParam) {
+            setQuickStartValue(promptParam)
+        }
+    }, [promptParam])
 
     const loadAgentForChat = useCallback(async (agentId: string) => {
         try {

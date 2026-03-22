@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EntityUserBubble, EntityAgentBubble, derivePhase } from '@/components/message-bubble'
 import type { MessageEntity } from '@/stores/message-store'
 
@@ -21,6 +22,13 @@ function makeEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
     roomId: 'room-1',
     ...overrides,
   }
+}
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient()
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+  )
 }
 
 describe('EntityUserBubble', () => {
@@ -55,7 +63,7 @@ describe('EntityAgentBubble', () => {
       agentId: 'agent-1',
       content: 'Here is your code.',
     })
-    render(<EntityAgentBubble entity={entity} />)
+    renderWithQueryClient(<EntityAgentBubble entity={entity} />)
 
     expect(screen.getByText('Coding Agent')).toBeTruthy()
   })
@@ -67,7 +75,7 @@ describe('EntityAgentBubble', () => {
       agentId: 'agent-1',
       content: 'Response',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     const avatar = container.querySelector('.rounded-full')
     expect(avatar).toBeTruthy()
   })
@@ -79,7 +87,7 @@ describe('EntityAgentBubble', () => {
       agentId: 'agent-1',
       content: longContent,
     })
-    render(<EntityAgentBubble entity={entity} />)
+    renderWithQueryClient(<EntityAgentBubble entity={entity} />)
 
     expect(screen.getByText('Show more')).toBeTruthy()
   })
@@ -91,7 +99,7 @@ describe('EntityAgentBubble', () => {
       content: 'Hi',
       source: 'db',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
 
     const expandBtn = container.querySelector('button')
     if (expandBtn) {
@@ -106,7 +114,7 @@ describe('EntityAgentBubble', () => {
       agentId: 'agent-1',
       content: 'Hi',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     const link = container.querySelector('a[href="/c/agents/agent-1"]')
     expect(link).toBeTruthy()
   })
@@ -230,7 +238,7 @@ describe('EntityAgentBubble phase rendering', () => {
       messageType: 'agent', agentId: 'a1', senderName: 'Bot',
       content: '', taskStatus: 'failed', taskError: 'Something went wrong',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     expect(container.querySelector('.border-red-200')).toBeTruthy()
   })
 
@@ -240,7 +248,7 @@ describe('EntityAgentBubble phase rendering', () => {
       content: '', taskStatus: 'input-required',
       hitlPrompt: 'What is your name?', hitlResolved: false,
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     expect(container.querySelector('.border-amber-200')).toBeTruthy()
   })
 
@@ -250,7 +258,7 @@ describe('EntityAgentBubble phase rendering', () => {
       content: '', taskStatus: 'working',
       hitlPrompt: 'What is your name?', hitlResolved: true, hitlUserAnswer: 'Alice',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     expect(container.textContent).toContain('Your answer:')
     expect(container.textContent).toContain('Alice')
   })
@@ -260,7 +268,7 @@ describe('EntityAgentBubble phase rendering', () => {
       messageType: 'agent', agentId: 'a1', senderName: 'Bot',
       content: '', taskStatus: 'completed',
     })
-    const { container } = render(<EntityAgentBubble entity={entity} />)
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     expect(container.querySelector('.border-emerald-200')).toBeTruthy()
     expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1)
   })
