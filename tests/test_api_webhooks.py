@@ -205,6 +205,7 @@ class TestWebhookTransportFlow:
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
         msg = _make_tracked_message()
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
 
         wt = _make_webhook_transport(db=db)
         payload = {
@@ -228,6 +229,7 @@ class TestWebhookTransportFlow:
         db.verify_webhook_token_for_task = AsyncMock(return_value=(True, None))
         msg = _make_tracked_message(state=TaskState.completed)
         db.get_room_agent_message_by_message_id = AsyncMock(return_value=msg)
+        db.is_message_cancelled = AsyncMock(return_value=False)
 
         wt = _make_webhook_transport(db=db)
         payload = {

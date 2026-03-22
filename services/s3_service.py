@@ -132,6 +132,14 @@ class S3Service:
             logger.info("Deleted %d objects under prefix %s", deleted, prefix)
         return deleted
 
+    def get_public_url(self, s3_key: str) -> str:
+        """Return the permanent public URL for an S3 object.
+
+        Requires the S3 bucket policy to grant public s3:GetObject on the
+        relevant prefix (e.g. agent-avatars/*).
+        """
+        return f"https://{self._bucket}.s3.{self._region}.amazonaws.com/{s3_key}"
+
     async def download_text(self, s3_key: str) -> str | None:
         """Download a text file from S3 and return its content as a string."""
         try:

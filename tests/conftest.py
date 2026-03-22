@@ -174,11 +174,14 @@ def mock_db_service():
     # Message operations
     mock.get_room_user_message_by_message_id = AsyncMock(return_value=None)
     mock.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
+    mock.get_room_agent_messages_by_related_message_id = AsyncMock(return_value=[])
     mock.create_room_user_message = AsyncMock(return_value=True)
     mock.create_room_agent_message = AsyncMock(return_value=True)
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
     mock.get_task_messages_for_room = AsyncMock(return_value=[])
     mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
+    mock.update_task_state_on_message = AsyncMock(return_value=True)
+    mock.is_message_cancelled = AsyncMock(return_value=False)
     
     # Memory operations
     mock.get_room_memory_by_room_id = AsyncMock(return_value=None)
@@ -445,6 +448,7 @@ def mock_sse_manager():
     mock.cancel_message = MagicMock()
     mock.cancel_message_and_broadcast = AsyncMock()
     mock.clear_cancellation = MagicMock()
+    mock.send_processing_status = AsyncMock()
     mock.get_room_status = MagicMock(return_value={"connections": 0})
     return mock
 
