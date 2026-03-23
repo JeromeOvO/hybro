@@ -64,6 +64,26 @@ test.describe('Auth Gate', () => {
       `Expected redirect to /sign-in or "Room not found" but got URL: ${url}`
     ).toBe(true)
   })
+
+  test('RequireAuth redirect_url preserves the room path so login returns to the room', async ({ page }) => {
+    const roomId = 'test-room-redirect'
+    await page.goto(`/c/room/${roomId}`)
+
+    await waitForRoomAuthDecision(page)
+    await page.waitForTimeout(1500)
+
+    const url = page.url()
+
+    // If RequireAuth redirected to sign-in, the redirect_url must point back to
+    // the room so the user lands there after login — not on the home page.
+    if (url.includes('sign-in')) {
+      expect(
+        decodeURIComponent(url),
+        'redirect_url should contain the room path'
+      ).toContain(`/room/${roomId}`)
+    }
+    // If "Room not found" is shown the room path was reached correctly — pass.
+  })
 })
 
 test.describe('Auth Pages', () => {
@@ -103,5 +123,68 @@ test.describe('Navigation', () => {
     await expect(agentsLink).toBeVisible({ timeout: 5000 })
     await agentsLink.click()
     await expect(page).toHaveURL(/agents/)
+  })
+})
+
+test.describe('Sidebar Sign-in Button', () => {
+  // Wait for Clerk to finish hydrating so NavUser renders the sign-in button
+  // instead of the loading skeleton (.animate-pulse).
+  async function waitForSidebarSignInButton(page: import('@playwright/test').Page) {
+    await page.waitForFunction(
+      () => {
+        const sidebar = document.querySelector('[data-slot="sidebar"]')
+        if (!sidebar) return false
+        return sidebar.querySelectorAll('.animate-pulse').length === 0
+      },
+      { timeout: 15000 },
+    )
+  }
+
+  test('sidebar sign-in button preserves path and query params in redirect_url', async ({ page }) => {
+    // Navigate to the chat page with an agentId param — the exact scenario from
+    // "Chat with this agent" on the agent profile page.
+    await page.goto('/c/chat?agentId=test-agent-nav')
+
+    await waitForSidebarSignInButton(page)
+
+    // Dismiss cookie consent if it overlays the sidebar footer
+    const declineBtn = page.getByRole('button', { name: 'Decline' })
+    if (await declineBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await declineBtn.click()
+    }
+
+    // The sign-in button is a div with title="Sign in" (no aria-label)
+    const signInBtn = page.locator('[title="Sign in"]')
+    await expect(signInBtn).toBeVisible({ timeout: 5000 })
+    await signInBtn.click({ force: true })
+
+    // After clicking, the sidebar button does window.location.href = /sign-in?redirect_url=...
+    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
+    const decoded = decodeURIComponent(page.url())
+    expect(decoded).toContain('redirect_url')
+    expect(decoded).toContain('/chat')
+    expect(decoded).toContain('agentId=test-agent-nav')
+  })
+})
+
+test.describe('Developer Portal Auth', () => {
+  test('register page loads for unauthenticated users', async ({ page }) => {
+    // The register page is publicly accessible — auth is only checked when
+    // the user clicks "Register Agent" after completing the inspection flow.
+    // This test verifies the page renders without crashing for unauthenticated users.
+    await page.goto('/d/register')
+
+    await page.waitForFunction(
+      () => !document.querySelector('.animate-spin'),
+      { timeout: 15000 },
+    )
+
+    // The page heading should be visible — confirms the page loaded correctly.
+    await expect(page.getByRole('heading', { name: /register agent/i })).toBeVisible({ timeout: 5000 })
+
+    // The register button is only shown after a successful agent inspection,
+    // so it should not be visible yet for a fresh unauthenticated page load.
+    const registerBtn = page.getByRole('button', { name: /^register agent$/i })
+    await expect(registerBtn).not.toBeVisible()
   })
 })
