@@ -1,22 +1,29 @@
-"use client"
-
+import type { Metadata } from "next"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { 
-  Bot, 
-  Zap, 
-  Users, 
+import {
+  Bot,
+  Zap,
+  Users,
   Grid3X3,
-  ArrowRight,
   Network,
   Workflow,
   Mail
 } from "lucide-react"
-import { useClerk } from "@clerk/nextjs"
-import { isWaitlistEnabled } from "@/lib/utils"
+import { AboutCtaButton } from "./about-cta-button"
+
+export const metadata: Metadata = {
+  title: "About Hybro AI – Collaborative AI Agent Network for the AGI Era",
+  description:
+    "Hybro AI builds an interoperable, collaborative AI agent network. Connect A2A-compliant local and remote agents, decompose complex tasks, and enable seamless human-AI collaboration.",
+  openGraph: {
+    title: "About Hybro AI – Collaborative AI Agent Network for the AGI Era",
+    description:
+      "Hybro AI builds an interoperable, collaborative AI agent network. Connect A2A-compliant local and remote agents, decompose complex tasks, and enable seamless human-AI collaboration.",
+    url: "https://hybro.ai/c/about",
+  },
+}
 
 export default function AboutPage() {
-  const { openWaitlist } = useClerk()
   const features = [
     {
       icon: <Network className="h-8 w-8 icon-network" />,
@@ -75,21 +82,7 @@ export default function AboutPage() {
             Be part of the future where humans and AI agents collaborate seamlessly
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button 
-              variant="outline" 
-              size="lg" 
-              className="px-8"
-              onClick={() => {
-                if (isWaitlistEnabled()) {
-                  openWaitlist()
-                } else {
-                  window.location.href = "/sign-in"
-                }
-              }}
-            >
-              {isWaitlistEnabled() ? "Join Waitlist" : "Sign in"}
-              <ArrowRight className="ml-2 h-4 w-4 icon-action" />
-            </Button>
+            <AboutCtaButton />
           </div>
         </div>
       </section>
