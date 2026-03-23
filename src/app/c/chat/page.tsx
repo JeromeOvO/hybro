@@ -1,7 +1,7 @@
 "use client"
 
 import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
-import { useSearchParams, usePathname } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { useUser, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
@@ -101,7 +101,6 @@ function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
     const searchParams = useSearchParams()
-    const currentPath = usePathname()
     const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
@@ -163,8 +162,8 @@ function ChatPageContent() {
     }, [agentIdParam, loadAgentForChat])
 
     const handleRequireAuth = useCallback(() => {
-        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
-    }, [currentPath])
+        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
+    }, [])
 
     const {
         creating,

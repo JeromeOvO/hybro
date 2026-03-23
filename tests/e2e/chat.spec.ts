@@ -21,7 +21,7 @@ test.describe('Chat Flow', () => {
 
 test.describe('Chat Page (public render, auth on submit)', () => {
   // The chat page renders its UI for all users, including unauthenticated.
-  // Auth is checked only on submit (window.location.href = "/sign-in").
+  // Auth is checked only on submit — it redirects to /sign-in?redirect_url=<current path + query>.
   // These tests verify the page loads correctly without auth.
 
   test('should render chat page with quick-start templates', async ({ page }) => {
@@ -59,6 +59,54 @@ test.describe('Chat Page (public render, auth on submit)', () => {
 
     // After submit, unauthenticated user should be redirected to /sign-in
     await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
+  })
+
+  test('unauthenticated submit from agent link should preserve agentId in redirect_url', async ({ page }) => {
+    // Simulate arriving via "Chat with this agent" on the agent profile page
+    await page.goto('/c/chat?agentId=test-agent-123')
+
+    await page.waitForFunction(
+      () => !document.querySelector('.animate-spin'),
+      { timeout: 15000 },
+    )
+
+    const chatInput = page.locator('[contenteditable="true"]')
+    await expect(chatInput).toBeVisible({ timeout: 5000 })
+
+    await chatInput.click()
+    await page.keyboard.type('Hello agent')
+    await page.keyboard.press('Enter')
+
+    // After redirect, the sign-in URL must include redirect_url with the agentId param
+    // so the user returns to the correct agent chat after login.
+    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
+    const url = page.url()
+    expect(url).toContain('redirect_url')
+    expect(decodeURIComponent(url)).toContain('agentId=test-agent-123')
+  })
+
+  test('unauthenticated submit preserves both agentId and prompt params in redirect_url', async ({ page }) => {
+    // Simulate arriving via "Chat with this agent" with a pre-filled prompt
+    await page.goto('/c/chat?agentId=test-agent-456&prompt=Hello%20world')
+
+    await page.waitForFunction(
+      () => !document.querySelector('.animate-spin'),
+      { timeout: 15000 },
+    )
+
+    const chatInput = page.locator('[contenteditable="true"]')
+    await expect(chatInput).toBeVisible({ timeout: 5000 })
+
+    await chatInput.click()
+    await page.keyboard.press('Enter')
+
+    await expect(page).toHaveURL(/sign-in/, { timeout: 10000 })
+    const url = page.url()
+    const decoded = decodeURIComponent(url)
+    expect(decoded).toContain('agentId=test-agent-456')
+    // The prompt value may be encoded as + or %20 for spaces; check the key is present
+    // and that the value survived the redirect round-trip.
+    expect(decoded).toMatch(/prompt=Hello[+ ]world/)
   })
 })
 
