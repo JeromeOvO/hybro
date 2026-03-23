@@ -20,7 +20,7 @@ import type { NextRequest, NextFetchEvent } from 'next/server'
 const DEV_HOSTS = ['developer.', 'dev.']
 
 /** Paths that should never be rewritten. */
-const SHARED_PATH_PREFIXES = ['/api/', '/_next/', '/sign-in', '/sign-up', '/privacy']
+const SHARED_PATH_PREFIXES = ['/api/', '/_next/', '/sign-in', '/sign-up', '/privacy', '/robots.txt', '/sitemap.xml']
 
 /** Determine if running locally based on NEXT_PUBLIC_CONSUMER_URL */
 const IS_LOCAL = process.env.NEXT_PUBLIC_CONSUMER_URL?.includes('localhost')
