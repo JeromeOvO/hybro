@@ -8,8 +8,9 @@ import { BannerHost } from "@/components/ui/banner"
 import { SettingsDialogProvider } from "@/components/settings/settings-dialog-provider"
 
 export const metadata: Metadata = {
-  title: "HYBRO AI",
-  description: "Chat with AI agents",
+  title: "HYBRO AI – Your Local & Remote Hybrid Agent Platform",
+  description:
+    "Work with local and remote AI agents in a unified, private platform. Connect on-device or cloud-based agents and get things done.",
 }
 
 export default function ConsumerLayout({

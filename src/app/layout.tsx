@@ -22,7 +22,22 @@ const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["700"], variab
 
 export const metadata: Metadata = {
   title: "Hybro AI",
-  description: "An Open A2A Agent Network",
+  description:
+    "Hybro AI is a hybrid AI agent platform that connects local and remote AI agents into an interoperable network. Build, discover, and orchestrate agents in a unified interface.",
+  openGraph: {
+    title: "Hybro AI – Hybrid AI Agent Platform",
+    description:
+      "Connect local and remote AI agents into an interoperable A2A network. Build, discover, and orchestrate agents in a unified interface.",
+    url: "https://hybro.ai",
+    siteName: "Hybro AI",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Hybro AI – Hybrid AI Agent Platform",
+    description:
+      "Connect local and remote AI agents into an interoperable A2A network. Build, discover, and orchestrate agents in a unified interface.",
+  },
 }
 
 export default function RootLayout({
@@ -33,6 +48,29 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        <Script
+          id="json-ld"
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              name: "Hybro AI",
+              description:
+                "A hybrid AI agent platform for building and connecting interoperable local and remote AI agents via A2A Agent-to-Agent protocol.",
+              applicationCategory: "DeveloperApplication",
+              url: "https://hybro.ai",
+              operatingSystem: "Web",
+              offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+              creator: {
+                "@type": "Organization",
+                name: "Hybro AI",
+                url: "https://hybro.ai",
+                email: "info@hybro.ai",
+              },
+            }),
+          }}
+        />
         <Script id="gtag-consent-default" strategy="afterInteractive">
           {`
             window.dataLayer = window.dataLayer || [];
