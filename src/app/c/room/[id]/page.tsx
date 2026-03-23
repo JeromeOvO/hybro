@@ -290,14 +290,16 @@ export default function RoomChatPage() {
     }
     try {
       const result = await updateRoomName(roomId, editNameValue.trim(), getToken)
-      if (!result.success) {
+      if (result.success) {
+        await refreshRoomSetting()
+      } else {
         toast.error(result.error || 'Failed to update room name')
       }
     } catch {
       toast.error('Failed to update room name')
     }
     setEditingName(false)
-  }, [room, roomId, editNameValue, getToken])
+  }, [room, roomId, editNameValue, getToken, refreshRoomSetting])
 
   const cancelEditingName = useCallback(() => {
     setEditingName(false)
@@ -365,7 +367,7 @@ export default function RoomChatPage() {
                       onBlur={saveRoomName}
                       className="text-xl font-semibold bg-transparent border-b-2 border-primary outline-none px-0 py-0 min-w-[120px]"
                     />
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={saveRoomName}>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onMouseDown={(e) => { e.preventDefault(); saveRoomName() }}>
                       <Check className="h-3.5 w-3.5" />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-6 w-6" onMouseDown={(e) => { e.preventDefault(); cancelEditingName() }}>
