@@ -121,6 +121,8 @@ export interface Agent {
   is_hub_online?: boolean;
   /** Agent ID on the local hub (maps to the hub's internal registry) */
   local_agent_id?: string;
+  /** Display name resolved from provider_id via Clerk (when agent_card.provider is absent) */
+  provider_name?: string | null;
 }
 
 export interface AgentCenterResponse {
