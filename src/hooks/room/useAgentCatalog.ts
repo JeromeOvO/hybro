@@ -71,6 +71,14 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     return undefined
   }, [allAgentsQuery.data])
 
+  const getAgentIconUrl = useCallback((agentId: string | undefined): string | null => {
+    if (!agentId) return null
+    const agents = allAgentsQuery.data
+    if (!agents) return null
+    const found = agents.find(a => a.agent_id === agentId)
+    return found?.agent_card?.iconUrl ?? null
+  }, [allAgentsQuery.data])
+
   // Refresh agent name cache when agent catalog loads
   useEffect(() => {
     if (allAgentsQuery.data) {
@@ -95,6 +103,7 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     allAgentsData: allAgentsQuery.data,
     getAgentName,
     getAgentSource,
+    getAgentIconUrl,
     primeAgentNameCache,
     resetAgentNameCache,
   }

@@ -60,12 +60,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { banner } from "@/components/ui/banner"
 import { getAgent } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import type { Agent, AgentCenterResponse, AgentCapabilities } from "@/lib/types"
 import type { AgentSkill } from "@/lib/types"
 import { developerUrl } from "@/lib/urls"
 import { isSystemAgent, SYSTEM_AGENTS } from "@/lib/system-agents"
 import { getModeIcon, getModeLabel } from "@/lib/agent-icon-utils"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
 
 const CAPABILITY_TOOLTIPS: Record<string, string> = {
   "Streaming": "Responses appear in real-time as they're generated",
@@ -351,10 +353,11 @@ export default function ConsumerAgentProfilePage() {
         {/* ── Hero ── */}
         <div className="space-y-5">
           <div className="flex items-start gap-5">
-            <Avatar className="h-24 w-24 shrink-0 border-4 border-background shadow-xl">
+            <Avatar className={cn("h-24 w-24 shrink-0 border-4 border-background shadow-xl", !isActive && "grayscale opacity-60")}>
               <AvatarImage src={card.iconUrl || undefined} alt={card.name} />
-              <AvatarFallback className="bg-primary/5 text-primary">
-                <Bot className="h-10 w-10" />
+              <AvatarFallback className="rounded-none p-0 overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={getAgentAvatarUri(agentId)} alt={card.name} className="h-full w-full" />
               </AvatarFallback>
             </Avatar>
 

@@ -8,8 +8,9 @@ import { BannerHost } from "@/components/ui/banner"
 import { SettingsDialogProvider } from "@/components/settings/settings-dialog-provider"
 
 export const metadata: Metadata = {
-  title: "HYBRO Developers",
-  description: "Build interoperable AI agents",
+  title: "HYBRO Developers – Build & Connect Interoperable AI Agents",
+  description:
+    "APIs and SDKs to build, connect, and deploy interoperable AI agents. Run agents locally or in the cloud and orchestrate them with HYBRO.",
 }
 
 export default function DeveloperLayout({

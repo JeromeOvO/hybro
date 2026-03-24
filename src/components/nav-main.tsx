@@ -128,7 +128,7 @@ export function NavMain({
                             "transition-all duration-150 ease-out",
                             "hover:bg-black/10 dark:hover:bg-white/15",
                             isActive
-                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-primary"
+                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-accent-foreground"
                               : ""
                           )}
                         >

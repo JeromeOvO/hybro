@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 
 vi.mock('@/hooks/useAutoHideScroll', () => ({
@@ -47,7 +48,12 @@ function seedStore(messages: Array<{
 
 async function renderMessages() {
   const { RoomMessages } = await import('@/components/room-messages')
-  return render(<RoomMessages />)
+  const queryClient = new QueryClient()
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RoomMessages />
+    </QueryClientProvider>
+  )
 }
 
 describe('RoomMessages', () => {

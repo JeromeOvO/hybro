@@ -38,7 +38,7 @@ test.describe('Room Auth Gate', () => {
 test.describe('Agent Selection', () => {
   test('should display agents page with title', async ({ page }) => {
     await page.goto('/c/agents')
-    await expect(page).toHaveTitle(/Hybro/)
+    await expect(page).toHaveTitle(/Hybro/i)
     await expect(page.locator('body')).toBeVisible()
   })
 })

@@ -5,6 +5,7 @@ import { Plus, RefreshCw, Search, Settings, SquareArrowOutUpRight } from "lucide
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import {
   Tooltip,
   TooltipContent,
@@ -17,6 +18,8 @@ import { banner } from "@/components/ui/banner"
 import { getAgentsByProviderId } from "@/lib/api"
 import type { Agent } from "@/lib/types"
 import { consumerUrl } from "@/lib/urls"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
+import { AgentSourceBadge } from "@/components/agent-source-badge"
 
 export default function DeveloperAgentsPage() {
   const router = useRouter()
@@ -139,9 +142,33 @@ export default function DeveloperAgentsPage() {
                     onClick={() => router.push(`/agents/${agent.agent_id}`)}
                   >
                     <td className="px-3 sm:px-4 py-3 min-w-0">
-                      <div className="font-medium truncate">{agent.agent_card.name}</div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {agent.agent_card.description}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Avatar className="h-8 w-8 rounded-md shrink-0">
+                          <AvatarImage
+                            src={agent.agent_card.iconUrl || undefined}
+                            alt={agent.agent_card.name}
+                            className="rounded-md"
+                          />
+                          <AvatarFallback className="rounded-md p-0 overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-medium truncate">{agent.agent_card.name}</span>
+                            <TooltipProvider>
+                              <AgentSourceBadge
+                                source={agent.source}
+                                isHubOnline={agent.is_hub_online}
+                                className="h-3.5 w-3.5 shrink-0"
+                              />
+                            </TooltipProvider>
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {agent.agent_card.description}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-3 sm:px-4 py-3">

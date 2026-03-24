@@ -101,7 +101,7 @@ function PricingClient() {
 
   return (
     <div className="min-h-screen py-16 bg-gradient-to-b from-background to-background/50">
-      <div className="max-w-7xl mx-auto space-y-16">
+      <div className="max-w-7xl mx-auto space-y-16 px-4 sm:px-8">
         {/* Header Section */}
         <div className="text-center space-y-6 max-w-3xl mx-auto">
           <h1 className="text-5xl sm:text-7xl font-extrabold tracking-tight leading-tight">

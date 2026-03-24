@@ -236,7 +236,7 @@ export default function RegisterAgentPage() {
       if (isWaitlistEnabled()) {
         openWaitlist()
       } else {
-        router.push("/sign-in")
+        router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`)
       }
       return
     }

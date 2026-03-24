@@ -36,6 +36,7 @@ import { consumerUrl } from "@/lib/urls"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
 import { AgentSettingsCard, validateAgentSettings, settingsToUpdatePayload } from "@/components/developer/agent-settings-card"
 import type { AgentSettingsValues } from "@/components/developer/agent-settings-card"
+import { AgentAvatarUpload } from "@/components/developer/agent-avatar-upload"
 import { useMyAgents } from "@/hooks/useMyAgents"
 
 export default function DeveloperAgentManagePage() {
@@ -269,13 +270,34 @@ export default function DeveloperAgentManagePage() {
         <Card>
           <CardHeader>
             <div className="flex items-start gap-4">
-              <Avatar className="h-16 w-16 border-2 border-background shadow-lg">
-                <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
-                <AvatarFallback className="bg-primary/5 text-primary p-0 overflow-hidden">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
-                </AvatarFallback>
-              </Avatar>
+              {isOwner ? (
+                <AgentAvatarUpload
+                  agentId={agent.agent_id}
+                  agentName={agent.agent_card.name}
+                  iconUrl={agent.agent_card.iconUrl}
+                  onUploaded={(newIconUrl) =>
+                    setAgentData((prev) =>
+                      prev?.agent
+                        ? {
+                            ...prev,
+                            agent: {
+                              ...prev.agent,
+                              agent_card: { ...prev.agent.agent_card, iconUrl: newIconUrl },
+                            },
+                          }
+                        : prev
+                    )
+                  }
+                />
+              ) : (
+                <Avatar className="h-16 w-16 border-2 border-background shadow-lg">
+                  <AvatarImage src={agent.agent_card.iconUrl || undefined} alt={agent.agent_card.name} />
+                  <AvatarFallback className="bg-primary/5 text-primary p-0 overflow-hidden">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} className="h-full w-full" />
+                  </AvatarFallback>
+                </Avatar>
+              )}
               <div className="flex-1 space-y-1">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-2xl">{agent.agent_card.name}</CardTitle>
@@ -362,7 +384,7 @@ export default function DeveloperAgentManagePage() {
                   <Button
                     variant="default"
                     className="mt-4"
-                    onClick={() => router.push(`/sign-in?redirect_url=/d/agents/${agentId}`)}
+                    onClick={() => router.push(`/sign-in?redirect_url=${encodeURIComponent(`/d/agents/${agentId}`)}`)}
                   >
                     Sign In
                   </Button>

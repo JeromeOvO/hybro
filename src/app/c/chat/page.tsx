@@ -1,8 +1,8 @@
 "use client"
 
 import { Suspense, useState, useEffect, useMemo, useCallback } from "react"
-import { useSearchParams, usePathname } from "next/navigation"
-import { useUser, useClerk, useAuth } from "@clerk/nextjs"
+import { useSearchParams } from "next/navigation"
+import { useUser, useAuth } from "@clerk/nextjs"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { GroupManagementModal } from "@/components/group-management-modal"
 import { banner } from "@/components/ui/banner"
@@ -28,7 +28,7 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/components/message-bubble"
 import type { PendingAttachment } from "@/lib/types/attachments"
-import { cn, isWaitlistEnabled } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
 
@@ -100,9 +100,7 @@ export default function ChatPage() {
 function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
-    const { openWaitlist } = useClerk()
     const searchParams = useSearchParams()
-    const currentPath = usePathname()
     const [quickStartValue, setQuickStartValue] = useState("")
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
@@ -119,6 +117,13 @@ function ChatPageContent() {
 
     // Pre-configure room when agentId is in URL params
     const agentIdParam = searchParams.get("agentId")
+    const promptParam = searchParams.get("prompt")
+
+    useEffect(() => {
+        if (promptParam) {
+            setQuickStartValue(promptParam)
+        }
+    }, [promptParam])
 
     const loadAgentForChat = useCallback(async (agentId: string) => {
         try {
@@ -157,12 +162,8 @@ function ChatPageContent() {
     }, [agentIdParam, loadAgentForChat])
 
     const handleRequireAuth = useCallback(() => {
-        if (isWaitlistEnabled()) {
-            openWaitlist()
-        } else {
-            window.location.href = `/sign-in?redirect_url=${encodeURIComponent(currentPath)}`
-        }
-    }, [openWaitlist, currentPath])
+        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
+    }, [])
 
     const {
         creating,
