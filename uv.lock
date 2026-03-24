@@ -937,7 +937,7 @@ wheels = [
 
 [[package]]
 name = "multi-agents-backend"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
