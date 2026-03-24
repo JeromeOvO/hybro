@@ -371,7 +371,7 @@ export default function ConsumerAgentProfilePage() {
               <p className="text-sm text-muted-foreground font-medium">
                 v{card.version}
                 <span className="mx-1.5 text-border">·</span>
-                Built by {card.provider?.organization || "Unknown Provider"}
+                Built by <span className="text-[hsl(var(--color-hybro-hy))]">{card.provider?.organization || agent.provider_name || "Hybro AI"}</span>
               </p>
             </div>
           </div>
