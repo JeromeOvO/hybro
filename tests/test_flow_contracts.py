@@ -528,12 +528,15 @@ class TestMessageCancellationFlow:
         mock_db = MagicMock()
         mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=mock_msg)
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
+        mock_db.get_room_agent_messages_by_related_message_id = AsyncMock(return_value=[])
+        mock_db.update_task_state_on_message = AsyncMock(return_value=True)
 
         mock_mongodb = MagicMock()
         mock_mongodb.cancel_message = AsyncMock(return_value=True)
 
         mock_sse = MagicMock()
         mock_sse.cancel_message_and_broadcast = AsyncMock()
+        mock_sse.send_processing_status = AsyncMock()
 
         mock_hitl = MagicMock()
         mock_hitl.cancel_requests_for_message = AsyncMock()
