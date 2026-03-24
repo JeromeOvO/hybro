@@ -5,6 +5,7 @@ import os
 from typing import TYPE_CHECKING
 
 import httpx
+from a2a.types import AgentCard
 from a2a.utils.constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -72,20 +73,23 @@ class AgentHealthService:
         """Attach a LeaderElection instance for distributed leader gating."""
         self._leader = leader
 
-    async def check_agent_health(self, agent: Agent, *, timeout: float | None = None) -> bool:
+    async def check_agent_health(
+        self, agent: Agent, *, timeout: float | None = None
+    ) -> tuple[bool, AgentCard | None]:
         """
         Check if an agent is reachable by making an HTTP request to its URL.
 
         A2A protocol agents typically only accept POST on root URL for message
         sending, so we fall back to checking the agent card endpoint which
-        accepts GET requests.
+        accepts GET requests.  When the endpoint returns a valid agent card,
+        it is parsed and returned so callers can update the DB.
 
         Args:
             agent: The agent to check
             timeout: Optional override for HTTP timeout (defaults to self.timeout)
 
         Returns:
-            bool: True if agent is reachable, False otherwise
+            Tuple of (is_healthy, fetched_agent_card_or_None)
         """
         agent_url = agent.agent_card.url
         effective_timeout = timeout if timeout is not None else self.timeout
@@ -106,31 +110,63 @@ class AgentHealthService:
                 # Consider 2xx and 3xx as healthy
                 is_healthy = response.status_code < 400
 
+                fetched_card: AgentCard | None = None
                 if is_healthy:
                     logger.debug(
                         f"Agent {agent.agent_id} ({agent.agent_card.name}) is healthy"
                     )
+                    # Try to parse the response body as an AgentCard
+                    try:
+                        fetched_card = AgentCard(**response.json())
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not parse agent card for {agent.agent_id}: {e}"
+                        )
                 else:
                     logger.warning(
                         f"Agent {agent.agent_id} ({agent.agent_card.name}) "
                         f"returned status {response.status_code}"
                     )
 
-                return is_healthy
+                return is_healthy, fetched_card
 
         except httpx.TimeoutException:
             logger.warning(
                 f"Agent {agent.agent_id} ({agent.agent_card.name}) timed out"
             )
-            return False
+            return False, None
         except httpx.RequestError as e:
             logger.warning(
                 f"Agent {agent.agent_id} ({agent.agent_card.name}) unreachable: {e}"
             )
-            return False
+            return False, None
         except Exception as e:
             logger.error(f"Unexpected error checking agent {agent.agent_id}: {e}")
-            return False
+            return False, None
+
+    async def _update_agent_card_in_db(
+        self, agent: Agent, fetched_card: AgentCard
+    ) -> None:
+        """
+        Persist the freshly fetched agent card to MongoDB.
+
+        Preserves the stored ``url`` so that an agent cannot silently redirect
+        its own traffic to a different endpoint.
+        """
+        try:
+            # Preserve the URL we have on file (registration source of truth)
+            fetched_card.url = agent.agent_card.url
+            await mongodb.agents_collection.update_one(
+                {"agent_id": agent.agent_id},
+                {"$set": {"agent_card": fetched_card.model_dump(mode="json")}},
+            )
+            logger.debug(
+                f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to update agent card for {agent.agent_id}: {e}"
+            )
 
     async def update_agent_status(self, agent_id: str, new_status: AgentStatus) -> bool:
         """
@@ -190,10 +226,12 @@ class AgentHealthService:
                 if not agent or agent.agent_status == AgentStatus.deleted:
                     break
 
-                is_healthy = await self.check_agent_health(agent)
+                is_healthy, fetched_card = await self.check_agent_health(agent)
 
                 if is_healthy:
                     self._failure_counts[agent_id] = 0
+                    if fetched_card:
+                        await self._update_agent_card_in_db(agent, fetched_card)
                     if agent.agent_status == AgentStatus.inactive:
                         await self.update_agent_status(agent_id, AgentStatus.active)
                         logger.info(
@@ -257,11 +295,13 @@ class AgentHealthService:
                     logger.debug(f"Skipping agent {agent_id} - retry task in progress")
                     continue
 
-                is_healthy = await self.check_agent_health(agent)
+                is_healthy, fetched_card = await self.check_agent_health(agent)
 
                 if is_healthy:
                     # Reset failure count and mark as active if was inactive
                     self._failure_counts[agent_id] = 0
+                    if fetched_card:
+                        await self._update_agent_card_in_db(agent, fetched_card)
                     if agent.agent_status == AgentStatus.inactive:
                         await self.update_agent_status(agent_id, AgentStatus.active)
                         logger.info(

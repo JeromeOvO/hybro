@@ -35,7 +35,7 @@ async def _check_cloud_agent(agent: Agent) -> Agent:
     from services.agent_health_service import agent_health_service
 
     try:
-        is_healthy = await agent_health_service.check_agent_health(
+        is_healthy, fetched_card = await agent_health_service.check_agent_health(
             agent, timeout=settings.cloud_health_check_timeout
         )
     except Exception:
@@ -45,6 +45,9 @@ async def _check_cloud_agent(agent: Agent) -> Agent:
             exc_info=True,
         )
         return agent
+
+    if is_healthy and fetched_card:
+        await agent_health_service._update_agent_card_in_db(agent, fetched_card)
 
     if not is_healthy and agent.agent_status == AgentStatus.active:
         await agent_health_service.update_agent_status(
