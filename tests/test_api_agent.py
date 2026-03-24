@@ -123,6 +123,43 @@ class TestGetAgentByProvider:
         assert response.success is True
         assert len(response.agents) == 1
 
+    @pytest.mark.asyncio
+    async def test_populates_provider_name_when_agent_card_has_no_provider(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should resolve and set provider_name when agent_card.provider is absent."""
+        sample_agent.agent_card.provider = None
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
+
+        with patch("api.agent.resolve_provider_name", return_value="Test User"):
+            response = await get_agent_by_provider(mock_user)
+
+        assert response.agents[0].provider_name == "Test User"
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_provider_name_when_organization_is_set(
+        self, mock_user, patch_agent_deps, sample_agent
+    ):
+        """Should not set provider_name when agent_card.provider.organization is already set."""
+        from a2a.types import AgentProvider
+        sample_agent.agent_card.provider = AgentProvider(
+            organization="Existing Org", url="http://example.com"
+        )
+        expected_response = AgentCenterResponse(
+            success=True,
+            agents=[sample_agent],
+        )
+        patch_agent_deps.get_agents_by_provider_id.return_value = expected_response
+
+        with patch("api.agent.resolve_provider_name", return_value="Test User"):
+            response = await get_agent_by_provider(mock_user)
+
+        assert response.agents[0].provider_name is None
+
 
 class TestGetAgent:
     """Tests for get_agent endpoint."""

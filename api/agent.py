@@ -65,6 +65,13 @@ async def get_agent_by_provider(
         agent_center_request
     )
 
+    # Resolve provider display name once for all agents (same owner)
+    if agent_center_response.success and agent_center_response.agents:
+        resolved_name = resolve_provider_name(provider_id)
+        for agent in agent_center_response.agents:
+            if not agent.agent_card.provider or not agent.agent_card.provider.organization:
+                agent.provider_name = resolved_name
+
     return agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
     )
