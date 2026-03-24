@@ -56,10 +56,12 @@ class CloudHealthMiddleware:
         cached = self._get_cached(agent_id)
 
         if cached is None:
-            is_healthy = await self._health.check_agent_health(
+            is_healthy, fetched_card = await self._health.check_agent_health(
                 ctx.agent, timeout=settings.cloud_health_check_timeout
             )
             self._cache[agent_id] = (is_healthy, time.monotonic())
+            if is_healthy and fetched_card:
+                await self._health._update_agent_card_in_db(ctx.agent, fetched_card)
         else:
             is_healthy = cached
 
