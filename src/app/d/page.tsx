@@ -213,7 +213,7 @@ function DeveloperDashboard() {
                         </td>
                         <td className="px-3 sm:px-4 py-3 hidden sm:table-cell">
                           <span className="text-sm text-muted-foreground truncate block">
-                            {agent.agent_card.provider?.organization || 'Unknown'}
+                            {agent.agent_card.provider?.organization || agent.provider_name || 'Unknown'}
                           </span>
                         </td>
                         <td className="px-3 sm:px-4 py-3 text-center">
