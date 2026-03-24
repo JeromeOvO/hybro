@@ -309,7 +309,7 @@ export default function DeveloperAgentManagePage() {
                   />
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  v{agent.agent_card.version} · {agent.agent_card.provider?.organization || "Unknown Provider"}
+                  v{agent.agent_card.version} · Built by <span className="text-[hsl(var(--color-hybro-hy))]">{agent.agent_card.provider?.organization || agent.provider_name || "Unknown Provider"}</span>
                 </div>
                 <CardDescription className="mt-2">
                   {agent.agent_card.description}
