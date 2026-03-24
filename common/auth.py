@@ -3,12 +3,41 @@ Clerk Authentication for FastAPI
 Validates JWT tokens from Clerk and provides user authentication.
 """
 
-from clerk_backend_api import authenticate_request
+from functools import lru_cache
+
+from clerk_backend_api import Clerk, authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
 from config.settings import settings
+
+
+def _get_clerk_client() -> Clerk:
+    return Clerk(bearer_auth=settings.clerk_secret_key)
+
+
+@lru_cache(maxsize=256)
+def _cached_clerk_user_name(user_id: str) -> str | None:
+    """Fetch and cache user display name from Clerk."""
+    try:
+        client = _get_clerk_client()
+        user = client.users.get(user_id=user_id)
+        if not user:
+            return None
+        parts = [user.first_name, user.last_name]
+        full = " ".join(p for p in parts if p)
+        return full or user.username or None
+    except Exception as e:
+        logger.warning(f"Failed to resolve Clerk user name for {user_id}: {e}")
+        return None
+
+
+def resolve_provider_name(provider_id: str | None) -> str | None:
+    """Resolve a Clerk user ID to a display name (cached)."""
+    if not provider_id:
+        return None
+    return _cached_clerk_user_name(provider_id)
 
 # Authorized parties (azp) for Clerk JWT verification
 # These are the origins that are allowed to use the Clerk tokens

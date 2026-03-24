@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from uuid import uuid4
 
 from api.agent_viewset import AgentViewSet
-from common.auth import ClerkUser, get_current_user, get_optional_user
+from common.auth import ClerkUser, get_current_user, get_optional_user, resolve_provider_name
 from database.mongodb import mongodb
 from models.agent import IssueStatus
 from models.request import AgentCenterRequest, AgentSettingsUpdateRequest
@@ -355,6 +355,10 @@ async def get_agent(
         agent_center_response.agent = await check_and_sync_liveness(
             agent_center_response.agent
         )
+        # Resolve provider display name from Clerk if agent_card has no provider
+        agent = agent_center_response.agent
+        if not agent.agent_card.provider or not agent.agent_card.provider.organization:
+            agent.provider_name = resolve_provider_name(agent.provider_id)
 
     return agent_center._mask_sensitive_information(
         agent_center_response, ["agent_url", "agent_card.url"]
