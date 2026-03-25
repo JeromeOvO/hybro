@@ -241,3 +241,19 @@ class TestUpdateAgentCardInDb:
             )
             # Should not raise
             await svc._update_agent_card_in_db(agent, fetched_card)
+
+    @pytest.mark.asyncio
+    async def test_no_db_call_when_card_unchanged(self, svc, fetched_card):
+        """If the stored card already matches the fetched card, no DB write should occur."""
+        from unittest.mock import MagicMock
+
+        # Build an agent whose stored agent_card is identical to fetched_card
+        agent = MagicMock()
+        agent.agent_id = "agent-123"
+        agent.agent_card = fetched_card  # same object → all fields equal
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock()
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        mock_mongodb.agents_collection.update_one.assert_not_called()

@@ -151,8 +151,11 @@ class AgentHealthService:
         Persist the freshly fetched agent card to MongoDB using a partial update.
 
         Only fields that come from the live agent card are synced. Fields that
-        are managed by Hybro (``url``, ``icon_url``) are never overwritten so
+        are managed by Hybro (``url``, ``iconUrl``) are never overwritten so
         that custom avatars and the registered URL remain intact.
+
+        The update is skipped entirely when none of the synced fields have
+        changed, avoiding unnecessary DB writes on every health-check cycle.
         """
         # Fields the agent itself owns and we trust from the live card.
         # Keys match the camelCase output of AgentCard.model_dump(mode="json").
@@ -179,13 +182,17 @@ class AgentHealthService:
 
         try:
             card_dict = fetched_card.model_dump(mode="json")
+            stored_dict = agent.agent_card.model_dump(mode="json")
             partial_set = {
                 f"agent_card.{field}": card_dict[field]
                 for field in SYNCED_FIELDS
-                if field in card_dict
+                if field in card_dict and card_dict[field] != stored_dict.get(field)
             }
 
             if not partial_set:
+                logger.debug(
+                    f"Agent card unchanged for {agent.agent_id} ({fetched_card.name}), skipping update"
+                )
                 return
 
             await mongodb.agents_collection.update_one(
