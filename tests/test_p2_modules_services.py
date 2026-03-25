@@ -162,13 +162,21 @@ class TestUpdateAgentCardInDb:
 
     @pytest.fixture
     def agent(self):
-        """Minimal Agent stub with the fields _update_agent_card_in_db reads."""
-        from unittest.mock import MagicMock
-        agent = MagicMock()
-        agent.agent_id = "agent-123"
-        agent.agent_card.url = "https://registered.example.com"
-        agent.agent_card.iconUrl = "https://s3.example.com/agent-avatars/agent-123/custom.png"
-        return agent
+        """Minimal Agent with a stored card that differs from fetched_card."""
+        from models.agent import Agent
+        from a2a.types import AgentCard, AgentCapabilities
+        stored_card = AgentCard(
+            name="Old Name",
+            description="Old description",
+            url="https://registered.example.com",
+            version="1.0",
+            capabilities=AgentCapabilities(),
+            defaultInputModes=["text"],
+            defaultOutputModes=["text"],
+            skills=[],
+            iconUrl="https://s3.example.com/agent-avatars/agent-123/custom.png",
+        )
+        return Agent(agent_id="agent-123", agent_card=stored_card)
 
     @pytest.fixture
     def fetched_card(self):
@@ -245,15 +253,37 @@ class TestUpdateAgentCardInDb:
     @pytest.mark.asyncio
     async def test_no_db_call_when_card_unchanged(self, svc, fetched_card):
         """If the stored card already matches the fetched card, no DB write should occur."""
-        from unittest.mock import MagicMock
+        from models.agent import Agent
 
         # Build an agent whose stored agent_card is identical to fetched_card
-        agent = MagicMock()
-        agent.agent_id = "agent-123"
-        agent.agent_card = fetched_card  # same object → all fields equal
+        agent = Agent(agent_id="agent-123", agent_card=fetched_card)
 
         with patch("services.agent_health_service.mongodb") as mock_mongodb:
             mock_mongodb.agents_collection.update_one = AsyncMock()
             await svc._update_agent_card_in_db(agent, fetched_card)
 
         mock_mongodb.agents_collection.update_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blocklist_syncs_unknown_fields(self, svc, agent, fetched_card):
+        """Blocklist approach: any field absent from the blocklist is synced,
+        even if it would have been missed by the old SYNCED_FIELDS whitelist.
+        url and iconUrl (both in the blocklist) must never appear in the $set."""
+        captured_updates = {}
+
+        async def fake_update_one(filter, update, *args, **kwargs):
+            captured_updates.update(update.get("$set", {}))
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock(
+                side_effect=fake_update_one
+            )
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        # Blocked fields must never be written
+        assert "agent_card.url" not in captured_updates
+        assert "agent_card.iconUrl" not in captured_updates
+        # Non-blocked fields that changed must be synced
+        assert "agent_card.name" in captured_updates
+        assert "agent_card.description" in captured_updates
+        assert "agent_card.version" in captured_updates

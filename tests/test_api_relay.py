@@ -430,6 +430,40 @@ class TestRelayServiceAgentSync:
         assert synced == []
         svc._mongo.agents_collection.update_many.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_sync_new_agent_card_uses_dot_notation(self):
+        """Hub-only (else branch): agent_card fields must arrive as dot-notation keys
+        in upsert_hub_agent so that iconUrl is never overwritten on re-sync."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        captured_data: dict = {}
+
+        async def capture_upsert(hub_id, local_id, data):
+            captured_data.update(data)
+            return "new-agent-id"
+
+        svc._mongo.upsert_hub_agent = AsyncMock(side_effect=capture_upsert)
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Agent A",
+                description="Desc",
+                agent_card=_make_agent_card("Agent A"),
+            )
+        ]
+        await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        # Must NOT write a nested "agent_card" key — that would overwrite iconUrl on re-sync
+        assert "agent_card" not in captured_data, \
+            "agent_card must be spread into dot-notation keys, not a nested dict"
+        # Non-blocked card fields must appear as dot-notation keys
+        assert "agent_card.name" in captured_data
+        assert "agent_card.url" in captured_data
+        # Hybro-managed field must never be written from hub data
+        assert "agent_card.iconUrl" not in captured_data
+
 
 # ===========================================================================
 # RelayService — Push to Hub

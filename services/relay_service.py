@@ -323,6 +323,10 @@ class RelayService:
         user_id = api_key.user_id
         gateway_base = settings.gateway_base_url
 
+        # Fields in agent_card that Hybro manages and must never be overwritten
+        # by data coming from the hub (e.g. iconUrl is set by the avatar upload).
+        _AGENT_CARD_NO_OVERWRITE = frozenset({"iconUrl"})
+
         synced: list[dict] = []
         to_index: list[tuple[str, str, str]] = []
         for ag in agents:
@@ -339,28 +343,47 @@ class RelayService:
                 )
 
             if existing:
+                # Spread agent_card as dot-notation $set keys so that
+                # Hybro-managed fields stored in the DB are never overwritten.
+                # iconUrl is set by the avatar upload endpoint and must be
+                # preserved across hub re-syncs.
+                agent_card_update = {
+                    f"agent_card.{k}": v
+                    for k, v in ag.agent_card.items()
+                    if k not in _AGENT_CARD_NO_OVERWRITE
+                }
                 await self._mongo.agents_collection.update_one(
                     {"agent_id": existing["agent_id"]},
                     {"$set": {
                         "source": "hub",
                         "hub_id": hub_id,
                         "local_agent_id": ag.local_agent_id,
-                        "agent_card": ag.agent_card,
+                        **agent_card_update,
                     }},
                 )
                 stored_id = existing["agent_id"]
             else:
                 new_agent_id = str(uuid4().hex)
+                # Spread agent_card as dot-notation keys so that Hybro-managed
+                # fields (e.g. iconUrl set by the avatar-upload endpoint) are
+                # never overwritten on subsequent re-syncs.  upsert_hub_agent
+                # uses $set for these keys, so an existing iconUrl is preserved
+                # even though upsert_hub_agent is also the initial-insert path.
+                agent_card_data = {
+                    f"agent_card.{k}": v
+                    for k, v in ag.agent_card.items()
+                    if k not in _AGENT_CARD_NO_OVERWRITE
+                }
                 agent_data = {
                     "agent_id": new_agent_id,
                     "source": "hub",
                     "hub_id": hub_id,
                     "local_agent_id": ag.local_agent_id,
                     "provider_id": user_id,
-                    "agent_card": ag.agent_card,
                     "normalized_url": normalized,
                     "agent_status": "active",
                     "is_public": False,
+                    **agent_card_data,
                 }
                 stored_id = await self._mongo.upsert_hub_agent(
                     hub_id, ag.local_agent_id, agent_data

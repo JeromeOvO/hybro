@@ -150,43 +150,28 @@ class AgentHealthService:
         """
         Persist the freshly fetched agent card to MongoDB using a partial update.
 
-        Only fields that come from the live agent card are synced. Fields that
-        are managed by Hybro (``url``, ``iconUrl``) are never overwritten so
-        that custom avatars and the registered URL remain intact.
+        All fields from the live agent card are synced except those in
+        ``_AGENT_CARD_NO_SYNC``. Using a blocklist (rather than a whitelist)
+        ensures that new fields added by the a2a SDK are picked up
+        automatically without any code change here.
 
         The update is skipped entirely when none of the synced fields have
         changed, avoiding unnecessary DB writes on every health-check cycle.
         """
-        # Fields the agent itself owns and we trust from the live card.
-        # Keys match the camelCase output of AgentCard.model_dump(mode="json").
-        # "url" and "iconUrl" are intentionally excluded: url is the registered
-        # source-of-truth and iconUrl is a Hybro-managed custom avatar.
-        SYNCED_FIELDS = (
-            "name",
-            "description",
-            "version",
-            "capabilities",
-            "skills",
-            "defaultInputModes",
-            "defaultOutputModes",
-            "documentationUrl",
-            "provider",
-            "preferredTransport",
-            "protocolVersion",
-            "security",
-            "securitySchemes",
-            "signatures",
-            "supportsAuthenticatedExtendedCard",
-            "additionalInterfaces",
-        )
+        # Blocklist of fields Hybro manages; everything else is trusted from
+        # the live agent card and will be synced automatically.
+        # - url     : the registered endpoint; Hybro is the source of truth.
+        # - iconUrl : set by the avatar-upload endpoint.
+        _AGENT_CARD_NO_SYNC = frozenset({"url", "iconUrl"})
 
         try:
             card_dict = fetched_card.model_dump(mode="json")
             stored_dict = agent.agent_card.model_dump(mode="json")
             partial_set = {
                 f"agent_card.{field}": card_dict[field]
-                for field in SYNCED_FIELDS
-                if field in card_dict and card_dict[field] != stored_dict.get(field)
+                for field in card_dict
+                if field not in _AGENT_CARD_NO_SYNC
+                and card_dict[field] != stored_dict.get(field)
             }
 
             if not partial_set:

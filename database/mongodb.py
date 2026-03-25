@@ -538,18 +538,35 @@ class MongoDB:
         self, agent_id: str, agent_card: AgentCard
     ) -> bool:
         """
-        Update an agent
+        Update the agent_card subdocument for a given agent.
+
+        Uses dot-notation $set keys (e.g. ``agent_card.name``) so that only
+        the supplied fields are touched and unrelated fields — including
+        Hybro-managed ones like ``iconUrl`` — are never overwritten.
 
         Args:
             agent_id: ID of the agent to update
-            agent_card: New agent card to update
+            agent_card: New agent card values to persist
 
         Returns:
-            bool: True if update was successful
+            bool: True if a document was modified
         """
+        # iconUrl is managed by the avatar-upload endpoint; never overwrite it.
+        _NO_OVERWRITE = frozenset({"iconUrl"})
+        # exclude_unset=True: only fields explicitly provided by the caller are
+        # written. If a caller needs to explicitly clear a field to None, they
+        # must construct AgentCard with that field set (not just defaulted).
+        card_dict = agent_card.model_dump(exclude_unset=True, mode="json")
+        partial_set = {
+            f"agent_card.{k}": v
+            for k, v in card_dict.items()
+            if k not in _NO_OVERWRITE
+        }
+        if not partial_set:
+            return False
         result = await self.agents_collection.update_one(
             {"agent_id": agent_id},
-            {"$set": agent_card.model_dump(exclude_unset=True, mode="json")},
+            {"$set": partial_set},
         )
         return result.modified_count > 0
 
