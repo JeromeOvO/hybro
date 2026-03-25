@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from common.utils.time import utcnow
-from models.agent import Agent
+from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
@@ -552,7 +552,7 @@ class MongoDB:
             bool: True if a document was modified
         """
         # iconUrl is managed by the avatar-upload endpoint; never overwrite it.
-        _NO_OVERWRITE = frozenset({"iconUrl"})
+        # See AGENT_CARD_HUB_NO_OVERWRITE in models/agent.py.
         # exclude_unset=True: only fields explicitly provided by the caller are
         # written. If a caller needs to explicitly clear a field to None, they
         # must construct AgentCard with that field set (not just defaulted).
@@ -560,7 +560,7 @@ class MongoDB:
         partial_set = {
             f"agent_card.{k}": v
             for k, v in card_dict.items()
-            if k not in _NO_OVERWRITE
+            if k not in AGENT_CARD_HUB_NO_OVERWRITE
         }
         if not partial_set:
             return False

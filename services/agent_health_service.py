@@ -15,7 +15,7 @@ from loguru import logger
 from config.settings import settings
 from database.mongodb import mongodb
 from jobs.constants import AGENT_HEALTH_CHECKER
-from models.agent import Agent, AgentStatus
+from models.agent import AGENT_CARD_HEALTH_NO_SYNC, Agent, AgentStatus
 
 if TYPE_CHECKING:
     from infrastructure.leader_election import LeaderElection
@@ -158,11 +158,8 @@ class AgentHealthService:
         The update is skipped entirely when none of the synced fields have
         changed, avoiding unnecessary DB writes on every health-check cycle.
         """
-        # Blocklist of fields Hybro manages; everything else is trusted from
-        # the live agent card and will be synced automatically.
-        # - url     : the registered endpoint; Hybro is the source of truth.
-        # - iconUrl : set by the avatar-upload endpoint.
-        _AGENT_CARD_NO_SYNC = frozenset({"url", "iconUrl"})
+        # Blocklist imported from models.agent — see AGENT_CARD_HEALTH_NO_SYNC
+        # for the rationale on why url and iconUrl are both protected here.
 
         try:
             card_dict = fetched_card.model_dump(mode="json")
@@ -170,7 +167,7 @@ class AgentHealthService:
             partial_set = {
                 f"agent_card.{field}": card_dict[field]
                 for field in card_dict
-                if field not in _AGENT_CARD_NO_SYNC
+                if field not in AGENT_CARD_HEALTH_NO_SYNC
                 and card_dict[field] != stored_dict.get(field)
             }
 

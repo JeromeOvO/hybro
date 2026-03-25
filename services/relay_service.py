@@ -23,6 +23,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
 from jobs.constants import RELAY_HEARTBEAT_MONITOR
+from models.agent import AGENT_CARD_HUB_NO_OVERWRITE
 from models.hub import (
     Hub,
     HubAgentSync,
@@ -324,8 +325,8 @@ class RelayService:
         gateway_base = settings.gateway_base_url
 
         # Fields in agent_card that Hybro manages and must never be overwritten
-        # by data coming from the hub (e.g. iconUrl is set by the avatar upload).
-        _AGENT_CARD_NO_OVERWRITE = frozenset({"iconUrl"})
+        # by data coming from the hub. See AGENT_CARD_HUB_NO_OVERWRITE in
+        # models/agent.py for the rationale.
 
         synced: list[dict] = []
         to_index: list[tuple[str, str, str]] = []
@@ -350,7 +351,7 @@ class RelayService:
                 agent_card_update = {
                     f"agent_card.{k}": v
                     for k, v in ag.agent_card.items()
-                    if k not in _AGENT_CARD_NO_OVERWRITE
+                    if k not in AGENT_CARD_HUB_NO_OVERWRITE
                 }
                 await self._mongo.agents_collection.update_one(
                     {"agent_id": existing["agent_id"]},
@@ -372,7 +373,7 @@ class RelayService:
                 agent_card_data = {
                     f"agent_card.{k}": v
                     for k, v in ag.agent_card.items()
-                    if k not in _AGENT_CARD_NO_OVERWRITE
+                    if k not in AGENT_CARD_HUB_NO_OVERWRITE
                 }
                 agent_data = {
                     "agent_id": new_agent_id,
