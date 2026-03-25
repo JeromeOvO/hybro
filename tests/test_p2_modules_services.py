@@ -5,7 +5,7 @@ and services/agent_health_service.py.
 Tests cover:
 - WorkflowCenter: _success_response, _error_response, _get_first_text_from_task
 - TaskCenter: delegation to task_service
-- AgentHealthCheckService: _get_retry_delay backoff math
+- AgentHealthCheckService: _get_retry_delay backoff math, _update_agent_card_in_db partial update
 """
 
 import pytest
@@ -144,3 +144,116 @@ class TestGetRetryDelay:
 
     def test_large_failure_count_still_caps(self, svc):
         assert svc._get_retry_delay(100) == 120.0
+
+
+# =============================================================================
+# AgentHealthCheckService._update_agent_card_in_db Tests
+# =============================================================================
+
+
+class TestUpdateAgentCardInDb:
+    """Verify that _update_agent_card_in_db uses a partial $set and never
+    touches agent_card.url or agent_card.iconUrl."""
+
+    @pytest.fixture
+    def svc(self):
+        from services.agent_health_service import AgentHealthService
+        return AgentHealthService()
+
+    @pytest.fixture
+    def agent(self):
+        """Minimal Agent stub with the fields _update_agent_card_in_db reads."""
+        from unittest.mock import MagicMock
+        agent = MagicMock()
+        agent.agent_id = "agent-123"
+        agent.agent_card.url = "https://registered.example.com"
+        agent.agent_card.iconUrl = "https://s3.example.com/agent-avatars/agent-123/custom.png"
+        return agent
+
+    @pytest.fixture
+    def fetched_card(self):
+        from a2a.types import AgentCard, AgentCapabilities
+        return AgentCard(
+            name="Updated Name",
+            description="New description",
+            url="https://live-agent.example.com",  # would redirect if used
+            version="2.0",
+            capabilities=AgentCapabilities(),
+            defaultInputModes=["text"],
+            defaultOutputModes=["text"],
+            skills=[],
+            iconUrl="https://live-agent.example.com/icon.png",  # remote icon
+        )
+
+    @pytest.mark.asyncio
+    async def test_partial_set_excludes_url_and_icon_url(self, svc, agent, fetched_card):
+        """The $set dict must contain agent card fields but NEVER url or iconUrl."""
+        captured_updates = {}
+
+        async def fake_update_one(filter, update, *args, **kwargs):
+            captured_updates.update(update.get("$set", {}))
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock(
+                side_effect=fake_update_one
+            )
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        assert "agent_card.url" not in captured_updates, \
+            "url must never be overwritten by health check"
+        assert "agent_card.iconUrl" not in captured_updates, \
+            "iconUrl (custom avatar) must never be overwritten by health check"
+
+    @pytest.mark.asyncio
+    async def test_partial_set_includes_expected_fields(self, svc, agent, fetched_card):
+        """Core agent-card fields (name, description, version…) must be synced."""
+        captured_updates = {}
+
+        async def fake_update_one(filter, update, *args, **kwargs):
+            captured_updates.update(update.get("$set", {}))
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock(
+                side_effect=fake_update_one
+            )
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        assert captured_updates.get("agent_card.name") == "Updated Name"
+        assert captured_updates.get("agent_card.description") == "New description"
+        assert captured_updates.get("agent_card.version") == "2.0"
+
+    @pytest.mark.asyncio
+    async def test_db_update_uses_agent_id_filter(self, svc, agent, fetched_card):
+        """update_one must be called with the correct agent_id filter."""
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock()
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        call_args = mock_mongodb.agents_collection.update_one.call_args
+        assert call_args[0][0] == {"agent_id": "agent-123"}
+
+    @pytest.mark.asyncio
+    async def test_db_exception_is_swallowed(self, svc, agent, fetched_card):
+        """Errors from MongoDB must not propagate; they are only logged."""
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock(
+                side_effect=Exception("DB down")
+            )
+            # Should not raise
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+    @pytest.mark.asyncio
+    async def test_no_db_call_when_card_unchanged(self, svc, fetched_card):
+        """If the stored card already matches the fetched card, no DB write should occur."""
+        from unittest.mock import MagicMock
+
+        # Build an agent whose stored agent_card is identical to fetched_card
+        agent = MagicMock()
+        agent.agent_id = "agent-123"
+        agent.agent_card = fetched_card  # same object → all fields equal
+
+        with patch("services.agent_health_service.mongodb") as mock_mongodb:
+            mock_mongodb.agents_collection.update_one = AsyncMock()
+            await svc._update_agent_card_in_db(agent, fetched_card)
+
+        mock_mongodb.agents_collection.update_one.assert_not_called()

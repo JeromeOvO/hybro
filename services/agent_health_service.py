@@ -148,17 +148,56 @@ class AgentHealthService:
         self, agent: Agent, fetched_card: AgentCard
     ) -> None:
         """
-        Persist the freshly fetched agent card to MongoDB.
+        Persist the freshly fetched agent card to MongoDB using a partial update.
 
-        Preserves the stored ``url`` so that an agent cannot silently redirect
-        its own traffic to a different endpoint.
+        Only fields that come from the live agent card are synced. Fields that
+        are managed by Hybro (``url``, ``iconUrl``) are never overwritten so
+        that custom avatars and the registered URL remain intact.
+
+        The update is skipped entirely when none of the synced fields have
+        changed, avoiding unnecessary DB writes on every health-check cycle.
         """
+        # Fields the agent itself owns and we trust from the live card.
+        # Keys match the camelCase output of AgentCard.model_dump(mode="json").
+        # "url" and "iconUrl" are intentionally excluded: url is the registered
+        # source-of-truth and iconUrl is a Hybro-managed custom avatar.
+        SYNCED_FIELDS = (
+            "name",
+            "description",
+            "version",
+            "capabilities",
+            "skills",
+            "defaultInputModes",
+            "defaultOutputModes",
+            "documentationUrl",
+            "provider",
+            "preferredTransport",
+            "protocolVersion",
+            "security",
+            "securitySchemes",
+            "signatures",
+            "supportsAuthenticatedExtendedCard",
+            "additionalInterfaces",
+        )
+
         try:
-            # Preserve the URL we have on file (registration source of truth)
-            fetched_card.url = agent.agent_card.url
+            card_dict = fetched_card.model_dump(mode="json")
+            stored_dict = agent.agent_card.model_dump(mode="json")
+            partial_set = {
+                f"agent_card.{field}": card_dict[field]
+                for field in SYNCED_FIELDS
+                if field in card_dict and card_dict[field] != stored_dict.get(field)
+            }
+
+            if not partial_set:
+                logger.debug(
+                    f"Agent card unchanged for {agent.agent_id} ({fetched_card.name}), skipping update"
+                )
+                return
+
             await mongodb.agents_collection.update_one(
                 {"agent_id": agent.agent_id},
-                {"$set": {"agent_card": fetched_card.model_dump(mode="json")}},
+                {"$set": partial_set},
             )
             logger.debug(
                 f"Agent card updated for {agent.agent_id} ({fetched_card.name})"
