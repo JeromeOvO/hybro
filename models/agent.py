@@ -5,6 +5,30 @@ from typing import ClassVar
 from a2a.types import AgentCard
 from pydantic import BaseModel, field_serializer
 
+# ---------------------------------------------------------------------------
+# Agent-card field protection constants
+#
+# These frozensets define which AgentCard fields Hybro manages directly and
+# must therefore never be overwritten by data arriving from external sources
+# (hub syncs, health-check fetches, etc.).
+#
+# Two distinct sets exist because the semantics differ:
+#
+#   AGENT_CARD_HUB_NO_OVERWRITE — used when syncing data from a hub.
+#     Hub agents own their `url` (it is their real endpoint) so only the
+#     Hybro-managed avatar field is protected.
+#
+#   AGENT_CARD_HEALTH_NO_SYNC — used when syncing from a live health-check.
+#     The registered `url` is Hybro's source of truth (the live card may
+#     advertise a different address), so both fields are protected.
+# ---------------------------------------------------------------------------
+
+# Fields Hybro manages for hub-sourced agents; all others come from the hub.
+AGENT_CARD_HUB_NO_OVERWRITE: frozenset[str] = frozenset({"iconUrl"})
+
+# Fields Hybro manages for health-check syncs; all others come from the live card.
+AGENT_CARD_HEALTH_NO_SYNC: frozenset[str] = frozenset({"url", "iconUrl"})
+
 
 class AgentStatus(Enum):
     active = "active"
