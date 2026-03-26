@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
-import { Search, ChevronDown, Check, Bot, Cloud, Home, Terminal, KeyRound, Download, Play, ArrowUpDown } from "lucide-react"
+import { Search, ChevronDown, Check, Bot, Cloud, Home, Terminal, KeyRound, Download, Play} from "lucide-react"
 import { ConsumerAgentCard } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
