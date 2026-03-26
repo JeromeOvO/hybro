@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
-import { Search, ChevronDown, Check, Bot, Cloud, Home, Terminal, KeyRound, Download, Play } from "lucide-react"
+import { Search, ChevronDown, Check, Bot, Cloud, Home, Terminal, KeyRound, Download, Play} from "lucide-react"
 import { ConsumerAgentCard } from "@/components/consumer-agent-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +18,16 @@ const STATUS_OPTIONS = [
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" }
 ] as const
+
+const SORT_OPTIONS = [
+  { value: "call_count", label: "Most Popular" },
+  { value: "time_asc", label: "Old - New" },
+  { value: "time_desc", label: "New - Old" },
+  { value: "name_asc", label: "A - Z" },
+  { value: "name_desc", label: "Z - A" },
+] as const
+
+type SortBy = typeof SORT_OPTIONS[number]["value"]
 
 type SourceTab = "all" | "cloud" | "local"
 
@@ -54,11 +64,11 @@ function getStatusLabel(status: string) {
   return STATUS_OPTIONS.find(option => option.value === status)?.label || "All Status"
 }
 
-function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: string) {
+function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: string, sortBy: SortBy) {
   return useMemo(() => {
     const existingIds = new Set<string>()
 
-    return agents.filter(agent => {
+    const filtered = agents.filter(agent => {
       if (agent.agent_status === "deleted") return false
 
       if (existingIds.has(agent.agent_id)) {
@@ -78,7 +88,17 @@ function useFilteredAgents(agents: Agent[], searchTerm: string, statusFilter: st
 
       return matchesSearch && matchesStatus
     })
-  }, [agents, searchTerm, statusFilter])
+
+    if (sortBy === "time_asc") return filtered
+    if (sortBy === "time_desc") return [...filtered].reverse()
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "call_count") return (b.call_count ?? 0) - (a.call_count ?? 0)
+      if (sortBy === "name_asc") return a.agent_card.name.localeCompare(b.agent_card.name)
+      if (sortBy === "name_desc") return b.agent_card.name.localeCompare(a.agent_card.name)
+      return 0
+    })
+  }, [agents, searchTerm, statusFilter, sortBy])
 }
 
 const VALID_SOURCE_TABS = new Set<SourceTab>(["all", "cloud", "local"])
@@ -100,7 +120,9 @@ function ConsumerAgentsPageContent() {
   const searchParams = useSearchParams()
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [sortBy, setSortBy] = useState<SortBy>("call_count")
   const { isOpen: isDropdownOpen, setIsOpen: setIsDropdownOpen, ref: dropdownRef } = useDropdown()
+  const { isOpen: isSortOpen, setIsOpen: setIsSortOpen, ref: sortRef } = useDropdown()
 
   const urlSourceTab = parseSourceTab(searchParams.get("source"))
 
@@ -119,7 +141,7 @@ function ConsumerAgentsPageContent() {
   })
 
   const allAgents = data?.success && data.agents ? data.agents : []
-  const filteredAgents = useFilteredAgents(allAgents, searchTerm, statusFilter)
+  const filteredAgents = useFilteredAgents(allAgents, searchTerm, statusFilter, sortBy)
 
   const cloudAgents = useMemo(() => filteredAgents.filter(a => a.source !== 'hub'), [filteredAgents])
   const localAgents = useMemo(() => filteredAgents.filter(a => a.source === 'hub'), [filteredAgents])
@@ -220,6 +242,35 @@ function ConsumerAgentsPageContent() {
                       className="w-full px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
                     >
                       <Check className={`h-3 w-3 shrink-0 transition-opacity ${statusFilter === option.value ? 'opacity-100' : 'opacity-0'}`} />
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="relative" ref={sortRef}>
+              <Button
+                variant="outline"
+                className="h-10 w-[145px] justify-between"
+                onClick={() => setIsSortOpen(!isSortOpen)}
+              >
+                <span className="flex items-center gap-1.5">
+                  {SORT_OPTIONS.find(o => o.value === sortBy)?.label}
+                </span>
+                <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${isSortOpen ? 'rotate-180' : ''}`} />
+              </Button>
+              {isSortOpen && (
+                <div className="absolute top-full left-0 mt-1 z-50 w-[145px] py-1 bg-background/95 backdrop-blur-md border border-muted-foreground/30 shadow-lg rounded-md overflow-hidden animate-[fadeSlideIn_150ms_ease-out]">
+                  {SORT_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => {
+                        setSortBy(option.value)
+                        setIsSortOpen(false)
+                      }}
+                      className="w-full px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+                    >
+                      <Check className={`h-3 w-3 shrink-0 transition-opacity ${sortBy === option.value ? 'opacity-100' : 'opacity-0'}`} />
                       {option.label}
                     </button>
                   ))}
