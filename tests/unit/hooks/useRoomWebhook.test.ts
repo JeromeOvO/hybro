@@ -314,4 +314,28 @@ describe('useRoomWebhook SSE message handling', () => {
       { duration: 15000 }
     )
   })
+
+  it('should handle agent_response without agent_id by using fallback sender name', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'msg-no-agent-id',
+          content: 'Response without agent id',
+          // agent_id intentionally absent — simulates legacy hub or missing field
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['msg-no-agent-id']
+    expect(entity).toBeDefined()
+    expect(entity.content).toBe('Response without agent id')
+    expect(entity.messageType).toBe('agent')
+    expect(entity.isEphemeral).toBe(false)
+    // agent_id is absent — senderName should be the fallback, not undefined
+    expect(entity.senderName).toBeTruthy()
+    expect(entity.agentId).toBeUndefined()
+  })
 })

@@ -67,8 +67,11 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
 
-          if (sseMessage.data?.agent_id && (sseMessage.data?.content !== undefined || sseMessage.data?.parts)) {
-            const agentName = await getAgentName(sseMessage.data.agent_id)
+          if (sseMessage.data?.content !== undefined || sseMessage.data?.parts) {
+            const agentId = sseMessage.data?.agent_id as string | undefined
+            const agentName = agentId
+              ? await getAgentName(agentId)
+              : (sseMessage.data?.agent_name as string | undefined) || 'Agent'
             const content = sseMessage.data.content ?? ''
             const msgTimestamp = normalizeTimestampOrNow(sseMessage.timestamp)
             const existing = store.entities[messageId]
@@ -84,8 +87,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               messageType: 'agent',
               content,
               senderName: agentName,
-              agentId: sseMessage.data.agent_id,
-              agentSource: getAgentSource(sseMessage.data.agent_id),
+              agentId,
+              agentSource: agentId ? getAgentSource(agentId) : undefined,
               timestamp: msgTimestamp,
               taskStatus: null,
               isEphemeral: false,
