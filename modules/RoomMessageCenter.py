@@ -1323,9 +1323,29 @@ class RoomMessageCenter:
                             exc_info=True,
                         )
                 if not synthesis_emitted:
-                    await self.room_coordinator_service.on_room_user_message_completed(
-                        room_id, user_message_id
-                    )
+                    # Extract agent responses from the trajectory so the coordinator
+                    # doesn't need to re-read from DB.  Relay agents may not have
+                    # written their message_content.message_task.history yet, which
+                    # would cause the BFS path to find empty texts and skip the summary.
+                    from models.supervisor_v2 import ActionType  # noqa: PLC0415
+
+                    trajectory_responses = [
+                        {"agent_name": step.agent_name, "message": step.response_text}
+                        for entry in result.trajectory.entries
+                        if entry.action.action == ActionType.DELEGATE
+                        for step in entry.results
+                        if step.success and step.response_text
+                    ]
+                    if trajectory_responses:
+                        await self.room_coordinator_service.on_room_user_message_completed(
+                            room_id,
+                            user_message_id,
+                            trajectory_responses=trajectory_responses,
+                        )
+                    else:
+                        await self.room_coordinator_service.on_room_user_message_completed(
+                            room_id, user_message_id
+                        )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )

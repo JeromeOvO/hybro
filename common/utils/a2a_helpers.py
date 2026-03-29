@@ -145,6 +145,46 @@ def extract_text_from_artifacts(artifacts: list) -> str | None:
     return text if text else None
 
 
+def extract_agent_text_from_room_message(msg: object) -> str | None:
+    """Safely extract the agent's latest response text from a RoomAgentMessage.
+
+    Checks two storage locations in priority order:
+    1. Agent-role entries in ``message_content.message_task.history`` (most
+       reliable for push-notification and streaming agents).
+    2. ``message_content.message_text`` (populated by the DirectTransport sync
+       path, which does not append to history).
+
+    All parts of the latest agent-role message are joined so that multi-part
+    responses are preserved (e.g. reasoning part + answer part).
+
+    Returns ``None`` when no text can be found; never raises.
+    """
+    try:
+        mc = getattr(msg, "message_content", None)
+        if mc is None:
+            return None
+
+        task = getattr(mc, "message_task", None)
+        if task is not None:
+            history = getattr(task, "history", None)
+            if history:
+                for entry in reversed(history):
+                    if getattr(entry, "role", None) == Role.agent:
+                        parts = getattr(entry, "parts", None)
+                        if parts:
+                            text = extract_parts(parts).text
+                            if text:
+                                return text
+
+        message_text = getattr(mc, "message_text", None)
+        if message_text:
+            return message_text
+
+        return None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
 def extract_error_message(task: Task) -> str | None:
     """Extract error message from task status."""
     if not task.status.message:

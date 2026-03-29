@@ -339,12 +339,14 @@ class A2AService:
         """
         from services.database_service import db_service
 
-        # Build request with push notification config
+        # Build request with push notification config.
+        # Push notifications require a publicly reachable WEBHOOK_BASE_URL. When
+        # that setting is absent (e.g. local dev), fall back to blocking=True so
+        # the agent holds the connection and returns the result directly instead
+        # of posting to an unreachable localhost URL.
         push_config = None
         has_capability = self.has_push_notification_capability(agent_card)
-        webhook_url = (
-            settings.webhook_base_url or "http://localhost:8000"
-        )  # Fallback to default
+        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
 
         logger.info(
             f"Push notification check: has_capability={has_capability}, "
@@ -357,31 +359,32 @@ class A2AService:
                 url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
                 token=webhook_token,
             )
-            logger.info(f"Enabled push notifications for task {message_id}")
+            logger.info(
+                f"Enabled push notifications for task {message_id} "
+                f"(callback → {webhook_url}/api/v1/webhooks/a2a/{message_id})"
+            )
         else:
+            reason = "Agent missing capability" if not has_capability else "WEBHOOK_BASE_URL not set — using blocking=True"
             logger.warning(
-                f"Push notifications DISABLED for task {message_id}. "
-                f"Reason: {'Agent missing capability' if not has_capability else 'Missing WEBHOOK_BASE_URL setting'}"
+                f"Push notifications DISABLED for task {message_id}. Reason: {reason}"
             )
 
+        # blocking=False tells the agent to ack quickly and deliver via webhook;
+        # blocking=True (no push_config) tells it to hold the connection until done.
+        use_blocking = push_config is None
         payload = MessageSendParams(
             message=message,
             configuration=MessageSendConfiguration(
                 accepted_output_modes=self._resolve_accepted_modes(agent_card),
                 push_notification_config=push_config,
-                blocking=False if push_config else None,
+                blocking=use_blocking,
             ),
         )
 
-        # Debug: log the actual payload being sent
         logger.debug(
             f"MessageSendParams configuration: push_notification_config={push_config}, "
-            f"payload.configuration={payload.configuration}"
+            f"blocking={use_blocking}"
         )
-        if payload.configuration:
-            logger.debug(
-                f"Configuration details: push_notification_config={payload.configuration.push_notification_config}"
-            )
 
         send_message_request = SendMessageRequest(
             id=str(uuid4()),
@@ -390,8 +393,8 @@ class A2AService:
             params=payload,
         )
 
-        # Send to agent — use a shorter timeout for push-notification agents
-        # since they should acknowledge immediately and deliver results via webhook.
+        # Push-notification agents should ack immediately (use short timeout).
+        # Blocking agents hold the connection for the full task duration.
         try:
             dispatch_timeout = (
                 self.PUSH_NOTIFICATION_TIMEOUT if push_config
@@ -989,12 +992,47 @@ class A2AService:
                 "agent callback would fail verification; aborting reply"
             )
 
-        webhook_url = settings.webhook_base_url or "http://localhost:8000"
-        push_config = PushNotificationConfig(
-            id=message_id,
-            url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
-            token=webhook_token,
-        )
+        # When WEBHOOK_BASE_URL is configured, use push-notification mode so the
+        # agent can POST back asynchronously — but only if the agent advertises
+        # push-notification capability (mirrors the check in send_message_to_tracked_agent).
+        # Otherwise fall back to blocking=True.
+        webhook_url = settings.webhook_base_url.rstrip("/") if settings.webhook_base_url else ""
+
+        has_capability = False
+        if webhook_url and msg.agent_id:
+            agent_record = await db_service.get_agent_by_agent_id(msg.agent_id)
+            if agent_record and agent_record.agent_card:
+                has_capability = self.has_push_notification_capability(agent_record.agent_card)
+            else:
+                logger.warning(
+                    "hitl: could not load agent card for agent %s — disabling push notifications",
+                    msg.agent_id,
+                )
+
+        if has_capability and webhook_url:
+            push_config = PushNotificationConfig(
+                id=message_id,
+                url=f"{webhook_url}/api/v1/webhooks/a2a/{message_id}",
+                token=webhook_token,
+            )
+            logger.info(
+                "hitl: push-notification mode for task %s (callback → %s)",
+                message_id,
+                push_config.url,
+            )
+            hitl_blocking = False
+            hitl_timeout = self.PUSH_NOTIFICATION_TIMEOUT
+        else:
+            push_config = None
+            hitl_blocking = True
+            hitl_timeout = self.DEFAULT_REQUEST_TIMEOUT
+            reason = (
+                "WEBHOOK_BASE_URL not set" if not webhook_url
+                else "agent missing push-notification capability"
+            )
+            logger.warning(
+                "hitl: %s — using blocking=True for task %s", reason, message_id
+            )
 
         # Build message continuing the existing task
         reply_message = Message(
@@ -1010,14 +1048,14 @@ class A2AService:
             message=reply_message,
             configuration=MessageSendConfiguration(
                 push_notification_config=push_config,
-                blocking=False,
+                blocking=hitl_blocking,
             ),
         )
 
         # Use a scoped httpx client with async with to ensure cleanup.
         # Agent card resolution is skipped since we already have the
         # agent_url.
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=hitl_timeout) as client:
             a2a_client = A2AClient(
                 httpx_client=client,
                 url=agent_url,

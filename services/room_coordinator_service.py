@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.room import CoordinatorAgentId, MessageContent, Room, RoomAgentMessage
@@ -39,6 +40,7 @@ class RoomCoordinatorService:
         self,
         room_id: str,
         room_user_message_id: str,
+        trajectory_responses: list[dict[str, str]] | None = None,
     ) -> None:
         """
         Entry point called after RoomMessageCenter processes all agent messages
@@ -50,6 +52,17 @@ class RoomCoordinatorService:
         - In debate mode: Uses debate-style summary (comparing viewpoints)
         - In normal mode: Uses non_debate-style summary (combining contributions)
 
+        ``trajectory_responses`` is an optional fast-path for the supervisor V2
+        execution path.  When the supervisor executor completes (debate fast-path
+        returns synthesis_text=None), the trajectory already holds every agent's
+        response text in memory.  Passing those responses directly here avoids a
+        DB re-read that would race against relay agents whose
+        ``message_content.message_task.history`` may not be written yet.
+
+        When ``trajectory_responses`` is None (or empty), the function falls back
+        to the existing BFS + DB extraction path used by the QueueExecutor and
+        other non-supervisor flows.
+
         Future extensions:
         - Track pending clarification questions that individual agents ask the user
           (for example via TaskStatus or structured message patterns).
@@ -59,6 +72,9 @@ class RoomCoordinatorService:
         - Apply per-room policies such as limiting debate rounds or selecting a
           single “final” agent answer in addition to the summary.
         """
+        summary_message_id: str | None = None
+        coordinator_agent_id: str | None = None
+
         try:
             room: Room | None = await self.database_service.get_room_by_room_id(room_id)
             if room is None:
@@ -73,32 +89,50 @@ class RoomCoordinatorService:
             if room.extend_info and isinstance(room.extend_info, dict):
                 is_debate_mode = bool(room.extend_info.get("debateMode", False))
 
-            # Collect all agent messages related to this user message
-            agent_messages = await self._collect_agent_messages_for_user_message(
-                room_user_message_id
-            )
-            if len(agent_messages) < 2:
-                # Not enough agent answers to justify a summary
-                return
+            if trajectory_responses:
+                # Fast path: caller already has agent response texts from the
+                # in-memory trajectory — skip DB BFS entirely.
+                logger.info(
+                    "RoomCoordinatorService: using %d trajectory responses for room %s "
+                    "(skipping DB read)",
+                    len(trajectory_responses),
+                    room_id,
+                )
+                agent_responses: list[dict[str, str]] = trajectory_responses
+            else:
+                # Standard path: collect agent messages from DB via BFS and
+                # extract visible text from each message's history.
+                logger.debug(
+                    "RoomCoordinatorService: no trajectory responses for room %s, "
+                    "falling back to DB BFS",
+                    room_id,
+                )
+                agent_messages = await self._collect_agent_messages_for_user_message(
+                    room_user_message_id
+                )
+                if len(agent_messages) < 2:
+                    # Not enough agent answers to justify a summary
+                    return
 
-            # Extract visible text and agent info from each agent message
-            agent_responses: list[dict[str, str]] = []
-            for msg in agent_messages:
-                text = self._extract_agent_text_from_message(msg)
-                if text and msg.agent_id:
-                    # Skip summary messages from previous summaries
+                agent_responses = []
+                for msg in agent_messages:
                     if msg.agent_id in ("debate_summary", "non_debate_summary"):
                         continue
-                    # Get agent name from database
-                    agent_name = await self.database_service.get_agent_name_by_agent_id(
-                        msg.agent_id
-                    )
-                    agent_responses.append(
-                        {
-                            "agent_name": agent_name or msg.agent_id,
-                            "message": text,
-                        }
-                    )
+                    task = msg.message_content and msg.message_content.message_task
+                    if task and task.status and task.status.state != TaskState.completed:
+                        continue
+                    text = extract_agent_text_from_room_message(msg)
+                    if text and msg.agent_id:
+                        # Get agent name from database
+                        agent_name = await self.database_service.get_agent_name_by_agent_id(
+                            msg.agent_id
+                        )
+                        agent_responses.append(
+                            {
+                                "agent_name": agent_name or msg.agent_id,
+                                "message": text,
+                            }
+                        )
 
             # Require at least two distinct non-empty answers
             if len(agent_responses) < 2:
@@ -106,18 +140,44 @@ class RoomCoordinatorService:
 
             # Use different summary approach based on mode
             summary_mode = "debate" if is_debate_mode else "non_debate"
-            summary_text = await self.openai_service.summarize_agent_responses(
-                agent_responses, mode=summary_mode
-            )
             coordinator_agent_id = (
                 CoordinatorAgentId.DEBATE_SUMMARY if is_debate_mode else CoordinatorAgentId.NON_DEBATE_SUMMARY
             )
 
+            # Pre-generate message_id and emit a "working" indicator so the
+            # frontend shows a spinner while the LLM summarisation runs.
+            summary_message_id = str(uuid4())
+            agent_name = (
+                "Debate Coordinator" if is_debate_mode else "Summary Agent"
+            )
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=summary_message_id,
+                task_id=summary_message_id,
+                agent_name=agent_name,
+                agent_id=coordinator_agent_id,
+                status="working",
+                related_message_id=room_user_message_id,
+                task_content="Summarizing agent responses…",
+            )
+
+            summary_text = await self.openai_service.summarize_agent_responses(
+                agent_responses, mode=summary_mode
+            )
+
             if not summary_text:
+                # Dismiss the working indicator by sending a completed-empty update
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=summary_message_id,
+                    status="completed",
+                    agent_id=coordinator_agent_id,
+                )
                 return
 
             await self._create_and_emit_summary_message(
-                room_id, room_user_message_id, summary_text, coordinator_agent_id
+                room_id, room_user_message_id, summary_text, coordinator_agent_id,
+                message_id=summary_message_id,
             )
 
         except Exception as exc:  # noqa: BLE001
@@ -127,6 +187,17 @@ class RoomCoordinatorService:
                 room_user_message_id,
                 str(exc),
             )
+            # Dismiss the working spinner if it was already emitted.
+            if summary_message_id is not None:
+                try:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=summary_message_id,
+                        status="failed",
+                        agent_id=coordinator_agent_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _collect_agent_messages_for_user_message(
         self,
@@ -171,40 +242,6 @@ class RoomCoordinatorService:
                     queue.append(child)
 
         return all_messages
-
-    def _extract_agent_text_from_message(self, agent_msg: RoomAgentMessage) -> str:
-        """
-        Extract the latest agent-visible text content from a RoomAgentMessage.
-
-        Mirrors the logic in RoomServices.inquiry_room_messages_by_room_id so that
-        summaries are based on the same text the frontend displays.
-        """
-        if (
-            not agent_msg.message_content
-            or not agent_msg.message_content.message_task
-            or not agent_msg.message_content.message_task.history
-        ):
-            return ""
-
-        history = agent_msg.message_content.message_task.history
-
-        # Find the latest message with role "agent"
-        agent_messages = [
-            msg for msg in history if getattr(msg, "role", None) == Role.agent
-        ]
-        if not agent_messages:
-            return ""
-
-        latest_agent_message = agent_messages[-1]
-
-        text_parts: list[str] = []
-        if hasattr(latest_agent_message, "parts") and latest_agent_message.parts:
-            for part in latest_agent_message.parts:
-                root = getattr(part, "root", None)
-                if root is not None and hasattr(root, "text"):
-                    text_parts.append(root.text)
-
-        return "".join(text_parts) if text_parts else ""
 
     async def emit_synthesis_message(
         self,
