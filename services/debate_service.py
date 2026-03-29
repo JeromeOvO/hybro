@@ -1,7 +1,13 @@
+from __future__ import annotations
+
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
+from common.utils.logger import get_logger
 from models.room import MessageContent, RoomAgentMessage
 from services.agent_service import agent_service
 from services.database_service import db_service
 from services.openai_service import openai_service
+
+logger = get_logger(__name__)
 
 
 class DebateService:
@@ -28,14 +34,21 @@ class DebateService:
             related_message.agent_id
         )
 
-        related_message_content = (
-            related_message.message_content.message_task.history[-1].parts[0].root.text
-        )
+        related_message_content = extract_agent_text_from_room_message(related_message)
+        if related_message_content is None:
+            logger.warning(
+                "debate_service: related message %s has no extractable text, skipping debate injection",
+                related_message.message_id,
+            )
+            return agent_messsage
 
-        # Get the current agent's task
-        current_task = (
-            agent_messsage.message_content.message_task.history[-1].parts[0].root.text
-        )
+        current_task = extract_agent_text_from_room_message(agent_messsage)
+        if current_task is None:
+            logger.warning(
+                "debate_service: current message %s has no extractable text, skipping debate injection",
+                agent_messsage.message_id,
+            )
+            return agent_messsage
 
         short_term_debate_prompt = f"""YOUR TASK: {current_task}
 
