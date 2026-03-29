@@ -1,11 +1,17 @@
 """Tests for A2AService webhook_base_url / blocking fallback logic.
 
-Covers:
+Covers send_message_to_tracked_agent:
 1. webhook_base_url set → push_config built, blocking=False, short timeout
 2. webhook_base_url empty → no push_config, blocking=True, long timeout
 3. webhook_base_url with trailing slash → URL normalised correctly
 4. Agent missing push capability → no push_config even when URL is set, blocking=True
-5. HITL path: webhook_base_url empty → push_config=None, blocking=True, long timeout
+5. blocking=True → DEFAULT_REQUEST_TIMEOUT used
+
+Covers reply_to_task (HITL path):
+6. webhook_base_url set + agent push-capable → push_config built, blocking=False
+7. webhook_base_url empty → push_config=None, blocking=True
+8. Agent missing push capability → push_config=None, blocking=True
+9. Agent card not found in DB → push_config=None, blocking=True
 """
 
 from __future__ import annotations
@@ -302,4 +308,240 @@ class TestSendMessageTrackedAgentWebhookFallback:
             )
 
         assert captured_timeout["value"] == A2AService.DEFAULT_REQUEST_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Helpers for reply_to_task (HITL) tests
+# ---------------------------------------------------------------------------
+
+def _make_room_agent_message(agent_url: str = "http://remote-agent:8080/", agent_id: str = "agent-001"):
+    """Minimal RoomAgentMessage-like object returned by db_service."""
+    msg = MagicMock()
+    msg.agent_url = agent_url
+    msg.agent_id = agent_id
+    return msg
+
+
+def _make_agent_record(push_capable: bool = True):
+    """Minimal Agent-like object with an agent_card."""
+    record = MagicMock()
+    record.agent_card = _make_agent_card(push_capable=push_capable)
+    return record
+
+
+class TestReplyToTaskWebhookFallback:
+    """Tests for the webhook / blocking decision in reply_to_task (HITL path)."""
+
+    @pytest.mark.asyncio
+    async def test_hitl_webhook_url_and_capability_uses_push_notification(self):
+        """HITL: webhook_base_url set + agent push-capable → push_config built, blocking=False."""
+        from services.a2a_service import A2AService
+
+        captured_request = {}
+
+        fake_a2a_client = AsyncMock()
+
+        async def capture_send(request):
+            captured_request["params"] = request.params
+            return _build_mock_response()
+
+        fake_a2a_client.send_message = capture_send
+
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message()
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-001")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(
+            return_value=_make_agent_record(push_capable=True)
+        )
+        mock_db.update_task_on_message = AsyncMock()
+
+        with (
+            patch("services.a2a_service.settings") as mock_settings,
+            patch("services.a2a_service.httpx") as mock_httpx,
+            patch.dict("sys.modules", {}),
+        ):
+            mock_settings.webhook_base_url = "https://api.example.com"
+
+            mock_client_instance = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("services.a2a_service.A2AClient") as MockA2AClient:
+                mock_a2a = AsyncMock()
+                mock_a2a.send_message = capture_send
+                MockA2AClient.return_value = mock_a2a
+
+                with patch("services.database_service.db_service", mock_db):
+                    await service.reply_to_task(
+                        message_id="msg-hitl-001",
+                        task_id="task-hitl-001",
+                        context_id="ctx-hitl-001",
+                        user_input="yes, proceed",
+                    )
+
+        cfg: MessageSendConfiguration = captured_request["params"].configuration
+        assert cfg.push_notification_config is not None
+        assert cfg.push_notification_config.url == "https://api.example.com/api/v1/webhooks/a2a/msg-hitl-001"
+        assert cfg.push_notification_config.token == "tok-hitl-001"
+        assert cfg.blocking is False
+
+    @pytest.mark.asyncio
+    async def test_hitl_no_webhook_url_uses_blocking_true(self):
+        """HITL: webhook_base_url empty → push_config=None, blocking=True."""
+        from services.a2a_service import A2AService
+
+        captured_request = {}
+
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message()
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-002")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(
+            return_value=_make_agent_record(push_capable=True)
+        )
+        mock_db.update_task_on_message = AsyncMock()
+
+        async def capture_send(request):
+            captured_request["params"] = request.params
+            return _build_mock_response()
+
+        with (
+            patch("services.a2a_service.settings") as mock_settings,
+            patch("services.a2a_service.httpx") as mock_httpx,
+        ):
+            mock_settings.webhook_base_url = ""
+
+            mock_client_instance = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("services.a2a_service.A2AClient") as MockA2AClient:
+                mock_a2a = AsyncMock()
+                mock_a2a.send_message = capture_send
+                MockA2AClient.return_value = mock_a2a
+
+                with patch("services.database_service.db_service", mock_db):
+                    await service.reply_to_task(
+                        message_id="msg-hitl-002",
+                        task_id="task-hitl-002",
+                        context_id="ctx-hitl-002",
+                        user_input="no thanks",
+                    )
+
+        cfg: MessageSendConfiguration = captured_request["params"].configuration
+        assert cfg.push_notification_config is None
+        assert cfg.blocking is True
+
+    @pytest.mark.asyncio
+    async def test_hitl_agent_without_push_capability_uses_blocking_true(self):
+        """HITL: agent lacks push-notification capability → blocking=True even if webhook URL is set."""
+        from services.a2a_service import A2AService
+
+        captured_request = {}
+
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message()
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-003")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(
+            return_value=_make_agent_record(push_capable=False)
+        )
+        mock_db.update_task_on_message = AsyncMock()
+
+        async def capture_send(request):
+            captured_request["params"] = request.params
+            return _build_mock_response()
+
+        with (
+            patch("services.a2a_service.settings") as mock_settings,
+            patch("services.a2a_service.httpx") as mock_httpx,
+        ):
+            mock_settings.webhook_base_url = "https://api.example.com"
+
+            mock_client_instance = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("services.a2a_service.A2AClient") as MockA2AClient:
+                mock_a2a = AsyncMock()
+                mock_a2a.send_message = capture_send
+                MockA2AClient.return_value = mock_a2a
+
+                with patch("services.database_service.db_service", mock_db):
+                    await service.reply_to_task(
+                        message_id="msg-hitl-003",
+                        task_id="task-hitl-003",
+                        context_id="ctx-hitl-003",
+                        user_input="try again",
+                    )
+
+        cfg: MessageSendConfiguration = captured_request["params"].configuration
+        assert cfg.push_notification_config is None
+        assert cfg.blocking is True
+
+    @pytest.mark.asyncio
+    async def test_hitl_agent_card_not_found_uses_blocking_true(self):
+        """HITL: agent record not in DB → push_config=None, blocking=True."""
+        from services.a2a_service import A2AService
+
+        captured_request = {}
+
+        service = A2AService.__new__(A2AService)
+
+        mock_db = MagicMock()
+        mock_db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=_make_room_agent_message()
+        )
+        mock_db.generate_webhook_token = MagicMock(return_value="tok-hitl-004")
+        mock_db.hash_webhook_token = MagicMock(return_value="hashed-tok")
+        mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+        mock_db.get_agent_by_agent_id = AsyncMock(return_value=None)
+        mock_db.update_task_on_message = AsyncMock()
+
+        async def capture_send(request):
+            captured_request["params"] = request.params
+            return _build_mock_response()
+
+        with (
+            patch("services.a2a_service.settings") as mock_settings,
+            patch("services.a2a_service.httpx") as mock_httpx,
+        ):
+            mock_settings.webhook_base_url = "https://api.example.com"
+
+            mock_client_instance = AsyncMock()
+            mock_httpx.AsyncClient.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
+            mock_httpx.AsyncClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("services.a2a_service.A2AClient") as MockA2AClient:
+                mock_a2a = AsyncMock()
+                mock_a2a.send_message = capture_send
+                MockA2AClient.return_value = mock_a2a
+
+                with patch("services.database_service.db_service", mock_db):
+                    await service.reply_to_task(
+                        message_id="msg-hitl-004",
+                        task_id="task-hitl-004",
+                        context_id="ctx-hitl-004",
+                        user_input="hello",
+                    )
+
+        cfg: MessageSendConfiguration = captured_request["params"].configuration
+        assert cfg.push_notification_config is None
+        assert cfg.blocking is True
 

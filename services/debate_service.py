@@ -42,10 +42,10 @@ class DebateService:
             )
             return agent_messsage
 
-        current_task = extract_agent_text_from_room_message(agent_messsage)
+        current_task = agent_messsage.task_content
         if current_task is None:
             logger.warning(
-                "debate_service: current message %s has no extractable text, skipping debate injection",
+                "debate_service: current message %s has no task_content, skipping debate injection",
                 agent_messsage.message_id,
             )
             return agent_messsage

@@ -116,11 +116,13 @@ class RoomCoordinatorService:
 
                 agent_responses = []
                 for msg in agent_messages:
+                    if msg.agent_id in ("debate_summary", "non_debate_summary"):
+                        continue
+                    task = msg.message_content and msg.message_content.message_task
+                    if task and task.status and task.status.state != TaskState.completed:
+                        continue
                     text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
-                        # Skip summary messages from previous summaries
-                        if msg.agent_id in ("debate_summary", "non_debate_summary"):
-                            continue
                         # Get agent name from database
                         agent_name = await self.database_service.get_agent_name_by_agent_id(
                             msg.agent_id
