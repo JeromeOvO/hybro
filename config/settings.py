@@ -6,7 +6,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     app_env: str = "development"  # development, staging, production
 
-    frontend_origins: str | list[str] = ["http://localhost:3000","http://dev.localhost:3000"]
+    frontend_origins: str | list[str] = [
+        "http://localhost:3000",
+        "http://dev.localhost:3000",
+    ]
     api_prefix: str = "/api/v1"
 
     mongodb_url: str = "localhost:27017"
@@ -17,9 +20,7 @@ class Settings(BaseSettings):
     mongodb_password: str = ""
 
     pinecone_api_key: str = ""
-    pinecone_environment: str = ""
     pinecone_index_name: str = "agentmatch"
-    pinecone_host: str = ""
 
     openai_api_key: str = ""
     lead_ai_model: str = "gpt-5-mini"
@@ -51,25 +52,40 @@ class Settings(BaseSettings):
     capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
 
     # Discovery API Settings
-    discovery_confidence_threshold: float = 0.3  # Minimum similarity score to return an agent
+    discovery_confidence_threshold: float = (
+        0.3  # Minimum similarity score to return an agent
+    )
     discovery_default_limit: int = 5  # Default number of agents to return
-    discovery_query_expansion_threshold: int = 5  # Maximum word count for query expansion
-    discovery_rate_limit_per_key: int | None = 100  # Requests per API key per hour (None = unlimited)
-    discovery_rate_limit_global: int | None = 10000  # Total requests per hour across all keys (None = unlimited)
-    hybro_timeout_seconds: float = 45.0  
-
+    discovery_query_expansion_threshold: int = (
+        5  # Maximum word count for query expansion
+    )
+    discovery_rate_limit_per_key: int | None = (
+        100  # Requests per API key per hour (None = unlimited)
+    )
+    discovery_rate_limit_global: int | None = (
+        10000  # Total requests per hour across all keys (None = unlimited)
+    )
+    hybro_timeout_seconds: float = 45.0
 
     # Gateway API Settings
-    gateway_base_url: str = ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime
-    gateway_rate_limit_per_key: int | None = 200  # Requests per API key per hour (None = unlimited)
-    gateway_rate_limit_global: int | None = 20000  # Total requests per hour across all keys (None = unlimited)
+    gateway_base_url: str = (
+        ""  # e.g. https://api.hybro.ai/api/v1 — if empty, derived at runtime
+    )
+    gateway_rate_limit_per_key: int | None = (
+        200  # Requests per API key per hour (None = unlimited)
+    )
+    gateway_rate_limit_global: int | None = (
+        20000  # Total requests per hour across all keys (None = unlimited)
+    )
 
     # Relay (Hub Phase 2) Settings
     relay_heartbeat_interval: int = 30  # seconds
     relay_offline_queue_max: int = 100  # per hub
     relay_offline_queue_ttl: int = 86400  # 24 hours in seconds
     relay_hub_agent_heartbeat_miss_limit: int = 3
-    relay_offline_grace_period: int = 120  # seconds before rejecting messages to a disconnected hub
+    relay_offline_grace_period: int = (
+        120  # seconds before rejecting messages to a disconnected hub
+    )
     relay_stream_maxlen: int = 10_000
     relay_hub_heartbeat_ttl: int = 90  # 3x relay_heartbeat_interval
 
@@ -87,7 +103,9 @@ class Settings(BaseSettings):
     task_expiry_hours: int = 4  # Auto-fail tasks older than this
     pending_task_warning_hours: int = 1  # Warn (log) after this time
     orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
-    processing_status_expiry_minutes: int = 30  # Clear stuck processing status older than this
+    processing_status_expiry_minutes: int = (
+        30  # Clear stuck processing status older than this
+    )
 
     # Change stream reconnection backoff
     cs_backoff_base: float = 1.0  # initial delay in seconds
@@ -96,9 +114,13 @@ class Settings(BaseSettings):
     cs_jitter_fraction: float = 0.25  # ±25% random jitter
 
     # Event Broker (cross-instance SSE fan-out + cancellation)
-    redis_url: str = ""  # e.g. "redis://localhost:6379/0" — empty string disables broker
+    redis_url: str = (
+        ""  # e.g. "redis://localhost:6379/0" — empty string disables broker
+    )
     redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
-    redis_cancel_channel: str = "cancel:global"  # single channel for all cancellation events
+    redis_cancel_channel: str = (
+        "cancel:global"  # single channel for all cancellation events
+    )
     redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
     redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
     redis_cancel_key_prefix: str = "cancelled:"
@@ -121,7 +143,9 @@ class Settings(BaseSettings):
     # Compaction Settings (LOSSLESS - pointer-based, not summarization)
     compaction_enabled: bool = True  # Enable/disable auto-compaction
     compaction_max_full_turns: int = 20  # Max turns to keep in FULL representation
-    compaction_max_total_tokens: int = 80000  # Trigger compaction when full turns exceed this
+    compaction_max_total_tokens: int = (
+        80000  # Trigger compaction when full turns exceed this
+    )
     compaction_preserve_recent: int = 10  # Always keep this many recent turns FULL
     compaction_content_ttl_days: int = 0  # TTL for stored content (0 = forever)
 
@@ -131,7 +155,9 @@ class Settings(BaseSettings):
     memory_search_keyword_weight: float = 0.3  # Weight for BM25 keyword matching
     memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
     memory_search_half_life_days: int = 30  # Half-life for temporal decay
-    memory_search_mmr_lambda: float = 0.7  # MMR diversity parameter (0=diverse, 1=relevant)
+    memory_search_mmr_lambda: float = (
+        0.7  # MMR diversity parameter (0=diverse, 1=relevant)
+    )
     memory_search_max_results: int = 10  # Max results to return
     memory_search_max_snippet_chars: int = 500  # Max chars per snippet
     memory_search_index_name: str = "room-memory"  # Pinecone index for memory
@@ -150,7 +176,9 @@ class Settings(BaseSettings):
     use_bedrock_supervisor: bool = False
 
     # Graceful Shutdown Settings
-    shutdown_drain_seconds: float = 5.0  # Drain period for SSE connections during shutdown
+    shutdown_drain_seconds: float = (
+        5.0  # Drain period for SSE connections during shutdown
+    )
 
     class Config:
         env_file = ".env"
