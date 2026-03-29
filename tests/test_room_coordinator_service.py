@@ -36,7 +36,7 @@ def coordinator():
     svc = RoomCoordinatorService.__new__(RoomCoordinatorService)
     svc.database_service = AsyncMock()
     svc.openai_service = AsyncMock()
-    svc.sse_manager = MagicMock()
+    svc.sse_manager = AsyncMock()
 
     # Stub _create_and_emit_summary_message so we can assert without
     # needing the full SSE/DB chain.

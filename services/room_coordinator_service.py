@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
 
+from common.utils.a2a_helpers import extract_agent_text_from_room_message
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.room import CoordinatorAgentId, MessageContent, Room, RoomAgentMessage
@@ -71,6 +72,9 @@ class RoomCoordinatorService:
         - Apply per-room policies such as limiting debate rounds or selecting a
           single “final” agent answer in addition to the summary.
         """
+        summary_message_id: str | None = None
+        coordinator_agent_id: str | None = None
+
         try:
             room: Room | None = await self.database_service.get_room_by_room_id(room_id)
             if room is None:
@@ -112,7 +116,7 @@ class RoomCoordinatorService:
 
                 agent_responses = []
                 for msg in agent_messages:
-                    text = self._extract_agent_text_from_message(msg)
+                    text = extract_agent_text_from_room_message(msg)
                     if text and msg.agent_id:
                         # Skip summary messages from previous summaries
                         if msg.agent_id in ("debate_summary", "non_debate_summary"):
@@ -134,18 +138,44 @@ class RoomCoordinatorService:
 
             # Use different summary approach based on mode
             summary_mode = "debate" if is_debate_mode else "non_debate"
-            summary_text = await self.openai_service.summarize_agent_responses(
-                agent_responses, mode=summary_mode
-            )
             coordinator_agent_id = (
                 CoordinatorAgentId.DEBATE_SUMMARY if is_debate_mode else CoordinatorAgentId.NON_DEBATE_SUMMARY
             )
 
+            # Pre-generate message_id and emit a "working" indicator so the
+            # frontend shows a spinner while the LLM summarisation runs.
+            summary_message_id = str(uuid4())
+            agent_name = (
+                "Debate Coordinator" if is_debate_mode else "Summary Agent"
+            )
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=summary_message_id,
+                task_id=summary_message_id,
+                agent_name=agent_name,
+                agent_id=coordinator_agent_id,
+                status="working",
+                related_message_id=room_user_message_id,
+                task_content="Summarizing agent responses…",
+            )
+
+            summary_text = await self.openai_service.summarize_agent_responses(
+                agent_responses, mode=summary_mode
+            )
+
             if not summary_text:
+                # Dismiss the working indicator by sending a completed-empty update
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=summary_message_id,
+                    status="completed",
+                    agent_id=coordinator_agent_id,
+                )
                 return
 
             await self._create_and_emit_summary_message(
-                room_id, room_user_message_id, summary_text, coordinator_agent_id
+                room_id, room_user_message_id, summary_text, coordinator_agent_id,
+                message_id=summary_message_id,
             )
 
         except Exception as exc:  # noqa: BLE001
@@ -155,6 +185,17 @@ class RoomCoordinatorService:
                 room_user_message_id,
                 str(exc),
             )
+            # Dismiss the working spinner if it was already emitted.
+            if summary_message_id is not None:
+                try:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=summary_message_id,
+                        status="failed",
+                        agent_id=coordinator_agent_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _collect_agent_messages_for_user_message(
         self,
@@ -199,40 +240,6 @@ class RoomCoordinatorService:
                     queue.append(child)
 
         return all_messages
-
-    def _extract_agent_text_from_message(self, agent_msg: RoomAgentMessage) -> str:
-        """
-        Extract the latest agent-visible text content from a RoomAgentMessage.
-
-        Mirrors the logic in RoomServices.inquiry_room_messages_by_room_id so that
-        summaries are based on the same text the frontend displays.
-        """
-        if (
-            not agent_msg.message_content
-            or not agent_msg.message_content.message_task
-            or not agent_msg.message_content.message_task.history
-        ):
-            return ""
-
-        history = agent_msg.message_content.message_task.history
-
-        # Find the latest message with role "agent"
-        agent_messages = [
-            msg for msg in history if getattr(msg, "role", None) == Role.agent
-        ]
-        if not agent_messages:
-            return ""
-
-        latest_agent_message = agent_messages[-1]
-
-        text_parts: list[str] = []
-        if hasattr(latest_agent_message, "parts") and latest_agent_message.parts:
-            for part in latest_agent_message.parts:
-                root = getattr(part, "root", None)
-                if root is not None and hasattr(root, "text"):
-                    text_parts.append(root.text)
-
-        return "".join(text_parts) if text_parts else ""
 
     async def emit_synthesis_message(
         self,
