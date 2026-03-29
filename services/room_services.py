@@ -1316,6 +1316,8 @@ class RoomServices:
         # which shouldn't be echoed in the task status bubble.
         is_direct_chat = parsed_result.get("message_type") == "DIRECT_CHAT"
 
+        original_text = parsed_result.get("original_text", "")
+
         # Calculate total steps for progress tracking
         total_steps = len(task_steps)
 
@@ -1368,7 +1370,9 @@ class RoomServices:
             # In direct chat the task_content equals the user's original message,
             # which would be redundantly echoed in the task status bubble.
             # Clear it so the frontend shows a generic "Working on your request…" instead.
-            if is_direct_chat:
+            # Also clear in multi-agent rooms when the LLM simply passed through the
+            # user's message verbatim (no meaningful decomposition).
+            if is_direct_chat or task_content.strip() == original_text.strip():
                 agent_message.task_content = None
 
             agent_messages.append(agent_message)
