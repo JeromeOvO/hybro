@@ -27,9 +27,13 @@ from models.memory import (
     TurnRepresentation,
 )
 from models.supervisor_v2 import (
+    ActionType,
     RunStatus,
+    SupervisorAction,
     SupervisorRunResult,
     SupervisorTrajectory,
+    TrajectoryEntry,
+    V2StepResult,
 )
 
 
@@ -950,6 +954,60 @@ class TestHandleV2RunResultSummaryDedup:
         rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
         rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
             "room-1", "msg-1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_debate_mode_passes_trajectory_responses_to_coordinator(self, rmc):
+        """Regression: supervisor+debate fast-path must pass trajectory responses
+        directly to on_room_user_message_completed so the coordinator doesn't
+        race against relay agents' DB writes."""
+        from datetime import datetime
+
+        delegate_action = SupervisorAction(
+            action=ActionType.DELEGATE,
+            reasoning="Debate: delegate to both agents",
+        )
+        entry = TrajectoryEntry(
+            step_number=1,
+            action=delegate_action,
+            started_at=datetime(2026, 1, 1),
+            results=[
+                V2StepResult(
+                    step_number=1,
+                    agent_id="agent-1",
+                    agent_name="Agent Alpha",
+                    task="Answer the question",
+                    response_text="Alpha's answer here.",
+                    success=True,
+                ),
+                V2StepResult(
+                    step_number=2,
+                    agent_id="agent-2",
+                    agent_name="Agent Beta",
+                    task="Answer the question",
+                    response_text="Beta's answer here.",
+                    success=True,
+                ),
+            ],
+        )
+        result = SupervisorRunResult(
+            status=RunStatus.COMPLETED,
+            trajectory=SupervisorTrajectory(entries=[entry]),
+            synthesis_text=None,
+        )
+        await rmc._handle_v2_run_result(
+            result=result,
+            room_id="room-1",
+            user_message_id="msg-1",
+        )
+        rmc.room_coordinator_service.emit_synthesis_message.assert_not_awaited()
+        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
+            "room-1",
+            "msg-1",
+            trajectory_responses=[
+                {"agent_name": "Agent Alpha", "message": "Alpha's answer here."},
+                {"agent_name": "Agent Beta", "message": "Beta's answer here."},
+            ],
         )
 
 

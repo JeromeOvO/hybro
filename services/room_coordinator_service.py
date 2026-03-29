@@ -39,6 +39,7 @@ class RoomCoordinatorService:
         self,
         room_id: str,
         room_user_message_id: str,
+        trajectory_responses: list[dict[str, str]] | None = None,
     ) -> None:
         """
         Entry point called after RoomMessageCenter processes all agent messages
@@ -49,6 +50,17 @@ class RoomCoordinatorService:
           chain for this user message, generate a coordinator summary.
         - In debate mode: Uses debate-style summary (comparing viewpoints)
         - In normal mode: Uses non_debate-style summary (combining contributions)
+
+        ``trajectory_responses`` is an optional fast-path for the supervisor V2
+        execution path.  When the supervisor executor completes (debate fast-path
+        returns synthesis_text=None), the trajectory already holds every agent's
+        response text in memory.  Passing those responses directly here avoids a
+        DB re-read that would race against relay agents whose
+        ``message_content.message_task.history`` may not be written yet.
+
+        When ``trajectory_responses`` is None (or empty), the function falls back
+        to the existing BFS + DB extraction path used by the QueueExecutor and
+        other non-supervisor flows.
 
         Future extensions:
         - Track pending clarification questions that individual agents ask the user
@@ -73,32 +85,48 @@ class RoomCoordinatorService:
             if room.extend_info and isinstance(room.extend_info, dict):
                 is_debate_mode = bool(room.extend_info.get("debateMode", False))
 
-            # Collect all agent messages related to this user message
-            agent_messages = await self._collect_agent_messages_for_user_message(
-                room_user_message_id
-            )
-            if len(agent_messages) < 2:
-                # Not enough agent answers to justify a summary
-                return
+            if trajectory_responses:
+                # Fast path: caller already has agent response texts from the
+                # in-memory trajectory — skip DB BFS entirely.
+                logger.info(
+                    "RoomCoordinatorService: using %d trajectory responses for room %s "
+                    "(skipping DB read)",
+                    len(trajectory_responses),
+                    room_id,
+                )
+                agent_responses: list[dict[str, str]] = trajectory_responses
+            else:
+                # Standard path: collect agent messages from DB via BFS and
+                # extract visible text from each message's history.
+                logger.debug(
+                    "RoomCoordinatorService: no trajectory responses for room %s, "
+                    "falling back to DB BFS",
+                    room_id,
+                )
+                agent_messages = await self._collect_agent_messages_for_user_message(
+                    room_user_message_id
+                )
+                if len(agent_messages) < 2:
+                    # Not enough agent answers to justify a summary
+                    return
 
-            # Extract visible text and agent info from each agent message
-            agent_responses: list[dict[str, str]] = []
-            for msg in agent_messages:
-                text = self._extract_agent_text_from_message(msg)
-                if text and msg.agent_id:
-                    # Skip summary messages from previous summaries
-                    if msg.agent_id in ("debate_summary", "non_debate_summary"):
-                        continue
-                    # Get agent name from database
-                    agent_name = await self.database_service.get_agent_name_by_agent_id(
-                        msg.agent_id
-                    )
-                    agent_responses.append(
-                        {
-                            "agent_name": agent_name or msg.agent_id,
-                            "message": text,
-                        }
-                    )
+                agent_responses = []
+                for msg in agent_messages:
+                    text = self._extract_agent_text_from_message(msg)
+                    if text and msg.agent_id:
+                        # Skip summary messages from previous summaries
+                        if msg.agent_id in ("debate_summary", "non_debate_summary"):
+                            continue
+                        # Get agent name from database
+                        agent_name = await self.database_service.get_agent_name_by_agent_id(
+                            msg.agent_id
+                        )
+                        agent_responses.append(
+                            {
+                                "agent_name": agent_name or msg.agent_id,
+                                "message": text,
+                            }
+                        )
 
             # Require at least two distinct non-empty answers
             if len(agent_responses) < 2:
