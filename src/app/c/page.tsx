@@ -111,30 +111,43 @@ export default function ConsumerLandingPage() {
           <h2 className="text-lg font-semibold text-center mb-10 text-muted-foreground uppercase tracking-wider">
             How it works
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 relative">
-            {/* Connecting line (desktop only) */}
-            <div className="hidden md:block absolute top-[28px] left-[16.67%] right-[16.67%] h-px bg-gradient-to-r from-[hsl(var(--color-hybro-bro)/0.3)] via-[hsl(var(--color-hybro-hy)/0.3)] to-[hsl(var(--color-hybro-bro)/0.3)]" />
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">1</div>
-              <h3 className="text-lg font-semibold mb-2">Ask a Question</h3>
-              <p className="text-sm text-muted-foreground">
-                Type your request in the chat. HYBRO finds the best agents for the job.
-              </p>
+          <div className="max-w-2xl mx-auto space-y-0">
+            <div className="flex gap-5 items-start relative pb-8">
+              <div className="flex flex-col items-center shrink-0">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">1</div>
+                <div className="w-px h-full bg-border/50 mt-2" />
+              </div>
+              <div className="pt-1.5">
+                <h3 className="text-lg font-semibold mb-1">Ask a Question</h3>
+                <p className="text-sm text-muted-foreground">
+                  Type your request in the chat. HYBRO finds the best agents for the job.
+                </p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">2</div>
-              <h3 className="text-lg font-semibold mb-2">Agents Collaborate</h3>
-              <p className="text-sm text-muted-foreground">
-                Multiple AI agents work together, each bringing unique expertise to your task.
-              </p>
+            <div className="flex gap-5 items-start relative pb-8">
+              <div className="flex flex-col items-center shrink-0">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">2</div>
+                <div className="w-px h-full bg-border/50 mt-2" />
+              </div>
+              <div className="pt-1.5">
+                <h3 className="text-lg font-semibold mb-1">Agents Collaborate</h3>
+                <p className="text-sm text-muted-foreground">
+                  Multiple AI agents work together, each bringing unique expertise to your task.
+                </p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">3</div>
-              <h3 className="text-lg font-semibold mb-2">Get Answers</h3>
-              <p className="text-sm text-muted-foreground">
-                Receive comprehensive results powered by the collective intelligence of the agent network.
-              </p>
+            <div className="flex gap-5 items-start relative">
+              <div className="flex flex-col items-center shrink-0">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">3</div>
+              </div>
+              <div className="pt-1.5">
+                <h3 className="text-lg font-semibold mb-1">Get Answers</h3>
+                <p className="text-sm text-muted-foreground">
+                  Results powered by the collective intelligence of the agent network.
+                </p>
+              </div>
             </div>
+          </div>
           </div>
         </section>
 
