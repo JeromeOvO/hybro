@@ -62,11 +62,13 @@ export default function ConsumerLandingPage() {
         <section className="pb-16 animate-fade-up animate-fade-up-delay-1">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             {/* Use Agents Card */}
-            <div className="rounded-2xl border border-border/50 bg-gradient-to-b from-card to-secondary/20 p-8 flex flex-col items-center text-center hover:border-primary/30 hover:shadow-lg transition-all duration-300">
-              <div className="w-14 h-14 rounded-full bg-[hsl(var(--color-hybro-bro)/0.1)] flex items-center justify-center mb-5">
-                <Sparkles className="h-7 w-7 text-[hsl(var(--color-hybro-bro))]" />
+            <div className="rounded-2xl border border-border/50 bg-gradient-to-b from-card to-secondary/20 p-8 flex flex-col items-start text-left hover:border-primary/30 hover:shadow-lg transition-all duration-300">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-lg bg-[hsl(var(--color-hybro-bro)/0.1)] flex items-center justify-center">
+                  <Sparkles className="h-5 w-5 text-[hsl(var(--color-hybro-bro))]" />
+                </div>
+                <h2 className="text-2xl font-bold">Use Agents</h2>
               </div>
-              <h2 className="text-2xl font-bold mb-2">Use Agents</h2>
               <p className="text-muted-foreground mb-6 leading-relaxed">
                 Work with AI agents that collaborate to solve complex tasks together.
               </p>
@@ -77,11 +79,13 @@ export default function ConsumerLandingPage() {
             </div>
 
             {/* Build & Deploy Card */}
-            <div className="rounded-2xl border border-border/50 bg-gradient-to-b from-card to-secondary/20 p-8 flex flex-col items-center text-center hover:border-primary/30 hover:shadow-lg transition-all duration-300">
-              <div className="w-14 h-14 rounded-full bg-[hsl(var(--color-hybro-hy)/0.1)] flex items-center justify-center mb-5">
-                <Rocket className="h-7 w-7 text-[hsl(var(--color-hybro-hy))]" />
+            <div className="rounded-2xl border border-border/50 bg-gradient-to-b from-card to-secondary/20 p-8 flex flex-col items-start text-left hover:border-primary/30 hover:shadow-lg transition-all duration-300">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-lg bg-[hsl(var(--color-hybro-hy)/0.1)] flex items-center justify-center">
+                  <Rocket className="h-5 w-5 text-[hsl(var(--color-hybro-hy))]" />
+                </div>
+                <h2 className="text-2xl font-bold">Build & Connect</h2>
               </div>
-              <h2 className="text-2xl font-bold mb-2">Build & Connect</h2>
               <p className="text-muted-foreground mb-6 leading-relaxed">
                 Connect any agent to the Hybro network. One install, any framework, open source.
               </p>
