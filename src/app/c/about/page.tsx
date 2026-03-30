@@ -32,7 +32,7 @@ export default function AboutPage() {
           <p className="text-sm font-medium tracking-widest uppercase text-[hsl(var(--color-hybro-hy))] mb-4">
             About Hybro
           </p>
-          <h1 className="text-3xl md:text-5xl font-bold leading-tight mb-6">
+          <h1 className="text-2xl sm:text-3xl md:text-5xl font-bold leading-tight mb-6">
             One network. Every agent.
             <br />
             <span className="text-brand-gradient">Local and remote.</span>
