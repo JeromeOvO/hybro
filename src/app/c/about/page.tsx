@@ -49,7 +49,7 @@ export default function AboutPage() {
       {/* What Hybro Does — two audiences, concrete language */}
       <section className="py-16 px-4 md:px-8 border-t border-border/40">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-bold mb-12">
+          <h2 className="text-2xl md:text-3xl font-bold mb-12 [text-wrap:balance]">
             What Hybro does
           </h2>
 
@@ -127,7 +127,7 @@ export default function AboutPage() {
       {/* How It Works — the architecture, grounded */}
       <section className="py-16 px-4 md:px-8 bg-muted/30 border-t border-border/40">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-bold mb-4">
+          <h2 className="text-2xl md:text-3xl font-bold mb-4 [text-wrap:balance]">
             How it works
           </h2>
           <p className="text-muted-foreground mb-12 max-w-2xl">
@@ -203,7 +203,7 @@ export default function AboutPage() {
       {/* Open Source Ecosystem */}
       <section className="py-16 px-4 md:px-8 border-t border-border/40">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-bold mb-4">
+          <h2 className="text-2xl md:text-3xl font-bold mb-4 [text-wrap:balance]">
             Open source at the core
           </h2>
           <p className="text-muted-foreground mb-12 max-w-2xl">
@@ -264,7 +264,7 @@ export default function AboutPage() {
       {/* Vision — the AGI narrative moves here, earned after the concrete sections */}
       <section className="py-16 px-4 md:px-8 bg-muted/30 border-t border-border/40">
         <div className="max-w-3xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-bold mb-6">
+          <h2 className="text-2xl md:text-3xl font-bold mb-6 [text-wrap:balance]">
             Where this is going
           </h2>
           <div className="space-y-4 text-muted-foreground leading-relaxed">
@@ -292,7 +292,7 @@ export default function AboutPage() {
       {/* CTA — at the end, after the reader has been informed */}
       <section className="py-16 px-4 md:px-8 border-t border-border/40">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-2xl md:text-3xl font-bold mb-4">
+          <h2 className="text-2xl md:text-3xl font-bold mb-4 [text-wrap:balance]">
             Try Hybro today
           </h2>
           <p className="text-muted-foreground mb-8">
