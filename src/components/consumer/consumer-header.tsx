@@ -65,7 +65,7 @@ export const ConsumerHeader = () => {
           <div className="flex-1" />
           <Link
             href="/sign-in"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap py-2"
           >
             Sign in
           </Link>

@@ -10,7 +10,7 @@ export function ConsumerFooter() {
             href="https://docs.hybro.ai/"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             <BookOpen className="h-4 w-4" />
             Docs
@@ -19,7 +19,7 @@ export function ConsumerFooter() {
             href="https://github.com/hybroai/a2a-adapter"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             <GithubIcon className="h-4 w-4" />
             a2a-adapter
@@ -28,7 +28,7 @@ export function ConsumerFooter() {
             href="https://github.com/hybroai/hybro-hub"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             <GithubIcon className="h-4 w-4" />
             hybro-hub
@@ -37,7 +37,7 @@ export function ConsumerFooter() {
             href="https://discord.gg/2S5pCKzUmJ"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-[#7289DA] transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-[#7289DA] transition-colors py-2"
           >
             <DiscordIcon className="h-4 w-4" />
             Discord
@@ -46,7 +46,7 @@ export function ConsumerFooter() {
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-border/30">
           <a
             href="mailto:info@hybro.ai"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             <Mail className="h-4 w-4" />
             info@hybro.ai
