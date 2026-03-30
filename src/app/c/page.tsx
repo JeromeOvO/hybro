@@ -152,7 +152,6 @@ export default function ConsumerLandingPage() {
               </div>
             </div>
           </div>
-          </div>
         </section>
 
         <ConsumerFooter />
