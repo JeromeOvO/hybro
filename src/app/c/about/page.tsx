@@ -273,10 +273,13 @@ export default function AboutPage() {
               as apps — millions of specialized agents, each good at one thing,
               working together to handle tasks no single agent could.
             </p>
+            <p className="text-xl md:text-2xl font-medium text-foreground/90 py-4 border-l-2 border-[hsl(var(--color-hybro-hy))] pl-6 my-6">
+              An operating system for agent collaboration.
+            </p>
             <p>
               That world needs infrastructure. Not just another chatbot wrapper,
               but a real network layer: discovery, routing, orchestration,
-              trust. An operating system for agent collaboration.
+              trust.
             </p>
             <p>
               Hybro is that layer. Built on open standards, designed for
