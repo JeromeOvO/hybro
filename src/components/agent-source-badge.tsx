@@ -34,7 +34,7 @@ export function AgentSourceBadge({
             )}
           />
         </TooltipTrigger>
-        <TooltipContent side="top" sideOffset={4}>
+        <TooltipContent side="top">
           {online
             ? 'Local agent'
             : 'Hub offline \u2014 start your hub to use this agent'}
@@ -50,7 +50,7 @@ export function AgentSourceBadge({
           className={cn('shrink-0 text-sky-500', className)}
         />
       </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={4}>
+      <TooltipContent side="top">
         Cloud agent
       </TooltipContent>
     </Tooltip>

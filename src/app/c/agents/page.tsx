@@ -168,15 +168,33 @@ function ConsumerAgentsPageContent() {
   if (isLoading && allAgents.length === 0) {
     return (
       <div className="page-container">
-        <div className="page-content flex items-center justify-center min-h-[60vh]">
-          <div className="flex flex-col items-center justify-center gap-4">
-            <div className="relative">
-              <div className="h-12 w-12 rounded-full border-4 border-primary/20 animate-spin border-t-primary" />
-              <Bot className="h-6 w-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-primary/60" />
-            </div>
-            <span className="text-base font-medium text-muted-foreground animate-pulse">
-              Loading Agents...
-            </span>
+        <div className="page-content space-y-4">
+          <div>
+            <h1 className="text-2xl font-bold">Explore Agents</h1>
+            <p className="text-sm text-muted-foreground">Discover AI agents on the HYBRO network</p>
+          </div>
+          <div className="grid grid-auto-fill-cards gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="rounded-2xl border border-border/50 bg-card p-6 space-y-4 animate-pulse">
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 rounded bg-muted" />
+                </div>
+                <div className="flex justify-center">
+                  <div className="h-16 w-16 rounded-full bg-muted" />
+                </div>
+                <div className="space-y-2 text-center">
+                  <div className="h-5 w-3/4 mx-auto rounded bg-muted" />
+                  <div className="h-3 w-1/3 mx-auto rounded bg-muted" />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="h-3 w-full rounded bg-muted/60" />
+                  <div className="h-3 w-2/3 rounded bg-muted/60" />
+                </div>
+                <div className="flex justify-center pt-2">
+                  <div className="h-6 w-16 rounded bg-muted/40" />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

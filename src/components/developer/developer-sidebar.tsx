@@ -95,6 +95,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>
+        <div className="border-t border-sidebar-border mx-2 mb-1" />
         {/* Try Agents link */}
         <SidebarMenu>
           <SidebarMenuItem>

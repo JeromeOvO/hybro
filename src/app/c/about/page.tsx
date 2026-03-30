@@ -183,19 +183,17 @@ export default function AboutPage() {
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {features.map((feature, index) => (
-              <Card key={index} className="border-0 shadow-sm hover:shadow-md transition-shadow">
-                <CardHeader className="text-center pb-4">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-                    {feature.icon}
-                  </div>
-                  <CardTitle className="text-xl">{feature.title}</CardTitle>
-                </CardHeader>
-                <CardContent className="text-center">
-                  <CardDescription className="text-base">
+              <div key={index} className="group flex gap-4 p-4 rounded-xl hover:bg-muted/30 transition-colors">
+                <div className="shrink-0 mt-1">
+                  {feature.icon}
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold mb-1">{feature.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
                     {feature.description}
-                  </CardDescription>
-                </CardContent>
-              </Card>
+                  </p>
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -227,7 +225,7 @@ export default function AboutPage() {
             
             <div className="pt-6 border-t border-border/40">
               <p className="text-sm text-muted-foreground">
-                © 2025 HYBRO. All rights reserved.
+                © {new Date().getFullYear()} HYBRO. All rights reserved.
               </p>
             </div>
           </div>

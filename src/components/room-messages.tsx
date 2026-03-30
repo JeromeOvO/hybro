@@ -260,7 +260,7 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>{allExpanded ? 'Collapse all messages' : 'Expand all messages'}</p>
+                      {allExpanded ? 'Collapse all messages' : 'Expand all messages'}
                     </TooltipContent>
                   </Tooltip>
                 </div>

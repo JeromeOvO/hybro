@@ -265,6 +265,7 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const isLongMessage = displayContent.length > 500
   const [isExpanded, setIsExpanded] = useState(false)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+  const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
 
   return (
     <div className="flex justify-end w-full">
@@ -277,13 +278,18 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
             {formatTimestamp(message.timestamp)}
           </span>
         </div>
-        <div
-          className={cn(
-            "text-sm leading-relaxed",
-            !isExpanded && isLongMessage ? "line-clamp-4" : "whitespace-pre-wrap"
+        <div className="relative">
+          <div
+            className={cn(
+              "text-sm leading-relaxed transition-opacity duration-200",
+              !isExpanded && isLongMessage ? "line-clamp-4" : "whitespace-pre-wrap"
+            )}
+          >
+            <LinkifiedContent content={displayContent} />
+          </div>
+          {!isExpanded && isLongMessage && (
+            <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-secondary to-transparent pointer-events-none" />
           )}
-        >
-          <LinkifiedContent content={displayContent} />
         </div>
 
         {isLongMessage && (
@@ -321,7 +327,7 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
             ) : (
               <>
                 <ChevronDown className="h-3.5 w-3.5" />
-                Show more
+                Show more ({estimatedLines} lines)
               </>
             )}
           </button>
@@ -525,6 +531,7 @@ function AgentMessageBubbleInner({
   
   const displayContent = entity.content || ''
   const isLongMessage = displayContent.length > 500
+  const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
   
   const colors = getAgentColorClasses(entity.agentId || 'unknown')
   const textColorClass = colors.text
@@ -583,7 +590,7 @@ function AgentMessageBubbleInner({
               </span>
             )}
             {entity.agentSource && (
-              <TooltipProvider delayDuration={150}>
+              <TooltipProvider delayDuration={200}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     {entity.agentSource === 'hub'
@@ -677,10 +684,16 @@ function AgentMessageBubbleInner({
           const failedBadge = phaseStyle?.badge ?? 'Failed'
           const displayBody = entity.taskError || entity.content || `Task ${failedBadge.toLowerCase()}`
           const isLong = displayBody.length > 500
+          const failedEstimatedLines = isLong ? Math.max(5, Math.ceil(displayBody.length / 80)) : 0
           return (
             <div>
-              <div className={cn("text-sm text-red-700 dark:text-red-300", !isExpanded && isLong && "line-clamp-4")}>
-                <MarkdownContent content={displayBody} />
+              <div className="relative">
+                <div className={cn("text-sm text-red-700 dark:text-red-300 transition-opacity duration-200", !isExpanded && isLong && "line-clamp-4")}>
+                  <MarkdownContent content={displayBody} />
+                </div>
+                {!isExpanded && isLong && (
+                  <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />
+                )}
               </div>
               {isLong && (
                 <button
@@ -704,7 +717,7 @@ function AgentMessageBubbleInner({
                   }}
                   className="flex items-center gap-1 text-xs mt-3 font-medium transition-colors text-red-600 dark:text-red-400 hover:opacity-80"
                 >
-                  {isExpanded ? <><ChevronUp className="h-3.5 w-3.5" />Show less</> : <><ChevronDown className="h-3.5 w-3.5" />Show more</>}
+                  {isExpanded ? <><ChevronUp className="h-3.5 w-3.5" />Show less</> : <><ChevronDown className="h-3.5 w-3.5" />Show more ({failedEstimatedLines} lines)</>}
                 </button>
               )}
             </div>
@@ -728,11 +741,11 @@ function AgentMessageBubbleInner({
         {/* ── STREAMING / COMPLETE phases: normal content area ── */}
         {(phase === 'streaming' || phase === 'complete') && (
           <>
-            <div className="grid grid-rows-[1fr]">
+            <div className="relative">
               <div
                 ref={contentRef}
                 className={cn(
-                  "min-h-0 overflow-hidden text-sm leading-relaxed select-text",
+                  "min-h-0 overflow-hidden text-sm leading-relaxed select-text transition-opacity duration-200",
                   contentColorClass,
                   !isExpanded && isLongMessage && "line-clamp-4"
                 )}
@@ -742,6 +755,9 @@ function AgentMessageBubbleInner({
                   content={displayContent}
                 />
               </div>
+              {!isExpanded && isLongMessage && (
+                <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />
+              )}
             </div>
 
             {/* Expand/Collapse button */}
@@ -785,7 +801,7 @@ function AgentMessageBubbleInner({
                 ) : (
                   <>
                     <ChevronDown className="h-3.5 w-3.5" />
-                    Show more
+                    Show more ({estimatedLines} lines)
                   </>
                 )}
               </button>

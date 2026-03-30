@@ -905,18 +905,27 @@ export function RoomChatInput({
 
           {/* Expand/Collapse toggle - shown when content overflows or already expanded */}
           {(isOverflowing || isEditorExpanded) && (
-            <button
-              type="button"
-              onClick={() => setIsEditorExpanded(prev => !prev)}
-              className="absolute top-2.5 right-3 z-10 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
-              title={isEditorExpanded ? 'Collapse editor' : 'Expand editor'}
-            >
-              {isEditorExpanded ? (
-                <Minimize2 className="h-3.5 w-3.5" />
-              ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
-              )}
-            </button>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditorExpanded(prev => !prev)}
+                    data-testid="expand-editor"
+                    className="absolute top-2.5 right-3 z-10 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                  >
+                    {isEditorExpanded ? (
+                      <Minimize2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isEditorExpanded ? 'Collapse' : 'Expand'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           {/* Quote preview */}
           {quote && (
@@ -953,7 +962,7 @@ export function RoomChatInput({
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
               className={cn(
-                "w-full overflow-y-auto resize-none",
+                "w-full overflow-y-auto resize-none transition-[max-height] duration-200 ease-out",
                 "border-0 bg-transparent text-[15px] leading-7 text-foreground",
                 "focus:outline-none placeholder-editor",
                 isEditorExpanded ? "min-h-[200px] max-h-[60vh]" : "min-h-[28px] max-h-[200px]",
@@ -982,22 +991,30 @@ export function RoomChatInput({
                 debateMode={debateMode}
                 onDebateModeChange={onDebateModeChange}
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                disabled={disabled || sending || processing}
-                className="h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors"
-                title="Mention an agent (@)"
-                onClick={() => {
-                  if (!editorRef.current) return
-                  editorRef.current.focus()
-                  document.execCommand('insertText', false, '@')
-                  handleInput()
-                }}
-              >
-                <AtSign className="h-4 w-4" />
-              </Button>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={disabled || sending || processing}
+                      className="h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors"
+                      onClick={() => {
+                        if (!editorRef.current) return
+                        editorRef.current.focus()
+                        document.execCommand('insertText', false, '@')
+                        handleInput()
+                      }}
+                    >
+                      <AtSign className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Mention (@)
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               {showGroupSelector && (
                 <GroupSelector
                   selectedGroup={selectedGroup}
@@ -1019,7 +1036,7 @@ export function RoomChatInput({
               {supervisorMode && onSupervisorChange && (
                 <>
                   <div className="h-4 w-px bg-border mx-0.5" />
-                  <TooltipProvider delayDuration={300}>
+                  <TooltipProvider delayDuration={200}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
@@ -1032,7 +1049,7 @@ export function RoomChatInput({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
-                        Supervisor understands your request better
+                        Smart agent coordination
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -1041,7 +1058,7 @@ export function RoomChatInput({
               {debateMode && onDebateModeChange && (
                 <>
                   <div className="h-4 w-px bg-border mx-0.5" />
-                  <TooltipProvider delayDuration={300}>
+                  <TooltipProvider delayDuration={200}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
@@ -1054,7 +1071,7 @@ export function RoomChatInput({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
-                        Agents will debate with each other
+                        Agents debate responses
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -1088,63 +1105,100 @@ export function RoomChatInput({
               ) : null}
             {sending ? (
               <div className="relative">
-                <Button
-                  disabled
-                  size="icon"
-                  className={cn(
-                    "h-8 w-8 rounded-full p-0",
-                    "bg-gradient-to-br from-primary to-primary/80"
-                  )}
-                  title="Sending message..."
-                >
-                  <div className="h-4 w-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                </Button>
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span>
+                        <Button
+                          disabled
+                          size="icon"
+                          data-testid="sending-button"
+                          className={cn(
+                          )}
+                        >
+                          <div className="h-4 w-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Sending...
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
                 <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
               </div>
             ) : cancelling && processing ? (
-              <Button
-                disabled
-                size="icon"
-                className={cn(
-                  "h-8 w-8 rounded-full p-0",
-                  "bg-destructive/60",
-                )}
-                title="Cancelling..."
-              >
-                <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              </Button>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        disabled
+                        size="icon"
+                        data-testid="cancelling-button"
+                        className={cn(
+                          "h-8 w-8 rounded-full p-0",
+                          "bg-destructive/60",
+                        )}
+                      >
+                        <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Cancelling...
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ) : processing ? (
-              <Button
-                onClick={onCancel}
-                size="icon"
-                className={cn(
-                  "h-8 w-8 rounded-full p-0",
-                  "bg-muted text-muted-foreground",
-                  "hover:scale-105 active:scale-95 transition-all duration-200",
-                )}
-                title="Stop processing"
-                data-testid="stop-processing"
-              >
-                <Square className="h-3.5 w-3.5 fill-current" />
-              </Button>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={onCancel}
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8 rounded-full p-0",
+                        "bg-muted text-muted-foreground",
+                        "hover:scale-105 active:scale-95 transition-all duration-200",
+                      )}
+                      data-testid="stop-processing"
+                    >
+                      <Square className="h-3.5 w-3.5 fill-current" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Stop
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ) : (
-              <Button
-                onClick={handleSubmit}
-                disabled={!isReadyToSend}
-                size="icon"
-                className={cn(
-                  "h-8 w-8 rounded-full p-0",
-                  "transition-all duration-300",
-                  "hover:scale-105 active:scale-95",
-                  "disabled:hover:scale-100 disabled:shadow-none disabled:cursor-default",
-                  isReadyToSend
-                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40"
-                    : "bg-primary/40 text-primary-foreground/70"
-                )}
-                title="Send message (Enter)"
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={handleSubmit}
+                      disabled={!isReadyToSend}
+                      size="icon"
+                      data-testid="send-button"
+                      className={cn(
+                        "h-8 w-8 rounded-full p-0",
+                        "transition-all duration-300",
+                        "hover:scale-105 active:scale-95",
+                        "disabled:hover:scale-100 disabled:shadow-none disabled:cursor-default",
+                        isReadyToSend
+                          ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40"
+                          : "bg-primary/40 text-primary-foreground/70"
+                      )}
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    Send (Enter)
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             </div>
           </div>

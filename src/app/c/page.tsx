@@ -41,25 +41,25 @@ export default function ConsumerLandingPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 sm:px-8">
+      <div className="max-w-6xl mx-auto px-4 sm:px-8">
 
         {/* Hero Section */}
-        <section className="pt-20 pb-12 text-center">
-          <h1 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">
+        <section className="pt-20 pb-12 text-center animate-fade-up">
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold mb-4 tracking-tight">
             <span className="text-[hsl(var(--color-hybro-hy))]">HY</span>
             <span className="text-[hsl(var(--color-hybro-bro))]">BRO</span>
           </h1>
-          <p className="text-xl md:text-2xl font-medium mb-3">
+          <p className="text-xl md:text-2xl font-medium mb-3 text-balance">
             Unify all AI agents &mdash; local &amp; remote
           </p>
-          <p className="text-base text-muted-foreground mb-10 max-w-2xl mx-auto">
+          <p className="text-base text-muted-foreground mb-10 max-w-2xl mx-auto text-pretty">
             Local and remote AI agents that collaborate seamlessly.<br />
             Your data, your privacy, your control.
           </p>
         </section>
 
         {/* Two-Path Fork */}
-        <section className="pb-16">
+        <section className="pb-16 animate-fade-up animate-fade-up-delay-1">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             {/* Use Agents Card */}
             <div className="rounded-2xl border border-border/50 bg-gradient-to-b from-card to-secondary/20 p-8 flex flex-col items-center text-center hover:border-primary/30 hover:shadow-lg transition-all duration-300">
@@ -96,7 +96,7 @@ export default function ConsumerLandingPage() {
         </section>
 
         {/* Demo Video */}
-        <section className="pb-16">
+        <section className="pb-16 animate-fade-up animate-fade-up-delay-2">
           <h2 className="text-lg font-semibold text-muted-foreground uppercase tracking-wider mb-6 text-center">
             See it in action
           </h2>
@@ -111,23 +111,25 @@ export default function ConsumerLandingPage() {
           <h2 className="text-lg font-semibold text-center mb-10 text-muted-foreground uppercase tracking-wider">
             How it works
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4">1</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 relative">
+            {/* Connecting line (desktop only) */}
+            <div className="hidden md:block absolute top-[28px] left-[16.67%] right-[16.67%] h-px bg-gradient-to-r from-[hsl(var(--color-hybro-bro)/0.3)] via-[hsl(var(--color-hybro-hy)/0.3)] to-[hsl(var(--color-hybro-bro)/0.3)]" />
+            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">1</div>
               <h3 className="text-lg font-semibold mb-2">Ask a Question</h3>
               <p className="text-sm text-muted-foreground">
                 Type your request in the chat. HYBRO finds the best agents for the job.
               </p>
             </div>
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4">2</div>
+            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">2</div>
               <h3 className="text-lg font-semibold mb-2">Agents Collaborate</h3>
               <p className="text-sm text-muted-foreground">
                 Multiple AI agents work together, each bringing unique expertise to your task.
               </p>
             </div>
-            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4">3</div>
+            <div className="rounded-2xl border border-border/50 bg-card p-6 flex flex-col items-center text-center card-lift relative">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold mb-4 relative z-10">3</div>
               <h3 className="text-lg font-semibold mb-2">Get Answers</h3>
               <p className="text-sm text-muted-foreground">
                 Receive comprehensive results powered by the collective intelligence of the agent network.

@@ -156,20 +156,27 @@ export function GroupSelector({
     <div className={cn("flex items-center gap-1", className)}>
       <TooltipProvider delayDuration={100}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild disabled={disabled}>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn(
-                "h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
-                isOverride && "bg-primary/10"
-              )}
-            >
-              {displayInfo.icon}
-              <span className="font-medium">{displayInfo.label}</span>
-              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild disabled={disabled}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
+                    isOverride && "bg-primary/10"
+                  )}
+                >
+                  {displayInfo.icon}
+                  <span className="font-medium">{displayInfo.label}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              Select agents
+            </TooltipContent>
+          </Tooltip>
           <DropdownMenuContent
             side="top"
             align="start"
