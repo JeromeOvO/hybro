@@ -12,6 +12,7 @@ import { MarkdownContent, LinkifiedContent } from './markdown-content'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
+import { ImageLightbox } from './image-lightbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { TASK_STATE, isFailureState, isInteractiveState, isTerminalState } from '@/lib/types/sse'
 import type { LucideIcon } from 'lucide-react'
@@ -186,16 +187,14 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
   if (isImg && attachment.fileUrl) {
     if (loadError) return <AttachmentExpiredBanner icon={ImageIcon} />
     return (
-      <a href={attachment.fileUrl} target="_blank" rel="noopener noreferrer" className="block max-w-[200px]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+      <div className="max-w-[200px]">
+        <ImageLightbox
           src={attachment.fileUrl}
           alt={attachment.fileName}
-          className="rounded-md border border-border max-h-40 object-cover"
-          loading="lazy"
+          className="max-w-[200px]"
           onError={() => setLoadError(true)}
         />
-      </a>
+      </div>
     )
   }
 

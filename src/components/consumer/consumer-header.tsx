@@ -8,7 +8,7 @@ import { Logo } from '@/components/logo';
 import { useUser } from '@clerk/nextjs';
 import { cn } from '@/lib/utils';
 
-const MARKETING_PAGES = ['/', '/about', '/pricing', '/agents']
+const MARKETING_PAGES = ['/', '/about', '/pricing', '/agents', '/c', '/c/about', '/c/pricing', '/c/agents']
 
 export const ConsumerHeader = () => {
   const [mounted, setMounted] = React.useState(false);
@@ -41,9 +41,7 @@ export const ConsumerHeader = () => {
     return (
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border/40">
         <div className="flex h-14 items-center gap-6 px-6 max-w-6xl mx-auto">
-          <Link href="/">
-            <Logo size="sm" />
-          </Link>
+          <Logo size="sm" />
           <nav className="flex items-center gap-1 ml-4">
             {[
               { href: '/agents', label: 'Explore' },
@@ -67,13 +65,13 @@ export const ConsumerHeader = () => {
           <div className="flex-1" />
           <Link
             href="/sign-in"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
           >
             Sign in
           </Link>
           <Link
             href="/sign-up"
-            className="text-sm font-medium px-4 py-1.5 rounded-md btn-brand-gradient"
+            className="text-sm font-medium px-4 py-1.5 rounded-md btn-brand-gradient whitespace-nowrap"
           >
             Get Started
           </Link>

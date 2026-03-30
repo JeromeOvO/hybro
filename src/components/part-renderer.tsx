@@ -5,6 +5,7 @@ import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-r
 import type { ArtifactPart } from '@/stores/message-store/types'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { MarkdownContent } from './markdown-content'
+import { ImageLightbox } from './image-lightbox'
 
 const INTERNAL_NAME_RE = /^(inline|notify|ext)-\d+\.\w+$/
 const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
@@ -47,17 +48,12 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
     }
     return (
       <div className="my-1">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <ImageLightbox
           src={src}
           alt={displayName || 'image'}
-          className="max-w-full max-h-80 rounded-md border border-border"
-          loading="lazy"
+          caption={displayName}
           onError={() => setLoadError(true)}
         />
-        {displayName && (
-          <span className="mt-1 block text-xs text-muted-foreground">{displayName}</span>
-        )}
       </div>
     )
   }

@@ -4,11 +4,11 @@ import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { useUser, useClerk } from "@clerk/nextjs"
 import { Button } from "@/components/ui/button"
-import { ArrowRight, BookOpen, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
+import { ArrowRight, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
 import { isWaitlistEnabled } from "@/lib/utils"
 import { VideoEmbed } from "@/components/video-embed"
 import { developerUrl } from "@/lib/urls"
-import { GithubIcon, DiscordIcon } from "@/components/icons"
+import { ConsumerFooter } from "@/components/consumer/consumer-footer"
 
 export default function ConsumerLandingPage() {
   const router = useRouter()
@@ -138,53 +138,7 @@ export default function ConsumerLandingPage() {
           </div>
         </section>
 
-        {/* Footer CTAs */}
-        <section className="py-16 border-t border-border/50">
-          <h2 className="text-lg font-semibold text-center mb-8 text-muted-foreground uppercase tracking-wider">
-            Get Involved
-          </h2>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Button variant="brandTint" size="sm" asChild>
-              <a href="https://docs.hybro.ai/" target="_blank" rel="noopener noreferrer">
-                <BookOpen className="mr-2 h-4 w-4 text-primary" />
-                Documentation
-                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
-              </a>
-            </Button>
-            <Button variant="brandTint" size="sm" asChild>
-              <a href="https://github.com/hybroai/a2a-adapter" target="_blank" rel="noopener noreferrer">
-                <GithubIcon className="mr-2 h-4 w-4" />
-                a2a-adapter
-                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
-              </a>
-            </Button>
-            <Button variant="brandTint" size="sm" asChild>
-              <a href="https://github.com/hybroai/hybro-hub" target="_blank" rel="noopener noreferrer">
-                <GithubIcon className="mr-2 h-4 w-4" />
-                hybro-hub
-                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
-              </a>
-            </Button>
-            <Button variant="brandTint" size="sm" asChild>
-              <a href="https://discord.gg/2S5pCKzUmJ" target="_blank" rel="noopener noreferrer">
-                <DiscordIcon className="mr-2 h-4 w-4" />
-                Discord
-                <SquareArrowOutUpRight className="ml-1.5 h-3 w-3 opacity-50" />
-              </a>
-            </Button>
-          </div>
-          <div className="mt-8 text-center">
-            <a
-              href="mailto:info@hybro.ai"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              info@hybro.ai
-            </a>
-            <p className="mt-2 text-xs text-muted-foreground">
-              © {new Date().getFullYear()} HYBRO. All rights reserved.
-            </p>
-          </div>
-        </section>
+        <ConsumerFooter />
 
       </div>
     </div>
