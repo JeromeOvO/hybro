@@ -304,7 +304,7 @@ export default function AboutPage() {
               href="https://docs.hybro.ai"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors px-4 py-2 rounded-md border border-border/60 hover:border-border"
             >
               Read the docs
               <ArrowRight className="h-4 w-4" />
