@@ -61,9 +61,9 @@ const quickStartTemplates: QuickStartTemplate[] = [
     },
     {
         icon: ImageIcon,
-        label: "Generate an Image for me about banana",
+        label: "Generate an Image of a futuristic city at sunset",
         mentions: [
-            { agentName: "Image Generator Agent", textAfter: " give me an image of banana" },
+            { agentName: "Image Generator Agent", textAfter: " generate an image of a futuristic city at sunset" },
         ],
     },
 ]

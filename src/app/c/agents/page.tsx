@@ -220,7 +220,7 @@ function ConsumerAgentsPageContent() {
                 key={tab.value}
                 onClick={() => setSourceTab(tab.value)}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-all duration-150 ease-out",
+                  "flex items-center gap-1.5 px-3 py-2.5 rounded-md text-sm transition-all duration-150 ease-out",
                   sourceTab === tab.value
                     ? "bg-primary/10 font-medium text-foreground ring-1 ring-primary/20"
                     : "text-muted-foreground hover:bg-black/10 dark:hover:bg-white/10 hover:text-foreground"

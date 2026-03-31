@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronUp, ImageIcon, Volume2, Film, AlertCircle, Loader2, Clock, MessageCircleQuestion, XCircle, CheckCircle, House, Cloud } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, tryParseJson } from '@/lib/utils'
 import { getAgentColorClasses, getAgentInitials } from '@/lib/agent-colors'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { formatTimestamp, elapsedSeconds, formatElapsedTime } from '@/lib/time'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
-import { MarkdownContent, LinkifiedContent } from './markdown-content'
+import { MarkdownContent, LinkifiedContent, JsonBlockExpandedContext } from './markdown-content'
+import { CollapsibleJsonBlock } from './part-renderer'
 import type { MessageEntity } from '@/stores/message-store'
 import type { AttachmentData } from '@/lib/types/attachments'
 import { ArtifactList } from './artifact-list'
@@ -370,6 +371,8 @@ function AgentMessageBubbleInner({
   const prevAutoCollapseVersion = useRef(autoCollapseVersion)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
+  const wasStreamingContent = useRef(false)
+  const [jsonContentOpen, setJsonContentOpen] = useState(defaultExpanded)
 
   // --- Quote selection state ---
   const contentRef = useRef<HTMLDivElement>(null)
@@ -528,9 +531,24 @@ function AgentMessageBubbleInner({
     prevAutoCollapseVersion.current = autoCollapseVersion
   }, [autoCollapseVersion, isLatestAgent, isUserExpanded])
   
+  useEffect(() => {
+    if (phase === 'streaming') wasStreamingContent.current = true
+  }, [phase])
+
   const displayContent = entity.content || ''
-  const isLongMessage = displayContent.length > 500
+  // Use tryParseJson unconditionally — it returns null for incomplete/invalid JSON,
+  // so it's safe to call during streaming. Removing the phase guard fixes cases where
+  // taskStatus never transitions to 'completed' but content is valid JSON.
+  const parsedJsonContent = tryParseJson(displayContent)
+  const isLongMessage = parsedJsonContent === null && displayContent.length > 500
   const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
+
+  // Open the JSON collapsible when streaming finishes and content is JSON
+  useEffect(() => {
+    if (phase !== 'streaming' && wasStreamingContent.current && parsedJsonContent !== null) {
+      setJsonContentOpen(true)
+    }
+  }, [phase, parsedJsonContent])
   
   const colors = getAgentColorClasses(entity.agentId || 'unknown')
   const textColorClass = colors.text
@@ -740,26 +758,32 @@ function AgentMessageBubbleInner({
         {/* ── STREAMING / COMPLETE phases: normal content area ── */}
         {(phase === 'streaming' || phase === 'complete') && (
           <>
-            <div className="relative">
-              <div
-                ref={contentRef}
-                className={cn(
-                  "min-h-0 overflow-hidden text-sm leading-relaxed select-text transition-opacity duration-200",
-                  contentColorClass,
-                  !isExpanded && isLongMessage && "line-clamp-4"
+            {parsedJsonContent !== null ? (
+              <CollapsibleJsonBlock data={parsedJsonContent} open={jsonContentOpen} onOpenChange={setJsonContentOpen} />
+            ) : (
+              <div className="relative">
+                <div
+                  ref={contentRef}
+                  className={cn(
+                    "min-h-0 overflow-hidden text-sm leading-relaxed select-text transition-opacity duration-200",
+                    contentColorClass,
+                    !isExpanded && isLongMessage && "line-clamp-4"
+                  )}
+                  onMouseUp={handleMouseUp}
+                >
+                  <JsonBlockExpandedContext.Provider value={isExpanded}>
+                    <MarkdownContent
+                      content={displayContent}
+                    />
+                  </JsonBlockExpandedContext.Provider>
+                </div>
+                {!isExpanded && isLongMessage && (
+                  <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />
                 )}
-                onMouseUp={handleMouseUp}
-              >
-                <MarkdownContent
-                  content={displayContent}
-                />
               </div>
-              {!isExpanded && isLongMessage && (
-                <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />
-              )}
-            </div>
+            )}
 
-            {/* Expand/Collapse button */}
+            {/* Expand/Collapse button — only for non-JSON long messages */}
             {isLongMessage && (
               <button
                 ref={toggleButtonRef}

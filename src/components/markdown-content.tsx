@@ -1,10 +1,11 @@
 'use client'
 
-import React, { useCallback, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy } from 'lucide-react'
+import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { formatIfJson } from '@/lib/utils'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 /**
  * Extract plain text from React children tree (strips HTML / highlight spans).
@@ -65,8 +66,51 @@ function CodeBlockWithCopy({
 }
 
 /**
- * Convert <@agent_id|agent_name> mention syntax to markdown links.
+ * Context that propagates the parent message bubble's expanded state.
+ * When true, JSON code blocks inside the message should default to open.
  */
+export const JsonBlockExpandedContext = React.createContext(false)
+
+/**
+ * Collapsible wrapper for JSON fenced code blocks in markdown.
+ * Starts closed so large JSON responses don't flood the message view,
+ * but opens automatically when the parent message bubble is expanded.
+ */
+function CollapsibleCodeBlock({
+  className,
+  children,
+  lineCount,
+}: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode; lineCount: number }) {
+  const isMessageExpanded = React.useContext(JsonBlockExpandedContext)
+  const [open, setOpen] = useState(isMessageExpanded)
+
+  useEffect(() => {
+    if (isMessageExpanded) setOpen(true)
+  }, [isMessageExpanded])
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="my-1">
+      <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+        <ChevronRight
+          className="h-3.5 w-3.5 transition-transform duration-150 ease-in-out"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}
+        />
+        <Code2 className="h-3.5 w-3.5" />
+        <span>JSON</span>
+        <span className="text-muted-foreground/60">
+          · {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="data-[state=open]:animate-collapsible-down overflow-hidden">
+        <div className="mt-1">
+          <CodeBlockWithCopy className={className}>{children}</CodeBlockWithCopy>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+
 function processMentions(content: string): string {
   return content.replace(
     /<@([^|]+)\|([^>]+)>/g,
@@ -80,7 +124,8 @@ function isAgentMentionHref(href: string | undefined): boolean {
 }
 
 /** Shared custom component overrides used by all Streamdown instances. */
-const sharedComponents = {
+function makeComponents(isStreaming: boolean) {
+  return {
   a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
     if (isAgentMentionHref(href)) {
       return (
@@ -110,14 +155,27 @@ const sharedComponents = {
   code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
     const match = /language-(\w+)/.exec(className || '')
     const isInline = !match
-    return isInline ? (
-      <code
-        className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono"
-        {...props}
-      >
-        {children}
-      </code>
-    ) : (
+    if (isInline) {
+      return (
+        <code
+          className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded text-sm font-mono"
+          {...props}
+        >
+          {children}
+        </code>
+      )
+    }
+    const isJson = match[1] === 'json'
+    if (isJson && !isStreaming) {
+      const text = extractText(children)
+      const lineCount = text.split('\n').filter((l, i, a) => i < a.length - 1 || l.trim()).length
+      return (
+        <CollapsibleCodeBlock className={className} lineCount={lineCount}>
+          {children}
+        </CollapsibleCodeBlock>
+      )
+    }
+    return (
       <CodeBlockWithCopy className={className} {...props}>
         {children}
       </CodeBlockWithCopy>
@@ -151,6 +209,7 @@ const sharedComponents = {
       {children}
     </td>
   ),
+  }
 }
 
 /**
@@ -176,13 +235,16 @@ export function MarkdownContent({
 }) {
   const formatted = autoFormatJson ? formatIfJson(content) : content
   const processedContent = processMentions(formatted)
+  // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const components = React.useMemo(() => makeComponents(isStreaming), [isStreaming])
 
   return (
     <div className="min-w-0 text-sm leading-relaxed text-inherit">
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}
-        components={sharedComponents}
+        components={components}
         rehypePlugins={[rehypeHighlight]}
       >
         {processedContent}
