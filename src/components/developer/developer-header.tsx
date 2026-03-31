@@ -35,11 +35,9 @@ export const DeveloperHeader = () => {
   if (showAuthButtons) {
     return (
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border/40">
-        <div className="flex h-14 items-center gap-4 px-4 sm:px-8">
-          <div className="flex items-center gap-2">
-            <Logo size="sm" />
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Dev</span>
-          </div>
+        <div className="flex h-14 items-center gap-6 px-6 max-w-6xl mx-auto">
+          <Logo size="sm" />
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Dev</span>
           <div className="flex-1" />
           <Link
             href="/sign-in"
