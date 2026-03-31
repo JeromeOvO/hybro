@@ -279,6 +279,44 @@
   }
 }
 
+/* Radix Collapsible open/close slide animation */
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.animate-collapsible-down {
+  animation: collapsible-down 150ms ease-out;
+}
+
+.animate-collapsible-up {
+  animation: collapsible-up 150ms ease-in;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-collapsible-down,
+  .animate-collapsible-up {
+    animation: none;
+  }
+}
+
 /* Cursor-style "thinking" shimmer sweep over text */
 @keyframes shimmer-sweep {
   0% {

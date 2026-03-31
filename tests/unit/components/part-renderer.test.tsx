@@ -67,18 +67,61 @@ describe('PartRenderer', () => {
     expect(screen.getByText('doc.pdf')).toBeTruthy()
   })
 
-  it('renders data part as collapsible JSON pre', () => {
+  it('renders data part as collapsible JSON block', () => {
     const data = { key: 'value', nested: { a: 1 } }
     const part: ArtifactPart = { kind: 'data', data }
     const { container } = render(<PartRenderer part={part} />)
 
-    const details = container.querySelector('details')
-    expect(details).toBeTruthy()
-    expect(screen.getByText('Structured data')).toBeTruthy()
+    // Uses Radix Collapsible (button trigger), not a native <details> element
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
 
-    const pre = container.querySelector('pre')
-    expect(pre).toBeTruthy()
-    expect(pre!.textContent).toBe(JSON.stringify(data, null, 2))
+    // Trigger shows "JSON" label and a line count hint
+    expect(trigger!.textContent).toContain('JSON')
+    const lineCount = JSON.stringify(data, null, 2).split('\n').length
+    expect(trigger!.textContent).toContain(`· ${lineCount} lines`)
+  })
+
+  it('renders text part containing raw JSON as collapsible JSON block', () => {
+    const data = { foo: 'bar', count: 42 }
+    const part: ArtifactPart = { kind: 'text', text: JSON.stringify(data) }
+    const { container } = render(<PartRenderer part={part} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('renders text part containing a JSON array as collapsible JSON block', () => {
+    const data = [1, 2, { key: 'val' }]
+    const part: ArtifactPart = { kind: 'text', text: JSON.stringify(data) }
+    const { container } = render(<PartRenderer part={part} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('does NOT render collapsible for text that looks like JSON but is invalid', () => {
+    const part: ArtifactPart = { kind: 'text', text: '{broken json: true,}' }
+    const { container } = render(<PartRenderer part={part} />)
+
+    expect(container.querySelector('[data-slot="collapsible-trigger"]')).toBeNull()
+  })
+
+  it('does NOT render collapsible for plain non-JSON text', () => {
+    const part: ArtifactPart = { kind: 'text', text: 'Just a normal message.' }
+    const { container } = render(<PartRenderer part={part} />)
+
+    expect(container.querySelector('[data-slot="collapsible-trigger"]')).toBeNull()
+  })
+
+  it('renders JSON text as markdown (not collapsible) while streaming', () => {
+    const data = { status: 'streaming' }
+    const part: ArtifactPart = { kind: 'text', text: JSON.stringify(data) }
+    const { container } = render(<PartRenderer part={part} isStreaming={true} />)
+
+    expect(container.querySelector('[data-slot="collapsible-trigger"]')).toBeNull()
   })
 
   it('renders nothing for unknown kind', () => {

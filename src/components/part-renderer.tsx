@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
-import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle, ChevronRight } from 'lucide-react'
 import type { ArtifactPart } from '@/stores/message-store/types'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
+import { tryParseJson } from '@/lib/utils'
 import { MarkdownContent } from './markdown-content'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 import { ImageLightbox } from './image-lightbox'
 
 const INTERNAL_NAME_RE = /^(inline|notify|ext)-\d+\.\w+$/
@@ -30,6 +32,18 @@ function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ cla
 }
 
 function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
+  const wasStreaming = useRef(false)
+
+  useEffect(() => {
+    if (isStreaming) wasStreaming.current = true
+  }, [isStreaming])
+
+  if (!isStreaming) {
+    const parsed = tryParseJson(text)
+    if (parsed !== null) {
+      return <CollapsibleJsonBlock data={parsed} defaultOpen={wasStreaming.current} />
+    }
+  }
   return <MarkdownContent content={text} isStreaming={isStreaming} />
 }
 
@@ -121,18 +135,34 @@ function GenericFileLink({ src, displayName }: { src: string; displayName: strin
   )
 }
 
-function DataPartView({ data }: { data: Record<string, unknown> }) {
+function CollapsibleJsonBlock({ data, defaultOpen = false }: { data: unknown; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data])
+  const lineCount = useMemo(() => jsonString.split('\n').length, [jsonString])
+  const fenced = useMemo(() => '```json\n' + jsonString + '\n```', [jsonString])
+
   return (
-    <details className="my-1">
-      <summary className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+    <Collapsible open={open} onOpenChange={setOpen} className="my-1">
+      <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+        <ChevronRight
+          className="h-3.5 w-3.5 transition-transform duration-150 ease-in-out"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}
+        />
         <Code2 className="h-3.5 w-3.5" />
-        Structured data
-      </summary>
-      <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">
-        {JSON.stringify(data, null, 2)}
-      </pre>
-    </details>
+        <span>JSON</span>
+        <span className="text-muted-foreground/60">· {lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up overflow-hidden">
+        <div className="mt-1">
+          <MarkdownContent content={fenced} autoFormatJson={false} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
+}
+
+function DataPartView({ data }: { data: Record<string, unknown> }) {
+  return <CollapsibleJsonBlock data={data} />
 }
 
 export function PartRenderer({ part, isStreaming }: { part: ArtifactPart; isStreaming?: boolean }) {

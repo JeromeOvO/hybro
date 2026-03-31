@@ -54,22 +54,33 @@ export function getInspectionTimeoutMs(): number {
 }
 
 /**
- * Detect raw JSON content and wrap it in a fenced code block so
- * ReactMarkdown renders it as a scrollable <pre> with syntax highlighting.
- * Non-JSON content passes through untouched.
+ * Try to parse text as JSON. Returns the parsed value if it looks like a
+ * JSON object or array and parses successfully, otherwise null.
  */
-export function formatIfJson(text: string): string {
+export function tryParseJson(text: string): unknown | null {
   const trimmed = text.trim()
   if (
     (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
     (trimmed.startsWith('[') && trimmed.endsWith(']'))
   ) {
     try {
-      const parsed = JSON.parse(trimmed)
-      return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```'
+      return JSON.parse(trimmed)
     } catch {
-      // Not valid JSON, return as-is
+      // Not valid JSON
     }
+  }
+  return null
+}
+
+/**
+ * Detect raw JSON content and wrap it in a fenced code block so
+ * ReactMarkdown renders it as a scrollable <pre> with syntax highlighting.
+ * Non-JSON content passes through untouched.
+ */
+export function formatIfJson(text: string): string {
+  const parsed = tryParseJson(text)
+  if (parsed !== null) {
+    return '```json\n' + JSON.stringify(parsed, null, 2) + '\n```'
   }
   return text
 }
