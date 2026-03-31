@@ -49,7 +49,8 @@ export function VideoEmbed({ videoId, title = "Video", className = "" }: VideoEm
         alt={title}
         fill
         className="absolute inset-0 object-cover transition-transform duration-300 group-hover:scale-105"
-        loading="lazy"
+        loading="eager"
+        priority
         unoptimized
       />
 
