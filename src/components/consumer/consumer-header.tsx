@@ -40,7 +40,7 @@ export const ConsumerHeader = () => {
   if (showMarketingNav) {
     return (
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border/40">
-        <div className="flex h-14 items-center gap-6 px-6 max-w-6xl mx-auto">
+        <div className="flex h-14 items-center gap-6 px-4 sm:px-6">
           <Logo size="sm" />
           <nav className="flex items-center gap-1 ml-4">
             {[
