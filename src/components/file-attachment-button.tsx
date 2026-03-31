@@ -64,20 +64,27 @@ export function FileAttachmentButton({
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled={disabled}
-            className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors', className)}
-            title="Add attachments"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" sideOffset={8} className="min-w-[220px]">
+      <TooltipProvider delayDuration={200}>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors', className)}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+                    <TooltipContent side="top">
+                      More options
+                    </TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" side="top" sideOffset={8} className="min-w-[220px]">
           <DropdownMenuItem
             onSelect={() => inputRef.current?.click()}
             className="gap-2 cursor-pointer"
@@ -87,7 +94,6 @@ export function FileAttachmentButton({
           </DropdownMenuItem>
 
           {onSupervisorChange !== undefined && (
-            <TooltipProvider delayDuration={300}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuItem
@@ -104,14 +110,12 @@ export function FileAttachmentButton({
                   </DropdownMenuItem>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="text-xs">
-                  Supervisor understands your request better
+                  Smart agent coordination
                 </TooltipContent>
               </Tooltip>
-            </TooltipProvider>
           )}
 
           {onDebateModeChange !== undefined && (
-            <TooltipProvider delayDuration={300}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuItem
@@ -128,13 +132,13 @@ export function FileAttachmentButton({
                   </DropdownMenuItem>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="text-xs">
-                  Agents will debate with each other
+                  Agents debate responses
                 </TooltipContent>
               </Tooltip>
-            </TooltipProvider>
           )}
         </DropdownMenuContent>
-      </DropdownMenu>
+        </DropdownMenu>
+      </TooltipProvider>
       <input
         ref={inputRef}
         type="file"

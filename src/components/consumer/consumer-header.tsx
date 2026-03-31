@@ -1,16 +1,27 @@
 "use client"
 
 import React from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
+import { useUser } from '@clerk/nextjs';
+import { cn } from '@/lib/utils';
+
+const MARKETING_PAGES = ['/', '/about', '/pricing', '/agents', '/c', '/c/about', '/c/pricing', '/c/agents']
 
 export const ConsumerHeader = () => {
   const [mounted, setMounted] = React.useState(false);
   const { isMobile } = useSidebar();
+  const { isSignedIn, isLoaded } = useUser();
+  const pathname = usePathname();
   
   React.useEffect(() => {
     setMounted(true);
   }, []);
+
+  const isMarketingPage = MARKETING_PAGES.includes(pathname);
+  const isUnauthenticated = mounted && isLoaded && !isSignedIn && isMarketingPage;
 
   if (!mounted) {
     return (
@@ -18,9 +29,52 @@ export const ConsumerHeader = () => {
         <div className="flex h-14 items-center gap-4 px-4">
           <div className="flex items-center gap-2">
             <SidebarTrigger />
-            <Logo size="sm" />
+            <Logo />
           </div>
           <div className="flex-1" />
+        </div>
+      </header>
+    );
+  }
+
+  if (isUnauthenticated) {
+    return (
+      <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border/40">
+        <div className="flex h-14 items-center gap-6 px-4">
+          <Logo />
+          <nav className="hidden sm:flex items-center gap-1 ml-4">
+            {[
+              { href: '/agents', label: 'Explore' },
+              { href: '/about', label: 'About' },
+              { href: '/pricing', label: 'Pricing' },
+            ].map(link => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={cn(
+                  "px-3 py-1.5 text-sm rounded-md transition-colors",
+                  pathname === link.href
+                    ? "text-foreground font-medium bg-muted/50"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                )}
+              >
+                {link.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="flex-1" />
+          <Link
+            href="/sign-in"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap py-2"
+          >
+            Sign in
+          </Link>
+          <Link
+            href="/sign-up"
+            className="text-sm font-medium px-4 py-1.5 rounded-md btn-brand-gradient whitespace-nowrap"
+          >
+            Get Started
+          </Link>
         </div>
       </header>
     );
@@ -35,7 +89,7 @@ export const ConsumerHeader = () => {
       <div className="flex h-14 items-center gap-4 px-4">
         <div className="flex items-center gap-2">
           <SidebarTrigger />
-          <Logo size="sm" />
+          <Logo />
         </div>
         <div className="flex-1" />
       </div>

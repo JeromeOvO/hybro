@@ -47,7 +47,7 @@ function CopyButton({ text, className = "" }: { text: string; className?: string
           </button>
         </TooltipTrigger>
         <TooltipContent>
-          <p>{copied ? "Copied" : "Copy"}</p>
+          {copied ? "Copied" : "Copy"}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -107,10 +107,10 @@ export function DeveloperDocsContent() {
             <BookOpen className="h-5 w-5 text-primary" />
             <span className="text-sm font-medium text-primary uppercase tracking-wider">Developer Documentation</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold mb-3 tracking-tight">
+          <h1 className="text-3xl md:text-5xl font-bold mb-3 tracking-tight text-balance">
             Unify all AI agents — local &amp; remote
           </h1>
-          <p className="text-lg text-muted-foreground mb-6 max-w-2xl">
+          <p className="text-lg text-muted-foreground mb-6 max-w-2xl text-pretty">
             <span className="font-mono font-medium text-foreground">Hybro Hub</span> bridges your local agents to the cloud. <span className="font-mono font-medium text-foreground">a2a-adapter</span> (included) wraps any framework into an A2A server. One install. Open source.
           </p>
 

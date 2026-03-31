@@ -3,6 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { Code, History, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
@@ -28,13 +29,15 @@ import {
 import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
 import type { Room } from "@/lib/types/room"
 
+const MARKETING_PAGES = ['/', '/about', '/pricing', '/agents', '/c', '/c/about', '/c/pricing', '/c/agents']
+
 export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar } = useSidebar()
+  const pathname = usePathname()
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
 
-  // Get user's room list
   const loadRooms = React.useCallback(async () => {
     if (!isLoaded || !isSignedIn || !user?.id) return
 
@@ -56,21 +59,18 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
     }
   }, [isLoaded, isSignedIn, user?.id])
 
-  // Load sessions and rooms when user login status changes
   React.useEffect(() => {
     if (isLoaded && isSignedIn && user?.id) {
       loadRooms()
     }
   }, [isLoaded, isSignedIn, user?.id, loadRooms])
 
-  // Refresh rooms when a new room is created elsewhere
   React.useEffect(() => {
     const handleRefresh = () => loadRooms()
     window.addEventListener("rooms:refresh", handleRefresh)
     return () => window.removeEventListener("rooms:refresh", handleRefresh)
   }, [loadRooms])
 
-  // Build dynamic navigation data
   const navMainData = React.useMemo(() => {
     const roomItems = [...rooms].reverse().map(room => ({
       title: room.room_name || 'Unnamed Room',
@@ -96,12 +96,19 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
     ]
   }, [rooms, isLoadingRooms])
 
+  const isMarketingPage = MARKETING_PAGES.includes(pathname)
+  const hideSidebar = isMarketingPage && (!isLoaded || !isSignedIn)
+
+  if (hideSidebar) {
+    return null
+  }
+
   const isCollapsed = state === "collapsed"
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <div className="flex h-12 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
+      <SidebarHeader className="py-0">
+        <div className="flex h-14 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
           <Logo className={`flex-1 ${SIDEBAR_ICON_HIDDEN}`} />
           <button
             type="button"
@@ -132,6 +139,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>
+        <div className="border-t border-sidebar-border mx-2 mb-1" />
         {/* Developer Portal link */}
         <SidebarMenu>
           <SidebarMenuItem>

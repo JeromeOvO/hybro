@@ -89,7 +89,7 @@ describe('EntityAgentBubble', () => {
     })
     renderWithQueryClient(<EntityAgentBubble entity={entity} />)
 
-    expect(screen.getByText('Show more')).toBeTruthy()
+    expect(screen.getByText(/Show more/)).toBeTruthy()
   })
 
   it('should not show expand button for very short messages', () => {

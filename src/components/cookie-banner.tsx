@@ -30,7 +30,7 @@ export function CookieBanner() {
   if (!show) return null
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-50 border-t bg-background px-4 py-4 shadow-lg sm:flex sm:items-center sm:justify-between sm:gap-6">
+    <div className="fixed bottom-0 inset-x-0 z-60 border-t bg-background px-4 py-4 shadow-lg sm:flex sm:items-center sm:justify-between sm:gap-6">
       <p className="text-sm text-muted-foreground">
         We use cookies to analyze traffic via Google Analytics. See our{" "}
         <a href="/privacy" className="underline underline-offset-4 hover:text-foreground transition-colors">

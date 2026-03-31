@@ -268,6 +268,17 @@
   }
 }
 
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Cursor-style "thinking" shimmer sweep over text */
 @keyframes shimmer-sweep {
   0% {
@@ -310,6 +321,20 @@
     transition: background-color 0.3s ease, color 0.3s ease;
   }
 
+  :focus-visible {
+    outline: 2px solid hsl(var(--color-ring));
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 /* Syntax highlighting — hljs base theme; dark mode overrides in .dark .hljs below */
@@ -539,12 +564,20 @@ a.room-mention {
 
 /* Card with hover lift effect */
 .card-lift {
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .card-lift:hover {
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   transform: translateY(-2px);
 }
+
+/* Entrance animation — use on sections/cards for scroll-triggered feel */
+.animate-fade-up {
+  animation: fadeUp 0.5s ease-out both;
+}
+.animate-fade-up-delay-1 { animation-delay: 100ms; }
+.animate-fade-up-delay-2 { animation-delay: 200ms; }
+.animate-fade-up-delay-3 { animation-delay: 300ms; }
 
 /* Amber tip link styling */
 .tip-link {

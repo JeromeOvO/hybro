@@ -90,7 +90,7 @@ export function FrameworkBadges({ compact = false, className = "" }: FrameworkBa
               </TooltipTrigger>
               {fw.description && (
                 <TooltipContent>
-                  <p>{fw.description}</p>
+                  {fw.description}
                 </TooltipContent>
               )}
             </Tooltip>

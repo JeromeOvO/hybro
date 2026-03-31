@@ -44,7 +44,7 @@ describe('RoomChatInput', () => {
 
     it('should render send button', () => {
       renderInput()
-      expect(screen.getAllByTitle('Send message (Enter)').length).toBeGreaterThan(0)
+      expect(screen.getAllByTestId('send-button').length).toBeGreaterThan(0)
     })
 
     it('should render group selector by default', () => {
@@ -67,23 +67,23 @@ describe('RoomChatInput', () => {
   describe('button states', () => {
     it('should show spinner when sending=true', () => {
       renderInput({ sending: true })
-      expect(screen.getByTitle('Sending message...')).toBeTruthy()
+      expect(screen.getByTestId('sending-button')).toBeTruthy()
     })
 
     it('should show stop button when processing=true', () => {
       renderInput({ processing: true })
-      expect(screen.getByTitle('Stop processing')).toBeTruthy()
+      expect(screen.getByTestId('stop-processing')).toBeTruthy()
     })
 
     it('should show cancelling spinner when processing and cancelling', () => {
       renderInput({ processing: true, cancelling: true })
-      expect(screen.getByTitle('Cancelling...')).toBeTruthy()
+      expect(screen.getByTestId('cancelling-button')).toBeTruthy()
     })
 
     it('should call onCancel when stop button is clicked', () => {
       const onCancel = vi.fn()
       renderInput({ processing: true, onCancel })
-      fireEvent.click(screen.getByTitle('Stop processing'))
+      fireEvent.click(screen.getByTestId('stop-processing'))
       expect(onCancel).toHaveBeenCalledOnce()
     })
   })
@@ -92,7 +92,7 @@ describe('RoomChatInput', () => {
     it('should not submit when message is empty', () => {
       const onSubmit = vi.fn()
       renderInput({ onSubmit })
-      const sendBtns = screen.getAllByTitle('Send message (Enter)')
+      const sendBtns = screen.getAllByTestId('send-button')
       fireEvent.click(sendBtns[0])
       expect(onSubmit).not.toHaveBeenCalled()
     })
@@ -105,7 +105,7 @@ describe('RoomChatInput', () => {
       editor.textContent = 'Hello'
       fireEvent.input(editor)
 
-      const sendBtns = screen.getAllByTitle('Send message (Enter)')
+      const sendBtns = screen.getAllByTestId('send-button')
       fireEvent.click(sendBtns[0])
 
       expect(onSubmit).not.toHaveBeenCalled()
@@ -140,7 +140,7 @@ describe('RoomChatInput', () => {
   describe('expand/collapse', () => {
     it('should not show expand button when content is not overflowing', () => {
       const { container } = renderInput()
-      expect(container.querySelector('[title="Expand editor"]')).toBeNull()
+      expect(container.querySelector('[data-testid="expand-editor"]')).toBeNull()
     })
   })
 
@@ -171,7 +171,7 @@ describe('RoomChatInput', () => {
       const { container } = renderInput()
       const text = 'a'.repeat(MAX_MESSAGE_LENGTH + 1)
       setEditorText(container, text)
-      const sendBtn = screen.getByTitle('Send message (Enter)')
+      const sendBtn = screen.getByTestId('send-button')
       expect(sendBtn.hasAttribute('disabled')).toBe(true)
     })
 
