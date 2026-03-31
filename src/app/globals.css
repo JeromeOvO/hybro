@@ -630,4 +630,14 @@ a.room-mention {
   color: rgb(253 230 138); /* amber-200 */
 }
 
+/* Push page content above the cookie banner on mobile so it isn't obscured */
+body[data-cookie-banner="visible"] {
+  padding-bottom: 80px;
+}
+@media (min-width: 640px) {
+  body[data-cookie-banner="visible"] {
+    padding-bottom: 68px;
+  }
+}
+
 } /* end @layer components */
