@@ -33,15 +33,23 @@ function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ cla
 
 function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
   const wasStreaming = useRef(false)
+  const [jsonOpen, setJsonOpen] = useState(false)
 
   useEffect(() => {
     if (isStreaming) wasStreaming.current = true
   }, [isStreaming])
 
+  // Open the collapsible when streaming finishes and the final content is JSON
+  useEffect(() => {
+    if (!isStreaming && wasStreaming.current && tryParseJson(text) !== null) {
+      setJsonOpen(true)
+    }
+  }, [isStreaming, text])
+
   if (!isStreaming) {
     const parsed = tryParseJson(text)
     if (parsed !== null) {
-      return <CollapsibleJsonBlock data={parsed} defaultOpen={wasStreaming.current} />
+      return <CollapsibleJsonBlock data={parsed} open={jsonOpen} onOpenChange={setJsonOpen} />
     }
   }
   return <MarkdownContent content={text} isStreaming={isStreaming} />
@@ -135,14 +143,17 @@ function GenericFileLink({ src, displayName }: { src: string; displayName: strin
   )
 }
 
-function CollapsibleJsonBlock({ data, defaultOpen = false }: { data: unknown; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen)
+export function CollapsibleJsonBlock({ data, open, onOpenChange }: {
+  data: unknown
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data])
   const lineCount = useMemo(() => jsonString.split('\n').length, [jsonString])
   const fenced = useMemo(() => '```json\n' + jsonString + '\n```', [jsonString])
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="my-1">
+    <Collapsible open={open} onOpenChange={onOpenChange} className="my-1">
       <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
         <ChevronRight
           className="h-3.5 w-3.5 transition-transform duration-150 ease-in-out"
@@ -152,7 +163,7 @@ function CollapsibleJsonBlock({ data, defaultOpen = false }: { data: unknown; de
         <span>JSON</span>
         <span className="text-muted-foreground/60">· {lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up overflow-hidden">
+      <CollapsibleContent className="data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="mt-1">
           <MarkdownContent content={fenced} autoFormatJson={false} />
         </div>
@@ -162,7 +173,8 @@ function CollapsibleJsonBlock({ data, defaultOpen = false }: { data: unknown; de
 }
 
 function DataPartView({ data }: { data: Record<string, unknown> }) {
-  return <CollapsibleJsonBlock data={data} />
+  const [open, setOpen] = useState(false)
+  return <CollapsibleJsonBlock data={data} open={open} onOpenChange={setOpen} />
 }
 
 export function PartRenderer({ part, isStreaming }: { part: ArtifactPart; isStreaming?: boolean }) {

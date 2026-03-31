@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EntityUserBubble, EntityAgentBubble, derivePhase } from '@/components/message-bubble'
 import type { MessageEntity } from '@/stores/message-store'
@@ -227,6 +227,122 @@ describe('derivePhase', () => {
       hitlResolved: true, hitlUserAnswer: 'Yes',
     })
     expect(derivePhase(entity)).toBe('failed')
+  })
+})
+
+// ── JSON content rendering ──────────────────────────────────────
+
+describe('EntityAgentBubble JSON content rendering', () => {
+  it('renders JSON entity.content as CollapsibleJsonBlock, not plain text', () => {
+    const jsonContent = JSON.stringify({ foo: 'bar', count: 42 })
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: jsonContent,
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    // Should render a collapsible trigger, not raw JSON text
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('renders JSON object entity.content as CollapsibleJsonBlock for completed task', () => {
+    const jsonContent = JSON.stringify({ status: 'ok', data: [1, 2, 3] })
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: jsonContent, taskStatus: 'completed',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('renders JSON array entity.content as CollapsibleJsonBlock', () => {
+    const jsonContent = JSON.stringify([{ id: 1 }, { id: 2 }])
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: jsonContent,
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('CollapsibleJsonBlock trigger click toggles open state', () => {
+    const jsonContent = JSON.stringify({ foo: 'bar', count: 42 })
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: jsonContent,
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]') as HTMLElement
+    expect(trigger).toBeTruthy()
+
+    // Initially closed
+    const collapsible = container.querySelector('[data-slot="collapsible"]')
+    expect(collapsible?.getAttribute('data-state')).toBe('closed')
+
+    // Click to open
+    fireEvent.click(trigger)
+    expect(collapsible?.getAttribute('data-state')).toBe('open')
+
+    // Click to close again
+    fireEvent.click(trigger)
+    expect(collapsible?.getAttribute('data-state')).toBe('closed')
+  })
+
+  it('renders JSON code block within markdown message as CollapsibleJsonBlock', () => {
+    const content = [
+      "Here's your data:",
+      '```json',
+      '{"foo": "bar", "count": 42}',
+      '```',
+      'Hope that helps!',
+    ].join('\n')
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content,
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    // The JSON fenced code block should render as a collapsible, not a plain code block
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.textContent).toContain('JSON')
+  })
+
+  it('does NOT render non-JSON fenced code blocks (e.g. python) as collapsible', () => {
+    const content = [
+      'Here is some Python:',
+      '```python',
+      'print("hello")',
+      '```',
+    ].join('\n')
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content,
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeNull()
+  })
+
+  it('does NOT render CollapsibleJsonBlock for plain text content', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: 'Hello, this is a normal message.',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
+    expect(trigger).toBeNull()
   })
 })
 

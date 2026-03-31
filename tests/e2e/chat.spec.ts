@@ -125,10 +125,13 @@ test.describe('Page Content', () => {
 
 test.describe('Theme Toggle', () => {
   test('should toggle between light and dark themes', async ({ page }) => {
-    await page.goto('/')
+    // The sidebar (and theme toggle) only exists on /c/* routes, not the marketing homepage.
+    await page.goto('/c/chat')
 
-    // ThemeToggle only renders after Clerk's useUser() resolves (isLoaded=true).
-    // NavUser shows a skeleton (.animate-pulse) while Clerk loads.
+    // ThemeToggle renders in two places depending on auth state:
+    //   - Unauthenticated: small button in the sidebar footer (always visible)
+    //   - Authenticated: inside the user dropdown menu (must be opened first)
+    // Wait for Clerk to finish loading either way.
     const clerkLoaded = await page.waitForFunction(
       () => {
         const sidebar = document.querySelector('[data-slot="sidebar"]')
@@ -151,14 +154,31 @@ test.describe('Theme Toggle', () => {
       await declineBtn.click()
     }
 
-    const themeToggle = page.getByRole('button', { name: 'Toggle theme' })
-    await themeToggle.scrollIntoViewIfNeeded()
-    await expect(themeToggle).toBeVisible({ timeout: 5000 })
-
     const htmlElement = page.locator('html')
     const initialClass = await htmlElement.getAttribute('class')
 
-    await themeToggle.click()
+    // Try the unauthenticated path: standalone toggle button in sidebar footer
+    const themeToggle = page.getByRole('button', { name: 'Toggle theme' })
+    const isDirectVisible = await themeToggle.isVisible({ timeout: 2000 }).catch(() => false)
+
+    if (isDirectVisible) {
+      await themeToggle.scrollIntoViewIfNeeded()
+      await themeToggle.click()
+    } else {
+      // Authenticated path: open user dropdown, navigate to Theme submenu
+      const userMenuTrigger = page.locator('[data-slot="sidebar"] button[title]').first()
+      await userMenuTrigger.click()
+      const themeMenuItem = page.getByRole('menuitem', { name: /theme/i })
+      await expect(themeMenuItem).toBeVisible({ timeout: 5000 })
+      await themeMenuItem.click()
+      // Click one of the explicit theme options (Light or Dark)
+      const htmlClass = await htmlElement.getAttribute('class')
+      const isDark = htmlClass?.includes('dark')
+      const targetOption = page.getByRole('menuitemradio', { name: isDark ? 'Light' : 'Dark' })
+      await expect(targetOption).toBeVisible({ timeout: 3000 })
+      await targetOption.click()
+    }
+
     await page.waitForTimeout(500)
 
     const newClass = await htmlElement.getAttribute('class')
