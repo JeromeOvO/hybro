@@ -9,6 +9,7 @@ import { isWaitlistEnabled } from "@/lib/utils"
 import { VideoEmbed } from "@/components/video-embed"
 import { developerUrl } from "@/lib/urls"
 import { ConsumerFooter } from "@/components/consumer/consumer-footer"
+import { FadeInSection } from "@/components/fade-in-section"
 
 export default function ConsumerLandingPage() {
   const router = useRouter()
@@ -112,45 +113,53 @@ export default function ConsumerLandingPage() {
 
         {/* How It Works (Consumer version) */}
         <section className="py-16 border-t border-border/50">
-          <h2 className="text-lg font-semibold text-center mb-10 text-muted-foreground uppercase tracking-wider">
-            How it works
-          </h2>
+          <FadeInSection>
+            <h2 className="text-lg font-semibold text-center mb-10 text-muted-foreground uppercase tracking-wider">
+              How it works
+            </h2>
+          </FadeInSection>
           <div className="max-w-2xl mx-auto space-y-0">
-            <div className="flex gap-5 items-start relative pb-8">
-              <div className="flex flex-col items-center shrink-0">
-                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">1</div>
-                <div className="w-px h-full bg-border/50 mt-2" />
+            <FadeInSection delay={100}>
+              <div className="flex gap-5 items-start relative pb-8">
+                <div className="flex flex-col items-center shrink-0">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">1</div>
+                  <div className="w-px h-full bg-border/50 mt-2" />
+                </div>
+                <div className="pt-1.5">
+                  <h3 className="text-lg font-semibold mb-1">Ask a Question</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Type your request in the chat. HYBRO finds the best agents for the job.
+                  </p>
+                </div>
               </div>
-              <div className="pt-1.5">
-                <h3 className="text-lg font-semibold mb-1">Ask a Question</h3>
-                <p className="text-sm text-muted-foreground">
-                  Type your request in the chat. HYBRO finds the best agents for the job.
-                </p>
+            </FadeInSection>
+            <FadeInSection delay={200}>
+              <div className="flex gap-5 items-start relative pb-8">
+                <div className="flex flex-col items-center shrink-0">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">2</div>
+                  <div className="w-px h-full bg-border/50 mt-2" />
+                </div>
+                <div className="pt-1.5">
+                  <h3 className="text-lg font-semibold mb-1">Agents Collaborate</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Multiple AI agents work together, each bringing unique expertise to your task.
+                  </p>
+                </div>
               </div>
-            </div>
-            <div className="flex gap-5 items-start relative pb-8">
-              <div className="flex flex-col items-center shrink-0">
-                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">2</div>
-                <div className="w-px h-full bg-border/50 mt-2" />
+            </FadeInSection>
+            <FadeInSection delay={300}>
+              <div className="flex gap-5 items-start relative">
+                <div className="flex flex-col items-center shrink-0">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">3</div>
+                </div>
+                <div className="pt-1.5">
+                  <h3 className="text-lg font-semibold mb-1">Get Answers</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Results powered by the collective intelligence of the agent network.
+                  </p>
+                </div>
               </div>
-              <div className="pt-1.5">
-                <h3 className="text-lg font-semibold mb-1">Agents Collaborate</h3>
-                <p className="text-sm text-muted-foreground">
-                  Multiple AI agents work together, each bringing unique expertise to your task.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-5 items-start relative">
-              <div className="flex flex-col items-center shrink-0">
-                <div className="flex items-center justify-center w-10 h-10 rounded-full btn-brand-gradient text-sm font-bold">3</div>
-              </div>
-              <div className="pt-1.5">
-                <h3 className="text-lg font-semibold mb-1">Get Answers</h3>
-                <p className="text-sm text-muted-foreground">
-                  Results powered by the collective intelligence of the agent network.
-                </p>
-              </div>
-            </div>
+            </FadeInSection>
           </div>
         </section>
 

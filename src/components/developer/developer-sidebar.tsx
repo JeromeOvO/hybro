@@ -4,6 +4,7 @@ import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { Bot, PanelLeftIcon } from "lucide-react"
+import { useUser } from "@clerk/nextjs"
 
 import { NavAgent } from "@/components/nav-agent"
 import { NavMain } from "@/components/nav-main"
@@ -28,6 +29,7 @@ import { useMyAgents } from "@/hooks/useMyAgents"
 
 export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { state, toggleSidebar } = useSidebar()
+  const { isLoaded, isSignedIn } = useUser()
   const { agents: myAgents, isLoading: isLoadingAgents } = useMyAgents()
 
   // Build dynamic navigation data
@@ -57,6 +59,8 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
   }, [myAgents, isLoadingAgents])
 
   const isCollapsed = state === "collapsed"
+
+  if (!isLoaded || !isSignedIn) return null
 
   return (
     <Sidebar collapsible="icon" {...props}>
