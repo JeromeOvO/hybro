@@ -21,7 +21,7 @@ export const ConsumerHeader = () => {
   }, []);
 
   const isMarketingPage = MARKETING_PAGES.includes(pathname);
-  const showMarketingNav = mounted && isLoaded && !isSignedIn && isMarketingPage && !isMobile;
+  const isUnauthenticated = mounted && isLoaded && !isSignedIn && isMarketingPage;
 
   if (!mounted) {
     return (
@@ -29,7 +29,7 @@ export const ConsumerHeader = () => {
         <div className="flex h-14 items-center gap-4 px-4">
           <div className="flex items-center gap-2">
             <SidebarTrigger />
-            <Logo size="sm" />
+            <Logo />
           </div>
           <div className="flex-1" />
         </div>
@@ -37,12 +37,12 @@ export const ConsumerHeader = () => {
     );
   }
 
-  if (showMarketingNav) {
+  if (isUnauthenticated) {
     return (
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border/40">
-        <div className="flex h-14 items-center gap-6 px-4 sm:px-6">
-          <Logo size="sm" />
-          <nav className="flex items-center gap-1 ml-4">
+        <div className="flex h-14 items-center gap-6 px-4">
+          <Logo />
+          <nav className="hidden sm:flex items-center gap-1 ml-4">
             {[
               { href: '/agents', label: 'Explore' },
               { href: '/about', label: 'About' },
@@ -89,7 +89,7 @@ export const ConsumerHeader = () => {
       <div className="flex h-14 items-center gap-4 px-4">
         <div className="flex items-center gap-2">
           <SidebarTrigger />
-          <Logo size="sm" />
+          <Logo />
         </div>
         <div className="flex-1" />
       </div>

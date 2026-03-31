@@ -64,8 +64,8 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <div className="flex h-12 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
+      <SidebarHeader className="py-0">
+        <div className="flex h-14 items-center gap-2 px-2 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:justify-center">
           <div className={`flex items-center gap-1.5 flex-1 ${SIDEBAR_ICON_HIDDEN}`}>
             <Logo className="flex-shrink-0" />
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Dev</span>
