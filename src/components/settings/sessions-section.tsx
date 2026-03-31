@@ -46,16 +46,24 @@ export function SessionsSection({ user }: { user: UserResource }) {
   const [revokingAll, setRevokingAll] = useState(false)
   const isInitialLoad = useRef(true)
 
-  const loadSessions = useCallback(async () => {
+  // Keep a ref so loadSessions always has the latest user without being a dependency.
+  // If user were a direct dependency, Clerk emitting a new UserResource object after
+  // user.reload() would create a new loadSessions reference → retrigger the effect →
+  // call reload() again → infinite blink loop.
+  const userRef = useRef(user)
+  useEffect(() => { userRef.current = user }, [user])
+
+  const loadSessions = useCallback(async (showSkeleton = false) => {
     try {
-      setLoading(true)
+      if (showSkeleton) setLoading(true)
+      const u = userRef.current
       // Only reload user on subsequent fetches (after revoke) to bust the cache.
       // Skip on initial mount to avoid an unnecessary API call.
       if (!isInitialLoad.current) {
-        await user.reload()
+        await u.reload()
       }
       isInitialLoad.current = false
-      const result = await user.getSessions()
+      const result = await u.getSessions()
       // Only show active sessions
       setSessions(result.filter((s) => s.status === "active"))
     } catch {
@@ -63,18 +71,17 @@ export function SessionsSection({ user }: { user: UserResource }) {
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [])
 
   useEffect(() => {
-    loadSessions()
+    loadSessions(true)
   }, [loadSessions])
 
   async function handleRevoke(session: SessionWithActivitiesResource) {
     try {
       setRevokingId(session.id)
       await session.revoke()
-      // Refresh list after revoke (will call user.reload() to bust cache)
-      await loadSessions()
+      await loadSessions(false)
       toast.success("Session revoked")
     } catch {
       toast.error("Failed to revoke session")
@@ -94,7 +101,7 @@ export function SessionsSection({ user }: { user: UserResource }) {
       const succeeded = results.filter((r) => r.status === "fulfilled").length
 
       // Refresh list regardless — some may have succeeded
-      await loadSessions()
+      await loadSessions(false)
 
       if (failed === 0) {
         toast.success(`Revoked ${succeeded} session${succeeded > 1 ? "s" : ""}`)
