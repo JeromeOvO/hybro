@@ -169,10 +169,10 @@ test.describe('Sidebar Sign-in Button', () => {
       return
     }
 
-    // Dismiss cookie consent if it overlays the sidebar footer
+    // Dismiss cookie consent if it overlays the sidebar footer (only needed when unauthenticated)
     const declineBtn = page.getByRole('button', { name: 'Decline' })
     if (await declineBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await declineBtn.click()
+      await declineBtn.click({ force: true })
     }
 
     await expect(signInBtn).toBeVisible({ timeout: 5000 })
