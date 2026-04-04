@@ -43,6 +43,11 @@ class RoomCoordinatorService:
         trajectory_responses: list[dict[str, str]] | None = None,
     ) -> None:
         """
+        .. deprecated::
+            Use ``RoomMessageCenter._emit_unified_summary()`` instead.
+            This method is no longer called from RoomMessageCenter as of
+            the unified summary system refactor.
+
         Entry point called after RoomMessageCenter processes all agent messages
         for a specific room user message.
 
@@ -116,7 +121,19 @@ class RoomCoordinatorService:
 
                 agent_responses = []
                 for msg in agent_messages:
-                    if msg.agent_id in ("debate_summary", "non_debate_summary"):
+                    # Exclude all synthetic coordinator messages (new + historical IDs)
+                    if (
+                        msg.extend_info
+                        and isinstance(msg.extend_info, dict)
+                        and msg.extend_info.get("is_coordinator_summary")
+                    ) or msg.agent_id in (
+                        "debate_summary",
+                        "non_debate_summary",
+                        "summary",
+                        "supervisor_synthesis",
+                        "supervisor_error",
+                        "supervisor_clarify",
+                    ):
                         continue
                     task = msg.message_content and msg.message_content.message_task
                     if task and task.status and task.status.state != TaskState.completed:
@@ -280,6 +297,9 @@ class RoomCoordinatorService:
         message_id: str | None = None,
     ) -> None:
         """
+        .. deprecated::
+            Logic absorbed into ``RoomMessageCenter._emit_unified_summary()``.
+
         Create a coordinator summary RoomAgentMessage and emit it via SSE.
 
         Args:

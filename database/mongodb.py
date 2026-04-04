@@ -837,6 +837,14 @@ class MongoDB:
         )
         return result is not None
 
+    async def unclaim_user_message(self, message_id: str) -> bool:
+        """Release a previously claimed user message so it can be retried."""
+        result = await self.room_user_messages_collection.update_one(
+            {"message_id": message_id},
+            {"$set": {"processing_claimed_at": None}},
+        )
+        return result.modified_count > 0
+
     async def claim_or_reclaim_user_message(
         self, message_id: str, stale_threshold: datetime
     ) -> bool:
@@ -852,6 +860,14 @@ class MongoDB:
             {"$set": {"processing_claimed_at": utcnow()}},
         )
         return result is not None
+
+    async def refresh_processing_claim(self, message_id: str) -> bool:
+        """Refresh processing_claimed_at to now so the stale task checker won't reclaim it."""
+        result = await self.room_user_messages_collection.update_one(
+            {"message_id": message_id, "processing_claimed_at": {"$ne": None}},
+            {"$set": {"processing_claimed_at": utcnow()}},
+        )
+        return result.modified_count > 0
 
     async def delete_room_by_room_id(self, room_id: str) -> bool:
         """
@@ -935,6 +951,18 @@ class MongoDB:
             room_agent_message.model_dump(mode="json")
         )
         return str(result.inserted_id)
+
+    async def upsert_room_agent_message(self, room_agent_message: RoomAgentMessage) -> None:
+        """
+        Insert or replace a room agent message by message_id.
+        Used for idempotent summary emission — deterministic message_id
+        ensures at most one summary per user message turn.
+        """
+        await self.room_agent_messages_collection.replace_one(
+            {"message_id": room_agent_message.message_id},
+            room_agent_message.model_dump(mode="json"),
+            upsert=True,
+        )
 
     async def get_room_agent_messages_by_room_id(
         self, room_id: str

@@ -262,6 +262,63 @@ class QueueExecutor:
                     deferred_sse = (SSEProcessingStatus.CANCELED, True)
                     break
 
+                elif result.status == ProcessingStatus.AWAITING_INPUT:
+                    # Agent returned input_required — create HITL request
+                    # so the frontend shows an input form, then pause the
+                    # queue exactly like PAUSED.
+                    if not is_direct_chat:
+                        await self._queue_next_messages(
+                            current_message, message_queue, room_id
+                        )
+                    if result.message_id:
+                        await self._save_continuation(
+                            message_id=result.message_id,
+                            message_queue=message_queue,
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            request_user_id=request_user_id,
+                            current_agent=agent,
+                        )
+                        from services.hitl_service import hitl_service
+                        hitl_req = await hitl_service.request_input(
+                            room_id=room_id,
+                            user_message_id=user_message_id,
+                            source="agent",
+                            prompt=(
+                                result.status_message
+                                or "The agent needs additional information."
+                            ),
+                            agent_id=current_message.agent_id,
+                            agent_name=(
+                                agent.agent_card.name if agent else None
+                            ),
+                            a2a_task_id=result.a2a_task_id,
+                            a2a_context_id=result.a2a_context_id,
+                            continuation_message_id=result.message_id,
+                            display_message_id=current_message.message_id,
+                        )
+                        if hitl_req is None:
+                            logger.warning(
+                                "QueueExecutor: Max HITL rounds exceeded "
+                                "for message %s — failing queue",
+                                result.message_id,
+                            )
+                            queue_result = QueueResult.FAILED
+                            break
+                        await self.sse_manager.send_processing_status(
+                            room_id,
+                            SSEProcessingStatus.AWAITING_INPUT,
+                            user_message_id,
+                        )
+                        logger.info(
+                            "QueueExecutor: Queue paused for HITL on message %s",
+                            result.message_id,
+                        )
+                    message_queue.clear()
+                    last_popped.clear()
+                    queue_result = QueueResult.PAUSED
+                    break
+
                 elif result.status in (
                     ProcessingStatus.PAUSED,
                     ProcessingStatus.RELAY_DISPATCHED,

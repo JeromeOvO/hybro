@@ -1,6 +1,12 @@
 """Unit tests for RoomCoordinatorService.on_room_user_message_completed.
 
-Covers the new ``trajectory_responses`` fast-path that was added to avoid a
+.. deprecated::
+    ``on_room_user_message_completed`` is deprecated in favour of
+    ``RoomMessageCenter._emit_unified_summary()``.  These tests are
+    retained for backward-compatibility coverage of the legacy method.
+    New summary behaviour is tested in ``tests/test_unified_summary.py``.
+
+Covers the ``trajectory_responses`` fast-path that was added to avoid a
 race condition where relay agents' DB messages are not yet written when the
 coordinator tries to read them.
 """

@@ -1069,13 +1069,46 @@ class A2AService:
             response = await a2a_client.send_message(request)
 
         # Update task status locally if a Task was returned
+        task_obj = None
         result = getattr(response, "root", None)
         if result and hasattr(result, "result"):
             task_result = result.result
             if hasattr(task_result, "kind") and task_result.kind == "task":
+                task_obj = task_result
                 await db_service.update_task_on_message(
                     message_id, task_result.model_dump(mode="json")
                 )
+
+        # Extract response text from artifacts or message
+        response_text: str | None = None
+        if task_obj and hasattr(task_obj, "artifacts") and task_obj.artifacts:
+            from common.utils.a2a_helpers import extract_text_from_artifacts
+            response_text = extract_text_from_artifacts(task_obj.artifacts)
+        elif result and hasattr(result, "result"):
+            msg_result = result.result
+            if hasattr(msg_result, "kind") and msg_result.kind == "message":
+                parts = getattr(msg_result, "parts", []) or []
+                for p in parts:
+                    if hasattr(p, "root") and hasattr(p.root, "text"):
+                        response_text = p.root.text
+                        break
+                    if hasattr(p, "text"):
+                        response_text = p.text
+                        break
+
+        # Fallback: check task.status.message for the agent's follow-up prompt
+        # (e.g. when task is input_required / auth_required)
+        if not response_text and task_obj and hasattr(task_obj, "status") and task_obj.status:
+            status_msg = getattr(task_obj.status, "message", None)
+            if status_msg:
+                parts = getattr(status_msg, "parts", []) or []
+                for p in parts:
+                    if hasattr(p, "root") and hasattr(p.root, "text"):
+                        response_text = p.root.text
+                        break
+                    if hasattr(p, "text"):
+                        response_text = p.text
+                        break
 
         logger.info(
             "hitl_reply_to_task_sent",
@@ -1085,7 +1118,18 @@ class A2AService:
                 "context_id": context_id,
             },
         )
-        return {"status": "sent"}
+
+        task_state: str | None = None
+        if task_obj and hasattr(task_obj, "status") and task_obj.status:
+            st = task_obj.status.state
+            task_state = st.value if hasattr(st, "value") else str(st)
+
+        return {
+            "status": "sent",
+            "blocking": hitl_blocking,
+            "task_state": task_state,
+            "response_text": response_text,
+        }
 
 
 a2a_service = A2AService()

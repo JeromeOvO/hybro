@@ -264,7 +264,8 @@ class DirectTransport(AgentTransport):
             task = get_task(message)
             if task and task.status and task.status.state == TaskState.input_required:
                 logger.info(
-                    "DirectTransport.dispatch: Agent returned input_required for message %s",
+                    "DirectTransport.dispatch: Agent returned interactive state %s for message %s",
+                    task.status.state,
                     paused_message_id,
                 )
                 task_data = task.model_dump(mode="json") if hasattr(task, "model_dump") else {}
@@ -617,9 +618,9 @@ class DirectTransport(AgentTransport):
                 state = task.status.state
                 state_value = state_str(state)
 
-                if is_terminal_state(state):
+                if is_terminal_state(state) or state in INTERACTIVE_STATES:
                     logger.info(
-                        "DirectTransport: Task %s completed with state %s after %.1fs (%d polls)",
+                        "DirectTransport: Task %s reached actionable state %s after %.1fs (%d polls)",
                         message_id,
                         state_value,
                         asyncio.get_event_loop().time() - start_time,
@@ -1560,6 +1561,27 @@ class DirectTransport(AgentTransport):
                     artifact, room_id, message_id,
                     conversion_counter=conversion_counter,
                 )
+
+        # --- Interactive states (input_required / auth_required) ---
+        # The polled agent needs user interaction.  Persist the task state
+        # and return paused_message_id so the dispatch method detects it
+        # and triggers HITL.
+        if state in INTERACTIVE_STATES:
+            # Update in-memory task so get_task(message) sees the new state.
+            if current_message.message_content:
+                current_message.message_content.message_task = completed_task
+            if task_info:
+                await self.database_service.update_task_on_message(
+                    message_id,
+                    completed_task.model_dump(mode="json"),
+                )
+            logger.info(
+                "DirectTransport: Polled task %s reached interactive state %s — "
+                "returning paused_message_id for HITL",
+                message_id,
+                state_value,
+            )
+            return True, None, message_id
 
         final_content = None
         final_error = None

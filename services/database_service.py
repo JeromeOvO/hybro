@@ -714,6 +714,16 @@ class DatabaseService:
             )
             return False
 
+    async def unclaim_user_message(self, message_id: str) -> bool:
+        """Release a previously claimed user message so it can be retried."""
+        try:
+            return await self.mongo.unclaim_user_message(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to unclaim user message {message_id}: {str(e)}"
+            )
+            return False
+
     async def claim_or_reclaim_user_message(
         self, message_id: str, stale_threshold: datetime
     ) -> bool:
@@ -725,6 +735,16 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to claim/reclaim user message {message_id}: {str(e)}"
+            )
+            return False
+
+    async def refresh_processing_claim(self, message_id: str) -> bool:
+        """Refresh processing_claimed_at to now so the stale task checker won't reclaim it."""
+        try:
+            return await self.mongo.refresh_processing_claim(message_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to refresh processing claim for {message_id}: {str(e)}"
             )
             return False
 
@@ -813,6 +833,21 @@ class DatabaseService:
         except Exception as e:
             logger.error(
                 f"Failed to add room agent message {room_agent_message.message_id} to databases: {str(e)}"
+            )
+            return False
+
+    async def upsert_room_agent_message(
+        self, room_agent_message: RoomAgentMessage
+    ) -> bool:
+        """
+        Insert or replace a room agent message by message_id (idempotent).
+        """
+        try:
+            await self.mongo.upsert_room_agent_message(room_agent_message)
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to upsert room agent message {room_agent_message.message_id}: {str(e)}"
             )
             return False
 
