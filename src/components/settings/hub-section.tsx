@@ -35,7 +35,8 @@ export function HubSection() {
 
   const hubQuery = useQuery<HubStatusResponse>({
     queryKey: ['hub', 'status'],
-    staleTime: 1000 * 30,
+    staleTime: 1000 * 15,
+    refetchInterval: 1000 * 30,
     queryFn: () => getMyHubStatus(getToken),
   })
 
