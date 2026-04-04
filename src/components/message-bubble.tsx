@@ -767,7 +767,7 @@ function AgentMessageBubbleInner({
                   className={cn(
                     "min-h-0 overflow-hidden text-sm leading-relaxed select-text transition-opacity duration-200",
                     contentColorClass,
-                    !isExpanded && isLongMessage && "line-clamp-4"
+                    !isExpanded && isLongMessage && "max-h-[5lh]"
                   )}
                   onMouseUp={handleMouseUp}
                 >
