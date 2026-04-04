@@ -1771,19 +1771,7 @@ class RoomMessageCenter:
         summary_message_id = f"summary-{user_message_id}"
 
         try:
-            # 1. Placeholder SSE
-            await self.sse_manager.send_task_submitted(
-                room_id=room_id,
-                message_id=summary_message_id,
-                task_id=summary_message_id,
-                agent_name="Summary Agent",
-                agent_id=CoordinatorAgentId.SUMMARY,
-                status="working",
-                related_message_id=user_message_id,
-                task_content="Summarizing agent responses…",
-            )
-
-            # 2. Determine content
+            # 1. Determine content — check agent count BEFORE emitting placeholder
             if synthesis_text is not None and synthesis_text.strip():
                 content = synthesis_text
                 origin = "supervisor"
@@ -1821,13 +1809,8 @@ class RoomMessageCenter:
                                 "message": text,
                             })
 
+                # Skip summary entirely when fewer than 2 agents responded
                 if len(agent_responses) < 2:
-                    await self.sse_manager.send_task_update(
-                        room_id=room_id,
-                        message_id=summary_message_id,
-                        status="completed",
-                        agent_id=CoordinatorAgentId.SUMMARY,
-                    )
                     return
 
                 mode = "debate" if is_debate else "non_debate"
@@ -1837,13 +1820,19 @@ class RoomMessageCenter:
                 origin = "coordinator"
 
                 if not content:
-                    await self.sse_manager.send_task_update(
-                        room_id=room_id,
-                        message_id=summary_message_id,
-                        status="completed",
-                        agent_id=CoordinatorAgentId.SUMMARY,
-                    )
                     return
+
+            # 2. Placeholder SSE — only emitted when we actually have content to summarize
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=summary_message_id,
+                task_id=summary_message_id,
+                agent_name="Summary Agent",
+                agent_id=CoordinatorAgentId.SUMMARY,
+                status="working",
+                related_message_id=user_message_id,
+                task_content="Summarizing agent responses…",
+            )
 
             # 3. Build and persist
             from a2a.types import Message, Role, Task, TaskState as A2ATaskState, TaskStatus, TextPart
