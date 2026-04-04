@@ -729,11 +729,23 @@ class RelayService:
         hubs = await self._mongo.get_hubs_by_user(user_id)
         result: list[HubStatus] = []
         for h in hubs:
-            active, inactive = await self._mongo.count_hub_agents(h["hub_id"])
+            hub_id = h["hub_id"]
+            db_online = h.get("is_online", False)
+
+            actually_online = db_online
+            if db_online:
+                if self._streams:
+                    actually_online = await self._streams.is_hub_alive(hub_id)
+                else:
+                    actually_online = self.is_hub_connected(hub_id)
+                if not actually_online:
+                    await self.mark_hub_agents_offline(hub_id)
+
+            active, inactive = await self._mongo.count_hub_agents(hub_id)
             result.append(
                 HubStatus(
-                    hub_id=h["hub_id"],
-                    is_online=h.get("is_online", False),
+                    hub_id=hub_id,
+                    is_online=actually_online,
                     last_connected_at=h.get("last_connected_at"),
                     agent_count=active + inactive,
                     active_agent_count=active,
@@ -785,23 +797,35 @@ class RelayService:
     async def _do_heartbeat_check(self, stale_threshold: float) -> None:
         """Check for unresponsive hubs and signal disconnection.
 
-        Note: On the Redis Streams path, _hub_queues is empty so this is
-        a no-op. Streams-path liveness is handled lazily: push_to_hub()
-        checks is_hub_alive() (TTL key), and the SSE generator's finally
-        block marks the hub offline when the connection drops.
+        In-memory path: checks _hub_queues for stale heartbeats.
+        Redis Streams path: checks is_hub_alive() for all hubs marked
+        online in MongoDB, correcting stale is_online flags.
         """
-        now = time.monotonic()
-        for hub_id in list(self._hub_queues.keys()):
-            last = self._last_hub_heartbeat.get(hub_id)
-            if last is not None and (now - last) > stale_threshold:
-                logger.warning(
-                    "Hub %s has not sent a heartbeat for %.0fs — disconnecting",
-                    hub_id,
-                    now - last,
-                )
-                q = self._hub_queues.get(hub_id)
-                if q:
-                    await q.put({"type": "_disconnect"})
+        if self._streams:
+            stale_hubs = await self._mongo.hubs_collection.find(
+                {"is_online": True}, {"hub_id": 1}
+            ).to_list(length=None)
+            for doc in stale_hubs:
+                hub_id = doc["hub_id"]
+                if not await self._streams.is_hub_alive(hub_id):
+                    logger.warning(
+                        "Hub %s heartbeat expired in Redis — marking offline",
+                        hub_id,
+                    )
+                    await self.mark_hub_agents_offline(hub_id)
+        else:
+            now = time.monotonic()
+            for hub_id in list(self._hub_queues.keys()):
+                last = self._last_hub_heartbeat.get(hub_id)
+                if last is not None and (now - last) > stale_threshold:
+                    logger.warning(
+                        "Hub %s has not sent a heartbeat for %.0fs — disconnecting",
+                        hub_id,
+                        now - last,
+                    )
+                    q = self._hub_queues.get(hub_id)
+                    if q:
+                        await q.put({"type": "_disconnect"})
 
     # ------------------------------------------------------------------
     # Offline queue TTL sweep
