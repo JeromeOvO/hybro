@@ -417,20 +417,135 @@ class HITLService:
     async def _handle_agent_response(
         self, request: HITLRequest, user_input: str
     ) -> None:
-        """Send user's reply to the waiting A2A agent."""
+        """Send user's reply to the waiting A2A agent.
+
+        For push-notification agents the reply is fire-and-forget: the agent
+        will POST a webhook callback that triggers ``resume_queue_from_continuation``.
+
+        For blocking agents (non-push OR push-capable but WEBHOOK_BASE_URL
+        unset) the reply returns synchronously.  We use the response directly
+        (not a DB re-read) and trigger queue resume manually.
+
+        If the blocking reply itself returns ``input_required`` again, we do
+        NOT resume — the agent needs another round of user input, which the
+        next HITL cycle will handle.
+        """
         # Reset last_notified_state so multi-round input_required works
         await self.database_service.reset_last_notified_state(
             request.continuation_message_id
         )
 
-        await self.a2a_service.reply_to_task(
+        reply_result = await self.a2a_service.reply_to_task(
             message_id=request.continuation_message_id,
             task_id=request.a2a_task_id,
             context_id=request.a2a_context_id,
             user_input=user_input,
         )
-        # Agent will process and send webhook → resume_queue_from_continuation
-        # which routes to _resume_supervisor_v2(kind=HITL_AGENT)
+
+        # reply_to_task returns {"blocking": bool, "task_state": str|None,
+        # "response_text": str|None}.  When blocking=True the response is
+        # already complete — use it directly instead of re-reading from DB.
+        was_blocking = reply_result.get("blocking", False)
+        if not was_blocking:
+            # Push-notification mode — agent will POST webhook → resume_queue_from_continuation
+            return
+
+        task_state = reply_result.get("task_state")
+
+        # If the agent asked for more input, don't resume the queue — create
+        # a new HITL request so the frontend has a pending record for the next
+        # answer.  Without this, multi-round blocking HITL conversations get
+        # stuck after the second prompt.
+        if task_state in ("input-required", "auth-required"):
+            response_text = reply_result.get("response_text")
+            logger.info(
+                "hitl: blocking reply returned input_required for %s — "
+                "creating new HITL request (not resuming queue)",
+                request.continuation_message_id,
+            )
+            new_request = await self.request_input(
+                room_id=request.room_id,
+                user_message_id=request.user_message_id,
+                source="agent",
+                prompt=response_text or "The agent is requesting additional input.",
+                agent_id=request.agent_id,
+                agent_name=request.agent_name,
+                a2a_task_id=request.a2a_task_id,
+                a2a_context_id=request.a2a_context_id,
+                continuation_message_id=request.continuation_message_id,
+                display_message_id=request.display_message_id,
+            )
+            if new_request is None:
+                logger.warning(
+                    "hitl: request_input failed for %s — resuming queue "
+                    "with failure to unblock conversation",
+                    request.continuation_message_id,
+                )
+                from modules.RoomMessageCenter import room_message_center
+                await room_message_center.resume_queue_from_continuation(
+                    request.continuation_message_id,
+                    task_result_text=response_text,
+                    failed=True,
+                )
+            return
+
+        # Use the response text from the synchronous reply (authoritative,
+        # no stale-DB risk).
+        task_result_text = reply_result.get("response_text")
+
+        # Persist the agent's post-HITL response to DB and emit SSE
+        # notification so the frontend shows the updated message.
+        # The webhook path handles this via AgentResponseHandler, but
+        # the blocking path bypasses that — do it manually.
+        # Use the actual terminal state from reply_to_task (may be
+        # "completed", "failed", "canceled", or "rejected").
+        is_failure = task_state in ("failed", "canceled", "rejected")
+        effective_state = task_state or "completed"
+        if request.display_message_id:
+            await self.database_service.update_task_state_on_message(
+                request.display_message_id,
+                effective_state,
+                message_text=task_result_text or "",
+            )
+            # Retrieve the agent message to get user_id for notification
+            agent_msg = await self.database_service.get_room_agent_message(
+                request.display_message_id
+            )
+            if agent_msg:
+                from a2a.types import TaskState
+                from services.task_notification_service import notify_task_update
+
+                state_map = {
+                    "completed": TaskState.completed,
+                    "failed": TaskState.failed,
+                    "canceled": TaskState.canceled,
+                    "rejected": TaskState.rejected,
+                }
+                notify_state = state_map.get(effective_state, TaskState.completed)
+                await notify_task_update(
+                    request.display_message_id,
+                    notify_state,
+                    room_id=request.room_id,
+                    user_id=agent_msg.user_id or "",
+                )
+
+        logger.info(
+            "hitl: blocking reply completed (state=%s) — triggering manual "
+            "queue resume for %s",
+            task_state,
+            request.continuation_message_id,
+        )
+        from modules.RoomMessageCenter import room_message_center
+        resumed = await room_message_center.resume_queue_from_continuation(
+            request.continuation_message_id,
+            task_result_text=task_result_text,
+            failed=is_failure,
+        )
+        if not resumed:
+            raise RuntimeError(
+                f"Failed to resume queue for message {request.continuation_message_id} "
+                "— continuation may have been lost or room lock timed out"
+            )
 
     # ------------------------------------------------------------------
     # Supervisor response routing

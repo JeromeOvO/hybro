@@ -2149,13 +2149,16 @@ class RoomServices:
         user_message: RoomUserMessage,
         mentions: list[dict],
     ) -> RoomCenterUserMessageResponse:
-        """Deterministically fan out to mentioned agents and finish."""
+        """Deterministically fan out to mentioned agents and finish.
+
+        Note: Does NOT send processing_status COMPLETED here — the actual agent
+        execution happens in a background task (process_room_user_message) which
+        sends COMPLETED when all agents finish.  Sending it here would prematurely
+        clear the frontend processing state and hide the Stop button.
+        """
         room = await self.database_service.get_room_by_room_id(request.room_id)
         mention_response = await self.parse_user_message_with_mentions(
             room, user_message, mentions
-        )
-        await self.sse_manager.send_processing_status(
-            request.room_id, SSEProcessingStatus.COMPLETED, user_message.message_id
         )
         return mention_response
 

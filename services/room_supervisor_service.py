@@ -97,15 +97,32 @@ Output ONLY valid JSON matching the schema below.
   "Room Conversation Background" already contains relevant information from a prior
   exchange, the current user message is a NEW request that requires a fresh agent
   delegation. The conversation background is context only, not results for this task.
-- After each agent result, evaluate quality. If the agent returned a successful
-  response that addresses the user's question, choose DONE. Only re-delegate if
-  the response is clearly wrong, off-topic, or the agent explicitly failed.
-  Do NOT re-delegate just to get a "better" or "more refined" answer.
+- After each agent result, evaluate quality per the QUALITY EVALUATION section
+  below. If the agent returned a substantive response that addresses the user's
+  question, choose DONE. Re-delegate if the response is empty, off-topic, says
+  it couldn't find anything, or the agent explicitly failed.
+  Do NOT re-delegate just to get a "better" or "more refined" answer when the
+  existing response already contains actionable content.
 - If an agent's result changes what you planned to do next, simply adapt.
 - Do NOT delegate to agents that are unhealthy (status: unhealthy).
 - You have a maximum of {max_steps} actions. Use SYNTHESIZE or DONE before the limit.
 - You may CLARIFY at most once. After you receive the user's answers, you MUST
   proceed with DELEGATE — do not issue another CLARIFY.
+
+## Quality Evaluation — before choosing SYNTHESIZE or DONE
+- Review each DELEGATE result for substance. Does it directly address the
+  user's request with actionable, specific content?
+- A response that repeats the question, returns no data, says it couldn't
+  find anything, or contains only generic/templated text should be treated
+  as unsatisfactory.
+- If one or more agents returned unsatisfactory results while others
+  succeeded, you may:
+  (a) DELEGATE to the same agent with a more specific/refined task
+  (b) DELEGATE to a different agent that might handle it better
+  (c) SYNTHESIZE using only the good results, noting which areas had
+      insufficient coverage
+- Only choose SYNTHESIZE when you are confident the collected results
+  adequately address the user's request.
 
 ## Room Conversation Background
 {conversation_context}
@@ -425,8 +442,8 @@ class RoomSupervisorService:
                     else:
                         status = f"FAILED: {result.error_message}"
                     total_len = len(result.response_text)
-                    response_preview = result.response_text[:500]
-                    if total_len > 500:
+                    response_preview = result.response_text[:3000]
+                    if total_len > 3000:
                         response_preview += (
                             f" ... [truncated — full response: {total_len} chars]"
                         )

@@ -203,6 +203,15 @@ class SupervisorExecutor:
                     },
                 )
 
+            # SSE: notify frontend of planning stage
+            try:
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                    details="Planning next action...",
+                )
+            except Exception:
+                logger.debug("SSE stage notification failed (planning)", exc_info=True)
+
             # --- Debate mode fast-path (§8.13) ---
             if inflight_entry is not None:
                 action = inflight_entry.action
@@ -447,6 +456,15 @@ class SupervisorExecutor:
                         cached_user_message=_checkpoint_msg,
                     )
 
+                    # SSE: notify frontend of delegation stage
+                    try:
+                        await self.sse_manager.send_processing_status(
+                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            details=f"Delegating to {len(action.targets)} agent(s)...",
+                        )
+                    except Exception:
+                        logger.debug("SSE stage notification failed (delegating)", exc_info=True)
+
                     results = await self._dispatch_targets(
                         targets=action.targets,
                         agent_registry=agent_registry,
@@ -610,6 +628,15 @@ class SupervisorExecutor:
                         cached_user_message=_checkpoint_msg,
                     )
 
+                    # SSE: notify frontend of evaluation stage
+                    try:
+                        await self.sse_manager.send_processing_status(
+                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            details="Evaluating agent results...",
+                        )
+                    except Exception:
+                        logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
+
                     # Debate mode: after all agents respond, done (no synthesis)
                     if room_config.is_debate_mode and step_number == 0:
                         done_entry = TrajectoryEntry(
@@ -657,6 +684,15 @@ class SupervisorExecutor:
                                 status=RunStatus.COMPLETED, trajectory=trajectory
                             ),
                         )
+
+                    # SSE: notify frontend of synthesis stage
+                    try:
+                        await self.sse_manager.send_processing_status(
+                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                            details="Synthesizing responses...",
+                        )
+                    except Exception:
+                        logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
 
                     synth_coro = self.supervisor_service.synthesize_v2(
                         trajectory=trajectory,
@@ -875,6 +911,15 @@ class SupervisorExecutor:
                         status=RunStatus.FAILED, trajectory=trajectory
                     ),
                 )
+            # SSE: notify frontend of budget-exhaustion synthesis
+            try:
+                await self.sse_manager.send_processing_status(
+                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                    details="Synthesizing responses...",
+                )
+            except Exception:
+                logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
+
             budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,
                 synthesis_instruction="Budget exhausted. Synthesize available results.",

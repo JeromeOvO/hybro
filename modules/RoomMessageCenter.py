@@ -37,12 +37,19 @@ from services.memory_service import room_memory_service
 from services.notification_service import notification_service
 from services.rate_limit_service import rate_limit_service
 from services.room_coordinator_service import room_coordinator_service
+from services.openai_service import openai_service
 from services.room_services import room_services
 from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
 
 logger = get_logger(__name__)
+
+# Maximum time (seconds) to wait for a per-room lock before giving up.
+# MUST be shorter than orphan_threshold_minutes (default 2 min = 120s) to
+# prevent the stale-task checker from reclaiming a message that is still
+# queued behind the lock — which would cause double-processing.
+ROOM_LOCK_TIMEOUT_SECONDS = 90
 
 
 class RoomMessageCenter:
@@ -54,6 +61,7 @@ class RoomMessageCenter:
         self.database_service = db_service
         self.sse_manager = sse_manager
         self.room_coordinator_service = room_coordinator_service
+        self.openai_service = openai_service
         self.tsm = TaskStateManager(room_services, notification_service)
         self.agent_dispatcher = AgentDispatcher(
             agent_resolver=agent_resolver_service,
@@ -111,6 +119,19 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             room_coordinator_service=self.room_coordinator_service,
         )
+
+        # Per-room asyncio locks to serialise processing within the same room.
+        # Prevents concurrent supervisor runs / queue executions that would
+        # corrupt shared state (context, compaction, memory).
+        self._room_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_room_lock(self, room_id: str) -> asyncio.Lock:
+        """Return (or create) the asyncio.Lock for *room_id*."""
+        lock = self._room_locks.get(room_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._room_locks[room_id] = lock
+        return lock
 
     # ------------------------------------------------------------------
 
@@ -172,6 +193,80 @@ class RoomMessageCenter:
 
         room_id = request.room_id
         room_user_message_id = request.room_user_message_id
+
+        # ----- Per-room lock: serialise all processing within a room -----
+        room_lock = self._get_room_lock(room_id)
+        try:
+            await asyncio.wait_for(
+                room_lock.acquire(), timeout=ROOM_LOCK_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "RoomMessageCenter: Timed out waiting for room lock on %s "
+                "(message %s). Another processing run may be stuck.",
+                room_id,
+                room_user_message_id,
+            )
+            # Release the claim so the message can be retried (by user or
+            # stale-recovery) instead of staying permanently orphaned.
+            await self.database_service.unclaim_user_message(
+                room_user_message_id
+            )
+            # Send terminal SSE so the frontend clears the processing
+            # indicator.  Without this, the Stop button stays stuck because
+            # send_message_to_room already emitted PROCESSING and this
+            # BackgroundTask response is never seen by the client.
+            await self.sse_manager.send_processing_status(
+                room_id,
+                SSEProcessingStatus.FAILED,
+                room_user_message_id,
+                details="Room is busy processing another message — please retry shortly",
+            )
+            # Fail any descendant agent messages created during the
+            # parse/prepare step so they don't remain as orphaned
+            # non-terminal task bubbles in the frontend.
+            await self._notify_all_non_terminal_tasks_failed(
+                room_id, room_user_message_id,
+            )
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error="Room is busy processing another message — please retry shortly",
+                status_code=429,
+            )
+
+        # Refresh the processing claim timestamp now that we hold the lock.
+        # The claim was set before the lock wait (line 175); if the wait was
+        # long, the stale task checker (orphan_threshold_minutes=2 min) might
+        # consider the message orphaned.  Touching the timestamp here resets
+        # the clock so processing won't be reclaimed prematurely.
+        await self.database_service.refresh_processing_claim(
+            room_user_message_id
+        )
+
+        # Re-set processing_message_id to THIS message now that we hold the
+        # lock.  The API layer sent PROCESSING before we reached the lock,
+        # and a later queued message may have overwritten the room's
+        # processing_message_id in the meantime.  Restoring it here ensures
+        # cancel/page-refresh targets the correct (actively processing) turn.
+        await self.database_service.update_room_processing_status(
+            room_id, room_user_message_id
+        )
+
+        try:
+            return await self._process_room_user_message_locked(
+                request, room_id, room_user_message_id
+            )
+        finally:
+            room_lock.release()
+
+    async def _process_room_user_message_locked(
+        self,
+        request: OrchestrationRequest,
+        room_id: str,
+        room_user_message_id: str,
+    ) -> OrchestrationResponse:
+        """Inner processing path — caller MUST hold the per-room lock."""
 
         # Get user_id from the user message for rate limiting.
         # Fall back to the request-level user_id (from auth) if the stored
@@ -334,9 +429,14 @@ class RoomMessageCenter:
                 status_code=200,
             )
 
-        # QueueResult.COMPLETED — proceed with coordinator summary + completion.
-        await self.room_coordinator_service.on_room_user_message_completed(
-            room_id, room_user_message_id
+        # QueueResult.COMPLETED — emit unified summary + completion.
+        room = await self.database_service.get_room_by_room_id(room_id)
+        is_debate = bool(
+            room and isinstance(room.extend_info, dict)
+            and room.extend_info.get("debateMode", False)
+        )
+        await self._emit_unified_summary(
+            room_id, room_user_message_id, is_debate=is_debate
         )
 
         # Send completion status
@@ -1289,63 +1389,26 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
-                synthesis_emitted = False
-                if result.synthesis_text:
-                    synth_message_id = str(uuid4())
-                    try:
-                        await self.sse_manager.send_task_submitted(
-                            room_id=room_id,
-                            message_id=synth_message_id,
-                            task_id=synth_message_id,
-                            agent_name="Agent",
-                            agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
-                            status="working",
-                            related_message_id=user_message_id,
-                            task_content="Summarizing agent responses…",
-                        )
-                    except Exception:
-                        logger.warning(
-                            "RoomMessageCenter: Failed to send synthesis task_submitted SSE"
-                        )
-                    try:
-                        await self.room_coordinator_service.emit_synthesis_message(
-                            room_id=room_id,
-                            room_user_message_id=user_message_id,
-                            synthesis_text=result.synthesis_text,
-                            coordinator_agent_id=CoordinatorAgentId.SUPERVISOR_SYNTHESIS,
-                            message_id=synth_message_id,
-                        )
-                        synthesis_emitted = True
-                    except Exception as e:
-                        logger.error(
-                            "RoomMessageCenter: V2 synthesis emission failed: %s",
-                            e,
-                            exc_info=True,
-                        )
-                if not synthesis_emitted:
-                    # Extract agent responses from the trajectory so the coordinator
-                    # doesn't need to re-read from DB.  Relay agents may not have
-                    # written their message_content.message_task.history yet, which
-                    # would cause the BFS path to find empty texts and skip the summary.
-                    from models.supervisor_v2 import ActionType  # noqa: PLC0415
+                from models.supervisor_v2 import ActionType  # noqa: PLC0415
 
-                    trajectory_responses = [
-                        {"agent_name": step.agent_name, "message": step.response_text}
-                        for entry in result.trajectory.entries
-                        if entry.action.action == ActionType.DELEGATE
-                        for step in entry.results
-                        if step.success and step.response_text
-                    ]
-                    if trajectory_responses:
-                        await self.room_coordinator_service.on_room_user_message_completed(
-                            room_id,
-                            user_message_id,
-                            trajectory_responses=trajectory_responses,
-                        )
-                    else:
-                        await self.room_coordinator_service.on_room_user_message_completed(
-                            room_id, user_message_id
-                        )
+                trajectory_responses = [
+                    {"agent_name": step.agent_name, "message": step.response_text}
+                    for entry in result.trajectory.entries
+                    if entry.action.action == ActionType.DELEGATE
+                    for step in entry.results
+                    if step.success and step.response_text
+                ]
+                is_debate = bool(
+                    room and isinstance(room.extend_info, dict)
+                    and room.extend_info.get("debateMode", False)
+                ) if room else False
+                await self._emit_unified_summary(
+                    room_id,
+                    user_message_id,
+                    synthesis_text=result.synthesis_text,
+                    trajectory_responses=trajectory_responses,
+                    is_debate=is_debate,
+                )
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
@@ -1556,6 +1619,59 @@ class RoomMessageCenter:
             )
             return False
 
+        # ----- Per-room lock: serialise resume within the same room -----
+        room_id = continuation.get("room_id")
+        if room_id:
+            room_lock = self._get_room_lock(room_id)
+            try:
+                await asyncio.wait_for(
+                    room_lock.acquire(), timeout=ROOM_LOCK_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "RoomMessageCenter: Timed out waiting for room lock on %s "
+                    "during resume (message %s). Re-saving continuation.",
+                    room_id,
+                    message_id,
+                )
+                # Re-save so the continuation isn't lost.
+                # HITL_SUPERVISOR continuations are stored on user messages,
+                # not agent messages — use the correct collection.
+                from models.hitl import InterruptKind
+                interrupt_kind_raw = continuation.get("interrupt_kind")
+                if interrupt_kind_raw == InterruptKind.HITL_SUPERVISOR.value:
+                    await self.database_service.save_continuation_on_user_message(
+                        message_id, continuation
+                    )
+                else:
+                    await self.database_service.save_continuation_on_message(
+                        message_id, continuation
+                    )
+                return False
+        else:
+            room_lock = None
+            logger.warning(
+                "RoomMessageCenter: continuation for message %s has no room_id — "
+                "cannot acquire per-room lock; proceeding without serialisation",
+                message_id,
+            )
+
+        try:
+            return await self._resume_continuation_locked(
+                continuation, message_id, task_result_text
+            )
+        finally:
+            if room_lock is not None:
+                room_lock.release()
+
+    async def _resume_continuation_locked(
+        self,
+        continuation: dict,
+        message_id: str,
+        task_result_text: str | None,
+    ) -> bool:
+        """Inner resume path — caller MUST hold the per-room lock (if available)."""
+
         if continuation.get("supervisor_v2"):
             # Re-save continuation before attempting resume so a process
             # crash mid-resume doesn't permanently lose the execution state.
@@ -1617,8 +1733,13 @@ class RoomMessageCenter:
             return False
 
         if result.needs_completion and result.room_id and result.user_message_id:
-            await self.room_coordinator_service.on_room_user_message_completed(
-                result.room_id, result.user_message_id
+            room = await self.database_service.get_room_by_room_id(result.room_id)
+            is_debate = bool(
+                room and isinstance(room.extend_info, dict)
+                and room.extend_info.get("debateMode", False)
+            )
+            await self._emit_unified_summary(
+                result.room_id, result.user_message_id, is_debate=is_debate
             )
             await self.sse_manager.send_processing_status(
                 result.room_id, SSEProcessingStatus.COMPLETED, result.user_message_id
@@ -1626,6 +1747,176 @@ class RoomMessageCenter:
             await self._log_room_memory_stats(result.room_id)
 
         return True
+
+    # ------------------------------------------------------------------
+    # Unified summary emission
+    # ------------------------------------------------------------------
+
+    async def _emit_unified_summary(
+        self,
+        room_id: str,
+        user_message_id: str,
+        *,
+        synthesis_text: str | None = None,
+        trajectory_responses: list[dict[str, str]] | None = None,
+        is_debate: bool = False,
+    ) -> None:
+        """Emit a single unified summary message for a user message turn.
+
+        Routing logic:
+        - If synthesis_text is provided (supervisor path), use it directly.
+        - Otherwise, collect agent responses and call OpenAI to generate.
+        - Deterministic message_id ensures at most one summary per turn.
+        """
+        summary_message_id = f"summary-{user_message_id}"
+
+        try:
+            # 1. Placeholder SSE
+            await self.sse_manager.send_task_submitted(
+                room_id=room_id,
+                message_id=summary_message_id,
+                task_id=summary_message_id,
+                agent_name="Summary Agent",
+                agent_id=CoordinatorAgentId.SUMMARY,
+                status="working",
+                related_message_id=user_message_id,
+                task_content="Summarizing agent responses…",
+            )
+
+            # 2. Determine content
+            if synthesis_text is not None and synthesis_text.strip():
+                content = synthesis_text
+                origin = "supervisor"
+            else:
+                # Collect agent responses
+                if trajectory_responses:
+                    agent_responses = trajectory_responses
+                else:
+                    agent_messages = await self.room_coordinator_service._collect_agent_messages_for_user_message(
+                        user_message_id
+                    )
+                    agent_responses = []
+                    for msg in agent_messages:
+                        # Skip synthetic coordinator messages
+                        if (
+                            msg.extend_info
+                            and isinstance(msg.extend_info, dict)
+                            and msg.extend_info.get("is_coordinator_summary")
+                        ) or msg.agent_id in (
+                            "debate_summary", "non_debate_summary", "summary",
+                            "supervisor_synthesis", "supervisor_error", "supervisor_clarify",
+                        ):
+                            continue
+                        task = msg.message_content and msg.message_content.message_task
+                        if task and task.status and task.status.state != TaskState.completed:
+                            continue
+                        from common.utils.a2a_helpers import extract_agent_text_from_room_message
+                        text = extract_agent_text_from_room_message(msg)
+                        if text and msg.agent_id:
+                            agent_name = await self.database_service.get_agent_name_by_agent_id(
+                                msg.agent_id
+                            )
+                            agent_responses.append({
+                                "agent_name": agent_name or msg.agent_id,
+                                "message": text,
+                            })
+
+                if len(agent_responses) < 2:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=summary_message_id,
+                        status="completed",
+                        agent_id=CoordinatorAgentId.SUMMARY,
+                    )
+                    return
+
+                mode = "debate" if is_debate else "non_debate"
+                content = await self.openai_service.summarize_agent_responses(
+                    agent_responses, mode=mode
+                )
+                origin = "coordinator"
+
+                if not content:
+                    await self.sse_manager.send_task_update(
+                        room_id=room_id,
+                        message_id=summary_message_id,
+                        status="completed",
+                        agent_id=CoordinatorAgentId.SUMMARY,
+                    )
+                    return
+
+            # 3. Build and persist
+            from a2a.types import Message, Role, Task, TaskState as A2ATaskState, TaskStatus, TextPart
+            from common.utils.time import utcnow
+            from models.room import MessageContent, RoomAgentMessage
+
+            summary_a2a_message = Message(
+                message_id=summary_message_id,
+                role=Role.agent,
+                parts=[TextPart(text=content)],
+                context_id=summary_message_id,
+                metadata={},
+            )
+            task_status = TaskStatus(
+                state=A2ATaskState.completed,
+                timestamp=utcnow().isoformat(),
+                message=summary_a2a_message,
+            )
+            summary_task = Task(
+                id=summary_message_id,
+                context_id=summary_message_id,
+                status=task_status,
+                history=[summary_a2a_message],
+            )
+
+            user_message = await self.database_service.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            user_id = user_message.user_id if user_message else None
+
+            summary_agent_message = RoomAgentMessage(
+                room_id=room_id,
+                message_id=summary_message_id,
+                agent_id=CoordinatorAgentId.SUMMARY,
+                related_message_id=user_message_id,
+                user_id=user_id,
+                message_content=MessageContent(message_task=summary_task),
+                message_created_at=utcnow(),
+                extend_info={
+                    "is_coordinator_summary": True,
+                    "source_user_message_id": user_message_id,
+                    "summary_type": "debate" if is_debate else "non_debate",
+                    "summary_origin": origin,
+                },
+                task_content=content,
+            )
+
+            await self.database_service.upsert_room_agent_message(summary_agent_message)
+
+            # 4. Emit final SSE
+            await self.sse_manager.send_agent_response(
+                room_id,
+                summary_message_id,
+                CoordinatorAgentId.SUMMARY,
+                content,
+                related_message_id=user_message_id,
+            )
+
+        except Exception as exc:
+            logger.error(
+                "RoomMessageCenter: _emit_unified_summary failed for room %s "
+                "user message %s: %s",
+                room_id, user_message_id, exc, exc_info=True,
+            )
+            try:
+                await self.sse_manager.send_task_update(
+                    room_id=room_id,
+                    message_id=summary_message_id,
+                    status="failed",
+                    agent_id=CoordinatorAgentId.SUMMARY,
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Monitoring

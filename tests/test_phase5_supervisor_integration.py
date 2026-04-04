@@ -863,10 +863,9 @@ class TestTrajectoryStatusSerialization:
 # =========================================================================
 
 
-class TestHandleV2RunResultSummaryDedup:
-    """Verify that the default coordinator summary is skipped when the
-    supervisor already emitted its own synthesis, and that it acts as a
-    fallback when synthesis emission fails."""
+class TestHandleV2RunResultUnifiedSummary:
+    """Verify that _handle_v2_run_result routes to _emit_unified_summary
+    with correct arguments for both synthesis and non-synthesis paths."""
 
     @pytest.fixture
     def rmc(self):
@@ -874,7 +873,7 @@ class TestHandleV2RunResultSummaryDedup:
         with (
             patch("modules.RoomMessageCenter.db_service") as mock_db,
             patch("modules.RoomMessageCenter.sse_manager") as mock_sse,
-            patch("modules.RoomMessageCenter.room_coordinator_service") as mock_coord,
+            patch("modules.RoomMessageCenter.room_coordinator_service"),
             patch("modules.RoomMessageCenter.room_services"),
             patch("modules.RoomMessageCenter.notification_service"),
             patch("modules.RoomMessageCenter.a2a_service"),
@@ -887,14 +886,12 @@ class TestHandleV2RunResultSummaryDedup:
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
-            mock_sse.send_task_submitted = AsyncMock()
             mock_sse.send_processing_status = AsyncMock()
-            mock_coord.emit_synthesis_message = AsyncMock()
-            mock_coord.on_room_user_message_completed = AsyncMock()
 
             from modules.RoomMessageCenter import RoomMessageCenter
 
             rmc = RoomMessageCenter()
+            rmc._emit_unified_summary = AsyncMock()
             yield rmc
 
     @pytest.fixture
@@ -914,53 +911,39 @@ class TestHandleV2RunResultSummaryDedup:
         )
 
     @pytest.mark.asyncio
-    async def test_synthesis_emitted_skips_default_summary(
+    async def test_synthesis_text_passed_to_unified_summary(
         self, rmc, completed_result_with_synthesis
     ):
+        """When supervisor produces synthesis, it is passed directly."""
         await rmc._handle_v2_run_result(
             result=completed_result_with_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
-        rmc.room_coordinator_service.on_room_user_message_completed.assert_not_awaited()
+        rmc._emit_unified_summary.assert_awaited_once()
+        call_kwargs = rmc._emit_unified_summary.call_args
+        assert call_kwargs[0] == ("room-1", "msg-1")
+        assert call_kwargs[1]["synthesis_text"] == "Final synthesis."
 
     @pytest.mark.asyncio
-    async def test_no_synthesis_calls_default_summary(
+    async def test_no_synthesis_passes_none(
         self, rmc, completed_result_without_synthesis
     ):
+        """When no synthesis, synthesis_text=None lets unified summary
+        fall through to OpenAI generation."""
         await rmc._handle_v2_run_result(
             result=completed_result_without_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc.room_coordinator_service.emit_synthesis_message.assert_not_awaited()
-        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
-            "room-1", "msg-1"
-        )
+        rmc._emit_unified_summary.assert_awaited_once()
+        call_kwargs = rmc._emit_unified_summary.call_args
+        assert call_kwargs[1]["synthesis_text"] is None
 
     @pytest.mark.asyncio
-    async def test_synthesis_emission_failure_falls_back_to_default_summary(
-        self, rmc, completed_result_with_synthesis
-    ):
-        rmc.room_coordinator_service.emit_synthesis_message.side_effect = RuntimeError(
-            "LLM down"
-        )
-        await rmc._handle_v2_run_result(
-            result=completed_result_with_synthesis,
-            room_id="room-1",
-            user_message_id="msg-1",
-        )
-        rmc.room_coordinator_service.emit_synthesis_message.assert_awaited_once()
-        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
-            "room-1", "msg-1"
-        )
-
-    @pytest.mark.asyncio
-    async def test_debate_mode_passes_trajectory_responses_to_coordinator(self, rmc):
-        """Regression: supervisor+debate fast-path must pass trajectory responses
-        directly to on_room_user_message_completed so the coordinator doesn't
-        race against relay agents' DB writes."""
+    async def test_trajectory_responses_extracted_and_passed(self, rmc):
+        """Trajectory responses are extracted from DELEGATE entries and
+        forwarded to _emit_unified_summary."""
         from datetime import datetime
 
         delegate_action = SupervisorAction(
@@ -1000,15 +983,12 @@ class TestHandleV2RunResultSummaryDedup:
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc.room_coordinator_service.emit_synthesis_message.assert_not_awaited()
-        rmc.room_coordinator_service.on_room_user_message_completed.assert_awaited_once_with(
-            "room-1",
-            "msg-1",
-            trajectory_responses=[
-                {"agent_name": "Agent Alpha", "message": "Alpha's answer here."},
-                {"agent_name": "Agent Beta", "message": "Beta's answer here."},
-            ],
-        )
+        rmc._emit_unified_summary.assert_awaited_once()
+        call_kwargs = rmc._emit_unified_summary.call_args
+        assert call_kwargs[1]["trajectory_responses"] == [
+            {"agent_name": "Agent Alpha", "message": "Alpha's answer here."},
+            {"agent_name": "Agent Beta", "message": "Beta's answer here."},
+        ]
 
 
 # =========================================================================
