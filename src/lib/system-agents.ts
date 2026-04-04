@@ -15,15 +15,21 @@ export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
     description:
       'A built-in agent that facilitates human-in-the-loop interactions, collecting clarifications and confirmations from the user.',
   },
-  supervisor_synthesis: {
-    name: 'Agent',
+  summary: {
+    name: 'Summary Agent',
     description:
-      'A built-in agent that synthesizes and summarizes results from multiple specialist agents coordinated by the supervisor.',
+      'A built-in agent that summarizes responses from multiple agents in a room.',
+  },
+  // Historical backward compatibility — all map to "Summary Agent"
+  supervisor_synthesis: {
+    name: 'Summary Agent',
+    description:
+      'A built-in agent that summarizes responses from multiple agents in a room.',
   },
   debate_summary: {
-    name: 'Debate Coordinator',
+    name: 'Summary Agent',
     description:
-      'A built-in agent that synthesizes and summarizes debate responses from multiple agents in a room.',
+      'A built-in agent that summarizes responses from multiple agents in a room.',
   },
   non_debate_summary: {
     name: 'Summary Agent',
