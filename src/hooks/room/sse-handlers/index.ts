@@ -121,8 +121,15 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             if (!lifecycle.getMessageId() && sseMessage.data.message_id) {
               lifecycle.setMessageId(sseMessage.data.message_id)
             }
-            if (!lifecycle.isPlaceholderDismissed()) {
+            const stageDetails = sseMessage.data.details as string | undefined
+            // When details are present (supervisor stage updates), always
+            // re-show the placeholder — even after task_submitted dismissed
+            // it — so the user sees "Evaluating...", "Synthesizing...", etc.
+            if (stageDetails || !lifecycle.isPlaceholderDismissed()) {
               const isSupervisor = getSupervisorMode()
+              const defaultText = isSupervisor
+                ? 'Supervisor is analyzing your request…'
+                : 'Processing your request…'
               store.upsertMessage({
                 id: lifecycle.placeholderId(roomId),
                 roomId,
@@ -130,9 +137,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                 content: '',
                 senderName: 'HYBRO AI',
                 taskStatus: TASK_STATE.WORKING,
-                taskContent: isSupervisor
-                  ? 'Supervisor is analyzing your request…'
-                  : 'Processing your request…',
+                taskContent: stageDetails || defaultText,
                 timestamp: new Date().toISOString(),
                 isEphemeral: true,
               }, 'optimistic')
@@ -291,9 +296,22 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
 
-            lifecycle.setProcessing(false)
-            setCancelling(false)
-            lifecycle.disarmCancelTimeout()
+            // Cancel confirmation: task_update(canceled) confirms a cancel
+            // succeeded — clear cancelling UI immediately.  processing_status
+            // will also fire, but clearing cancelling here avoids the 15s
+            // timeout firing a spurious "timed out" warning.
+            if (status === TASK_STATE.CANCELED) {
+              setCancelling(false)
+              lifecycle.disarmCancelTimeout()
+            }
+
+            // NOTE: Do NOT clear processing here.  Individual task_update
+            // terminal events mean one agent finished, but the room-level
+            // processing may still be ongoing (e.g. supervisor synthesis,
+            // multi-agent queue).  The authoritative signal is the
+            // processing_status event — only that handler should call
+            // lifecycle.setProcessing(false).
+
             if (!lifecycle.hasCancelTimedOut()) {
               if (status === TASK_STATE.FAILED) {
                 banner.error(sseMessage.data.error || 'Task failed')
@@ -301,7 +319,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                 banner.error(sseMessage.data.error || 'Task was rejected')
               }
             }
-            lifecycle.setCancelTimedOut(false)
           } else {
             store.upsertMessage({
               ...baseMsg,
