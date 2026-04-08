@@ -21,6 +21,8 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/components/message-bubble"
 import type { PendingAttachment } from "@/lib/types/attachments"
+import type { ChatMode } from "@/lib/types/chat-mode"
+import { DEFAULT_CHAT_MODE, chatModeToSupervisor } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
@@ -98,9 +100,8 @@ function ChatPageContent() {
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
 
-    // Local mode toggles for the + menu
-    const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
-    const [localDebateMode, setLocalDebateMode] = useState(false)
+    // Local chat mode (Ultimate = supervisor, Fast = no supervisor)
+    const [localChatMode, setLocalChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
 
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
         roomName: string
@@ -203,8 +204,8 @@ function ChatPageContent() {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
                 } : {}),
-                debateMode: localDebateMode,
-                useSupervisor: localSupervisorMode,
+                debateMode: false,
+                useSupervisor: chatModeToSupervisor(localChatMode),
                 targetGroup: gm.selectedGroup,
                 attachments,
             }
@@ -352,10 +353,8 @@ function ChatPageContent() {
                             onClearOverride={gm.handleClearOverride}
                             externalValue={quickStartValue}
                             onExternalValueConsumed={handleClearQuickStart}
-                            supervisorMode={localSupervisorMode}
-                            onSupervisorChange={setLocalSupervisorMode}
-                            debateMode={localDebateMode}
-                            onDebateModeChange={setLocalDebateMode}
+                            chatMode={localChatMode}
+                            onChatModeChange={setLocalChatMode}
                         />
                     </div>
 

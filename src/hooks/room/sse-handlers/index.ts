@@ -39,7 +39,7 @@ function partsToArtifacts(
 }
 
 export function createSSEDispatcher(deps: SSEHandlerDeps) {
-  const { roomId, lifecycle, getAgentName, getAgentSource, getSupervisorMode,
+  const { roomId, lifecycle, getAgentName, getAgentSource,
           reconcileWithDb, hitlRequestIndex, setCancelling } = deps
 
   return async (sseMessage: SSEMessage) => {
@@ -126,10 +126,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // re-show the placeholder — even after task_submitted dismissed
             // it — so the user sees "Evaluating...", "Synthesizing...", etc.
             if (stageDetails || !lifecycle.isPlaceholderDismissed()) {
-              const isSupervisor = getSupervisorMode()
-              const defaultText = isSupervisor
-                ? 'Supervisor is analyzing your request…'
-                : 'Processing your request…'
+              const defaultText = 'Processing your request\u2026'
               store.upsertMessage({
                 id: lifecycle.placeholderId(roomId),
                 roomId,

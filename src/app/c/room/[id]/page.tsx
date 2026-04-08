@@ -27,6 +27,8 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
+import type { ChatMode } from '@/lib/types/chat-mode'
+import { chatModeToSupervisor, supervisorToChatMode } from '@/lib/types/chat-mode'
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -42,17 +44,15 @@ export default function RoomChatPage() {
   const handleQuote = useCallback((data: QuoteData) => setQuote(data), [])
   const clearQuote = useCallback(() => setQuote(null), [])
 
-  // Local supervisor mode toggle (synced from room, user can override before sending)
-  const [localSupervisorMode, setLocalSupervisorMode] = useState(false)
+  // Local chat mode (synced from room, user can override before sending)
+  const [localChatMode, setLocalChatMode] = useState<ChatMode | null>(null)
 
   // Inline room name editing
   const [editingName, setEditingName] = useState(false)
   const [editNameValue, setEditNameValue] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)
 
-  // Local debate mode toggle (synced from room, lazy-persist-on-send like supervisor)
-  const [localDebateMode, setLocalDebateMode] = useState(false)
-  const confirmedDebateModeRef = useRef(false)
+  const confirmedChatModeRef = useRef<ChatMode | null>(null)
 
   const {
     room,
@@ -84,18 +84,19 @@ export default function RoomChatPage() {
   // Room agent count
   const roomAgentCount = room?.room_agent_set ? Object.keys(room.room_agent_set).length : 0
 
-  // Sync local supervisor toggle from room data (re-syncs when roomId changes)
+  // Sync local chat mode from room data (re-syncs when roomId changes)
   const lastSyncedRoomRef = useRef<string | null>(null)
-  const confirmedSupervisorRef = useRef(false)
   useEffect(() => {
     if (room && lastSyncedRoomRef.current !== roomId) {
       lastSyncedRoomRef.current = roomId
-      setLocalSupervisorMode(roomSupervisorMode)
-      confirmedSupervisorRef.current = roomSupervisorMode
-      setLocalDebateMode(debateMode)
-      confirmedDebateModeRef.current = debateMode
+      const synced = supervisorToChatMode(roomSupervisorMode)
+      setLocalChatMode(synced)
+      confirmedChatModeRef.current = synced
     }
-  }, [room, roomId, roomSupervisorMode, debateMode])
+  }, [room, roomId, roomSupervisorMode])
+
+  // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
+  const effectiveChatMode = localChatMode ?? supervisorToChatMode(roomSupervisorMode)
 
   // Active HITL requests (for the panel above chat input)
   const activeHitlRequests = useActiveHitlRequests()
@@ -178,10 +179,10 @@ export default function RoomChatPage() {
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
-    // Lazy-persist supervisor mode and/or debate mode changes
-    const supervisorChanged = room && localSupervisorMode !== confirmedSupervisorRef.current
-    const debateModeChanged = room && localDebateMode !== confirmedDebateModeRef.current
-    if (supervisorChanged || debateModeChanged) {
+    // Lazy-persist chat mode changes
+    const baseline = confirmedChatModeRef.current ?? effectiveChatMode
+    const modeChanged = room && effectiveChatMode !== baseline
+    if (modeChanged) {
       let freshExtendInfo: object = {}
       try {
         const freshRoom = await inquiryRoomSetting(roomId, getToken)
@@ -191,22 +192,20 @@ export default function RoomChatPage() {
       } catch {
         freshExtendInfo = (room?.extend_info as object) || {}
       }
-      const updatedExtendInfo: Record<string, unknown> = { ...freshExtendInfo }
-      if (supervisorChanged) updatedExtendInfo.use_supervisor = localSupervisorMode
-      if (debateModeChanged) updatedExtendInfo.debateMode = localDebateMode
+      const updatedExtendInfo: Record<string, unknown> = {
+        ...freshExtendInfo,
+        use_supervisor: chatModeToSupervisor(effectiveChatMode),
+      }
       try {
         const result = await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
         if (result.success) {
-          if (supervisorChanged) confirmedSupervisorRef.current = localSupervisorMode
-          if (debateModeChanged) confirmedDebateModeRef.current = localDebateMode
+          confirmedChatModeRef.current = effectiveChatMode
         } else {
-          if (supervisorChanged) setLocalSupervisorMode(confirmedSupervisorRef.current)
-          if (debateModeChanged) setLocalDebateMode(confirmedDebateModeRef.current)
+          setLocalChatMode(confirmedChatModeRef.current)
           toast.warning('Failed to update mode settings — message sent with previous setting')
         }
       } catch {
-        if (supervisorChanged) setLocalSupervisorMode(confirmedSupervisorRef.current)
-        if (debateModeChanged) setLocalDebateMode(confirmedDebateModeRef.current)
+        setLocalChatMode(confirmedChatModeRef.current)
         toast.warning('Failed to update mode settings — message sent with previous setting')
       }
     }
@@ -478,10 +477,8 @@ export default function RoomChatPage() {
             onClearOverride={gm.handleClearOverride}
             quote={quote}
             onClearQuote={clearQuote}
-            supervisorMode={localSupervisorMode}
-            onSupervisorChange={setLocalSupervisorMode}
-            debateMode={localDebateMode}
-            onDebateModeChange={setLocalDebateMode}
+            chatMode={effectiveChatMode}
+            onChatModeChange={setLocalChatMode}
             topSlot={activeHitlRequests.length > 0
               ? (
                 <HitlPanel

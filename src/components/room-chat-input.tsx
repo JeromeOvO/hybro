@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react'
 import Image from 'next/image'
-import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ShipWheel, Swords, ChevronsUpDown } from 'lucide-react'
+import { ArrowUp, Square, AtSign, Maximize2, Minimize2, X, Quote, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { GroupSelector } from '@/components/group-selector'
@@ -18,6 +18,9 @@ import { cn } from '@/lib/utils'
 import type { QuoteData } from './message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
+import { ModeSelector } from './mode-selector'
+import type { ChatMode } from '@/lib/types/chat-mode'
+import { DEFAULT_CHAT_MODE } from '@/lib/types/chat-mode'
 import { AttachmentPreview } from './attachment-preview'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 
@@ -93,14 +96,10 @@ interface RoomChatInputProps {
    * Content above the editor (e.g. HITL Questions panel).
    */
   topSlot?: React.ReactNode
-  /** Current supervisor mode state. */
-  supervisorMode?: boolean
-  /** Callback when the user toggles supervisor mode from the + menu. */
-  onSupervisorChange?: (enabled: boolean) => void
-  /** Current debate mode state. */
-  debateMode?: boolean
-  /** Callback when the user toggles debate mode from the + menu. */
-  onDebateModeChange?: (enabled: boolean) => void
+  /** Current chat mode (Ultimate or Fast). */
+  chatMode?: ChatMode
+  /** Callback when the user changes the chat mode. */
+  onChatModeChange?: (mode: ChatMode) => void
 }
 
 export function RoomChatInput({
@@ -130,10 +129,8 @@ export function RoomChatInput({
   quote,
   onClearQuote,
   topSlot,
-  supervisorMode,
-  onSupervisorChange,
-  debateMode,
-  onDebateModeChange,
+  chatMode,
+  onChatModeChange,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -986,10 +983,6 @@ export function RoomChatInput({
               <FileAttachmentButton
                 onFiles={addFiles}
                 disabled={disabled || sending || processing}
-                supervisorMode={supervisorMode}
-                onSupervisorChange={onSupervisorChange}
-                debateMode={debateMode}
-                onDebateModeChange={onDebateModeChange}
               />
               <TooltipProvider delayDuration={200}>
                 <Tooltip>
@@ -1033,49 +1026,12 @@ export function RoomChatInput({
                   onClearOverride={onClearOverride}
                 />
               )}
-              {supervisorMode && onSupervisorChange && (
-                <>
-                  <div className="h-4 w-px bg-border mx-0.5" />
-                  <TooltipProvider delayDuration={200}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => onSupervisorChange(false)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-400/10 transition-colors"
-                        >
-                          <ShipWheel className="h-4.5 w-4.5" />
-                          <span>Supervisor</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Smart agent coordination
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </>
-              )}
-              {debateMode && onDebateModeChange && (
-                <>
-                  <div className="h-4 w-px bg-border mx-0.5" />
-                  <TooltipProvider delayDuration={200}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => onDebateModeChange(false)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium text-purple-400 hover:text-purple-300 hover:bg-purple-400/10 transition-colors"
-                        >
-                          <Swords className="h-4.5 w-4.5" />
-                          <span>Debate</span>
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Agents debate responses
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </>
+              {onChatModeChange && (
+                <ModeSelector
+                  mode={chatMode ?? DEFAULT_CHAT_MODE}
+                  onModeChange={onChatModeChange}
+                  disabled={disabled || sending || processing}
+                />
               )}
             </div>
 

@@ -78,7 +78,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       selectedAgents = [], 
       appliedFromGroup,
       debateMode = false,
-      useSupervisor = false,
+      useSupervisor = true,
       roomName: customRoomName,
       targetGroup,
       membership: explicitMembership,

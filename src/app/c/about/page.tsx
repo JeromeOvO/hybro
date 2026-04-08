@@ -81,7 +81,7 @@ export default function AboutPage() {
                     <span className="text-[hsl(var(--color-hybro-hy))] mt-1 shrink-0">
                       &#x2192;
                     </span>
-                    Supervisor and debate modes for complex reasoning
+                    Ultimate and Fast modes for flexible orchestration
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-[hsl(var(--color-hybro-hy))] mt-1 shrink-0">
@@ -204,9 +204,9 @@ export default function AboutPage() {
                   <p className="text-muted-foreground leading-relaxed">
                     When a task requires multiple agents, Hybro&apos;s
                     collaboration engine decomposes the work, routes sub-tasks to
-                    the right agents, and synthesizes results. Choose supervisor
-                    mode for structured delegation, debate mode for adversarial
-                    reasoning, or let the system decide.
+                    the right agents, and synthesizes results. Choose Ultimate
+                    mode for smart multi-agent coordination, or Fast mode for
+                    direct, quick responses.
                   </p>
                 </div>
               </div>

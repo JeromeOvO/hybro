@@ -128,12 +128,12 @@ describe('RoomMessages', () => {
         senderName: 'HYBRO AI',
         messageType: 'agent',
         taskStatus: 'working',
-        taskContent: 'Processing your request...',
+        taskContent: 'Processing your request\u2026',
         isEphemeral: true,
       }])
       await renderMessages()
       expect(screen.getByText('HYBRO AI')).toBeTruthy()
-      expect(screen.getByText('Processing your request...')).toBeTruthy()
+      expect(screen.getByText('Processing your request\u2026')).toBeTruthy()
     })
 
     it('should render working task with content as agent bubble showing the content', async () => {

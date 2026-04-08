@@ -65,7 +65,7 @@ export function useProcessingRestore(
         content: '',
         senderName: 'HYBRO AI',
         taskStatus: TASK_STATE.WORKING,
-        taskContent: 'Processing your request...',
+        taskContent: 'Processing your request\u2026',
         timestamp: new Date().toISOString(),
         isEphemeral: true,
       }, 'optimistic')

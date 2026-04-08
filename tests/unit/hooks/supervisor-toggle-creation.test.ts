@@ -107,7 +107,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     expect(extendInfoArg).toHaveProperty('use_supervisor', false)
   })
 
-  it('should default use_supervisor to false when useSupervisor is not provided', async () => {
+  it('should default use_supervisor to true when useSupervisor is not provided', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
       room: { room_id: 'room-sv-3' },
@@ -122,9 +122,8 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     })
 
     const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
-    // When useSupervisor is omitted, it should either not be in extendInfo
-    // or be explicitly false
-    expect(extendInfoArg.use_supervisor ?? false).toBe(false)
+    // When useSupervisor is omitted, default is now true (Ultimate mode)
+    expect(extendInfoArg.use_supervisor).toBe(true)
   })
 
   it('should include both debateMode and use_supervisor in extendInfo', async () => {
