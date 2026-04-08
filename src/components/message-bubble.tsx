@@ -353,6 +353,8 @@ function useTypewriter(fullContent: string, phase: AgentPhase, entity: MessageEn
   // Detect when new complete content arrives that should be animated
   const shouldAnimate = useMemo(() => {
     if (!fullContent) return false
+    // Only animate messages arriving live via SSE — skip DB-hydrated and optimistic
+    if (entity.source !== 'sse') return false
     // Only animate agent messages that arrive complete (no task-based streaming)
     if (entity.messageType !== 'agent') return false
     // If already streaming via artifacts, skip typewriter
@@ -360,7 +362,7 @@ function useTypewriter(fullContent: string, phase: AgentPhase, entity: MessageEn
     // If task status indicates real streaming, skip
     if (entity.taskStatus && !isTerminalState(entity.taskStatus)) return false
     return true
-  }, [fullContent, entity.messageType, entity.artifacts, entity.taskStatus])
+  }, [fullContent, entity.source, entity.messageType, entity.artifacts, entity.taskStatus])
 
   useEffect(() => {
     // Content changed — decide whether to animate the new portion
