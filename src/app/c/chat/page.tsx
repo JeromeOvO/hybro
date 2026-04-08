@@ -11,19 +11,12 @@ import {
     AlertCircle,
     RefreshCw,
     Sparkles,
-    Users,
     Youtube,
     Palmtree,
     ImageIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-    Tooltip,
-    TooltipContent,
-    TooltipProvider,
-    TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/components/message-bubble"
@@ -300,39 +293,6 @@ function ChatPageContent() {
 
     return (
         <div className="flex flex-col h-full bg-background">
-            {/* Fixed Header */}
-            <header className="shrink-0 flex items-center justify-between py-4 px-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
-                    <div className="flex items-center gap-3">
-                        <div className="space-y-1">
-                            {preConfiguredRoom?.roomName && (
-                                <h1 className="text-xl font-semibold">{preConfiguredRoom.roomName}</h1>
-                            )}
-
-                            {preConfiguredRoom && preConfiguredRoom.selectedAgents.length > 0 && (
-                                <div className="flex items-center gap-2 flex-wrap">
-                                    <TooltipProvider>
-                                        <Tooltip>
-                                            <TooltipTrigger asChild>
-                                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                                    <Users className="h-3 w-3" />
-                                                    <span>Team: {preConfiguredRoom.selectedAgents.length} agent{preConfiguredRoom.selectedAgents.length !== 1 ? 's' : ''}</span>
-                                                </div>
-                                            </TooltipTrigger>
-                                            <TooltipContent>
-                                                <div className="space-y-1">
-                                                    <p className="font-medium">Room team:</p>
-                                                    {preConfiguredRoom.selectedAgents.map((agent, i) => (
-                                                        <p key={i} className="text-xs">{agent.agent_card.name}</p>
-                                                    ))}
-                                                </div>
-                                            </TooltipContent>
-                                        </Tooltip>
-                                    </TooltipProvider>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-            </header>
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-3xl">
                     {/* Header */}
