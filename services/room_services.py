@@ -3407,8 +3407,31 @@ class RoomServices:
                     )
 
                     if task:
-                        # First, try to extract from task.history (streaming agents)
-                        if task.history:
+                        # First, try artifacts — these represent the final
+                        # agent output and take priority over history which
+                        # may contain intermediate status messages.
+                        if task.artifacts:
+                            text_parts = []
+                            for artifact in task.artifacts:
+                                if not artifact.parts:
+                                    continue
+                                for part in artifact.parts:
+                                    # Handle different part type structures
+                                    text = None
+                                    if hasattr(part, "text") and part.text:
+                                        text = part.text
+                                    elif hasattr(part, "root"):
+                                        # Discriminated union wrapper
+                                        root = part.root
+                                        if hasattr(root, "text") and root.text:
+                                            text = root.text
+                                    if text:
+                                        text_parts.append(text)
+                            agent_content = "".join(text_parts) if text_parts else ""
+
+                        # Fallback to task.history (streaming agents that
+                        # accumulate content in history rather than artifacts)
+                        if not agent_content and task.history:
                             # Find the latest message with role "agent"
                             agent_messages = [
                                 msg for msg in task.history if msg.role == Role.agent
@@ -3434,26 +3457,6 @@ class RoomServices:
                                 agent_content = (
                                     "".join(text_parts) if text_parts else ""
                                 )
-
-                        # If no content from history, try artifacts (non-push-notification agents)
-                        if not agent_content and task.artifacts:
-                            text_parts = []
-                            for artifact in task.artifacts:
-                                if not artifact.parts:
-                                    continue
-                                for part in artifact.parts:
-                                    # Handle different part type structures
-                                    text = None
-                                    if hasattr(part, "text") and part.text:
-                                        text = part.text
-                                    elif hasattr(part, "root"):
-                                        # Discriminated union wrapper
-                                        root = part.root
-                                        if hasattr(root, "text") and root.text:
-                                            text = root.text
-                                    if text:
-                                        text_parts.append(text)
-                            agent_content = "".join(text_parts) if text_parts else ""
 
                     # Fallback to existing message_text if task extraction yielded nothing
                     # This preserves content that was stored directly (e.g., from webhook handler)
