@@ -114,8 +114,10 @@ class DirectTransport(AgentTransport):
     ) -> None:
         """Emit a terminal AgentEvent through the shared response handler.
 
-        skip_persist=True because tsm.transition_task / tsm.persist_message
-        already wrote the full document to DB.
+        skip_persist=True because the task document was already written to DB
+        — either by tsm.transition_task / tsm.persist_message (streaming and
+        degraded sync paths) or by a2a_service's partial $set via
+        update_task_on_message (tracked sync path).
         """
         msg = ctx.current_message
         kind: str
@@ -1417,9 +1419,22 @@ class DirectTransport(AgentTransport):
         # Handle "message" response (fast path)
         if response.get("type") == "message":
             full_response_text = response.get("content") or ""
+            error_text = response.get("error")
             non_text_parts = response.get("parts")
+
+            # Respect the actual terminal state from the response.
+            # a2a_service returns type="message" for ALL terminal task states
+            # (completed, failed, canceled, rejected), not just completed.
+            actual_state_str = response.get("status")
+            if actual_state_str:
+                actual_state = TaskState(actual_state_str)
+            else:
+                actual_state = TaskState.completed
+
             if full_response_text:
                 current_message.message_content.message_text = full_response_text
+            elif error_text:
+                current_message.message_content.message_text = error_text
 
             # Convert inline base64 file parts to S3 URIs
             if non_text_parts:
@@ -1432,12 +1447,37 @@ class DirectTransport(AgentTransport):
                         task, non_text_parts,
                     )
 
+            # On the tracked path, a2a_service already persisted the real
+            # task (with artifacts) to DB via partial $set.  The in-memory
+            # current_message still holds the stale placeholder — a full-
+            # document persist here would overwrite the real data.  On the
+            # degraded path (task_info is None), no prior write happened so
+            # persist is needed.
+            #
+            # If the tracked write was not confirmed (persisted=False), fall
+            # back to a full-document persist so the terminal state is not
+            # lost — a stale-placeholder overwrite is better than leaving
+            # the task stuck in a non-terminal state after a refresh.
+            if task_info:
+                should_persist = not response.get("persisted", True)
+                if should_persist:
+                    logger.warning(
+                        "DirectTransport: tracked terminal task was not confirmed "
+                        "persisted for %s — falling back to full persist",
+                        message_id,
+                    )
+            else:
+                should_persist = True
             await self.tsm.transition_task(
                 current_message,
-                TaskState.completed,
-                persist=True,
+                actual_state,
+                persist=should_persist,
             )
-            await self._emit_terminal(ctx, TaskState.completed, parts=non_text_parts if non_text_parts else None)
+            await self._emit_terminal(
+                ctx, actual_state,
+                error=error_text,
+                parts=non_text_parts if non_text_parts else None,
+            )
 
             if not task_info:
                 logger.info(
@@ -1447,15 +1487,20 @@ class DirectTransport(AgentTransport):
                 await self.sse_manager.send_task_update(
                     room_id=room_id,
                     message_id=message_id,
-                    status=TaskState.completed,
-                    content=full_response_text,
+                    status=actual_state,
+                    content=full_response_text or error_text,
+                    error=error_text,
                     agent_name=agent_card.name if agent_card else None,
                     agent_id=current_message.agent_id,
                     step_number=step_number,
                     total_steps=total_steps,
                     parts=non_text_parts if non_text_parts else None,
                 )
-            return True, full_response_text, None
+
+            # P1: Non-completed terminal states are dispatch failures so
+            # QueueExecutor / SupervisorExecutor treat them correctly.
+            is_success = actual_state == TaskState.completed
+            return is_success, full_response_text or error_text, None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":

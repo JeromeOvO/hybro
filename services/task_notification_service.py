@@ -125,6 +125,34 @@ async def _notify_task_update_impl(
         else None
     )
 
+    # --- Diagnostic: log what we read from DB ---
+    if task:
+        _art_count = len(task.artifacts) if task.artifacts else 0
+        _task_state = task.status.state if task.status else "no-status"
+        _parts_detail = ""
+        if task.artifacts:
+            _parts_detail = "; ".join(
+                f"art[{i}]={len(a.parts) if a.parts else 0}p,kinds=[{','.join(getattr(getattr(p,'root',p),'kind','?') for p in (a.parts or []))}]"
+                for i, a in enumerate(task.artifacts)
+            )
+        logger.info(
+            "notify_task_update: DB task for %s: id=%s, db_state=%s, "
+            "artifacts=%d (%s), message_text=%s",
+            message_id,
+            task.id[:30] if task.id else "None",
+            _task_state,
+            _art_count,
+            _parts_detail or "none",
+            repr((room_agent_message.message_content.message_text or "")[:80])
+            if room_agent_message.message_content else "no-mc",
+        )
+    else:
+        logger.warning(
+            "notify_task_update: NO task in DB for %s (mc=%s)",
+            message_id,
+            bool(room_agent_message.message_content),
+        )
+
     # --- Extract content / error / flags from the persisted task ----------
     content = None
     resolved_error = error
@@ -133,7 +161,8 @@ async def _notify_task_update_impl(
     status_message = None
 
     if task:
-        if state == TaskState.completed and task.artifacts:
+        # Extract content from artifacts for any terminal state that has them
+        if task.artifacts:
             from common.utils.a2a_helpers import extract_parts_from_artifacts
 
             extracted = extract_parts_from_artifacts(task.artifacts)
@@ -147,8 +176,24 @@ async def _notify_task_update_impl(
                         i,
                         len(artifact.parts) if artifact.parts else 0,
                     )
+            logger.info(
+                "notify_task_update: extraction result for %s: "
+                "content=%s, text_parts=%d, file_parts=%d, data_parts=%d",
+                message_id,
+                repr(content[:80]) if content else "None",
+                len(extracted.text_parts),
+                len(extracted.file_parts),
+                len(extracted.data_parts),
+            )
+        elif state == TaskState.completed:
+            logger.warning(
+                "notify_task_update: completed but NO artifacts for %s "
+                "(task.artifacts=%s)",
+                message_id,
+                type(task.artifacts).__name__ if task is not None else "no-task",
+            )
 
-        elif state == TaskState.failed:
+        if state == TaskState.failed:
             if not resolved_error:
                 resolved_error = extract_error_message(task) or "Task failed"
 
@@ -174,6 +219,12 @@ async def _notify_task_update_impl(
             )
 
     # --- Write-side: artifact backfill + message_text backfill ------------
+    # Only write back to DB when a backfill actually modifies the message.
+    # An unconditional full-document write here can overwrite real task data
+    # (artifacts, id, context_id) saved by a2a_service's partial $set if
+    # the Pydantic round-trip (deserialize from DB → model_dump → $set)
+    # loses fields from the a2a Task schema.
+    needs_write = False
     if room_agent_message.message_content and task:
         existing_text = room_agent_message.message_content.message_text
         if (
@@ -197,6 +248,7 @@ async def _notify_task_update_impl(
             )
             room_agent_message.message_content.message_task = task
             content = extract_text_from_artifacts(task.artifacts)
+            needs_write = True
             logger.info(
                 "Task %s: Populated artifacts from message_text for A2A compliance",
                 message_id,
@@ -205,19 +257,23 @@ async def _notify_task_update_impl(
         if not room_agent_message.message_content.message_text:
             if content:
                 room_agent_message.message_content.message_text = content
+                needs_write = True
             elif resolved_error:
                 room_agent_message.message_content.message_text = resolved_error
+                needs_write = True
             elif status_message:
                 room_agent_message.message_content.message_text = status_message
+                needs_write = True
 
-        update_ok = await db.update_room_agent_message_by_message_id(
-            room_agent_message.message_id, room_agent_message
-        )
-        if not update_ok:
-            logger.error(
-                "Failed to update room agent message %s for task",
-                room_agent_message.message_id,
+        if needs_write:
+            update_ok = await db.update_room_agent_message_by_message_id(
+                room_agent_message.message_id, room_agent_message
             )
+            if not update_ok:
+                logger.error(
+                    "Failed to update room agent message %s for task",
+                    room_agent_message.message_id,
+                )
 
     # --- Resolve agent_name from room's agent set -------------------------
     agent_name: str | None = None

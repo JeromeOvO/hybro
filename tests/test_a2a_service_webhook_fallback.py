@@ -545,3 +545,99 @@ class TestReplyToTaskWebhookFallback:
         assert cfg.push_notification_config is None
         assert cfg.blocking is True
 
+
+# ---------------------------------------------------------------------------
+# Tests for persisted flag propagation
+# ---------------------------------------------------------------------------
+
+
+def _build_message_response() -> MagicMock:
+    """Build a mock a2a response where result.kind == 'message'."""
+    mock_result = MagicMock()
+    mock_result.kind = "message"
+    mock_result.parts = [TextPart(text="Hello from agent")]
+
+    inner = MagicMock()
+    inner.result = mock_result
+
+    outer = MagicMock()
+    outer.root = inner
+    return outer
+
+
+class TestSendMessageTrackedAgentPersistedFlag:
+    """Tests that send_message_to_tracked_agent propagates the DB write result
+    as a 'persisted' key in the response dict."""
+
+    @pytest.mark.asyncio
+    async def test_persisted_true_on_successful_db_write(self):
+        """update_task_on_message returns True → response has persisted=True."""
+        from services.a2a_service import A2AService
+        import services.database_service as db_module
+
+        @asynccontextmanager
+        async def fake_client_ctx(*args, **kwargs):
+            fake_client = AsyncMock()
+            fake_client.send_message = AsyncMock(return_value=_build_message_response())
+            yield fake_client
+
+        service = A2AService.__new__(A2AService)
+
+        with (
+            patch.object(service, "has_push_notification_capability", return_value=False),
+            patch.object(service, "create_a2a_client", fake_client_ctx),
+            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(service, "_record_call", new_callable=AsyncMock),
+            patch("services.a2a_service.settings") as mock_settings,
+            patch.object(db_module, "db_service") as mock_db,
+        ):
+            mock_settings.webhook_base_url = ""
+            mock_db.update_task_on_message = AsyncMock(return_value=True)
+
+            result = await service.send_message_to_tracked_agent(
+                agent_card=_make_agent_card(push_capable=False),
+                message=_make_message(),
+                message_id="msg-persist-001",
+                webhook_token="tok-p1",
+                context_id="ctx-p1",
+            )
+
+        assert result["type"] == "message"
+        assert result["persisted"] is True
+
+    @pytest.mark.asyncio
+    async def test_persisted_false_on_failed_db_write(self):
+        """update_task_on_message returns False → response has persisted=False."""
+        from services.a2a_service import A2AService
+        import services.database_service as db_module
+
+        @asynccontextmanager
+        async def fake_client_ctx(*args, **kwargs):
+            fake_client = AsyncMock()
+            fake_client.send_message = AsyncMock(return_value=_build_message_response())
+            yield fake_client
+
+        service = A2AService.__new__(A2AService)
+
+        with (
+            patch.object(service, "has_push_notification_capability", return_value=False),
+            patch.object(service, "create_a2a_client", fake_client_ctx),
+            patch.object(service, "_resolve_accepted_modes", return_value=["text/plain"]),
+            patch.object(service, "_record_call", new_callable=AsyncMock),
+            patch("services.a2a_service.settings") as mock_settings,
+            patch.object(db_module, "db_service") as mock_db,
+        ):
+            mock_settings.webhook_base_url = ""
+            mock_db.update_task_on_message = AsyncMock(return_value=False)
+
+            result = await service.send_message_to_tracked_agent(
+                agent_card=_make_agent_card(push_capable=False),
+                message=_make_message(),
+                message_id="msg-persist-002",
+                webhook_token="tok-p2",
+                context_id="ctx-p2",
+            )
+
+        assert result["type"] == "message"
+        assert result["persisted"] is False
+

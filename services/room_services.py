@@ -3086,6 +3086,7 @@ class RoomServices:
         from services.s3_service import s3_service
 
         key_refs: list[tuple[object, str]] = []
+        key_filenames: dict[str, str] = {}
 
         for msg in messages:
             task = msg.message_content.message_task if msg.message_content else None
@@ -3108,13 +3109,18 @@ class RoomServices:
                     if file_content is None:
                         continue
                     key_refs.append((file_content, s3_key))
+                    fname = getattr(file_content, "name", None)
+                    if fname:
+                        key_filenames[s3_key] = fname
 
         if not key_refs:
             return
 
         unique_keys = list({k for _, k in key_refs})
         try:
-            url_map = await s3_service.batch_presigned_urls(unique_keys)
+            url_map = await s3_service.batch_presigned_urls(
+                unique_keys, filenames=key_filenames,
+            )
         except Exception:
             logger.warning("Failed to refresh artifact presigned URLs")
             return

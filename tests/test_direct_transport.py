@@ -664,3 +664,223 @@ class TestFinalizeStreamingEmitsLastChunk:
         assert artifact["artifact_id"] == "msg-1-stream"
         assert artifact["parts"] == []
         assert first_call[1]["last_chunk"] is True or first_call[0][5] is True
+
+
+# =============================================================================
+# _process_sync_response: persist gating on tracked vs degraded path
+# =============================================================================
+
+
+class TestProcessSyncResponsePersistGating:
+    """Tracked path skips full-document persist to avoid overwriting
+    the real task saved by a2a_service's partial $set."""
+
+    def _make_ctx(self, current_message, agent_card, task_info):
+        return ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info=task_info,
+            send_sse=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_tracked_path_with_persisted_skips_persist(self):
+        """When task_info is set and response has persisted=True,
+        transition_task must be called with persist=False."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = self._make_ctx(current_message, agent_card, task_info)
+
+        response = {
+            "type": "message",
+            "content": "Agent result with artifacts",
+            "persisted": True,
+        }
+
+        await proc._process_sync_response(
+            response=response,
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=task_info,
+            ctx=ctx,
+            token=None,
+        )
+
+        proc.tsm.transition_task.assert_awaited_once()
+        call_kwargs = proc.tsm.transition_task.call_args[1]
+        assert call_kwargs["persist"] is False
+
+    @pytest.mark.asyncio
+    async def test_tracked_path_with_persisted_false_falls_back_to_persist(self):
+        """When task_info is set but persisted=False (DB write not confirmed),
+        fall back to full persist so the terminal state is not lost."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = self._make_ctx(current_message, agent_card, task_info)
+
+        response = {
+            "type": "message",
+            "content": "Agent result",
+            "persisted": False,
+        }
+
+        await proc._process_sync_response(
+            response=response,
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=task_info,
+            ctx=ctx,
+            token=None,
+        )
+
+        proc.tsm.transition_task.assert_awaited_once()
+        call_kwargs = proc.tsm.transition_task.call_args[1]
+        assert call_kwargs["persist"] is True
+
+    @pytest.mark.asyncio
+    async def test_degraded_path_persists(self):
+        """When task_info is None (degraded/fallback path), persist=True."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.sse_manager.send_task_update = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        ctx = self._make_ctx(current_message, agent_card, task_info=None)
+
+        response = {
+            "type": "message",
+            "content": "Fallback response",
+        }
+
+        await proc._process_sync_response(
+            response=response,
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=None,
+            ctx=ctx,
+            token=None,
+        )
+
+        proc.tsm.transition_task.assert_awaited_once()
+        call_kwargs = proc.tsm.transition_task.call_args[1]
+        assert call_kwargs["persist"] is True
+
+
+class TestProcessSyncResponseRespectsStatus:
+    """When the agent returns a non-completed terminal state (e.g. failed),
+    _process_sync_response must use that state instead of hardcoding completed."""
+
+    def _make_ctx(self, current_message, agent_card, task_info):
+        return ProcessingContext(
+            room_id="room-1",
+            current_message=current_message,
+            agent_card=agent_card,
+            user_message_id="msg-1",
+            task_info=task_info,
+            send_sse=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_status_uses_failed_state(self):
+        """Response with status=failed should transition to TaskState.failed,
+        not TaskState.completed."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = self._make_ctx(current_message, agent_card, task_info)
+
+        response = {
+            "type": "message",
+            "content": None,
+            "status": "failed",
+            "error": "Apify actor timed out",
+            "persisted": True,
+        }
+
+        success, text, _ = await proc._process_sync_response(
+            response=response,
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=task_info,
+            ctx=ctx,
+            token=None,
+        )
+
+        # transition_task should use TaskState.failed
+        call_args = proc.tsm.transition_task.call_args
+        assert call_args[0][1] == TaskState.failed
+
+        # _emit_terminal should receive state=failed and error text
+        handle_call = proc.response_handler.handle.call_args[0][0]
+        assert handle_call.kind == "error"
+        assert handle_call.error_text == "Apify actor timed out"
+
+        # Return text should be the error message
+        assert text == "Apify actor timed out"
+
+        # Failed dispatch must return success=False
+        assert success is False
+
+    @pytest.mark.asyncio
+    async def test_no_status_defaults_to_completed(self):
+        """Response without status field (Message kind) should default to completed."""
+        proc = _make_processor()
+        proc.tsm.transition_task = AsyncMock()
+        proc.response_handler.handle = AsyncMock()
+
+        current_message = _make_room_agent_message()
+        agent_card = MagicMock(spec_set=["name"])
+        agent_card.name = "test-agent"
+        task_info = {"webhook_token": "tok", "context_id": "ctx", "created_at": "t0"}
+        ctx = self._make_ctx(current_message, agent_card, task_info)
+
+        response = {
+            "type": "message",
+            "content": "Message result",
+            "persisted": True,
+        }
+
+        success, text, _ = await proc._process_sync_response(
+            response=response,
+            current_message=current_message,
+            agent_card=agent_card,
+            room_id="room-1",
+            message_id="msg-1",
+            task_info=task_info,
+            ctx=ctx,
+            token=None,
+        )
+
+        call_args = proc.tsm.transition_task.call_args
+        assert call_args[0][1] == TaskState.completed
+        assert success is True

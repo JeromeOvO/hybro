@@ -48,31 +48,63 @@ class S3Service:
         logger.info("Uploaded %s to S3 (%s bytes)", s3_key, content_length)
         return s3_key
 
-    async def generate_presigned_url(self, s3_key: str) -> str:
-        """Generate a presigned GET URL with in-memory caching."""
-        cached = self._url_cache.get(s3_key)
+    async def generate_presigned_url(
+        self, s3_key: str, *, filename: str | None = None,
+    ) -> str:
+        """Generate a presigned GET URL with in-memory caching.
+
+        If *filename* is provided, a ``Content-Disposition: attachment``
+        header is baked into the URL so browsers download the file with
+        the original name instead of the S3 key.
+        """
+        cache_key = (s3_key, filename)
+        cached = self._url_cache.get(cache_key)
         if cached:
             url, expiry = cached
             if time.time() < expiry:
                 return url
 
+        params: dict = {"Bucket": self._bucket, "Key": s3_key}
+        if filename:
+            from urllib.parse import quote
+
+            safe_name = quote(filename, safe="")
+            params["ResponseContentDisposition"] = (
+                f"attachment; filename*=UTF-8''{safe_name}"
+            )
+
         async with self._session.client("s3", region_name=self._region) as client:
             url = await client.generate_presigned_url(
                 "get_object",
-                Params={"Bucket": self._bucket, "Key": s3_key},
+                Params=params,
                 ExpiresIn=self._presigned_url_ttl,
             )
 
-        self._url_cache[s3_key] = (url, time.time() + self._cache_ttl)
+        self._url_cache[cache_key] = (url, time.time() + self._cache_ttl)
         return url
 
-    async def batch_presigned_urls(self, s3_keys: list[str]) -> dict[str, str]:
-        """Generate presigned URLs for multiple keys. Uses cache where available."""
+    async def batch_presigned_urls(
+        self,
+        s3_keys: list[str],
+        *,
+        filenames: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        """Generate presigned URLs for multiple keys. Uses cache where available.
+
+        If *filenames* maps an s3_key to an original filename, the generated
+        URL will include a ``Content-Disposition: attachment`` header so that
+        browsers download with the correct name.
+        """
+        from urllib.parse import quote
+
+        filenames = filenames or {}
         result: dict[str, str] = {}
         uncached: list[str] = []
 
         for key in s3_keys:
-            cached = self._url_cache.get(key)
+            fname = filenames.get(key)
+            cache_key = (key, fname) if fname else (key, None)
+            cached = self._url_cache.get(cache_key)
             if cached:
                 url, expiry = cached
                 if time.time() < expiry:
@@ -84,13 +116,21 @@ class S3Service:
             async with self._session.client("s3", region_name=self._region) as client:
                 now = time.time()
                 for key in uncached:
+                    params: dict = {"Bucket": self._bucket, "Key": key}
+                    fname = filenames.get(key)
+                    if fname:
+                        safe_name = quote(fname, safe="")
+                        params["ResponseContentDisposition"] = (
+                            f"attachment; filename*=UTF-8''{safe_name}"
+                        )
                     url = await client.generate_presigned_url(
                         "get_object",
-                        Params={"Bucket": self._bucket, "Key": key},
+                        Params=params,
                         ExpiresIn=self._presigned_url_ttl,
                     )
                     result[key] = url
-                    self._url_cache[key] = (url, now + self._cache_ttl)
+                    cache_key = (key, fname) if fname else (key, None)
+                    self._url_cache[cache_key] = (url, now + self._cache_ttl)
 
         return result
 
