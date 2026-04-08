@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   BarChart3,
   ThumbsUp,
-  Activity,
+
   ChevronDown,
   Link2,
   Tag,
@@ -295,9 +295,9 @@ export default function ConsumerAgentProfilePage() {
   const isChatDisabled = !isActive
 
   const callCount = agent.call_count ?? 0
-  const successCount = agent.call_success_count ?? 0
+
   const likeCount = agent.like_count ?? 0
-  const successRate = callCount > 0 ? Math.round((successCount / callCount) * 100) : null
+
   const hasStats = callCount > 0 || likeCount > 0
 
   const quickPrompts = collectQuickPrompts(card.skills)
@@ -497,12 +497,7 @@ export default function ConsumerAgentProfilePage() {
                 {formatCount(callCount)} calls
               </span>
             )}
-            {successRate !== null && (
-              <span className="flex items-center gap-1.5">
-                <Activity className="h-4 w-4" />
-                {successRate}% success
-              </span>
-            )}
+
             {likeCount > 0 && (
               <span className="flex items-center gap-1.5">
                 <ThumbsUp className="h-4 w-4" />
