@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EntityUserBubble, EntityAgentBubble, derivePhase } from '@/components/message-bubble'
 import type { MessageEntity } from '@/stores/message-store'
@@ -343,6 +343,58 @@ describe('EntityAgentBubble JSON content rendering', () => {
 
     const trigger = container.querySelector('[data-slot="collapsible-trigger"]')
     expect(trigger).toBeNull()
+  })
+})
+
+// ── Typewriter animation ───────────────────────────────────────
+
+describe('Typewriter animation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('source: "db" renders full content immediately without animation', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content: 'Hello, this is a completed response from the agent.',
+      source: 'db', taskStatus: 'completed',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+    expect(container.textContent).toContain('Hello, this is a completed response from the agent.')
+  })
+
+  it('source: "sse" agent message animates then completes after timers advance', () => {
+    vi.useFakeTimers()
+    const content = 'Hello, this is a live streaming response from the agent.'
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'Bot',
+      content, source: 'sse', taskStatus: 'completed',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+
+    // Phase 1: immediately after render, full content should NOT be present (typewriter starts at 0)
+    expect(container.textContent).not.toContain(content)
+
+    // Phase 2: advance through all typewriter ticks — each tick schedules
+    // the next via setTimeout, so we need multiple act() flush cycles
+    // TYPEWRITER_CHARS_PER_TICK=3, TYPEWRITER_INTERVAL_MS=12
+    const ticks = Math.ceil(content.length / 3) + 5
+    for (let i = 0; i < ticks; i++) {
+      act(() => { vi.advanceTimersByTime(12) })
+    }
+
+    // Now the full content should be visible
+    expect(container.textContent).toContain(content)
+  })
+
+  it('source: "optimistic" does not animate', () => {
+    const entity = makeEntity({
+      messageType: 'agent', agentId: 'a1', senderName: 'System',
+      content: 'Processing was stopped by the user.',
+      source: 'optimistic', taskStatus: 'canceled',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+    expect(container.textContent).toContain('Processing was stopped by the user.')
   })
 })
 

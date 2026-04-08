@@ -1,9 +1,8 @@
 'use client'
 
 import { useRef } from 'react'
-import { Plus, Paperclip, ShipWheel, Swords } from 'lucide-react'
+import { Plus, Paperclip } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,20 +36,12 @@ interface FileAttachmentButtonProps {
   onFiles: (files: File[]) => void
   disabled?: boolean
   className?: string
-  supervisorMode?: boolean
-  onSupervisorChange?: (enabled: boolean) => void
-  debateMode?: boolean
-  onDebateModeChange?: (enabled: boolean) => void
 }
 
 export function FileAttachmentButton({
   onFiles,
   disabled,
   className,
-  supervisorMode,
-  onSupervisorChange,
-  debateMode,
-  onDebateModeChange,
 }: FileAttachmentButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -92,50 +83,6 @@ export function FileAttachmentButton({
             <Paperclip className="h-4 w-4" />
             <span>Add photos and files</span>
           </DropdownMenuItem>
-
-          {onSupervisorChange !== undefined && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuItem
-                    onSelect={(e) => e.preventDefault()}
-                    className="gap-2 cursor-pointer"
-                  >
-                    <ShipWheel className="h-4 w-4" />
-                    <span className="flex-1">Supervisor Mode</span>
-                    <Switch
-                      checked={supervisorMode ?? false}
-                      onCheckedChange={onSupervisorChange}
-                      className="ml-2"
-                    />
-                  </DropdownMenuItem>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="text-xs">
-                  Smart agent coordination
-                </TooltipContent>
-              </Tooltip>
-          )}
-
-          {onDebateModeChange !== undefined && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuItem
-                    onSelect={(e) => e.preventDefault()}
-                    className="gap-2 cursor-pointer"
-                  >
-                    <Swords className="h-4 w-4" />
-                    <span className="flex-1">Debate Mode</span>
-                    <Switch
-                      checked={debateMode ?? false}
-                      onCheckedChange={onDebateModeChange}
-                      className="ml-2"
-                    />
-                  </DropdownMenuItem>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="text-xs">
-                  Agents debate responses
-                </TooltipContent>
-              </Tooltip>
-          )}
         </DropdownMenuContent>
         </DropdownMenu>
       </TooltipProvider>

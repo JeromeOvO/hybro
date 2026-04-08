@@ -198,7 +198,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       const entity = useMessageStore.getState().entities[placeholderId]
-      expect(entity.taskContent).toBe('Processing your request...')
+      expect(entity.taskContent).toBe('Processing your request\u2026')
       expect(entity.isEphemeral).toBe(true)
       expect(flags('room-1').processing).toBe(true)
     })

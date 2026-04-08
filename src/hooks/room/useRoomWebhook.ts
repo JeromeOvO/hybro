@@ -140,10 +140,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Handle SSE messages — delegates to pure dispatcher factory
   const handleSSEMessage = useMemo(
     () => createSSEDispatcher({
-      roomId, lifecycle, getAgentName, getAgentSource, getSupervisorMode,
+      roomId, lifecycle, getAgentName, getAgentSource,
       reconcileWithDb, hitlRequestIndex, setCancelling,
     }),
-    [roomId, lifecycle, getAgentName, getAgentSource, getSupervisorMode,
+    [roomId, lifecycle, getAgentName, getAgentSource,
      reconcileWithDb, setCancelling]
   )
 
