@@ -493,22 +493,14 @@ class HITLService:
         # no stale-DB risk).
         task_result_text = reply_result.get("response_text")
 
-        # Persist the agent's post-HITL response to DB and emit SSE
-        # notification so the frontend shows the updated message.
-        # The webhook path handles this via AgentResponseHandler, but
-        # the blocking path bypasses that — do it manually.
-        # Use the actual terminal state from reply_to_task (may be
-        # "completed", "failed", "canceled", or "rejected").
+        # reply_to_task already persisted the full task + message_text
+        # atomically via update_task_on_message.  We only need to emit the
+        # SSE notification so the frontend shows the updated message.
         is_failure = task_state in ("failed", "canceled", "rejected")
         effective_state = task_state or "completed"
         if request.display_message_id:
-            await self.database_service.update_task_state_on_message(
-                request.display_message_id,
-                effective_state,
-                message_text=task_result_text or "",
-            )
             # Retrieve the agent message to get user_id for notification
-            agent_msg = await self.database_service.get_room_agent_message(
+            agent_msg = await self.database_service.get_room_agent_message_by_message_id(
                 request.display_message_id
             )
             if agent_msg:

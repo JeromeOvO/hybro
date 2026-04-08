@@ -447,6 +447,26 @@ class A2AService:
         await self._record_call(agent_id, success=True)
         result = response.root.result
 
+        # --- Diagnostic: log the raw response shape ---
+        _art_count = len(result.artifacts) if hasattr(result, "artifacts") and result.artifacts else 0
+        _parts_summary = ""
+        if hasattr(result, "artifacts") and result.artifacts:
+            _parts_summary = "; ".join(
+                f"art[{i}]={len(a.parts) if a.parts else 0}p"
+                for i, a in enumerate(result.artifacts)
+            )
+        elif hasattr(result, "parts") and result.parts:
+            _parts_summary = f"msg_parts={len(result.parts)}"
+        logger.info(
+            "send_message_to_tracked_agent: response kind=%s, state=%s, "
+            "artifacts=%d (%s) for message_id=%s",
+            result.kind,
+            getattr(result.status, "state", "N/A") if hasattr(result, "status") else "N/A",
+            _art_count,
+            _parts_summary or "none",
+            message_id,
+        )
+
         # Handle Message response (fast path)
         if result.kind == "message":
             # Create completed task with message as artifact
@@ -458,7 +478,7 @@ class A2AService:
                 )
 
             message_text = self._extract_text_from_message(result)
-            await db_service.update_task_on_message(
+            persisted = await db_service.update_task_on_message(
                 message_id,
                 completed_task.model_dump(mode="json"),
                 message_text=message_text or None,
@@ -475,6 +495,7 @@ class A2AService:
                 "type": "message",
                 "message_id": message_id,
                 "content": message_text,
+                "persisted": persisted,
             }
             if non_text_parts:
                 resp["parts"] = non_text_parts
@@ -493,7 +514,7 @@ class A2AService:
             task_text = self._extract_text_from_task(result) if is_terminal_state(state) else None
 
             # Update with real task from agent
-            await db_service.update_task_on_message(
+            persisted = await db_service.update_task_on_message(
                 message_id,
                 result.model_dump(mode="json"),
                 message_text=task_text or None,
@@ -513,9 +534,17 @@ class A2AService:
                     "message_id": message_id,
                     "content": task_text,
                     "status": state.value if hasattr(state, "value") else str(state),
+                    "persisted": persisted,
                 }
                 if non_text_parts:
                     resp["parts"] = non_text_parts
+                # For non-completed terminal states, extract error from status.message
+                if state != TaskState.completed:
+                    error_text = self._extract_status_message(result)
+                    if error_text:
+                        resp["error"] = error_text
+                    elif not task_text:
+                        resp["error"] = f"Task {state.value}"
                 return resp
 
             # Handle interactive states
@@ -1068,26 +1097,25 @@ class A2AService:
             )
             response = await a2a_client.send_message(request)
 
-        # Update task status locally if a Task was returned
+        # Extract response and persist task to DB in one shot so that
+        # message_text is written atomically with the task.  Without this,
+        # the terminal-state guard in update_task_on_message blocks the
+        # subsequent update_task_state_on_message call in hitl_service,
+        # leaving message_text empty.
         task_obj = None
         result = getattr(response, "root", None)
+
+        # --- Extract response text from artifacts or message ---
+        response_text: str | None = None
         if result and hasattr(result, "result"):
             task_result = result.result
             if hasattr(task_result, "kind") and task_result.kind == "task":
                 task_obj = task_result
-                await db_service.update_task_on_message(
-                    message_id, task_result.model_dump(mode="json")
-                )
-
-        # Extract response text from artifacts or message
-        response_text: str | None = None
-        if task_obj and hasattr(task_obj, "artifacts") and task_obj.artifacts:
-            from common.utils.a2a_helpers import extract_text_from_artifacts
-            response_text = extract_text_from_artifacts(task_obj.artifacts)
-        elif result and hasattr(result, "result"):
-            msg_result = result.result
-            if hasattr(msg_result, "kind") and msg_result.kind == "message":
-                parts = getattr(msg_result, "parts", []) or []
+                if task_obj.artifacts:
+                    from common.utils.a2a_helpers import extract_text_from_artifacts
+                    response_text = extract_text_from_artifacts(task_obj.artifacts)
+            elif hasattr(task_result, "kind") and task_result.kind == "message":
+                parts = getattr(task_result, "parts", []) or []
                 for p in parts:
                     if hasattr(p, "root") and hasattr(p.root, "text"):
                         response_text = p.root.text
@@ -1109,6 +1137,14 @@ class A2AService:
                     if hasattr(p, "text"):
                         response_text = p.text
                         break
+
+        # --- Persist task + message_text together ---
+        if task_obj:
+            await db_service.update_task_on_message(
+                message_id,
+                task_obj.model_dump(mode="json"),
+                message_text=response_text,
+            )
 
         logger.info(
             "hitl_reply_to_task_sent",

@@ -377,7 +377,10 @@ async def convert_inline_bytes_to_s3(
                 content_type=mime,
                 content_length=len(decoded),
             )
-            presigned_url = await s3_service.generate_presigned_url(s3_key)
+            orig_name = file_info.get("name")
+            presigned_url = await s3_service.generate_presigned_url(
+                s3_key, filename=orig_name,
+            )
             file_info["bytes"] = None
             file_info["uri"] = presigned_url
             if part.get("metadata") is None:
@@ -502,7 +505,10 @@ async def _download_external_uris_to_s3(
                     content_type=mime,
                     content_length=len(data),
                 )
-                presigned_url = await s3_service.generate_presigned_url(s3_key)
+                orig_name = file_info.get("name")
+                presigned_url = await s3_service.generate_presigned_url(
+                    s3_key, filename=orig_name,
+                )
                 file_info["uri"] = presigned_url
                 if part_dict.get("metadata") is None:
                     part_dict["metadata"] = {}
@@ -578,11 +584,14 @@ async def convert_pydantic_artifacts_to_s3(
                     file_data=io.BytesIO(decoded), s3_key=s3_key,
                     content_type=mime, content_length=len(decoded),
                 )
-                presigned_url = await s3_service.generate_presigned_url(s3_key)
+                orig_name = getattr(fc, "name", None)
+                presigned_url = await s3_service.generate_presigned_url(
+                    s3_key, filename=orig_name,
+                )
                 root.file = FileWithUri(
                     uri=presigned_url,
                     mime_type=getattr(fc, "mime_type", None),
-                    name=getattr(fc, "name", None),
+                    name=orig_name,
                 )
                 root.metadata = {**(root.metadata or {}), "s3_key": s3_key}
                 converted += 1
@@ -643,7 +652,10 @@ async def convert_pydantic_artifacts_to_s3(
                         file_data=io.BytesIO(data), s3_key=s3_key,
                         content_type=mime, content_length=len(data),
                     )
-                    presigned_url = await s3_service.generate_presigned_url(s3_key)
+                    orig_name = getattr(fc, "name", None)
+                    presigned_url = await s3_service.generate_presigned_url(
+                        s3_key, filename=orig_name,
+                    )
                     fc.uri = presigned_url
                     root.metadata = {**(root.metadata or {}), "s3_key": s3_key}
                     converted += 1

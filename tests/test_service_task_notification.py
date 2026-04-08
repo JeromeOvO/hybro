@@ -317,6 +317,53 @@ class TestNotifyTaskUpdate:
             assert call_kw["error"] == "Task failed"
 
     # --------------------------------------------------------------------- #
+    # 7b. Failed state with artifacts extracts content
+    # --------------------------------------------------------------------- #
+    @pytest.mark.asyncio
+    async def test_failed_with_artifacts_extracts_content(self):
+        """A failed task that has artifacts (e.g. partial results) should
+        still extract text content from those artifacts for the SSE."""
+        task = _make_task(
+            TaskState.failed,
+            artifacts=[
+                Artifact(
+                    artifactId="a1",
+                    name="partial",
+                    parts=[Part(root=TextPart(text="Partial result before failure"))],
+                ),
+            ],
+        )
+        msg = _make_message(task=task)
+        extracted = _extracted_parts_mock(text="Partial result before failure")
+
+        with (
+            patch(PATCH_DB) as db,
+            patch(PATCH_NOTIF) as notif,
+            patch(PATCH_SSE) as sse,
+            patch(PATCH_SLEEP, new_callable=AsyncMock),
+            patch(PATCH_EXTRACT_PARTS, return_value=extracted) as mock_ep,
+            patch(PATCH_EXTRACT_ERR, return_value="Agent error") as mock_err,
+            patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
+        ):
+            _setup_db_mock(db, msg=msg)
+            _setup_notif_mock(notif)
+            _setup_sse_mock(sse)
+
+            result = await notify_task_update(
+                message_id="msg-1",
+                state=TaskState.failed,
+                room_id="room-1",
+                user_id="user-1",
+            )
+
+            assert result is True
+            # Artifacts should be extracted regardless of state
+            mock_ep.assert_called_once_with(task.artifacts)
+            call_kw = notif.send_task_update.call_args.kwargs
+            assert call_kw["content"] == "Partial result before failure"
+            assert call_kw["error"] == "Agent error"
+
+    # --------------------------------------------------------------------- #
     # 8. input_required sets requires_input flag
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
