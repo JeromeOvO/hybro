@@ -1,19 +1,14 @@
 """
 Agent Selection Service for Auto Room Mode
 
-This service provides smart agent routing with a two-stage process:
-1. Vector search for candidate agents using Pinecone
-2. LLM analysis to decide routing strategy (single/parallel/sequential)
+Thin facade over AgentMatcher. Provides backward-compatible API
+for agent selection with legacy RoutingStrategy and AgentSelectionResult types.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 
 from common.utils.logger import get_logger
-from models.agent import Agent, AgentStatus
-from services.agent_capability_issue_service import capability_issue_service
-from services.database_service import db_service
-from services.openai_service import openai_service
 
 logger = get_logger(__name__)
 
@@ -45,280 +40,88 @@ class AgentSelectionResult:
 
 class AgentSelectionService:
     """
-    Service for intelligent agent selection in Auto mode rooms.
-    
-    Uses vector search to find candidate agents, then LLM to analyze
-    the message and decide the optimal routing strategy.
+    Facade over AgentMatcher for backward compatibility.
+
+    Delegates to AgentMatcher.match() and converts results to legacy
+    AgentSelectionResult format.
     """
 
     def __init__(self):
-        self.database_service = db_service
-        self.openai_service = openai_service
+        from services.agent_matcher import AgentMatcher
+        self._matcher = AgentMatcher()
 
     async def select_agents_for_message(
         self,
         message_text: str,
         top_k: int = 10,
         user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
+        is_debate_mode: bool = False,
     ) -> AgentSelectionResult:
         """
-        Select agents for a message using vector search + LLM routing.
-        
-        Only active agents will be considered for selection.
-        
+        Select agents for a message using deterministic matching.
+
         Args:
             message_text: The user's message to route
-            top_k: Maximum number of candidate agents to consider
-            user_id: Optional sender ID — when provided, includes the sender's
-                     private agents in the candidate pool (shared eligibility predicate)
-            
+            top_k: Unused (kept for backward compatibility)
+            user_id: Optional sender ID for private agent visibility
+            required_input_modes: If present (non-None), message has attachments
+            is_debate_mode: If True, returns 3-5 agents for debate diversity
+
         Returns:
             AgentSelectionResult with strategy, selected agents, and reasoning
         """
         logger.info(
-            "AgentSelectionService: Selecting agents for message (length: %d chars)",
-            len(message_text)
+            "AgentSelectionService: Selecting agents for message (length: %d chars, debate=%s)",
+            len(message_text), is_debate_mode
         )
 
-        # Step 0.5: Get agents with open capability issues to exclude
-        excluded = await capability_issue_service.get_excluded_agent_ids()
-
-        # Step 1: Vector search for candidate agents (active only)
-        candidates = await self.database_service.query_similar_agents(
-            message_text, count=top_k, excluded_agent_ids=excluded, active_only=True, user_id=user_id,
+        # Delegate to AgentMatcher
+        match_result = await self._matcher.match(
+            message_text=message_text,
+            user_id=user_id,
+            is_debate_mode=is_debate_mode,
+            required_input_modes=required_input_modes,
         )
 
-        if not candidates:
-            logger.warning("AgentSelectionService: No active candidate agents found")
+        # Convert MatchResult to AgentSelectionResult for backward compatibility
+        if not match_result.agents:
+            logger.warning("AgentSelectionService: No agents matched")
             return AgentSelectionResult(
                 strategy=RoutingStrategy.SINGLE,
                 agents=[],
-                reasoning="No active matching agents found in the network",
+                reasoning="No matching agents found in the network",
                 needs_debate=False
             )
 
-        logger.info(
-            "AgentSelectionService: Found %d active candidate agents via vector search",
-            len(candidates)
-        )
-
-        # Step 2: Filter by skills to remove obviously wrong agents
-        skill_filtered = self._filter_by_skills(message_text, candidates)
-
-        # Step 3: LLM analyzes message and decides routing strategy
-        routing_result = await self._analyze_routing_needs(message_text, skill_filtered)
-
-        return routing_result
-
-    def _filter_by_skills(
-        self,
-        message_text: str,
-        candidates: list[Agent],
-    ) -> list[Agent]:
-        """
-        Filter candidates by skill matching to remove obviously unsuitable agents.
-
-        Uses simple keyword matching to quickly eliminate agents that lack
-        relevant skills for the task. Preserves agents with no skills listed
-        (general purpose) as potential fallbacks.
-
-        Args:
-            message_text: The user's message
-            candidates: List of candidate agents from vector search
-
-        Returns:
-            Filtered list of agents, or original list if no matches
-        """
-        message_lower = message_text.lower()
-
-        # Task keywords mapped to relevant skill patterns
-        task_skill_map = {
-            'summarize': ['summarization', 'writing', 'content', 'text'],
-            'summary': ['summarization', 'writing', 'content', 'text'],
-            'write': ['writing', 'content', 'generation', 'creation'],
-            'code': ['code', 'programming', 'development', 'software'],
-            'program': ['code', 'programming', 'development', 'software'],
-            'search': ['search', 'research', 'web', 'retrieval', 'information'],
-            'find': ['search', 'research', 'web', 'retrieval', 'information'],
-            'research': ['research', 'search', 'analysis', 'investigation'],
-            'analyze': ['analysis', 'data', 'reasoning', 'evaluation'],
-            'data': ['data', 'analysis', 'processing', 'statistics'],
-            'youtube': ['youtube', 'video', 'content', 'creator'],
-            'video': ['video', 'media', 'content', 'youtube'],
-            'translate': ['translation', 'language', 'localization'],
-            'travel': ['travel', 'planning', 'booking', 'destination'],
-        }
-
-        # Find which task keywords appear in message
-        relevant_skills = set()
-        for keyword, skills in task_skill_map.items():
-            if keyword in message_lower:
-                relevant_skills.update(skills)
-
-        # If no task keywords found, return all candidates (no filtering)
-        if not relevant_skills:
-            logger.info(
-                "AgentSelectionService: No specific task keywords found, skipping skill filter"
+        # Map MatchedAgent to AgentSelection
+        agent_selections = [
+            AgentSelection(
+                agent_id=matched.agent.agent_id,
+                agent_name=matched.agent.agent_card.name,
+                reason=f"Match score: {matched.final_score:.2f} (vector: {matched.vector_score:.2f}, capability: {matched.capability_score:.2f})",
+                score=matched.final_score,
             )
-            return candidates
-
-        # Filter candidates
-        filtered = []
-        for agent in candidates:
-            # Get agent's skills
-            agent_skills = []
-            if agent.agent_card.skills:
-                agent_skills = [s.name.lower() for s in agent.agent_card.skills]
-
-            # Include if:
-            # 1. Agent has no skills listed (general purpose)
-            # 2. Agent has at least one relevant skill
-            if not agent_skills:
-                filtered.append(agent)
-            elif any(
-                skill_keyword in agent_skill
-                for skill_keyword in relevant_skills
-                for agent_skill in agent_skills
-            ):
-                filtered.append(agent)
-            else:
-                logger.debug(
-                    "AgentSelectionService: Filtered out %s - no relevant skills for task",
-                    agent.agent_card.name
-                )
-
-        # If filtering removed everyone, return original candidates as fallback
-        if not filtered:
-            logger.warning(
-                "AgentSelectionService: Skill filtering removed all candidates, using original list"
-            )
-            return candidates
-
-        logger.info(
-            "AgentSelectionService: Skill filtering: %d -> %d candidates",
-            len(candidates),
-            len(filtered)
-        )
-        return filtered
-
-    async def _analyze_routing_needs(
-        self,
-        message_text: str,
-        candidates: list[Agent]
-    ) -> AgentSelectionResult:
-        """
-        Use LLM to analyze message and decide routing strategy.
-        
-        Only active agents will be selected.
-        
-        Args:
-            message_text: The user's message
-            candidates: List of candidate agents from vector search
-            
-        Returns:
-            AgentSelectionResult with strategy and selected agents
-        """
-        # Filter candidates to ensure only active agents are considered (safety check)
-        active_candidates = [
-            agent for agent in candidates 
-            if agent.agent_status == AgentStatus.active
+            for matched in match_result.agents
         ]
-        
-        if not active_candidates:
-            logger.warning(
-                "AgentSelectionService: No active agents in candidates after filtering"
-            )
-            return AgentSelectionResult(
-                strategy=RoutingStrategy.SINGLE,
-                agents=[],
-                reasoning="No active agents available",
-                needs_debate=False
-            )
-        
-        try:
-            routing_decision = await self.openai_service.analyze_message_routing(
-                message_text, active_candidates
-            )
 
-            # Parse LLM response
-            strategy_str = routing_decision.get("strategy", "single").lower()
-            strategy = RoutingStrategy(strategy_str) if strategy_str in [s.value for s in RoutingStrategy] else RoutingStrategy.SINGLE
+        # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1
+        strategy = RoutingStrategy.SINGLE if len(agent_selections) == 1 else RoutingStrategy.PARALLEL
 
-            selected_agent_ids = routing_decision.get("agent_ids", [])
-            reasoning = routing_decision.get("reasoning", "")
-            needs_debate = routing_decision.get("needs_debate", False)
+        reasoning = f"Matched {len(agent_selections)} agent(s) from {match_result.total_candidates} candidates"
 
-            # Build agent selections from the LLM's chosen agents (only active ones)
-            agent_selections = []
-            agent_reasons = routing_decision.get("agent_reasons", {})
-            
-            for agent in active_candidates:
-                if agent.agent_id in selected_agent_ids:
-                    # Double-check agent is active before adding
-                    if agent.agent_status != AgentStatus.active:
-                        logger.warning(
-                            "AgentSelectionService: Skipping inactive agent %s in selection",
-                            agent.agent_id
-                        )
-                        continue
-                    reason = agent_reasons.get(
-                        agent.agent_id, 
-                        f"Best match for: {agent.agent_card.description[:50]}..."
-                    )
-                    agent_selections.append(AgentSelection(
-                        agent_id=agent.agent_id,
-                        agent_name=agent.agent_card.name,
-                        reason=reason
-                    ))
+        logger.info(
+            "AgentSelectionService: Selected %d agents with strategy=%s",
+            len(agent_selections),
+            strategy.value,
+        )
 
-            # If LLM didn't select any agents, fall back to first active candidate
-            if not agent_selections and active_candidates:
-                first_agent = active_candidates[0]
-                agent_selections.append(AgentSelection(
-                    agent_id=first_agent.agent_id,
-                    agent_name=first_agent.agent_card.name,
-                    reason="Best overall match based on capabilities"
-                ))
-                strategy = RoutingStrategy.SINGLE
-
-            logger.info(
-                "AgentSelectionService: Routing decision - strategy=%s, agents=%d, debate=%s",
-                strategy.value,
-                len(agent_selections),
-                needs_debate
-            )
-
-            return AgentSelectionResult(
-                strategy=strategy,
-                agents=agent_selections,
-                reasoning=reasoning,
-                needs_debate=needs_debate
-            )
-
-        except Exception as e:
-            logger.error(
-                "AgentSelectionService: Failed to analyze routing, falling back to single agent: %s",
-                str(e)
-            )
-            # Fallback: use first active candidate with single strategy
-            if active_candidates:
-                first_agent = active_candidates[0]
-                return AgentSelectionResult(
-                    strategy=RoutingStrategy.SINGLE,
-                    agents=[AgentSelection(
-                        agent_id=first_agent.agent_id,
-                        agent_name=first_agent.agent_card.name,
-                        reason="Fallback selection due to routing analysis error"
-                    )],
-                    reasoning=f"Fallback to best match due to error: {str(e)}",
-                    needs_debate=False
-                )
-            return AgentSelectionResult(
-                strategy=RoutingStrategy.SINGLE,
-                agents=[],
-                reasoning="No active agents available",
-                needs_debate=False
-            )
+        return AgentSelectionResult(
+            strategy=strategy,
+            agents=agent_selections,
+            reasoning=reasoning,
+            needs_debate=False,  # Backward-compat: always False
+        )
 
     async def suggest_agents(self, message_text: str, top_k: int = 3) -> dict:
         """
