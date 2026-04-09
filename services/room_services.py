@@ -2303,9 +2303,6 @@ class RoomServices:
                         selection_result.strategy.value,
                     )
 
-                    if selection_result.needs_debate and not is_debate_mode:
-                        logger.info("All Agents mode: Debate mode suggested")
-
                     return selected, True, full_agents
 
                 logger.warning(
