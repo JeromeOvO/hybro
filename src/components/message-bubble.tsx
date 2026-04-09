@@ -17,6 +17,7 @@ import { ImageLightbox } from './image-lightbox'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { TASK_STATE, isFailureState, isInteractiveState, isTerminalState } from '@/lib/types/sse'
 import type { LucideIcon } from 'lucide-react'
+import { getFileIcon } from '@/lib/file-icon-utils'
 import type { Agent } from '@/lib/types/agent'
 
 // ---------------------------------------------------------------------------
@@ -158,10 +159,12 @@ function AttachmentExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ c
   )
 }
 
-function GenericAttachmentLink({ url, fileName, sizeLabel }: { url: string; fileName: string; sizeLabel: string }) {
+function GenericAttachmentLink({ url, fileName, sizeLabel, mimeType }: { url: string; fileName: string; sizeLabel: string; mimeType?: string }) {
   if (isPresignedUrlExpired(url)) {
     return <AttachmentExpiredBanner icon={AlertCircle} />
   }
+
+  const { icon: Icon, color } = getFileIcon(mimeType, fileName)
 
   return (
     <a
@@ -170,6 +173,7 @@ function GenericAttachmentLink({ url, fileName, sizeLabel }: { url: string; file
       rel="noopener noreferrer"
       className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted transition-colors"
     >
+      <Icon className={`h-4 w-4 shrink-0 ${color}`} />
       <span className="truncate max-w-[120px]">{fileName}</span>
       <span className="text-muted-foreground">{sizeLabel}</span>
     </a>
@@ -233,12 +237,15 @@ function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
         url={attachment.fileUrl}
         fileName={attachment.fileName}
         sizeLabel={sizeLabel}
+        mimeType={attachment.mimeType}
       />
     )
   }
 
+  const { icon: FallbackIcon, color: fallbackColor } = getFileIcon(attachment.mimeType, attachment.fileName)
   return (
     <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground">
+      <FallbackIcon className={`h-4 w-4 shrink-0 ${fallbackColor}`} />
       <span className="truncate max-w-[120px]">{attachment.fileName}</span>
       <span>{sizeLabel}</span>
     </span>

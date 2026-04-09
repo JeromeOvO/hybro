@@ -326,7 +326,7 @@ export function GroupSelector({
                           <div className="space-y-0.5 max-h-40 overflow-y-auto">
                             {group.agents.map(agentId => (
                               <div key={agentId} className="text-xs text-muted-foreground">
-                                {agentNameMap[agentId] || agentId}
+                                {agentNameMap[agentId] || 'Unavailable agent'}
                               </div>
                             ))}
                           </div>

@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileIcon, Code2, ImageIcon, Volume2, Film, AlertCircle, ChevronRight } from 'lucide-react'
+import { Code2, ImageIcon, Volume2, Film, AlertCircle, ChevronRight } from 'lucide-react'
+import { getFileIcon } from '@/lib/file-icon-utils'
 import type { ArtifactPart } from '@/stores/message-store/types'
 import { isPresignedUrlExpired } from '@/lib/presigned-url'
 import { tryParseJson } from '@/lib/utils'
@@ -113,7 +114,7 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
   }
 
   if (src) {
-    return <GenericFileLink src={src} displayName={displayName} />
+    return <GenericFileLink src={src} displayName={displayName} mimeType={mime} />
   }
 
   const FallbackIcon = isAudio ? Volume2 : isVideo ? Film : ImageIcon
@@ -125,9 +126,11 @@ function FilePartView({ file }: { file: NonNullable<ArtifactPart['file']> }) {
   )
 }
 
-function GenericFileLink({ src, displayName }: { src: string; displayName: string | undefined }) {
+function GenericFileLink({ src, displayName, mimeType }: { src: string; displayName: string | undefined; mimeType?: string }) {
+  const { icon: Icon, color } = getFileIcon(mimeType, displayName)
+
   if (isPresignedUrlExpired(src)) {
-    return <ResourceExpiredBanner icon={FileIcon} />
+    return <ResourceExpiredBanner icon={Icon} />
   }
 
   return (
@@ -137,7 +140,7 @@ function GenericFileLink({ src, displayName }: { src: string; displayName: strin
       rel="noopener noreferrer"
       className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors"
     >
-      <FileIcon className="h-4 w-4 text-muted-foreground" />
+      <Icon className={`h-4 w-4 shrink-0 ${color}`} />
       <span>{displayName || 'Download file'}</span>
     </a>
   )
