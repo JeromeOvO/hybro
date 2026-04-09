@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from a2a.types import AgentCard
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
@@ -191,6 +192,7 @@ class RelayService:
                         hub_id, last_id=start_id,
                         block_ms=settings.relay_heartbeat_interval * 1000,
                     )
+                    await self._streams.record_heartbeat(hub_id)
                     if entries:
                         for entry_id, payload in entries:
                             payload["_stream_id"] = entry_id
@@ -284,6 +286,9 @@ class RelayService:
     async def record_hub_heartbeat(self, hub_id: str, api_key: APIKey) -> None:
         """Record a hub-initiated heartbeat."""
         if self._streams:
+            hub_doc = await self._mongo.get_hub(hub_id)
+            if not hub_doc or hub_doc["user_id"] != api_key.user_id:
+                raise PermissionError("Hub not owned by this API key")
             await self._streams.record_heartbeat(hub_id)
         else:
             if hub_id not in self._hub_queues:
@@ -297,9 +302,26 @@ class RelayService:
         # Streams path uses _hub_disconnect_events; queue path uses _hub_queues
         return hub_id in self._hub_disconnect_events or hub_id in self._hub_queues
 
-    async def mark_hub_agents_offline(self, hub_id: str) -> None:
-        """Eagerly correct stale agent status for a disconnected hub."""
-        await self._mongo.update_hub_status(hub_id, is_online=False)
+    async def mark_hub_agents_offline(
+        self, hub_id: str, connection_id: str | None = None,
+    ) -> None:
+        """Eagerly correct stale agent status for a disconnected hub.
+
+        When *connection_id* is provided, the offline transition is conditional:
+        it only applies if the stored connection still matches, preventing a
+        concurrent ``connect_hub`` from being clobbered.
+        """
+        if connection_id:
+            result = await self._mongo.update_hub_status_if_current(
+                hub_id, connection_id=connection_id, is_online=False,
+            )
+            if not result:
+                logger.info(
+                    "Hub %s: offline mark skipped (connection superseded)", hub_id,
+                )
+                return
+        else:
+            await self._mongo.update_hub_status(hub_id, is_online=False)
         await self._mongo.agents_collection.update_many(
             {"hub_id": hub_id, "agent_status": "active"},
             {"$set": {"agent_status": "inactive"}},
@@ -331,6 +353,15 @@ class RelayService:
         synced: list[dict] = []
         to_index: list[tuple[str, str, str]] = []
         for ag in agents:
+            try:
+                AgentCard(**ag.agent_card)
+            except Exception:
+                logger.warning(
+                    "Hub %s: skipping agent %s with invalid card: %s",
+                    hub_id, ag.local_agent_id, ag.agent_card,
+                )
+                continue
+
             agent_url = ag.agent_card.get("url", "")
             normalized = normalize_agent_url(agent_url) if agent_url else None
 
@@ -738,8 +769,6 @@ class RelayService:
                     actually_online = await self._streams.is_hub_alive(hub_id)
                 else:
                     actually_online = self.is_hub_connected(hub_id)
-                if not actually_online:
-                    await self.mark_hub_agents_offline(hub_id)
 
             active, inactive = await self._mongo.count_hub_agents(hub_id)
             result.append(
@@ -795,13 +824,17 @@ class RelayService:
             await self.sweep_offline_queues()
 
     async def _do_heartbeat_check(self, stale_threshold: float) -> None:
-        """Check for unresponsive hubs and signal disconnection.
+        """Check for unresponsive hubs and self-heal stale states.
 
         In-memory path: checks _hub_queues for stale heartbeats.
-        Redis Streams path: checks is_hub_alive() for all hubs marked
-        online in MongoDB, correcting stale is_online flags.
+        Redis Streams path: two passes —
+          1. Hubs marked online in MongoDB whose Redis key expired → mark offline
+             and signal SSE disconnect (best-effort, process-local).
+          2. Hubs marked offline in MongoDB whose Redis key is alive → re-mark
+             online (self-heal from transient failures).
         """
         if self._streams:
+            # Pass 1: detect expired hubs and mark offline
             stale_hubs = await self._mongo.hubs_collection.find(
                 {"is_online": True}, {"hub_id": 1}
             ).to_list(length=None)
@@ -813,6 +846,22 @@ class RelayService:
                         hub_id,
                     )
                     await self.mark_hub_agents_offline(hub_id)
+                    disconnect_event = self._hub_disconnect_events.get(hub_id)
+                    if disconnect_event is not None:
+                        disconnect_event.set()
+
+            # Pass 2: self-heal hubs that recovered
+            recovering_hubs = await self._mongo.hubs_collection.find(
+                {"is_online": False}, {"hub_id": 1}
+            ).to_list(length=100)
+            for doc in recovering_hubs:
+                hub_id = doc["hub_id"]
+                if await self._streams.is_hub_alive(hub_id):
+                    logger.info(
+                        "Hub %s recovered — Redis heartbeat alive, re-marking online",
+                        hub_id,
+                    )
+                    await self._mongo.update_hub_status(hub_id, is_online=True)
         else:
             now = time.monotonic()
             for hub_id in list(self._hub_queues.keys()):

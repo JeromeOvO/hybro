@@ -20,6 +20,31 @@ class RelayStreamService:
     Each hub gets its own stream (hub:relay:{hub_id}). Events are pushed
     by push_event() and consumed by read_events(). Heartbeat liveness
     is tracked via a simple TTL key (hub:heartbeat:{hub_id}).
+
+    Hub Liveness State Machine (Redis Streams path)
+    ------------------------------------------------
+    AUTHORITATIVE SIGNAL: Redis TTL key (hub:heartbeat:{hub_id}).
+    PERSISTED PROJECTION: MongoDB ``is_online`` flag (eventually consistent,
+        may lag by up to one heartbeat interval).
+    QUERY SURFACE: ``get_hub_status()`` reads MongoDB first, validates against
+        Redis. ``_do_heartbeat_check()`` queries MongoDB, cross-checks Redis.
+
+    Signals that refresh the Redis TTL:
+        1. Client ``POST /heartbeat`` (primary, proves hub application is
+           healthy).
+        2. Server-side SSE loop iteration (secondary, proves TCP connection
+           is alive).
+        3. ``connect_hub()`` initial connection setup.
+
+    Transitions:
+        Online -> Offline: Redis TTL expires, ``_do_heartbeat_check``
+            corrects MongoDB and signals SSE disconnect (best-effort).
+        Offline -> Online: ``connect_hub()`` (new SSE) OR
+            ``_do_heartbeat_check`` self-heal (Redis alive, MongoDB stale).
+
+    Invariant: if the Redis key exists the hub SHOULD be online. If the
+    Redis key is absent but MongoDB says online, the hub is offline (stale
+    flag that will be corrected on the next heartbeat check).
     """
     STREAM_PREFIX = "hub:relay:"
     HEARTBEAT_PREFIX = "hub:heartbeat:"
