@@ -464,6 +464,31 @@ class TestRelayServiceAgentSync:
         # Hybro-managed field must never be written from hub data
         assert "agent_card.iconUrl" not in captured_data
 
+    @pytest.mark.asyncio
+    async def test_sync_agents_skips_invalid_agent_card(self):
+        """Agents with an invalid agent_card (e.g. error dict) must be skipped."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="corrupt-1",
+                name="Corrupt Agent",
+                description="Desc",
+                agent_card={"error": "Unexpected endpoint or method."},
+            ),
+            HubAgentSync(
+                local_agent_id="good-1",
+                name="Good Agent",
+                description="Desc",
+                agent_card=_make_agent_card("Good Agent"),
+            ),
+        ]
+        synced = await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        assert len(synced) == 1
+        assert synced[0]["local_agent_id"] == "good-1"
+
 
 # ===========================================================================
 # RelayService — Push to Hub

@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from a2a.types import AgentCard
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from config.settings import settings
@@ -352,6 +353,15 @@ class RelayService:
         synced: list[dict] = []
         to_index: list[tuple[str, str, str]] = []
         for ag in agents:
+            try:
+                AgentCard(**ag.agent_card)
+            except Exception:
+                logger.warning(
+                    "Hub %s: skipping agent %s with invalid card: %s",
+                    hub_id, ag.local_agent_id, ag.agent_card,
+                )
+                continue
+
             agent_url = ag.agent_card.get("url", "")
             normalized = normalize_agent_url(agent_url) if agent_url else None
 
