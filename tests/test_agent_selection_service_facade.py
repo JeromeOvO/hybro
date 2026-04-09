@@ -1,9 +1,9 @@
 """Tests for AgentSelectionService facade over AgentMatcher."""
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities
+from a2a.types import AgentCard, AgentCapabilities
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 from services.agent_matcher import MatchedAgent, MatchResult
@@ -31,17 +31,7 @@ def _create_test_agent_card(name: str, description: str) -> AgentCard:
 
 
 @pytest.fixture
-def mock_agent():
-    """Create a mock agent for testing."""
-    return Agent(
-        agent_id="agent-123",
-        agent_card=_create_test_agent_card("Test Agent", "A test agent"),
-        agent_status=AgentStatus.active,
-    )
-
-
-@pytest.fixture
-def mock_matched_agents(mock_agent):
+def mock_matched_agents():
     """Create mock MatchedAgent instances."""
     agents = []
     for i in range(3):
@@ -312,6 +302,45 @@ def test_resolve_strategy_single():
         agent_count=1,
     )
     assert strategy == DispatchStrategy.SINGLE
+
+
+@pytest.mark.asyncio
+async def test_facade_handles_matcher_error():
+    """Test that facade returns graceful fallback when matcher throws."""
+    with patch("services.agent_matcher.AgentMatcher") as MockMatcher:
+        mock_matcher_instance = AsyncMock()
+        mock_matcher_instance.match.side_effect = RuntimeError("Pinecone unreachable")
+        MockMatcher.return_value = mock_matcher_instance
+
+        service = AgentSelectionService()
+        result = await service.select_agents_for_message(
+            message_text="test message",
+        )
+
+        assert result.strategy == RoutingStrategy.SINGLE
+        assert result.needs_debate is False
+        assert len(result.agents) == 0
+        assert "Agent matching failed" in result.reasoning
+
+
+def test_resolve_strategy_supervisor_overrides_debate():
+    """Supervisor takes precedence over debate mode."""
+    strategy = resolve_strategy(
+        use_supervisor=True,
+        is_debate_mode=True,
+        agent_count=3,
+    )
+    assert strategy == DispatchStrategy.SUPERVISOR
+
+
+def test_resolve_strategy_debate_with_single_agent():
+    """Debate mode applies even with 1 agent."""
+    strategy = resolve_strategy(
+        use_supervisor=False,
+        is_debate_mode=True,
+        agent_count=1,
+    )
+    assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
 
 
 @pytest.mark.asyncio

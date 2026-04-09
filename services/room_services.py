@@ -1993,7 +1993,8 @@ class RoomServices:
                 request, user_message, target_group
             )
 
-        # Resolve dispatch strategy and store in user_message.extend_info
+        # Resolve dispatch strategy and annotate in-memory user_message for
+        # downstream dispatch logic. NOT persisted back to DB (message already written).
         dispatch_strategy = resolve_strategy(use_supervisor, is_debate_mode, len(selected_agent_set))
         if user_message.extend_info is None:
             user_message.extend_info = {}

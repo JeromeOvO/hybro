@@ -77,12 +77,23 @@ class AgentSelectionService:
         )
 
         # Delegate to AgentMatcher
-        match_result = await self._matcher.match(
-            message_text=message_text,
-            user_id=user_id,
-            is_debate_mode=is_debate_mode,
-            required_input_modes=required_input_modes,
-        )
+        try:
+            match_result = await self._matcher.match(
+                message_text=message_text,
+                user_id=user_id,
+                is_debate_mode=is_debate_mode,
+                required_input_modes=required_input_modes,
+            )
+        except Exception as e:
+            logger.error(
+                "AgentSelectionService: AgentMatcher.match() failed: %s", e
+            )
+            return AgentSelectionResult(
+                strategy=RoutingStrategy.SINGLE,
+                agents=[],
+                reasoning=f"Agent matching failed: {e}",
+                needs_debate=False,
+            )
 
         # Convert MatchResult to AgentSelectionResult for backward compatibility
         if not match_result.agents:
