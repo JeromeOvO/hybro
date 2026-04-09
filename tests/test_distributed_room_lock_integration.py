@@ -175,16 +175,19 @@ class TestRealRedisRoomLockFlow:
 
         await redis._client.delete(f"{LOCK_PREFIX}{room}")
 
-    async def test_lock_survives_local_eviction(self, redis: RedisService):
-        """After release evicts the local lock, re-acquiring works."""
+    async def test_lock_reused_across_acquires(self, redis: RedisService):
+        """Lock object stays in dict after release and is reused."""
         rmc = _make_rmc(redis)
-        room = "integration-eviction"
+        room = "integration-reuse"
 
         owner1 = await rmc._acquire_room_lock(room, timeout=5)
+        lock_obj = rmc._room_locks[room]
         await rmc._release_room_lock(room, owner1)
-        assert room not in rmc._room_locks
+        assert room in rmc._room_locks
+        assert rmc._room_locks[room] is lock_obj
 
         owner2 = await rmc._acquire_room_lock(room, timeout=5)
         assert owner2 is not None
         assert owner2 != owner1
+        assert rmc._room_locks[room] is lock_obj
         await rmc._release_room_lock(room, owner2)

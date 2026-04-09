@@ -160,24 +160,33 @@ class RoomMessageCenter:
 
     async def _acquire_distributed_lock(
         self, room_id: str, owner: str, ttl: int = ROOM_LOCK_HOLD_TTL_SECONDS,
-    ) -> bool:
+    ) -> bool | None:
         """Try to acquire the Redis distributed lock for *room_id*.
 
         Returns ``True`` if the lock was acquired, ``False`` if another
-        worker already holds it or Redis is unavailable / erroring.
+        worker already holds it, or ``None`` if Redis is unavailable or
+        erroring (caller should fall back to local-only locking).
+
+        Bypasses ``RedisService.set_nx`` intentionally — that wrapper
+        swallows exceptions and returns ``False``, making Redis errors
+        indistinguishable from contention.
         """
         if self._redis is None or not self._redis.is_connected:
-            return False
+            return None
+        client = self._redis._client
+        if client is None:
+            return None
         try:
-            return await self._redis.set_nx(
-                f"{self._ROOM_LOCK_PREFIX}{room_id}", owner, ex=ttl,
+            result = await client.set(
+                f"{self._ROOM_LOCK_PREFIX}{room_id}", owner, nx=True, ex=ttl,
             )
+            return result is not None
         except Exception:
             logger.debug(
                 "Redis error during distributed lock acquire for room %s",
                 room_id, exc_info=True,
             )
-            return False
+            return None
 
     async def _release_distributed_lock(self, room_id: str, owner: str) -> None:
         """Release the Redis distributed lock only if we still own it."""
@@ -223,8 +232,10 @@ class RoomMessageCenter:
         # --- Distributed lock (polling with back-off) ---------------------
         if use_distributed:
             poll_interval = 0.5
+            redis_errors = 0
             while elapsed < timeout:
-                if await self._acquire_distributed_lock(room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS):
+                result = await self._acquire_distributed_lock(room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS)
+                if result is True:
                     if elapsed > 1.0:
                         logger.info(
                             "Distributed lock acquired for room %s (owner=%s, waited=%.1fs, ttl=%ds)",
@@ -236,6 +247,18 @@ class RoomMessageCenter:
                             room_id, owner[:8], elapsed,
                         )
                     break
+                if result is None:
+                    redis_errors += 1
+                    if redis_errors >= 2:
+                        logger.warning(
+                            "Redis unhealthy (%d consecutive errors) while acquiring "
+                            "lock for room %s — falling back to local lock only",
+                            redis_errors, room_id,
+                        )
+                        use_distributed = False
+                        break
+                else:
+                    redis_errors = 0
                 await asyncio.sleep(poll_interval)
                 elapsed = loop.time() - t0
                 poll_interval = min(poll_interval * 1.5, 5.0)
@@ -278,11 +301,6 @@ class RoomMessageCenter:
         local_lock = self._room_locks.get(room_id)
         if local_lock is not None and local_lock.locked():
             local_lock.release()
-            # Evict the lock object when no coroutine is waiting on it to
-            # prevent the dict from growing unbounded over the process lifetime.
-            # _get_local_lock will lazily recreate it on next use.
-            if not local_lock.locked():
-                self._room_locks.pop(room_id, None)
         if owner is not None:
             await self._release_distributed_lock(room_id, owner)
             logger.debug(
