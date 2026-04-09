@@ -27,7 +27,7 @@ class RelayStreamService:
     PERSISTED PROJECTION: MongoDB ``is_online`` flag (eventually consistent,
         may lag by up to one heartbeat interval).
     QUERY SURFACE: all real-time liveness queries MUST use
-        ``_resolve_hub_liveness()`` (in RelayService), which always consults
+        ``is_hub_alive()`` (in RelayService), which always consults
         the authoritative Redis signal. MongoDB ``is_online`` is never
         consulted for liveness decisions; it is a projection maintained by
         ``_do_heartbeat_check`` for offline consumers (dashboards, batch

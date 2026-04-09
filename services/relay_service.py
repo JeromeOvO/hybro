@@ -297,23 +297,25 @@ class RelayService:
                 )
             self._last_hub_heartbeat[hub_id] = time.monotonic()
 
-    def is_hub_connected(self, hub_id: str) -> bool:
-        """Live check — is this hub currently connected via SSE?"""
-        # Streams path uses _hub_disconnect_events; queue path uses _hub_queues
+    def _is_hub_connected_locally(self, hub_id: str) -> bool:
+        """Process-local check — only valid for connection management on this worker.
+
+        Do NOT use for liveness decisions; use :meth:`is_hub_alive` instead.
+        """
         return hub_id in self._hub_disconnect_events or hub_id in self._hub_queues
 
-    async def _resolve_hub_liveness(self, hub_id: str) -> bool:
-        """Authoritative hub liveness check.
+    async def is_hub_alive(self, hub_id: str) -> bool:
+        """Authoritative hub liveness check (multi-worker safe).
 
         Streams path: Redis TTL key is the single source of truth.
-        In-memory path: process-local connection state is the source of truth.
+        In-memory path: process-local connection state (single-worker only).
 
         All real-time liveness queries MUST use this method rather than
         reading MongoDB ``is_online`` directly.
         """
         if self._streams:
             return await self._streams.is_hub_alive(hub_id)
-        return self.is_hub_connected(hub_id)
+        return self._is_hub_connected_locally(hub_id)
 
     async def mark_hub_agents_offline(
         self, hub_id: str, connection_id: str | None = None,
@@ -503,7 +505,7 @@ class RelayService:
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
 
         # Activate synced agents if this hub is still connected.
-        if self.is_hub_connected(hub_id) and synced:
+        if await self.is_hub_alive(hub_id) and synced:
             synced_ids = [item["agent_id"] for item in synced]
             await self._mongo.agents_collection.update_many(
                 {"hub_id": hub_id, "agent_id": {"$in": synced_ids}},
@@ -774,7 +776,7 @@ class RelayService:
         result: list[HubStatus] = []
         for h in hubs:
             hub_id = h["hub_id"]
-            actually_online = await self._resolve_hub_liveness(hub_id)
+            actually_online = await self.is_hub_alive(hub_id)
 
             active, inactive = await self._mongo.count_hub_agents(hub_id)
             result.append(

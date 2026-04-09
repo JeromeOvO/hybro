@@ -18,7 +18,7 @@ async def check_and_sync_liveness(agent: Agent) -> Agent:
     """Probe the agent and sync ``agent_status`` in the DB if it changed.
 
     - **Cloud agents**: HTTP probe via ``AgentHealthService``.
-    - **Hub agents**: In-memory ``is_hub_connected`` check via ``RelayService``.
+    - **Hub agents**: Authoritative ``is_hub_alive`` check via ``RelayService``.
     - **Others**: returned unchanged.
     """
 
@@ -75,7 +75,7 @@ async def _check_hub_agent(agent: Agent) -> Agent:
     if _svc is None:
         return agent
 
-    if not _svc.is_hub_connected(agent.hub_id):
+    if not await _svc.is_hub_alive(agent.hub_id):
         await _svc.mark_hub_agents_offline(agent.hub_id)
         agent.agent_status = AgentStatus.inactive
         logger.info(
