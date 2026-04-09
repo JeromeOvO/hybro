@@ -81,7 +81,7 @@ export default function AboutPage() {
                     <span className="text-[hsl(var(--color-hybro-hy))] mt-1 shrink-0">
                       &#x2192;
                     </span>
-                    Ultimate and Fast modes for flexible orchestration
+                    Multiple orchestration modes including debate reasoning
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-[hsl(var(--color-hybro-hy))] mt-1 shrink-0">
@@ -205,8 +205,8 @@ export default function AboutPage() {
                     When a task requires multiple agents, Hybro&apos;s
                     collaboration engine decomposes the work, routes sub-tasks to
                     the right agents, and synthesizes results. Choose Ultimate
-                    mode for smart multi-agent coordination, or Fast mode for
-                    direct, quick responses.
+                    mode for smart multi-agent coordination, Fast mode for
+                    direct responses, or add Debate for adversarial reasoning.
                   </p>
                 </div>
               </div>

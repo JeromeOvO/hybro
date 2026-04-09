@@ -96,7 +96,7 @@ interface RoomChatInputProps {
    * Content above the editor (e.g. HITL Questions panel).
    */
   topSlot?: React.ReactNode
-  /** Current chat mode (Ultimate or Fast). */
+  /** Current chat mode. */
   chatMode?: ChatMode
   /** Callback when the user changes the chat mode. */
   onChatModeChange?: (mode: ChatMode) => void

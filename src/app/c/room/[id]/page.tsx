@@ -28,7 +28,7 @@ import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } fro
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
 import type { ChatMode } from '@/lib/types/chat-mode'
-import { chatModeToSupervisor, supervisorToChatMode } from '@/lib/types/chat-mode'
+import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -89,14 +89,14 @@ export default function RoomChatPage() {
   useEffect(() => {
     if (room && lastSyncedRoomRef.current !== roomId) {
       lastSyncedRoomRef.current = roomId
-      const synced = supervisorToChatMode(roomSupervisorMode)
+      const synced = flagsToChatMode(roomSupervisorMode, debateMode)
       setLocalChatMode(synced)
       confirmedChatModeRef.current = synced
     }
-  }, [room, roomId, roomSupervisorMode])
+  }, [room, roomId, roomSupervisorMode, debateMode])
 
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
-  const effectiveChatMode = localChatMode ?? supervisorToChatMode(roomSupervisorMode)
+  const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
   // Active HITL requests (for the panel above chat input)
   const activeHitlRequests = useActiveHitlRequests()
@@ -192,9 +192,11 @@ export default function RoomChatPage() {
       } catch {
         freshExtendInfo = (room?.extend_info as object) || {}
       }
+      const modeFlags = chatModeToFlags(effectiveChatMode)
       const updatedExtendInfo: Record<string, unknown> = {
         ...freshExtendInfo,
-        use_supervisor: chatModeToSupervisor(effectiveChatMode),
+        use_supervisor: modeFlags.use_supervisor,
+        debateMode: modeFlags.debateMode,
       }
       try {
         const result = await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
