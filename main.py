@@ -172,6 +172,7 @@ async def lifespan(app: FastAPI):
     from services.database_service import db_service as _db_svc
     from services.relay_service import init_relay_service
     from modules.RoomMessageCenter import room_message_center as _rmc
+    _rmc.set_redis_service(_redis_service)
     _relay_svc = init_relay_service(
         mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
         room_message_center=_rmc,

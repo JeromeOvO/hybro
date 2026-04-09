@@ -171,7 +171,7 @@ class TestHubTransportMiddleware:
     @pytest.mark.asyncio
     async def test_hub_agent_online_sets_relay(self):
         relay = MagicMock()
-        relay.is_hub_connected = MagicMock(return_value=True)
+        relay.is_hub_alive = AsyncMock(return_value=True)
         mw = HubTransportMiddleware(relay)
         ctx = _make_ctx(
             agent=_make_agent(source="hub", hub_id="hub-001")
@@ -184,7 +184,7 @@ class TestHubTransportMiddleware:
     @pytest.mark.asyncio
     async def test_hub_agent_offline_sets_relay_and_queued(self):
         relay = MagicMock()
-        relay.is_hub_connected = MagicMock(return_value=False)
+        relay.is_hub_alive = AsyncMock(return_value=False)
         relay.mark_hub_agents_offline = AsyncMock()
         mw = HubTransportMiddleware(relay)
         ctx = _make_ctx(
@@ -219,7 +219,7 @@ class TestAMPRelayDispatch:
 
         relay_svc = MagicMock()
         relay_svc.push_to_hub = AsyncMock(return_value=True)
-        relay_svc.is_hub_connected = MagicMock(return_value=True)
+        relay_svc.is_hub_alive = AsyncMock(return_value=True)
 
         chain = DispatchChain([HubTransportMiddleware(relay_svc)])
 

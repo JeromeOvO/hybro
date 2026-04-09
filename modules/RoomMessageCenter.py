@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import asyncio
+import time
 from collections import deque
 from datetime import timedelta
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from a2a.types import TaskState
@@ -43,6 +47,9 @@ from services.room_supervisor_service import room_supervisor_service
 from services.sse_services import sse_manager
 from services.task_service import task_service
 
+if TYPE_CHECKING:
+    from infrastructure.redis_service import RedisService
+
 logger = get_logger(__name__)
 
 # Maximum time (seconds) to wait for a per-room lock before giving up.
@@ -50,6 +57,13 @@ logger = get_logger(__name__)
 # prevent the stale-task checker from reclaiming a message that is still
 # queued behind the lock — which would cause double-processing.
 ROOM_LOCK_TIMEOUT_SECONDS = 90
+
+# Redis key TTL for the distributed lock.  Must be much longer than the
+# expected room-processing duration (supervisor loops, LLM calls, agent
+# round-trips).  If a room genuinely takes this long, the lock will expire
+# and another worker may enter.  600 s = 10 minutes is generous enough for
+# multi-step supervisor flows while still recovering from crashed workers.
+ROOM_LOCK_HOLD_TTL_SECONDS = 600
 
 
 class RoomMessageCenter:
@@ -123,10 +137,179 @@ class RoomMessageCenter:
         # Per-room asyncio locks to serialise processing within the same room.
         # Prevents concurrent supervisor runs / queue executions that would
         # corrupt shared state (context, compaction, memory).
+        #
+        # With multi-worker Gunicorn these process-local locks are supplemented
+        # by a Redis distributed lock (SETNX + TTL).  When Redis is available
+        # the distributed lock is the primary gate and the asyncio lock provides
+        # intra-process fairness.  Without Redis the asyncio lock alone guards
+        # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
+        self._redis: RedisService | None = None
 
-    def _get_room_lock(self, room_id: str) -> asyncio.Lock:
-        """Return (or create) the asyncio.Lock for *room_id*."""
+    # -- Redis wiring (called from main.py at startup) ---------------------
+
+    def set_redis_service(self, redis_service: RedisService | None) -> None:
+        self._redis = redis_service
+
+    # -- Distributed room lock ---------------------------------------------
+
+    _ROOM_LOCK_PREFIX = "room:lock:"
+
+    # Lua script for safe release: only delete the key if we still own it.
+    _RELEASE_LOCK_LUA = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end"
+
+    async def _acquire_distributed_lock(
+        self, room_id: str, owner: str, ttl: int = ROOM_LOCK_HOLD_TTL_SECONDS,
+    ) -> bool | None:
+        """Try to acquire the Redis distributed lock for *room_id*.
+
+        Returns ``True`` if the lock was acquired, ``False`` if another
+        worker already holds it, or ``None`` if Redis is unavailable or
+        erroring (caller should fall back to local-only locking).
+
+        Bypasses ``RedisService.set_nx`` intentionally — that wrapper
+        swallows exceptions and returns ``False``, making Redis errors
+        indistinguishable from contention.
+        """
+        if self._redis is None or not self._redis.is_connected:
+            return None
+        client = self._redis._client
+        if client is None:
+            return None
+        try:
+            result = await client.set(
+                f"{self._ROOM_LOCK_PREFIX}{room_id}", owner, nx=True, ex=ttl,
+            )
+            return result is not None
+        except Exception:
+            logger.debug(
+                "Redis error during distributed lock acquire for room %s",
+                room_id, exc_info=True,
+            )
+            return None
+
+    async def _release_distributed_lock(self, room_id: str, owner: str) -> None:
+        """Release the Redis distributed lock only if we still own it."""
+        if self._redis is None or not self._redis.is_connected:
+            return
+        try:
+            await self._redis.eval_script(
+                self._RELEASE_LOCK_LUA,
+                1,
+                f"{self._ROOM_LOCK_PREFIX}{room_id}",
+                owner,
+            )
+        except Exception:
+            logger.warning(
+                "Redis error during distributed lock release for room %s (owner=%s); "
+                "key will expire via TTL",
+                room_id, owner[:8], exc_info=True,
+            )
+
+    async def _acquire_room_lock(
+        self, room_id: str, timeout: float = ROOM_LOCK_TIMEOUT_SECONDS,
+    ) -> str | None:
+        """Acquire both the distributed Redis lock and the local asyncio lock.
+
+        Returns an *owner* token on success (must be passed to
+        ``_release_room_lock``), or ``None`` on timeout / contention.
+
+        Acquisition order: distributed first (cross-process), then local
+        (intra-process).  If the distributed lock cannot be obtained within
+        *timeout* seconds, returns ``None`` without touching the local lock.
+        When Redis is unavailable, falls back to the local lock only (safe
+        for single-worker deployment).
+        """
+        owner = uuid4().hex
+        use_distributed = (
+            self._redis is not None and self._redis.is_connected
+        )
+
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        elapsed = 0.0
+
+        # --- Distributed lock (polling with back-off) ---------------------
+        if use_distributed:
+            poll_interval = 0.5
+            redis_errors = 0
+            while elapsed < timeout:
+                result = await self._acquire_distributed_lock(room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS)
+                if result is True:
+                    if elapsed > 1.0:
+                        logger.info(
+                            "Distributed lock acquired for room %s (owner=%s, waited=%.1fs, ttl=%ds)",
+                            room_id, owner[:8], elapsed, ROOM_LOCK_HOLD_TTL_SECONDS,
+                        )
+                    else:
+                        logger.debug(
+                            "Distributed lock acquired for room %s (owner=%s, waited=%.1fs)",
+                            room_id, owner[:8], elapsed,
+                        )
+                    break
+                if result is None:
+                    redis_errors += 1
+                    if redis_errors >= 2:
+                        logger.warning(
+                            "Redis unhealthy (%d consecutive errors) while acquiring "
+                            "lock for room %s — falling back to local lock only",
+                            redis_errors, room_id,
+                        )
+                        use_distributed = False
+                        break
+                else:
+                    redis_errors = 0
+                await asyncio.sleep(poll_interval)
+                elapsed = loop.time() - t0
+                poll_interval = min(poll_interval * 1.5, 5.0)
+            else:
+                logger.warning(
+                    "Distributed lock timeout for room %s after %.1fs (owner=%s)",
+                    room_id, elapsed, owner[:8],
+                )
+                return None  # timed out waiting for distributed lock
+
+        # --- Local asyncio lock (intra-process fairness) ------------------
+        local_lock = self._get_local_lock(room_id)
+        try:
+            remaining = max(0.1, timeout - elapsed)
+            await asyncio.wait_for(local_lock.acquire(), timeout=remaining)
+        except asyncio.TimeoutError:
+            if use_distributed:
+                await self._release_distributed_lock(room_id, owner)
+            return None
+
+        return owner
+
+    async def _release_room_lock(
+        self, room_id: str, owner: str | None, *, acquired_at: float | None = None,
+    ) -> None:
+        """Release both the local asyncio lock and the distributed Redis lock."""
+        if acquired_at is not None:
+            held_seconds = time.monotonic() - acquired_at
+            if held_seconds > ROOM_LOCK_HOLD_TTL_SECONDS * 0.8:
+                logger.warning(
+                    "Room %s held lock for %.0fs — approaching TTL of %ds. "
+                    "Consider investigating slow processing or adding lock renewal.",
+                    room_id, held_seconds, ROOM_LOCK_HOLD_TTL_SECONDS,
+                )
+            elif held_seconds > 60:
+                logger.info(
+                    "Room %s held lock for %.0fs",
+                    room_id, held_seconds,
+                )
+        local_lock = self._room_locks.get(room_id)
+        if local_lock is not None and local_lock.locked():
+            local_lock.release()
+        if owner is not None:
+            await self._release_distributed_lock(room_id, owner)
+            logger.debug(
+                "Distributed lock released for room %s (owner=%s)",
+                room_id, owner[:8],
+            )
+
+    def _get_local_lock(self, room_id: str) -> asyncio.Lock:
+        """Return (or create) the process-local asyncio.Lock for *room_id*."""
         lock = self._room_locks.get(room_id)
         if lock is None:
             lock = asyncio.Lock()
@@ -195,12 +378,9 @@ class RoomMessageCenter:
         room_user_message_id = request.room_user_message_id
 
         # ----- Per-room lock: serialise all processing within a room -----
-        room_lock = self._get_room_lock(room_id)
-        try:
-            await asyncio.wait_for(
-                room_lock.acquire(), timeout=ROOM_LOCK_TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
+        lock_owner = await self._acquire_room_lock(room_id)
+        lock_acquired_at = time.monotonic()
+        if lock_owner is None:
             logger.error(
                 "RoomMessageCenter: Timed out waiting for room lock on %s "
                 "(message %s). Another processing run may be stuck.",
@@ -236,10 +416,10 @@ class RoomMessageCenter:
             )
 
         # Refresh the processing claim timestamp now that we hold the lock.
-        # The claim was set before the lock wait (line 175); if the wait was
-        # long, the stale task checker (orphan_threshold_minutes=2 min) might
-        # consider the message orphaned.  Touching the timestamp here resets
-        # the clock so processing won't be reclaimed prematurely.
+        # The claim was set before the lock wait; if the wait was long, the
+        # stale task checker (orphan_threshold_minutes=2 min) might consider
+        # the message orphaned.  Touching the timestamp here resets the clock
+        # so processing won't be reclaimed prematurely.
         await self.database_service.refresh_processing_claim(
             room_user_message_id
         )
@@ -258,7 +438,7 @@ class RoomMessageCenter:
                 request, room_id, room_user_message_id
             )
         finally:
-            room_lock.release()
+            await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
 
     async def _process_room_user_message_locked(
         self,
@@ -1621,13 +1801,11 @@ class RoomMessageCenter:
 
         # ----- Per-room lock: serialise resume within the same room -----
         room_id = continuation.get("room_id")
+        lock_acquired_at: float | None = None
         if room_id:
-            room_lock = self._get_room_lock(room_id)
-            try:
-                await asyncio.wait_for(
-                    room_lock.acquire(), timeout=ROOM_LOCK_TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
+            lock_owner = await self._acquire_room_lock(room_id)
+            lock_acquired_at = time.monotonic()
+            if lock_owner is None:
                 logger.error(
                     "RoomMessageCenter: Timed out waiting for room lock on %s "
                     "during resume (message %s). Re-saving continuation.",
@@ -1649,7 +1827,7 @@ class RoomMessageCenter:
                     )
                 return False
         else:
-            room_lock = None
+            lock_owner = None
             logger.warning(
                 "RoomMessageCenter: continuation for message %s has no room_id — "
                 "cannot acquire per-room lock; proceeding without serialisation",
@@ -1661,8 +1839,8 @@ class RoomMessageCenter:
                 continuation, message_id, task_result_text
             )
         finally:
-            if room_lock is not None:
-                room_lock.release()
+            if room_id is not None:
+                await self._release_room_lock(room_id, lock_owner, acquired_at=lock_acquired_at)
 
     async def _resume_continuation_locked(
         self,

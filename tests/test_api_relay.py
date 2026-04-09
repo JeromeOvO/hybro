@@ -141,15 +141,15 @@ class TestRelayServiceRegistration:
 # ===========================================================================
 
 
-class TestIsHubConnected:
+class TestIsHubConnectedLocally:
     def test_returns_false_when_not_connected(self):
         svc = _make_relay_service()
-        assert svc.is_hub_connected("hub-001") is False
+        assert svc._is_hub_connected_locally("hub-001") is False
 
     def test_returns_true_for_queue_path(self):
         svc = _make_relay_service()
         svc._hub_queues["hub-001"] = MagicMock()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
     def test_returns_true_for_streams_path(self):
         """Streams path uses _hub_disconnect_events, not _hub_queues."""
@@ -157,7 +157,7 @@ class TestIsHubConnected:
 
         svc = _make_relay_service()
         svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
     def test_returns_true_for_both_paths(self):
         """If somehow both are present, still returns True."""
@@ -166,7 +166,7 @@ class TestIsHubConnected:
         svc = _make_relay_service()
         svc._hub_queues["hub-001"] = MagicMock()
         svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
 
 # ===========================================================================

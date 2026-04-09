@@ -80,19 +80,19 @@ def _make_service(mongo=None, streams=None):
 
 
 # ===========================================================================
-# _resolve_hub_liveness — authoritative liveness check
+# is_hub_alive — authoritative liveness check
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-class TestResolveHubLiveness:
+class TestIsHubAlive:
     async def test_streams_path_delegates_to_redis(self):
-        """With Streams, _resolve_hub_liveness delegates to is_hub_alive."""
+        """With Streams, is_hub_alive delegates to Redis is_hub_alive."""
         streams = _make_streams()
         streams.is_hub_alive = AsyncMock(return_value=True)
         svc = _make_service(streams=streams)
 
-        assert await svc._resolve_hub_liveness("hub-1") is True
+        assert await svc.is_hub_alive("hub-1") is True
         streams.is_hub_alive.assert_awaited_once_with("hub-1")
 
     async def test_streams_path_returns_false_when_redis_dead(self):
@@ -101,15 +101,15 @@ class TestResolveHubLiveness:
         streams.is_hub_alive = AsyncMock(return_value=False)
         svc = _make_service(streams=streams)
 
-        assert await svc._resolve_hub_liveness("hub-1") is False
+        assert await svc.is_hub_alive("hub-1") is False
 
     async def test_in_memory_path_uses_local_state(self):
         """Without Streams, falls back to process-local connection check."""
         svc = _make_service(streams=None)
-        assert await svc._resolve_hub_liveness("hub-1") is False
+        assert await svc.is_hub_alive("hub-1") is False
 
         svc._hub_queues["hub-1"] = asyncio.Queue()
-        assert await svc._resolve_hub_liveness("hub-1") is True
+        assert await svc.is_hub_alive("hub-1") is True
 
 
 # ===========================================================================
@@ -121,7 +121,7 @@ class TestResolveHubLiveness:
 class TestGetHubStatusLiveness:
     async def test_reports_online_when_redis_alive_but_mongo_offline(self):
         """get_hub_status reports online even if MongoDB says offline,
-        because _resolve_hub_liveness checks Redis directly."""
+        because is_hub_alive checks Redis directly."""
         mongo = _make_mongo()
         mongo.get_hubs_by_user = AsyncMock(return_value=[
             {"hub_id": "hub-1", "is_online": False, "last_connected_at": None},
