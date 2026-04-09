@@ -25,6 +25,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.hitl import InterruptKind
+from modules.debate_dispatcher import SequentialDebateDispatcher
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -1549,3 +1550,31 @@ class SupervisorExecutor:
             "SupervisorExecutor: Unknown interrupt kind %s", kind
         )
         return False
+
+    @staticmethod
+    def _build_debate_task(
+        original_task: str,
+        prior_responses: list[tuple[str, str]],
+        max_chars: int = 3000,
+    ) -> str:
+        """Build the debate-enriched task for the next agent.
+
+        Delegates to shared SequentialDebateDispatcher.
+
+        Args:
+            original_task: The original user task
+            prior_responses: List of (agent_name, response_text) tuples
+            max_chars: Maximum characters to include from prior response
+
+        Returns:
+            The debate-enriched task prompt, or original_task if no prior responses
+        """
+        if not prior_responses:
+            return original_task
+        last_name, last_text = prior_responses[-1]
+        return SequentialDebateDispatcher.build_debate_prompt(
+            original_task=original_task,
+            prior_agent_name=last_name,
+            prior_response=last_text,
+            max_chars=max_chars,
+        )
