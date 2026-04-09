@@ -302,6 +302,19 @@ class RelayService:
         # Streams path uses _hub_disconnect_events; queue path uses _hub_queues
         return hub_id in self._hub_disconnect_events or hub_id in self._hub_queues
 
+    async def _resolve_hub_liveness(self, hub_id: str) -> bool:
+        """Authoritative hub liveness check.
+
+        Streams path: Redis TTL key is the single source of truth.
+        In-memory path: process-local connection state is the source of truth.
+
+        All real-time liveness queries MUST use this method rather than
+        reading MongoDB ``is_online`` directly.
+        """
+        if self._streams:
+            return await self._streams.is_hub_alive(hub_id)
+        return self.is_hub_connected(hub_id)
+
     async def mark_hub_agents_offline(
         self, hub_id: str, connection_id: str | None = None,
     ) -> None:
@@ -761,14 +774,7 @@ class RelayService:
         result: list[HubStatus] = []
         for h in hubs:
             hub_id = h["hub_id"]
-            db_online = h.get("is_online", False)
-
-            actually_online = db_online
-            if db_online:
-                if self._streams:
-                    actually_online = await self._streams.is_hub_alive(hub_id)
-                else:
-                    actually_online = self.is_hub_connected(hub_id)
+            actually_online = await self._resolve_hub_liveness(hub_id)
 
             active, inactive = await self._mongo.count_hub_agents(hub_id)
             result.append(
@@ -836,7 +842,7 @@ class RelayService:
         if self._streams:
             # Pass 1: detect expired hubs and mark offline
             stale_hubs = await self._mongo.hubs_collection.find(
-                {"is_online": True}, {"hub_id": 1}
+                {"is_online": True}, {"hub_id": 1, "connection_id": 1}
             ).to_list(length=None)
             for doc in stale_hubs:
                 hub_id = doc["hub_id"]
@@ -845,7 +851,9 @@ class RelayService:
                         "Hub %s heartbeat expired in Redis — marking offline",
                         hub_id,
                     )
-                    await self.mark_hub_agents_offline(hub_id)
+                    await self.mark_hub_agents_offline(
+                        hub_id, connection_id=doc.get("connection_id"),
+                    )
                     disconnect_event = self._hub_disconnect_events.get(hub_id)
                     if disconnect_event is not None:
                         disconnect_event.set()
