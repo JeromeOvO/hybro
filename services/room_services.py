@@ -1413,7 +1413,12 @@ class RoomServices:
             # Clear it so the frontend shows a generic "Working on your request…" instead.
             # Also clear in multi-agent rooms when the LLM simply passed through the
             # user's message verbatim (no meaningful decomposition).
-            if is_direct_chat or task_content.strip() == original_text.strip():
+            # BUT: never clear task_content in debate mode — debate_service needs it
+            # to inject prior agent responses into the prompt.
+            is_debate = parsed_result.get("message_type", "").startswith("DEBATE")
+            if not is_debate and (
+                is_direct_chat or task_content.strip() == original_text.strip()
+            ):
                 agent_message.task_content = None
 
             agent_messages.append(agent_message)

@@ -1,8 +1,9 @@
 """
 Unit tests for AgentMatcher pipeline
 
-Tests per design doc §Testing Strategy:
-- CapabilityFilter: skill matching, I/O mode checks, general-purpose handling
+Tests:
+- I/O mode file support detection
+- CapabilityFilter: structural I/O scoring (no token matching)
 - ScoreRanker: composite scoring, debate/quality cutoffs
 - AgentMatcher.match(): end-to-end pipeline integration
 """
@@ -17,7 +18,6 @@ from services.agent_matcher import (
     MatchedAgent,
     MatchResult,
     _agent_supports_files,
-    _tokenize,
     compute_capability_score,
     select_top_agents,
 )
@@ -65,29 +65,6 @@ def mock_capability_issue_service():
     mock = MagicMock()
     mock.get_excluded_agent_ids = AsyncMock(return_value=frozenset())
     return mock
-
-
-# ---- Tokenizer Tests ----
-
-
-def test_tokenize_simple():
-    """Test basic tokenization."""
-    assert _tokenize("Hello World") == {"hello", "world"}
-
-
-def test_tokenize_with_punctuation():
-    """Test tokenization strips punctuation."""
-    assert _tokenize("Hello, World! How are you?") == {"hello", "world", "how", "are", "you"}
-
-
-def test_tokenize_with_numbers():
-    """Test tokenization includes numbers."""
-    assert _tokenize("Python 3.11 and Node 18") == {"python", "3", "11", "and", "node", "18"}
-
-
-def test_tokenize_empty():
-    """Test tokenization of empty string."""
-    assert _tokenize("") == set()
 
 
 # ---- File Support Tests ----
@@ -150,146 +127,28 @@ def test_agent_no_file_support_default():
 # ---- CapabilityFilter Tests ----
 
 
-def test_compute_capability_score_skill_name_match():
-    """Test skill name matching increases score."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="Python Developer",
-            description="Writes Python code",
-            tags=["coding"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "PythonBot", skills=skills)
-    message_tokens = _tokenize("I need help with python development")
-
-    score = compute_capability_score(message_tokens, agent)
-    assert score > 0.3  # Should be above baseline
+def test_capability_score_no_attachments():
+    """No attachments → all agents compatible (1.0)."""
+    agent = create_test_agent("a1", "AnyAgent", input_modes=["text"])
+    assert compute_capability_score(agent, required_input_modes=None) == 1.0
 
 
-def test_compute_capability_score_description_match():
-    """Test skill description matching increases score."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="Code Helper",
-            description="Expert in debugging and testing Python applications",
-            tags=["dev"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "CodeBot", skills=skills)
-    message_tokens = _tokenize("Help me debug my python testing issues")
-
-    score = compute_capability_score(message_tokens, agent)
-    assert score > 0.15  # Above zero (has some description overlap)
+def test_capability_score_attachments_file_capable():
+    """Attachments + file-capable agent → 1.0."""
+    agent = create_test_agent("a1", "FileAgent", input_modes=["text", "image/png"])
+    assert compute_capability_score(agent, required_input_modes=["image/png"]) == 1.0
 
 
-def test_compute_capability_score_tag_match():
-    """Test tag matching increases score."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="ML Assistant",
-            description="Machine learning helper",
-            tags=["tensorflow", "pytorch", "scikit-learn"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "MLBot", skills=skills)
-    message_tokens = _tokenize("I need help with tensorflow model training")
-
-    score = compute_capability_score(message_tokens, agent)
-    assert score > 0.15  # Above zero (has tag overlap with tensorflow)
+def test_capability_score_attachments_not_capable():
+    """Attachments + text-only agent → 0.0."""
+    agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
+    assert compute_capability_score(agent, required_input_modes=["image/png"]) == 0.0
 
 
-def test_compute_capability_score_io_mode_with_attachments_capable():
-    """Test I/O mode scoring: file-capable agent + attachments → 1.0."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="Image Processor",
-            description="Process images",
-            tags=["image"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "ImageBot", skills=skills, input_modes=["text", "image/png"])
-    message_tokens = _tokenize("analyze this image")
-
-    score = compute_capability_score(message_tokens, agent, required_input_modes=["image/png"])
-    # Should have full I/O score component
-    assert score > 0.0
-
-
-def test_compute_capability_score_io_mode_with_attachments_not_capable():
-    """Test I/O mode scoring: non-file-capable + attachments → 0.0."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="Text Helper",
-            description="Text processing only",
-            tags=["text"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "TextBot", skills=skills, input_modes=["text"])
-    message_tokens = _tokenize("analyze this file")
-
-    score = compute_capability_score(message_tokens, agent, required_input_modes=["image/png"])
-    # Should be penalized for lack of file support
-    assert score < 0.15  # Only partial overlap from skill, no I/O score
-
-
-def test_compute_capability_score_io_mode_no_attachments():
-    """Test I/O mode scoring: no attachments → 1.0 (no penalty)."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="General Helper",
-            description="Helps with tasks",
-            tags=["general"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "GeneralBot", skills=skills, input_modes=["text"])
-    message_tokens = _tokenize("help with general tasks")
-
-    score = compute_capability_score(message_tokens, agent, required_input_modes=None)
-    # Should not be penalized for missing file support when no files present
-    assert score > 0.0
-
-
-def test_compute_capability_score_general_purpose_agent():
-    """Test general-purpose agent (no skills) gets baseline score."""
-    agent = create_test_agent("a1", "GenericBot", skills=None)
-    message_tokens = _tokenize("do something")
-
-    score = compute_capability_score(message_tokens, agent)
-    # Should get baseline 0.3 * 0.85 + 0.15 * 1.0 = 0.255 + 0.15 = 0.405
-    assert 0.40 <= score <= 0.41  # baseline score
-
-
-def test_compute_capability_score_empty_skills():
-    """Test agent with empty skills list."""
-    agent = create_test_agent("a1", "EmptySkillsBot", skills=[])
-    message_tokens = _tokenize("help me")
-
-    score = compute_capability_score(message_tokens, agent)
-    assert 0.40 <= score <= 0.41  # Should get baseline score
-
-
-def test_compute_capability_score_no_overlap():
-    """Test no skill overlap results in low score."""
-    skills = [
-        AgentSkill(
-            id="s1",
-            name="Math Tutor",
-            description="Teaches mathematics",
-            tags=["education", "algebra"],  # Required field
-        )
-    ]
-    agent = create_test_agent("a1", "MathBot", skills=skills)
-    message_tokens = _tokenize("help me cook dinner tonight")
-
-    score = compute_capability_score(message_tokens, agent)
-    # Should have minimal score (only I/O component since no overlap)
-    assert score < 0.2
+def test_capability_score_attachments_wildcard_capable():
+    """Attachments + wildcard agent → 1.0."""
+    agent = create_test_agent("a1", "WildcardAgent", input_modes=["*/*"])
+    assert compute_capability_score(agent, required_input_modes=["application/pdf"]) == 1.0
 
 
 # ---- ScoreRanker Tests ----
@@ -311,31 +170,47 @@ def test_select_top_agents_debate_mode_returns_multiple():
     agent6 = create_test_agent("a6", "Agent6")
 
     ranked = [
-        MatchedAgent(agent1, 0.9, 0.8, 0.86),
-        MatchedAgent(agent2, 0.85, 0.75, 0.81),
-        MatchedAgent(agent3, 0.8, 0.7, 0.76),
-        MatchedAgent(agent4, 0.75, 0.65, 0.71),
-        MatchedAgent(agent5, 0.7, 0.6, 0.66),
-        MatchedAgent(agent6, 0.65, 0.55, 0.61),
+        MatchedAgent(agent1, 0.9, 1.0, 0.92),
+        MatchedAgent(agent2, 0.85, 1.0, 0.87),
+        MatchedAgent(agent3, 0.8, 1.0, 0.83),
+        MatchedAgent(agent4, 0.75, 1.0, 0.79),
+        MatchedAgent(agent5, 0.7, 1.0, 0.76),
+        MatchedAgent(agent6, 0.65, 1.0, 0.70),
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=True)
     assert 3 <= len(selected) <= 5
 
 
-def test_select_top_agents_debate_mode_below_threshold():
-    """Test debate mode with agents below threshold returns at most available."""
+def test_select_top_agents_debate_mode_few_above_threshold():
+    """Test debate mode with few agents above threshold returns only those."""
+    agent1 = create_test_agent("a1", "Agent1")
+    agent2 = create_test_agent("a2", "Agent2")
+    agent3 = create_test_agent("a3", "Agent3")
+
+    ranked = [
+        MatchedAgent(agent1, 0.5, 1.0, 0.58),  # Above threshold (0.3)
+        MatchedAgent(agent2, 0.3, 1.0, 0.41),  # Above threshold
+        MatchedAgent(agent3, 0.1, 1.0, 0.24),  # Below threshold
+    ]
+
+    selected = select_top_agents(ranked, is_debate_mode=True)
+    assert len(selected) == 2  # Only 2 above threshold
+
+
+def test_select_top_agents_debate_mode_none_above_threshold():
+    """Test debate mode with no agents above threshold returns top 1 fallback."""
     agent1 = create_test_agent("a1", "Agent1")
     agent2 = create_test_agent("a2", "Agent2")
 
     ranked = [
-        MatchedAgent(agent1, 0.5, 0.4, 0.46),  # Above threshold (0.3)
-        MatchedAgent(agent2, 0.2, 0.15, 0.18),  # Below threshold
+        MatchedAgent(agent1, 0.2, 1.0, 0.28),  # Below threshold
+        MatchedAgent(agent2, 0.1, 1.0, 0.24),  # Below threshold
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=True)
-    # Should return at least 3, but we only have 2, so return both
-    assert len(selected) == 2
+    assert len(selected) == 1
+    assert selected[0].agent.agent_id == "a1"
 
 
 def test_select_top_agents_gap_threshold_single_winner():
@@ -345,9 +220,9 @@ def test_select_top_agents_gap_threshold_single_winner():
     agent3 = create_test_agent("a3", "Third")
 
     ranked = [
-        MatchedAgent(agent1, 0.95, 0.9, 0.93),  # Clear winner
-        MatchedAgent(agent2, 0.65, 0.6, 0.63),  # Gap > 0.15
-        MatchedAgent(agent3, 0.6, 0.55, 0.58),
+        MatchedAgent(agent1, 0.95, 1.0, 0.96),  # Clear winner
+        MatchedAgent(agent2, 0.65, 1.0, 0.70),  # Gap > 0.15
+        MatchedAgent(agent3, 0.6, 1.0, 0.66),
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=False)
@@ -363,15 +238,14 @@ def test_select_top_agents_quality_threshold_cutoff():
     agent4 = create_test_agent("a4", "Agent4")
 
     ranked = [
-        MatchedAgent(agent1, 0.8, 0.75, 0.78),  # Above 0.4
-        MatchedAgent(agent2, 0.75, 0.7, 0.73),  # Above 0.4
-        MatchedAgent(agent3, 0.65, 0.6, 0.63),  # Above 0.4
-        MatchedAgent(agent4, 0.3, 0.25, 0.28),  # Below 0.4
+        MatchedAgent(agent1, 0.8, 1.0, 0.83),  # Above 0.4
+        MatchedAgent(agent2, 0.75, 1.0, 0.79),  # Above 0.4
+        MatchedAgent(agent3, 0.65, 1.0, 0.70),  # Above 0.4
+        MatchedAgent(agent4, 0.3, 1.0, 0.41),  # Above 0.4 but capped at 3
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=False)
     assert len(selected) == 3  # Top 3 above threshold
-    assert all(m.final_score > 0.4 for m in selected)
 
 
 def test_select_top_agents_all_below_threshold_returns_first():
@@ -380,24 +254,13 @@ def test_select_top_agents_all_below_threshold_returns_first():
     agent2 = create_test_agent("a2", "Agent2")
 
     ranked = [
-        MatchedAgent(agent1, 0.3, 0.25, 0.28),
-        MatchedAgent(agent2, 0.2, 0.15, 0.18),
+        MatchedAgent(agent1, 0.3, 1.0, 0.38),
+        MatchedAgent(agent2, 0.2, 1.0, 0.32),
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=False)
     assert len(selected) == 1
     assert selected[0].agent.agent_id == "a1"
-
-
-def test_select_top_agents_composite_score_calculation():
-    """Test composite score is properly calculated."""
-    agent1 = create_test_agent("a1", "Agent1")
-
-    # VECTOR_WEIGHT=0.6, CAPABILITY_WEIGHT=0.4
-    # Expected: 0.6 * 0.8 + 0.4 * 0.7 = 0.48 + 0.28 = 0.76
-    matched = MatchedAgent(agent1, vector_score=0.8, capability_score=0.7, final_score=0.76)
-
-    assert matched.final_score == 0.76
 
 
 # ---- AgentMatcher.match() Tests ----
@@ -426,12 +289,8 @@ async def test_agent_matcher_no_candidates():
 @pytest.mark.asyncio
 async def test_agent_matcher_returns_sorted_result():
     """Test match returns sorted MatchResult."""
-    agent1 = create_test_agent("a1", "Agent1", skills=[
-        AgentSkill(id="s1", name="Python Expert", description="Python coding", tags=["python"])
-    ])
-    agent2 = create_test_agent("a2", "Agent2", skills=[
-        AgentSkill(id="s2", name="General Helper", description="General tasks", tags=["general"])
-    ])
+    agent1 = create_test_agent("a1", "Agent1")
+    agent2 = create_test_agent("a2", "Agent2")
 
     mock_db = MagicMock()
     mock_db.query_similar_agents_with_scores = AsyncMock(return_value=[
@@ -460,9 +319,7 @@ async def test_agent_matcher_returns_sorted_result():
 async def test_agent_matcher_debate_mode_returns_more_agents():
     """Test debate mode returns more agents than non-debate."""
     agents = [
-        create_test_agent(f"a{i}", f"Agent{i}", skills=[
-            AgentSkill(id=f"s{i}", name="Helper", description="Helps", tags=["helper"])
-        ])
+        create_test_agent(f"a{i}", f"Agent{i}")
         for i in range(6)
     ]
 
@@ -488,15 +345,9 @@ async def test_agent_matcher_debate_mode_returns_more_agents():
 
 @pytest.mark.asyncio
 async def test_agent_matcher_with_required_input_modes():
-    """Test match with required_input_modes affects scoring."""
-    file_agent = create_test_agent("a1", "FileAgent",
-        skills=[AgentSkill(id="s1", name="File Processor", description="Process files", tags=["files"])],
-        input_modes=["text", "image/png"]
-    )
-    text_agent = create_test_agent("a2", "TextAgent",
-        skills=[AgentSkill(id="s2", name="Text Processor", description="Process text", tags=["text"])],
-        input_modes=["text"]
-    )
+    """Test match with required_input_modes penalizes non-file agents."""
+    file_agent = create_test_agent("a1", "FileAgent", input_modes=["text", "image/png"])
+    text_agent = create_test_agent("a2", "TextAgent", input_modes=["text"])
 
     mock_db = MagicMock()
     mock_db.query_similar_agents_with_scores = AsyncMock(return_value=[
@@ -514,17 +365,14 @@ async def test_agent_matcher_with_required_input_modes():
 
     assert len(result.agents) > 0
     # File-capable agent should be ranked higher due to I/O scoring
-    if len(result.agents) >= 2:
-        assert result.agents[0].agent.agent_id == "a1"
+    assert result.agents[0].agent.agent_id == "a1"
+    assert result.agents[0].capability_score == 1.0
 
 
 @pytest.mark.asyncio
 async def test_agent_matcher_without_required_input_modes():
     """Test match without required_input_modes (no attachments)."""
-    agent = create_test_agent("a1", "TextAgent",
-        skills=[AgentSkill(id="s1", name="Helper", description="General help", tags=["helper"])],
-        input_modes=["text"]
-    )
+    agent = create_test_agent("a1", "TextAgent", input_modes=["text"])
 
     mock_db = MagicMock()
     mock_db.query_similar_agents_with_scores = AsyncMock(return_value=[
@@ -540,15 +388,14 @@ async def test_agent_matcher_without_required_input_modes():
     result = await matcher.match("help me with text processing")
 
     assert len(result.agents) > 0
-    # Should not be penalized for lack of file support when no attachments
-    assert result.agents[0].capability_score > 0.0
+    # No attachments → capability_score = 1.0
+    assert result.agents[0].capability_score == 1.0
 
 
 @pytest.mark.asyncio
 async def test_agent_matcher_excludes_capability_issues():
     """Test match excludes agents with capability issues."""
     agent1 = create_test_agent("a1", "GoodAgent")
-    agent2 = create_test_agent("a2", "BadAgent")
 
     mock_db = MagicMock()
     mock_db.query_similar_agents_with_scores = AsyncMock(return_value=[

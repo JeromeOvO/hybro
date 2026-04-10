@@ -1,16 +1,16 @@
 """
 Agent Matching Pipeline
 
-Deterministic agent matching without LLM calls. Three-stage pipeline:
-  1. VectorSearch — Pinecone similarity search with excluded agent filtering
-  2. CapabilityFilter — Multi-dimensional capability scoring (skills, I/O modes)
-  3. ScoreRanker — Composite ranking and smart cutoff (debate vs quality-driven)
+Deterministic agent matching without LLM calls. Two-stage pipeline:
+  1. VectorSearch — Pinecone semantic similarity (full-sentence embedding)
+  2. ScoreRanker — Composite ranking with I/O penalty and smart cutoff
 
-Replaces the LLM-based analyze_message_routing() in agent_selection_service.py.
+Pinecone handles all semantic relevance via embeddings. The capability layer
+only applies structural penalties (e.g. message has files but agent can't
+handle them). This avoids duplicating semantic matching with naive token overlap.
 """
 
 import os
-import re
 from dataclasses import dataclass
 
 from common.utils.logger import get_logger
@@ -30,19 +30,11 @@ FILE_CAPABLE_MIMES = frozenset({
 })
 
 # Scoring weights and thresholds (configurable via env vars)
-VECTOR_WEIGHT = float(os.getenv("MATCH_VECTOR_WEIGHT", "0.6"))
-CAPABILITY_WEIGHT = float(os.getenv("MATCH_CAPABILITY_WEIGHT", "0.4"))
+VECTOR_WEIGHT = float(os.getenv("MATCH_VECTOR_WEIGHT", "0.85"))
+CAPABILITY_WEIGHT = float(os.getenv("MATCH_CAPABILITY_WEIGHT", "0.15"))
 DEBATE_THRESHOLD = float(os.getenv("MATCH_DEBATE_THRESHOLD", "0.3"))
 GAP_THRESHOLD = float(os.getenv("MATCH_GAP_THRESHOLD", "0.15"))
 QUALITY_THRESHOLD = float(os.getenv("MATCH_QUALITY_THRESHOLD", "0.4"))
-
-# Simple tokenizer
-_WORD_RE = re.compile(r"[a-z0-9]+")
-
-
-def _tokenize(text: str) -> set[str]:
-    """Simple lowercase tokenizer for skill matching."""
-    return set(_WORD_RE.findall(text.lower()))
 
 
 def _agent_supports_files(agent: Agent) -> bool:
@@ -71,51 +63,28 @@ def _agent_supports_files(agent: Agent) -> bool:
 
 
 def compute_capability_score(
-    message_tokens: set[str],
     agent: Agent,
     required_input_modes: list[str] | None = None,
 ) -> float:
-    """Score 0.0-1.0 based on how well agent capabilities match the message.
+    """Structural capability score (0.0 or 1.0).
+
+    Only checks I/O mode compatibility — whether the agent can handle
+    the message's attachment types. Semantic relevance is handled entirely
+    by Pinecone vector search.
 
     Args:
-        message_tokens: Tokenized message text (lowercase word set)
         agent: Agent to score
         required_input_modes: If present (non-None), message has attachments
 
     Returns:
-        Capability score from 0.0 to 1.0
+        1.0 if compatible, 0.0 if incompatible (agent can't handle files)
     """
-    skills = agent.agent_card.skills or []
+    if required_input_modes is None:
+        # No attachments → all agents compatible
+        return 1.0
 
-    # I/O mode: binary check (has attachments + agent supports files → 1.0, else → 0.0)
-    if required_input_modes is not None:  # non-None = message has attachments
-        io_score = 1.0 if _agent_supports_files(agent) else 0.0
-    else:
-        io_score = 1.0  # No attachments → no penalty
-
-    if not skills:
-        # General-purpose agents: baseline + I/O check
-        return 0.3 * 0.85 + 0.15 * io_score
-
-    best_skill_score = 0.0
-    for skill in skills:
-        name_tokens = _tokenize(skill.name)
-        desc_tokens = _tokenize(skill.description or "")
-        tags = set(t.lower() for t in (skill.tags or []))
-
-        name_overlap = len(message_tokens & name_tokens) / max(len(name_tokens), 1)
-        desc_overlap = len(message_tokens & desc_tokens) / max(len(desc_tokens), 1)
-        tag_overlap = len(message_tokens & tags) / max(len(tags), 1)
-
-        skill_score = (
-            0.35 * name_overlap +
-            0.25 * desc_overlap +
-            0.25 * tag_overlap +
-            0.15 * io_score
-        )
-        best_skill_score = max(best_skill_score, skill_score)
-
-    return min(best_skill_score, 1.0)
+    # Message has attachments — agent must support files
+    return 1.0 if _agent_supports_files(agent) else 0.0
 
 
 def select_top_agents(
@@ -137,8 +106,11 @@ def select_top_agents(
     if is_debate_mode:
         # Debate mode: return 3-5 agents above threshold for diversity
         above_threshold = [a for a in ranked if a.final_score > DEBATE_THRESHOLD]
-        count = max(3, min(len(above_threshold), 5))
-        return ranked[:count]
+        if not above_threshold:
+            # No agent scored well enough — return only the top 1 as fallback
+            return [ranked[0]]
+        count = min(max(len(above_threshold), 3), 5)
+        return above_threshold[:count] if len(above_threshold) >= 3 else above_threshold
 
     # Non-debate: quality-driven cutoff
     top = ranked[0]
@@ -156,8 +128,8 @@ def select_top_agents(
 class MatchedAgent:
     """Agent with scoring breakdown."""
     agent: Agent
-    vector_score: float         # 0.0 for non-vector scopes
-    capability_score: float
+    vector_score: float
+    capability_score: float     # 1.0 (compatible) or 0.0 (I/O mismatch)
     final_score: float
 
 
@@ -197,15 +169,13 @@ class AgentMatcher:
         Returns:
             MatchResult with sorted agents and metadata
         """
-        message_tokens = _tokenize(message_text)
-
         # Exclude agents with repeated capability issues
         excluded = await self._capability_issue_service.get_excluded_agent_ids()
 
-        # Stage 1: VectorSearch (Pinecone)
+        # Stage 1: VectorSearch (Pinecone) — full-sentence semantic matching
         candidates = await self._db.query_similar_agents_with_scores(
             query_text=message_text,
-            count=20,  # Request more candidates for filtering
+            count=20,
             excluded_agent_ids=excluded,
             active_only=True,
             user_id=user_id,
@@ -216,12 +186,10 @@ class AgentMatcher:
             logger.info("AgentMatcher: No candidates from vector search")
             return MatchResult(agents=[], total_candidates=0, filtered_count=0)
 
-        # Stage 2: CapabilityFilter — score each candidate
+        # Stage 2: Apply I/O capability penalty and compute final scores
         scored: list[MatchedAgent] = []
         for agent, vector_score in candidates:
-            cap_score = compute_capability_score(
-                message_tokens, agent, required_input_modes,
-            )
+            cap_score = compute_capability_score(agent, required_input_modes)
             final = VECTOR_WEIGHT * vector_score + CAPABILITY_WEIGHT * cap_score
             scored.append(MatchedAgent(
                 agent=agent,
@@ -232,6 +200,14 @@ class AgentMatcher:
 
         # Sort by final_score descending
         scored.sort(key=lambda m: m.final_score, reverse=True)
+
+        # Debug: log top candidates with score breakdown
+        for i, m in enumerate(scored[:6]):
+            agent_name = m.agent.agent_card.name if m.agent.agent_card else m.agent.agent_id
+            logger.info(
+                "AgentMatcher rank #%d: %s — vector=%.3f, capability=%.3f, final=%.3f",
+                i + 1, agent_name, m.vector_score, m.capability_score, m.final_score,
+            )
 
         # Stage 3: ScoreRanker — smart cutoff
         selected = select_top_agents(scored, is_debate_mode)

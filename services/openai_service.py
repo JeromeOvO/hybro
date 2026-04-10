@@ -599,9 +599,6 @@ Your response should be an complete answer with all the specific details the use
         Returns:
             Summary text string
         """
-        # Get max words from env variable, default to 200 words
-        max_words = int(os.getenv("SUMMARY_MAX_WORDS", "200"))
-
         # Select system prompt based on mode
         if mode == "debate":
             system_prompt = """You are an expert debate summarizer for multi-agent systems. Your task is to analyze responses from multiple AI agents and create a structured summary that captures different perspectives, agreements, and disagreements.
@@ -630,8 +627,7 @@ QUALITY STANDARDS:
             user_prompt_template = (
                 "Here are responses from multiple agents with potentially different opinions:\n\n{answers}\n\n"
                 "Summarize the key points from all agents in a structured format. "
-                "Use the actual agent names when referencing their opinions. "
-                "Keep the summary within {max_words} words."
+                "Use the actual agent names when referencing their opinions."
             )
         else:
             # Default: non_debate mode
@@ -661,8 +657,7 @@ QUALITY STANDARDS:
             user_prompt_template = (
                 "Here are responses from multiple agents working together on the user's request:\n\n{answers}\n\n"
                 "Synthesize these into a single, unified response that combines all their contributions. "
-                "Present it as a cohesive answer, not as a comparison of opinions. "
-                "Keep the summary within {max_words} words."
+                "Present it as a cohesive answer, not as a comparison of opinions."
             )
 
         # Format agent responses
@@ -675,7 +670,6 @@ QUALITY STANDARDS:
 
         user_prompt = user_prompt_template.format(
             answers=answers_text,
-            max_words=max_words,
         )
 
         chat_messages = [

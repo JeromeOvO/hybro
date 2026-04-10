@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     log_backup_count: int = 5
     log_max_bytes: int = 10485760  # 10 MB
 
-    debate_rounds: int = 1  # todo: can be as parameter
+    debate_rounds: int = 2  # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
     # Clerk Authentication

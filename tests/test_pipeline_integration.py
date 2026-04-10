@@ -60,8 +60,8 @@ async def test_all_agents_uses_agent_matcher():
     # Mock MatchResult
     mock_match_result = MatchResult(
         agents=[
-            MatchedAgent(agent=agent1, vector_score=0.8, capability_score=0.7, final_score=0.76),
-            MatchedAgent(agent=agent2, vector_score=0.6, capability_score=0.5, final_score=0.56),
+            MatchedAgent(agent=agent1, vector_score=0.8, capability_score=1.0, final_score=0.83),
+            MatchedAgent(agent=agent2, vector_score=0.6, capability_score=1.0, final_score=0.66),
         ],
         total_candidates=5,
         filtered_count=2,
@@ -91,8 +91,8 @@ async def test_all_agents_uses_agent_matcher():
         assert len(result.agents) == 2
         assert result.agents[0].agent_id == "agent1"
         assert result.agents[0].agent_name == "TestAgent1"
-        assert result.agents[0].score == 0.76
-        assert "Match score: 0.76" in result.agents[0].reason
+        assert result.agents[0].score == 0.83
+        assert "Match score: 0.83" in result.agents[0].reason
         assert "Matched 2 agent(s) from 5 candidates" in result.reasoning
 
 
@@ -289,62 +289,58 @@ async def test_matcher_error_propagates_to_caller():
             )
 
 
-def test_capability_score_integrated_with_vector_score():
-    """End-to-end: verify capability scoring and ranking pipeline work together."""
-    # Create agents with different skills
-    skills_python = [AgentSkill(id="skill1", name="python", description="Python programming expert", tags=["coding"])]
-    skills_data = [AgentSkill(id="skill2", name="data-analysis", description="Data analysis and visualization", tags=["analytics"])]
-
-    agent_python = _make_agent("agent1", "PythonExpert", "Python specialist", skills=skills_python)
-    agent_data = _make_agent("agent2", "DataAnalyst", "Data analysis specialist", skills=skills_data)
-    agent_general = _make_agent("agent3", "GeneralAgent", "General purpose assistant")
-
-    # Simulate matched agents with vector scores
-    message_tokens = {"python", "code", "script"}
+def test_vector_score_dominates_ranking():
+    """Verify ranking is driven by vector similarity (Pinecone embeddings)."""
+    # Without attachments, all agents get capability_score=1.0
+    # So final_score is determined entirely by vector_score
+    agent_high = _make_agent("agent1", "HighVector", "Best semantic match")
+    agent_low = _make_agent("agent2", "LowVector", "Poor semantic match")
 
     matched_agents = [
-        MatchedAgent(
-            agent=agent_python,
-            vector_score=0.8,
-            capability_score=compute_capability_score(message_tokens, agent_python),
-            final_score=0.0,  # Will be computed
-        ),
-        MatchedAgent(
-            agent=agent_data,
-            vector_score=0.7,
-            capability_score=compute_capability_score(message_tokens, agent_data),
-            final_score=0.0,
-        ),
-        MatchedAgent(
-            agent=agent_general,
-            vector_score=0.6,
-            capability_score=compute_capability_score(message_tokens, agent_general),
-            final_score=0.0,
-        ),
+        MatchedAgent(agent=agent_high, vector_score=0.9, capability_score=1.0,
+                     final_score=0.85 * 0.9 + 0.15 * 1.0),
+        MatchedAgent(agent=agent_low, vector_score=0.4, capability_score=1.0,
+                     final_score=0.85 * 0.4 + 0.15 * 1.0),
     ]
 
-    # Compute final scores with standard weights (0.6 vector + 0.4 capability)
-    for m in matched_agents:
-        m.final_score = 0.6 * m.vector_score + 0.4 * m.capability_score
-
-    # Sort by final score
     matched_agents.sort(key=lambda m: m.final_score, reverse=True)
+    assert matched_agents[0].agent.agent_id == "agent1"
 
-    # Verify ranking: PythonExpert should rank highest due to skill match
-    assert matched_agents[0].agent.agent_id == "agent1"  # PythonExpert
+    # Verify the gap in scores
+    assert matched_agents[0].final_score > matched_agents[1].final_score + 0.3
 
-    # Verify final scores are computed correctly
-    for m in matched_agents:
-        assert m.final_score > 0.0
-        assert m.final_score <= 1.0
 
-    # Test select_top_agents with non-debate mode
-    selected = select_top_agents(matched_agents, is_debate_mode=False)
+def test_file_penalty_demotes_incompatible_agents():
+    """Verify file-incapable agents rank lower when message has attachments."""
+    agent_file = _make_agent("agent1", "FileAgent", "Handles files", input_modes=["text", "file"])
+    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
 
-    # In non-debate mode with no large gap, should return qualified agents (up to 3)
-    assert len(selected) >= 1
-    assert len(selected) <= 3
-    assert selected[0].agent.agent_id == "agent1"  # Top agent should be selected
+    score_file = compute_capability_score(agent_file, required_input_modes=["application/pdf"])
+    score_text = compute_capability_score(agent_text, required_input_modes=["application/pdf"])
+
+    assert score_file == 1.0
+    assert score_text == 0.0
+
+    # With same vector score, file agent should rank higher
+    matched = [
+        MatchedAgent(agent=agent_file, vector_score=0.7, capability_score=score_file,
+                     final_score=0.85 * 0.7 + 0.15 * score_file),
+        MatchedAgent(agent=agent_text, vector_score=0.7, capability_score=score_text,
+                     final_score=0.85 * 0.7 + 0.15 * score_text),
+    ]
+    matched.sort(key=lambda m: m.final_score, reverse=True)
+    assert matched[0].agent.agent_id == "agent1"
+
+
+def test_no_file_penalty_without_attachments():
+    """Without attachments, text-only and file-capable agents score equally."""
+    agent_file = _make_agent("agent1", "FileAgent", "Handles files", input_modes=["text", "file"])
+    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
+
+    score_file = compute_capability_score(agent_file, required_input_modes=None)
+    score_text = compute_capability_score(agent_text, required_input_modes=None)
+
+    assert score_file == score_text == 1.0
 
 
 def test_debate_prompt_truncation_consistent():
@@ -365,8 +361,7 @@ def test_debate_prompt_truncation_consistent():
     assert "[truncated — full response: 3500 chars]" in prompt
 
     # Verify total length is reasonable (not massively oversized)
-    # Truncated response (3000) + marker (~40) + template (~400) ≈ 3440
-    assert len(prompt) < 3600  # Allow some buffer for template text
+    assert len(prompt) < 3600
 
     # Verify task and prior agent name still present
     assert original_task in prompt
@@ -377,44 +372,15 @@ def test_sequential_debate_first_agent_gets_raw_task():
     """Verify first agent in debate receives original task unchanged."""
     original_task = "Write a Python script to process data"
 
-    # First agent: no prior response
     prompt = SequentialDebateDispatcher.build_debate_prompt(
         original_task=original_task,
         prior_agent_name=None,
         prior_response=None,
     )
 
-    # Should return original task unchanged
     assert prompt == original_task
-
-    # Verify no debate instructions added
     assert "DEBATE MODE INSTRUCTIONS" not in prompt
     assert "RESPONSE FROM PREVIOUS AGENT" not in prompt
-
-
-def test_matcher_ranking_with_file_capability():
-    """Integration test: verify file-capable agents score higher for messages with attachments."""
-    from services.agent_matcher import _tokenize
-
-    # Create agents: one file-capable, one text-only
-    agent_file = _make_agent("agent1", "FileAgent", "Handles files", input_modes=["text", "file"])
-    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
-
-    message_tokens = _tokenize("Process this document")
-
-    # Compute capability scores with required_input_modes (message has attachments)
-    score_file = compute_capability_score(message_tokens, agent_file, required_input_modes=["application/pdf"])
-    score_text = compute_capability_score(message_tokens, agent_text, required_input_modes=["application/pdf"])
-
-    # File-capable agent should score higher
-    assert score_file > score_text
-
-    # Now test without attachments
-    score_file_no_attach = compute_capability_score(message_tokens, agent_file, required_input_modes=None)
-    score_text_no_attach = compute_capability_score(message_tokens, agent_text, required_input_modes=None)
-
-    # Without attachments, both should have same baseline (no I/O penalty)
-    assert score_file_no_attach == score_text_no_attach
 
 
 @pytest.mark.asyncio
@@ -473,22 +439,17 @@ async def test_debate_service_uses_shared_dispatcher():
         mock_get_name.return_value = "PriorAgent"
         mock_update.return_value = True
 
-        # Call inject_short_debate_for_agent_message
         result = await debate_service.inject_short_debate_for_agent_message(current_message)
-
-        # Verify SequentialDebateDispatcher was used (indirectly, by checking the prompt structure)
-        # The prompt should contain debate instructions from SequentialDebateDispatcher
         assert mock_update.called
 
 
 def test_select_top_agents_debate_mode_diversity():
     """Verify debate mode returns 3-5 agents for diversity."""
-    # Create 6 agents with varying scores
     agents = [
         MatchedAgent(_make_agent(f"agent{i}", f"Agent{i}", f"Desc{i}"),
-                    vector_score=0.8 - i*0.1,
-                    capability_score=0.7 - i*0.1,
-                    final_score=0.75 - i*0.1)
+                    vector_score=0.8 - i*0.05,
+                    capability_score=1.0,
+                    final_score=0.85 * (0.8 - i*0.05) + 0.15)
         for i in range(6)
     ]
 
@@ -503,19 +464,17 @@ def test_select_top_agents_debate_mode_diversity():
 
 def test_select_top_agents_clear_winner():
     """Verify non-debate mode returns only top agent when there's a clear winner."""
-    # Create agents with large score gap
     agents = [
         MatchedAgent(_make_agent("agent1", "Winner", "Top agent"),
-                    vector_score=0.9, capability_score=0.9, final_score=0.9),
+                    vector_score=0.9, capability_score=1.0, final_score=0.92),
         MatchedAgent(_make_agent("agent2", "Runner-up", "Second agent"),
-                    vector_score=0.5, capability_score=0.5, final_score=0.5),
+                    vector_score=0.5, capability_score=1.0, final_score=0.58),
         MatchedAgent(_make_agent("agent3", "Third", "Third agent"),
-                    vector_score=0.4, capability_score=0.4, final_score=0.4),
+                    vector_score=0.4, capability_score=1.0, final_score=0.49),
     ]
 
-    # Non-debate mode with clear winner: should return only top agent
     selected = select_top_agents(agents, is_debate_mode=False)
 
-    # Gap is 0.9 - 0.5 = 0.4, which exceeds GAP_THRESHOLD (0.15)
+    # Gap is 0.92 - 0.58 = 0.34, which exceeds GAP_THRESHOLD (0.15)
     assert len(selected) == 1
     assert selected[0].agent.agent_id == "agent1"
