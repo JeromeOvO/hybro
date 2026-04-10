@@ -2,17 +2,21 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+import { MarkdownContent } from './markdown-content'
 
 interface TruncatedContentProps {
   content: string
   maxLines?: number
   className?: string
+  /** Optional className forwarded to the inner MarkdownContent wrapper div */
+  markdownClassName?: string
 }
 
 export function TruncatedContent({
   content,
   maxLines = 6,
   className,
+  markdownClassName,
 }: TruncatedContentProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isTruncated, setIsTruncated] = useState(false)
@@ -29,10 +33,10 @@ export function TruncatedContent({
       <div
         ref={contentRef}
         data-testid="truncated-content-body"
-        className="whitespace-pre-wrap break-words"
-        style={!isExpanded ? { WebkitLineClamp: maxLines, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' } : undefined}
+        className="min-h-0 overflow-hidden break-words"
+        style={!isExpanded ? { maxHeight: `${maxLines}lh` } : undefined}
       >
-        {content}
+        <MarkdownContent content={content} className={markdownClassName} />
       </div>
 
       {isTruncated && !isExpanded && (

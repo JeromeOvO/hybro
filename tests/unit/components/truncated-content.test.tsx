@@ -1,5 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+
+vi.mock('@/components/markdown-content', () => ({
+  MarkdownContent: ({ content, className }: { content: string; className?: string }) => (
+    <div data-testid="markdown-content" className={className}>
+      {content}
+    </div>
+  ),
+}))
 
 import { TruncatedContent } from '@/components/truncated-content'
 
@@ -54,5 +62,42 @@ describe('TruncatedContent', () => {
     fireEvent.click(screen.getByText('Show less'))
     expect(screen.getByText('Show more')).toBeTruthy()
     expect(screen.getByTestId('truncated-fade')).toBeTruthy()
+  })
+
+  it('renders content through MarkdownContent', () => {
+    render(<TruncatedContent content="Hello **world**" />)
+    const md = screen.getByTestId('markdown-content')
+    expect(md).toBeTruthy()
+    expect(md.textContent).toContain('Hello **world**')
+  })
+
+  it('does not use whitespace-pre-wrap on content wrapper', () => {
+    render(<TruncatedContent content="test" />)
+    const body = screen.getByTestId('truncated-content-body')
+    expect(body.className).not.toContain('whitespace-pre-wrap')
+  })
+
+  it('uses inline max-height for truncation, not -webkit-line-clamp', () => {
+    render(<TruncatedContent content="test" maxLines={6} />)
+    const body = screen.getByTestId('truncated-content-body')
+    expect(body.style.maxHeight).toBe('6lh')
+    expect(body.className).toContain('overflow-hidden')
+    expect(body.style.webkitLineClamp).toBeFalsy()
+    expect(body.style.display).not.toBe('-webkit-box')
+  })
+
+  it('removes max-height when expanded', () => {
+    mockTruncation(true)
+    render(<TruncatedContent content="long content" maxLines={2} />)
+    const body = screen.getByTestId('truncated-content-body')
+    expect(body.style.maxHeight).toBe('2lh')
+    fireEvent.click(screen.getByText('Show more'))
+    expect(body.style.maxHeight).toBeFalsy()
+  })
+
+  it('forwards markdownClassName to MarkdownContent', () => {
+    render(<TruncatedContent content="test" markdownClassName="text-base" />)
+    const md = screen.getByTestId('markdown-content')
+    expect(md.className).toContain('text-base')
   })
 })
