@@ -1,7 +1,7 @@
 // src/components/conversation-turn.tsx
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { AgentBadge } from './agent-badge'
@@ -91,6 +91,13 @@ interface ConversationTurnProps {
 
 function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnProps) {
   const [isExpanded, setIsExpanded] = useState(isActive)
+
+  // Auto-collapse when turn stops being active (new user message arrived)
+  useEffect(() => {
+    if (!isActive) {
+      setIsExpanded(false)
+    }
+  }, [isActive])
 
   const handleToggle = useCallback(() => {
     if (!isActive) {
@@ -183,6 +190,7 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
           <AgentResultStack
             results={turn.agentResults}
             summary={turn.summary}
+            onQuote={onQuote}
           />
 
           {/* Collapse button for non-active expanded turns */}

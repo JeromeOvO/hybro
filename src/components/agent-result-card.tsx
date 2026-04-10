@@ -5,8 +5,10 @@ import React from 'react'
 import { cn } from '@/lib/utils'
 import { AgentBadge } from './agent-badge'
 import { TruncatedContent } from './truncated-content'
+import { ArtifactList } from './artifact-list'
 import { AlertTriangle } from 'lucide-react'
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
+import type { QuoteData } from './message-bubble'
 
 // ── Status indicator ────────────────────────────────────────────
 
@@ -28,26 +30,6 @@ function StatusIndicator({ status }: { status: AgentResultViewModel['status'] })
         </span>
       )
   }
-}
-
-// ── Artifact list ───────────────────────────────────────────────
-
-function ArtifactList({ artifacts }: { artifacts: AgentResultViewModel['artifacts'] }) {
-  if (!artifacts || artifacts.length === 0) return null
-
-  return (
-    <div className="mt-2 space-y-1">
-      {artifacts.map(artifact => (
-        <div
-          key={artifact.artifactId}
-          className="text-xs text-muted-foreground flex items-center gap-1.5"
-        >
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/50 shrink-0" />
-          <span className="truncate">{artifact.name || 'Artifact'}</span>
-        </div>
-      ))}
-    </div>
-  )
 }
 
 // ── HITL history ────────────────────────────────────────────────
@@ -72,9 +54,10 @@ function HitlHistoryList({ history }: { history: { prompt: string; answer: strin
 
 interface AgentResultCardProps {
   result: AgentResultViewModel
+  onQuote?: (data: QuoteData) => void
 }
 
-export function AgentResultCard({ result }: AgentResultCardProps) {
+export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
   const isStreaming = result.status === 'awaiting_input' && result.content.length > 0
   const isEmpty = result.content.trim().length === 0 && result.status === 'completed'
   const isFailed = result.status === 'failed'

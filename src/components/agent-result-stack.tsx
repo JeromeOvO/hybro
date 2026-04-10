@@ -4,6 +4,7 @@
 import React from 'react'
 import { AgentResultCard } from './agent-result-card'
 import type { AgentResultViewModel, TurnSummaryViewModel } from '@/lib/room-timeline/types'
+import type { QuoteData } from './message-bubble'
 
 // ── Sort order ──────────────────────────────────────────────────
 
@@ -29,9 +30,10 @@ function sortPriority(
 interface AgentResultStackProps {
   results: AgentResultViewModel[]
   summary?: TurnSummaryViewModel | null
+  onQuote?: (data: QuoteData) => void
 }
 
-export function AgentResultStack({ results, summary }: AgentResultStackProps) {
+export function AgentResultStack({ results, summary, onQuote }: AgentResultStackProps) {
   if (results.length === 0) return null
 
   const summarySourceId = summary?.sourceAgentId
@@ -42,7 +44,7 @@ export function AgentResultStack({ results, summary }: AgentResultStackProps) {
   return (
     <div className="space-y-3" data-testid="agent-result-stack">
       {sorted.map(result => (
-        <AgentResultCard key={result.messageId} result={result} />
+        <AgentResultCard key={result.messageId} result={result} onQuote={onQuote} />
       ))}
     </div>
   )

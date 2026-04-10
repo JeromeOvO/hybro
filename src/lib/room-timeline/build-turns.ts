@@ -307,10 +307,58 @@ function filterEventsForTurn(
   entities: Record<string, MessageEntity>,
   events: readonly RawTimelineEvent[],
 ): TimelineEventViewModel[] {
-  // For now, return an empty array. Events will be wired in Phase 3
-  // when SSE handler captures events into the event-log.
-  // This placeholder allows the turn builder to compile and pass tests.
-  return []
+  if (events.length === 0) return []
+
+  // Collect agentIds that belong to this turn
+  const turnAgentIds = new Set<string>()
+  for (const id of scaffold.agentMessageIds) {
+    const entity = entities[id]
+    if (entity?.agentId) turnAgentIds.add(entity.agentId)
+  }
+
+  // Determine time boundaries for this turn
+  const userEntity = scaffold.userMessageId ? entities[scaffold.userMessageId] : null
+  const turnStart = userEntity?.timestamp ?? ''
+
+  // Filter events that belong to this turn's agents within the time window
+  const filtered: TimelineEventViewModel[] = []
+  let counter = 0
+
+  for (const raw of events) {
+    // Must belong to one of this turn's agents (or be a user_prompt matching the turn)
+    if (raw.kind === 'user_prompt') {
+      if (scaffold.userMessageId && raw.timestamp === turnStart) {
+        filtered.push(rawToViewModel(raw, `${scaffold.userMessageId}-evt-${counter++}`))
+      }
+      continue
+    }
+
+    // Agent events: match by agentId
+    if (raw.agentId && turnAgentIds.has(raw.agentId)) {
+      // Only include events after the turn start (or if no start, include all)
+      if (!turnStart || raw.timestamp >= turnStart) {
+        filtered.push(rawToViewModel(raw, `evt-${raw.agentId}-${counter++}`))
+      }
+    }
+  }
+
+  return filtered
+}
+
+function rawToViewModel(raw: RawTimelineEvent, id: string): TimelineEventViewModel {
+  return {
+    id,
+    kind: raw.kind,
+    timestamp: raw.timestamp,
+    agentId: raw.agentId,
+    agentName: raw.agentName,
+    label: raw.label,
+    body: raw.body,
+    artifactPayload: raw.artifactPayload,
+    hitlPayload: raw.hitlPayload,
+    isLive: false,
+    isHiddenInCompact: raw.kind === 'agent_progress',
+  }
 }
 
 // ── Incremental derivation ─────────────────────────────────────
@@ -367,12 +415,21 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if (a.agentResults.length !== b.agentResults.length) return false
   if (a.userContent !== b.userContent) return false
 
-  // Check that all agent message IDs match
+  // Check that all agent results match (including artifacts)
   for (let i = 0; i < a.agentResults.length; i++) {
     if (a.agentResults[i].messageId !== b.agentResults[i].messageId) return false
     if (a.agentResults[i].status !== b.agentResults[i].status) return false
     if (a.agentResults[i].content !== b.agentResults[i].content) return false
+    if (a.agentResults[i].artifacts.length !== b.agentResults[i].artifacts.length) return false
+    for (let j = 0; j < a.agentResults[i].artifacts.length; j++) {
+      if (a.agentResults[i].artifacts[j].artifactId !== b.agentResults[i].artifacts[j].artifactId) return false
+      if (a.agentResults[i].artifacts[j].isStreaming !== b.agentResults[i].artifacts[j].isStreaming) return false
+      if (a.agentResults[i].artifacts[j].parts.length !== b.agentResults[i].artifacts[j].parts.length) return false
+    }
   }
+
+  // Check events count changed
+  if (a.events.length !== b.events.length) return false
 
   return true
 }
