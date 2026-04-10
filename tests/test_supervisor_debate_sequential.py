@@ -727,63 +727,6 @@ class TestDebateResume:
 # ---------------------------------------------------------------------------
 
 
-class TestAllAgentsDebateBypassesSelector:
-    """Verify that all_agents + debate mode returns all active agents
-    without calling the LLM agent selector."""
-
-    @pytest.mark.asyncio
-    async def test_all_agents_debate_bypasses_selector(self):
-        """all_agents + debate should return all active agents directly."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from models.agent import Agent, AgentStatus
-        from a2a.types import AgentCard, AgentCapabilities, AgentProvider
-
-        # Create mock agents
-        def make_agent(aid, name):
-            return Agent(
-                agent_id=aid,
-                provider_id="test",
-                agent_card=AgentCard(
-                    name=name,
-                    description=f"Agent {name}",
-                    url=f"https://test.com/{aid}",
-                    version="1.0.0",
-                    provider=AgentProvider(organization="Test", url="https://test.com"),
-                    capabilities=AgentCapabilities(),
-                    default_input_modes=["text"],
-                    default_output_modes=["text"],
-                    skills=[],
-                ),
-                agent_status=AgentStatus.active,
-            )
-
-        agents = [make_agent("a2", "Bravo"), make_agent("a1", "Alpha")]
-
-        mock_db = MagicMock()
-        mock_db.get_all_active_agents = AsyncMock(return_value=agents)
-
-        mock_room_services = MagicMock()
-        mock_room_services.database_service = mock_db
-
-        # Simulate the bypass logic from room_services._resolve_explicit_target_scope
-        target_group = "all_agents"
-        is_debate_mode = True
-        sender_user_id = "user1"
-
-        if target_group == "all_agents" and is_debate_mode:
-            all_agents = await mock_db.get_all_active_agents(user_id=sender_user_id)
-            all_agents.sort(key=lambda a: (a.agent_card.name.lower(), a.agent_id))
-            selected = {a.agent_id: a.agent_card.name for a in all_agents}
-
-        # Verify all agents returned
-        assert len(selected) == 2
-        # Verify stable sort (Alpha before Bravo)
-        keys = list(selected.keys())
-        assert keys == ["a1", "a2"]
-        # Verify DB was called (not LLM selector)
-        mock_db.get_all_active_agents.assert_called_once_with(user_id="user1")
-
-
 # ---------------------------------------------------------------------------
 # Resume: participant preservation across pause/resume
 # ---------------------------------------------------------------------------
