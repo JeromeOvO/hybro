@@ -75,6 +75,7 @@ export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
           agentName={result.agentName}
           agentSource={result.agentSource}
           size="md"
+          showDeletedIndicator={result.status !== 'awaiting_input' && !result.agentId}
         />
         <StatusIndicator status={result.status} />
       </div>
