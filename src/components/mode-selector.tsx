@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, Sparkles, Zap } from 'lucide-react'
+import { ChevronDown, Sparkles, Zap, Swords } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -22,12 +22,26 @@ const MODE_CONFIG = {
   [CHAT_MODE.ULTIMATE]: {
     label: 'Ultimate',
     icon: Sparkles,
-    description: 'Smart multi-agent coordination with planning and synthesis',
+    iconColor: 'text-primary',
+    description: 'For big tasks that need planning',
   },
   [CHAT_MODE.FAST]: {
     label: 'Fast',
     icon: Zap,
-    description: 'Direct dispatch to agents for quick responses',
+    iconColor: 'text-yellow-500',
+    description: 'For quick and simple questions',
+  },
+  [CHAT_MODE.ULTIMATE_DEBATE]: {
+    label: 'Ultimate - Debate',
+    icon: Swords,
+    iconColor: 'text-primary',
+    description: 'For big tasks where different ideas should be compared',
+  },
+  [CHAT_MODE.FAST_DEBATE]: {
+    label: 'Fast - Debate',
+    icon: Swords,
+    iconColor: 'text-yellow-500',
+    description: 'For quick answers with extra checking',
   },
 } as const
 
@@ -59,7 +73,7 @@ export function ModeSelector({
                   size="sm"
                   className="h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                 >
-                  <CurrentIcon className={cn('h-3.5 w-3.5', mode === CHAT_MODE.ULTIMATE ? 'text-primary' : 'text-yellow-500')} />
+                  <CurrentIcon className={cn('h-3.5 w-3.5', current.iconColor)} />
                   <span className="font-medium">{current.label}</span>
                   <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </Button>
@@ -87,7 +101,7 @@ export function ModeSelector({
                         mode === modeKey && 'bg-accent',
                       )}
                     >
-                      <Icon className={cn('h-4 w-4', modeKey === CHAT_MODE.ULTIMATE ? 'text-primary' : 'text-yellow-500')} />
+                      <Icon className={cn('h-4 w-4', config.iconColor)} />
                       <span className="font-medium">{config.label}</span>
                     </DropdownMenuItem>
                   </TooltipTrigger>

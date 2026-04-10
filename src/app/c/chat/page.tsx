@@ -22,7 +22,7 @@ import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/components/message-bubble"
 import type { PendingAttachment } from "@/lib/types/attachments"
 import type { ChatMode } from "@/lib/types/chat-mode"
-import { DEFAULT_CHAT_MODE, chatModeToSupervisor } from "@/lib/types/chat-mode"
+import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
@@ -100,7 +100,7 @@ function ChatPageContent() {
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
 
-    // Local chat mode (Ultimate = supervisor, Fast = no supervisor)
+    // Local chat mode selection
     const [localChatMode, setLocalChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
 
     const [preConfiguredRoom, setPreConfiguredRoom] = useState<{
@@ -204,8 +204,8 @@ function ChatPageContent() {
                     roomName: preConfiguredRoom.roomName || undefined,
                     selectedAgents: preConfiguredRoom.selectedAgents,
                 } : {}),
-                debateMode: false,
-                useSupervisor: chatModeToSupervisor(localChatMode),
+                debateMode: chatModeToFlags(localChatMode).debateMode,
+                useSupervisor: chatModeToFlags(localChatMode).use_supervisor,
                 targetGroup: gm.selectedGroup,
                 attachments,
             }

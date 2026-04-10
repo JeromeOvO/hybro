@@ -1,7 +1,8 @@
 'use client'
 
-import { X, FileIcon, Loader2, AlertCircle, Volume2, Film } from 'lucide-react'
+import { X, Loader2, AlertCircle, Volume2, Film } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getFileIcon } from '@/lib/file-icon-utils'
 import type { PendingAttachment } from '@/lib/types/attachments'
 
 interface AttachmentPreviewProps {
@@ -17,7 +18,10 @@ function AttachmentItem({ attachment, onRemove }: { attachment: PendingAttachmen
   const isImg = isImage(attachment.file)
   const isAudio = attachment.file.type.startsWith('audio/')
   const isVideo = attachment.file.type.startsWith('video/')
-  const FallbackIcon = isAudio ? Volume2 : isVideo ? Film : FileIcon
+  const mediaIcon = isAudio ? { icon: Volume2, color: 'text-muted-foreground' }
+    : isVideo ? { icon: Film, color: 'text-muted-foreground' }
+    : null
+  const { icon: FallbackIcon, color: fallbackColor } = mediaIcon ?? getFileIcon(attachment.file.type, attachment.file.name)
 
   return (
     <div
@@ -34,7 +38,7 @@ function AttachmentItem({ attachment, onRemove }: { attachment: PendingAttachmen
           className="h-8 w-8 rounded object-cover"
         />
       ) : (
-        <FallbackIcon className="h-5 w-5 text-muted-foreground shrink-0" />
+        <FallbackIcon className={`h-5 w-5 shrink-0 ${fallbackColor}`} />
       )}
 
       <div className="min-w-0 flex-1">
