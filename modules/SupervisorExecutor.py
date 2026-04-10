@@ -227,13 +227,16 @@ class SupervisorExecutor:
                 )
 
             # SSE: notify frontend of planning stage
-            try:
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                    details="Planning next action...",
-                )
-            except Exception:
-                logger.debug("SSE stage notification failed (planning)", exc_info=True)
+            # Skip if already cancelled — prevents re-setting processing_message_id
+            # in the DB after the cancel endpoint has cleared it.
+            if not (token and token.is_cancelled):
+                try:
+                    await self.sse_manager.send_processing_status(
+                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                        details="Planning next action...",
+                    )
+                except Exception:
+                    logger.debug("SSE stage notification failed (planning)", exc_info=True)
 
             # --- Debate mode fast-path (§8.13) ---
             if inflight_entry is not None:
@@ -525,13 +528,14 @@ class SupervisorExecutor:
                     )
 
                     # SSE: notify frontend of delegation stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details=f"Delegating to {len(action.targets)} agent(s)...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (delegating)", exc_info=True)
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details=f"Delegating to {len(action.targets)} agent(s)...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
 
                     results = await self._dispatch_targets(
                         targets=action.targets,
@@ -697,13 +701,14 @@ class SupervisorExecutor:
                     )
 
                     # SSE: notify frontend of evaluation stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details="Evaluating agent results...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details="Evaluating agent results...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
 
                 case ActionType.SYNTHESIZE:
                     entry = TrajectoryEntry(
@@ -733,13 +738,14 @@ class SupervisorExecutor:
                         )
 
                     # SSE: notify frontend of synthesis stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details="Synthesizing responses...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details="Synthesizing responses...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
 
                     synth_coro = self.supervisor_service.synthesize_v2(
                         trajectory=trajectory,
@@ -960,13 +966,14 @@ class SupervisorExecutor:
                     ),
                 )
             # SSE: notify frontend of budget-exhaustion synthesis
-            try:
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                    details="Synthesizing responses...",
-                )
-            except Exception:
-                logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
+            if not (token and token.is_cancelled):
+                try:
+                    await self.sse_manager.send_processing_status(
+                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                        details="Synthesizing responses...",
+                    )
+                except Exception:
+                    logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
 
             budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,

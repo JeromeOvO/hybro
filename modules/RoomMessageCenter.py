@@ -1526,6 +1526,18 @@ class RoomMessageCenter:
                     room_id, user_message_id
                 )
 
+        # Unconditionally clear DB processing status for terminal run statuses.
+        # The SSE dedup layer may suppress the second "canceled/completed/failed"
+        # event (correct — no need to re-send to clients), but the DB
+        # processing_message_id can be re-set by mid-loop PROCESSING events
+        # that fire between the cancel endpoint and the executor's cancellation
+        # check.  Clearing here is the authoritative last-write and prevents
+        # a stale "Processing your request..." on page refresh.
+        if result.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED):
+            await self.database_service.clear_room_processing_status_if_matches(
+                room_id, user_message_id
+            )
+
         # Clean up cancellation token for all terminal statuses.
         # PAUSED and AWAITING_INPUT runs keep their token alive — the
         # webhook/HITL resume path will create/reuse it.
