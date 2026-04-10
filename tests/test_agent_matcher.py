@@ -199,7 +199,7 @@ def test_select_top_agents_debate_mode_few_above_threshold():
 
 
 def test_select_top_agents_debate_mode_none_above_threshold():
-    """Test debate mode with no agents above threshold returns top 1 fallback."""
+    """Test debate mode with no agents above threshold returns top 2 for meaningful debate."""
     agent1 = create_test_agent("a1", "Agent1")
     agent2 = create_test_agent("a2", "Agent2")
 
@@ -209,8 +209,36 @@ def test_select_top_agents_debate_mode_none_above_threshold():
     ]
 
     selected = select_top_agents(ranked, is_debate_mode=True)
+    assert len(selected) == 2  # Min 2 for meaningful debate
+    assert selected[0].agent.agent_id == "a1"
+    assert selected[1].agent.agent_id == "a2"
+
+
+def test_select_top_agents_debate_mode_single_candidate():
+    """Test debate mode with only 1 candidate returns that 1."""
+    agent1 = create_test_agent("a1", "Agent1")
+
+    ranked = [
+        MatchedAgent(agent1, 0.2, 1.0, 0.28),
+    ]
+
+    selected = select_top_agents(ranked, is_debate_mode=True)
     assert len(selected) == 1
     assert selected[0].agent.agent_id == "a1"
+
+
+def test_select_top_agents_debate_mode_one_above_threshold():
+    """Test debate mode with only 1 above threshold still returns 2."""
+    agent1 = create_test_agent("a1", "Agent1")
+    agent2 = create_test_agent("a2", "Agent2")
+
+    ranked = [
+        MatchedAgent(agent1, 0.4, 1.0, 0.49),  # Above 0.3
+        MatchedAgent(agent2, 0.2, 1.0, 0.28),  # Below 0.3
+    ]
+
+    selected = select_top_agents(ranked, is_debate_mode=True)
+    assert len(selected) == 2  # Min 2 for meaningful debate
 
 
 def test_select_top_agents_gap_threshold_single_winner():

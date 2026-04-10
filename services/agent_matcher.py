@@ -107,9 +107,13 @@ def select_top_agents(
         # Debate mode: return 3-5 agents above threshold for diversity
         above_threshold = [a for a in ranked if a.final_score > DEBATE_THRESHOLD]
         if not above_threshold:
-            # No agent scored well enough — return only the top 1 as fallback
-            return [ranked[0]]
+            # No agent scored well enough — return top 2 so debate is meaningful
+            # (single-agent debate is pointless self-talk)
+            return ranked[:min(2, len(ranked))]
         count = min(max(len(above_threshold), 3), 5)
+        # Ensure at least 2 agents for meaningful debate
+        if len(above_threshold) < 2 and len(ranked) >= 2:
+            return ranked[:2]
         return above_threshold[:count] if len(above_threshold) >= 3 else above_threshold
 
     # Non-debate: quality-driven cutoff
