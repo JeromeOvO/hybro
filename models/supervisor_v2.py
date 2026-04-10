@@ -191,6 +191,8 @@ class SupervisorTrajectory(BaseModel):
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
 
+    debate_agent_ids: list[str] | None = None
+
     clarify_user_reply: str | None = None
     """The user's reply to a CLARIFY question.  Set by the clarify-resume
     path before calling ``SupervisorExecutor.run(resumed_trajectory=...)``.
