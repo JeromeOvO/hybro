@@ -239,8 +239,7 @@ class SupervisorExecutor:
                 action = inflight_entry.action
             elif room_config.is_debate_mode:
                 # Sequential debate: dispatch one agent per step
-                debate_agent_ids = self._snapshot_debate_agents(agent_registry, trajectory)
-
+                # (debate_agent_ids already computed before the loop; snapshot is idempotent)
                 remaining_ids = self._get_remaining_debate_agent_ids(debate_agent_ids, trajectory)
 
                 if not remaining_ids:
@@ -931,6 +930,7 @@ class SupervisorExecutor:
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
+                        debate_mode=room_config.is_debate_mode,
                     )
 
             step_number += 1

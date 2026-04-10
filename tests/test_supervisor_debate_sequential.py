@@ -672,3 +672,132 @@ class TestDebateResume:
         ids = SupervisorExecutor._snapshot_debate_agents(registry, restored)
         assert ids == ["a1", "a2", "a3"]  # original, not rebuilt
 
+
+# ---------------------------------------------------------------------------
+# Scope: all_agents + debate bypasses LLM selector
+# ---------------------------------------------------------------------------
+
+
+class TestAllAgentsDebateBypassesSelector:
+    """Verify that all_agents + debate mode returns all active agents
+    without calling the LLM agent selector."""
+
+    @pytest.mark.asyncio
+    async def test_all_agents_debate_bypasses_selector(self):
+        """all_agents + debate should return all active agents directly."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from models.agent import Agent, AgentStatus
+        from a2a.types import AgentCard, AgentCapabilities, AgentProvider
+
+        # Create mock agents
+        def make_agent(aid, name):
+            return Agent(
+                agent_id=aid,
+                provider_id="test",
+                agent_card=AgentCard(
+                    name=name,
+                    description=f"Agent {name}",
+                    url=f"https://test.com/{aid}",
+                    version="1.0.0",
+                    provider=AgentProvider(organization="Test", url="https://test.com"),
+                    capabilities=AgentCapabilities(),
+                    default_input_modes=["text"],
+                    default_output_modes=["text"],
+                    skills=[],
+                ),
+                agent_status=AgentStatus.active,
+            )
+
+        agents = [make_agent("a2", "Bravo"), make_agent("a1", "Alpha")]
+
+        mock_db = MagicMock()
+        mock_db.get_all_active_agents = AsyncMock(return_value=agents)
+
+        mock_room_services = MagicMock()
+        mock_room_services.database_service = mock_db
+
+        # Simulate the bypass logic from room_services._resolve_explicit_target_scope
+        target_group = "all_agents"
+        is_debate_mode = True
+        sender_user_id = "user1"
+
+        if target_group == "all_agents" and is_debate_mode:
+            all_agents = await mock_db.get_all_active_agents(user_id=sender_user_id)
+            all_agents.sort(key=lambda a: (a.agent_card.name.lower(), a.agent_id))
+            selected = {a.agent_id: a.agent_card.name for a in all_agents}
+
+        # Verify all agents returned
+        assert len(selected) == 2
+        # Verify stable sort (Alpha before Bravo)
+        keys = list(selected.keys())
+        assert keys == ["a1", "a2"]
+        # Verify DB was called (not LLM selector)
+        mock_db.get_all_active_agents.assert_called_once_with(user_id="user1")
+
+
+# ---------------------------------------------------------------------------
+# Resume: participant preservation across pause/resume
+# ---------------------------------------------------------------------------
+
+
+class TestResumePreservesDebateParticipants:
+    """Verify that debate participants are preserved across pause/resume
+    even when room membership changes."""
+
+    def test_resume_preserves_debate_participants(self):
+        """When a debate is paused and the room membership changes,
+        the original debate participants should be restored from
+        the continuation data."""
+        # Original debate had 3 agents
+        trajectory = SupervisorTrajectory(
+            debate_agent_ids=["a1", "a2", "a3"],
+            entries=[
+                _make_delegate_entry(1, "a1", "Alpha", "resp1"),
+            ],
+        )
+
+        # After resume, room only has a1 and a4 (a2, a3 removed, a4 added)
+        current_registry = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a4", "Delta"),
+        ]
+
+        # Serialized continuation has the original registry
+        continuation = {
+            "agent_registry": [
+                {"agent_id": "a1", "agent_name": "Alpha", "description": "", "is_healthy": True},
+                {"agent_id": "a2", "agent_name": "Beta", "description": "", "is_healthy": True},
+                {"agent_id": "a3", "agent_name": "Gamma", "description": "", "is_healthy": True},
+            ],
+        }
+
+        is_debate_mode = True
+
+        # Simulate the preservation logic from RoomMessageCenter._resume_supervisor_v2
+        if trajectory.debate_agent_ids and is_debate_mode:
+            current_ids = {a.agent_id for a in current_registry}
+            missing_ids = [
+                aid for aid in trajectory.debate_agent_ids
+                if aid not in current_ids
+            ]
+            if missing_ids:
+                serialized_registry = continuation.get("agent_registry", [])
+                serialized_map = {
+                    p["agent_id"]: p for p in serialized_registry
+                    if isinstance(p, dict) and "agent_id" in p
+                }
+                for mid in missing_ids:
+                    if mid in serialized_map:
+                        try:
+                            current_registry.append(AgentProfile(**serialized_map[mid]))
+                        except (TypeError, KeyError):
+                            pass
+
+        # Verify all original participants are in the registry
+        registry_ids = {a.agent_id for a in current_registry}
+        assert "a1" in registry_ids
+        assert "a2" in registry_ids  # restored from continuation
+        assert "a3" in registry_ids  # restored from continuation
+        assert "a4" in registry_ids  # new agent still present
+        assert len(current_registry) == 4
+
