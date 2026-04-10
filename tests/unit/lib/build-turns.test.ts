@@ -251,4 +251,121 @@ describe('buildTurns – core construction', () => {
     expect(turns[0].status).toBe('partial')
     expect(turns[0].agentResults).toHaveLength(2)
   })
+
+  describe('buildTurns – summary selection', () => {
+    it('11. supervisor result selected as summary', () => {
+      const user = makeUserEntity({ id: 'u1' })
+      const normalAgent = makeAgentEntity({
+        id: 'a1',
+        agentId: 'agent-normal',
+        senderName: 'Code Agent',
+        taskStatus: 'completed',
+        content: 'Normal agent response',
+      })
+      const supervisorAgent = makeAgentEntity({
+        id: 'a2',
+        agentId: 'agent-sup',
+        senderName: 'Supervisor Agent',
+        taskStatus: 'completed',
+        content: '# Summary\nThe team has completed the analysis.',
+      })
+
+      const entities = entitiesToMap([user, normalAgent, supervisorAgent])
+      const turns = buildTurns(entities, ['u1', 'a1', 'a2'], [])
+
+      expect(turns[0].summary).not.toBeNull()
+      expect(turns[0].summary!.sourceAgentName).toBe('Supervisor Agent')
+      expect(turns[0].summary!.title).toBe('Summary')
+      expect(turns[0].summary!.body).toContain('The team has completed the analysis.')
+    })
+
+    it('12. fallback to first completed agent when no supervisor', () => {
+      const user = makeUserEntity({ id: 'u1' })
+      const agentA = makeAgentEntity({
+        id: 'a1',
+        agentId: 'agent-a',
+        senderName: 'Agent Alpha',
+        taskStatus: 'completed',
+        content: 'First response with content',
+      })
+      const agentB = makeAgentEntity({
+        id: 'a2',
+        agentId: 'agent-b',
+        senderName: 'Agent Beta',
+        taskStatus: 'completed',
+        content: 'Second response with content',
+      })
+
+      const entities = entitiesToMap([user, agentA, agentB])
+      const turns = buildTurns(entities, ['u1', 'a1', 'a2'], [])
+
+      expect(turns[0].summary).not.toBeNull()
+      // First completed agent in ordering wins
+      expect(turns[0].summary!.sourceAgentName).toBe('Agent Alpha')
+    })
+
+    it('13. no completed agents returns null summary', () => {
+      const user = makeUserEntity({ id: 'u1' })
+      const agent = makeAgentEntity({
+        id: 'a1',
+        taskStatus: 'working',
+        content: '',
+      })
+
+      const entities = entitiesToMap([user, agent])
+      const turns = buildTurns(entities, ['u1', 'a1'], [])
+
+      expect(turns[0].summary).toBeNull()
+    })
+
+    it('14. completed agent with empty content is skipped for summary', () => {
+      const user = makeUserEntity({ id: 'u1' })
+      const emptyAgent = makeAgentEntity({
+        id: 'a1',
+        agentId: 'agent-empty',
+        senderName: 'Empty Agent',
+        taskStatus: 'completed',
+        content: '',
+      })
+      const contentAgent = makeAgentEntity({
+        id: 'a2',
+        agentId: 'agent-content',
+        senderName: 'Content Agent',
+        taskStatus: 'completed',
+        content: 'Actual meaningful response',
+      })
+
+      const entities = entitiesToMap([user, emptyAgent, contentAgent])
+      const turns = buildTurns(entities, ['u1', 'a1', 'a2'], [])
+
+      expect(turns[0].summary).not.toBeNull()
+      // Empty agent skipped, Content Agent selected
+      expect(turns[0].summary!.sourceAgentName).toBe('Content Agent')
+    })
+
+    it('15. failed agents are excluded from summary selection', () => {
+      const user = makeUserEntity({ id: 'u1' })
+      const failedAgent = makeAgentEntity({
+        id: 'a1',
+        agentId: 'agent-fail',
+        senderName: 'Failed Agent',
+        taskStatus: 'failed',
+        content: 'Error: something broke',
+      })
+      const successAgent = makeAgentEntity({
+        id: 'a2',
+        agentId: 'agent-ok',
+        senderName: 'Success Agent',
+        taskStatus: 'completed',
+        content: 'Valid response here',
+      })
+
+      const entities = entitiesToMap([user, failedAgent, successAgent])
+      const turns = buildTurns(entities, ['u1', 'a1', 'a2'], [])
+
+      expect(turns[0].summary).not.toBeNull()
+      // Failed agent must not be selected
+      expect(turns[0].summary!.sourceAgentName).toBe('Success Agent')
+    })
+  })
 })
