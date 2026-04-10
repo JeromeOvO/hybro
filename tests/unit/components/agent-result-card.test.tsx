@@ -1,4 +1,5 @@
 // tests/unit/components/agent-result-card.test.tsx
+import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { AgentResultCard } from '@/components/agent-result-card'
@@ -13,6 +14,24 @@ vi.mock('@/lib/agent-colors', () => ({
     text: 'text-blue-700',
     content: 'text-blue-900',
   }),
+}))
+
+vi.mock('@/components/markdown-content', () => ({
+  MarkdownContent: ({ content, className }: { content: string; className?: string }) => (
+    <div data-testid="markdown-content" className={className}>
+      {content}
+    </div>
+  ),
+}))
+
+vi.mock('@/components/agent-source-badge', () => ({
+  AgentSourceBadge: ({ source, className }: { source: string; className?: string }) => (
+    <span data-testid={`source-badge-${source}`} className={className} />
+  ),
+}))
+
+vi.mock('@/components/ui/tooltip', () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
 afterEach(() => {
@@ -135,5 +154,23 @@ describe('AgentResultCard', () => {
 
     expect(screen.getByText('report.pdf')).toBeTruthy()
     expect(screen.getByText('chart.png')).toBeTruthy()
+  })
+
+  it('uses md size for agent badge in result header', () => {
+    render(<AgentResultCard result={makeResult()} />)
+    const nameEl = screen.getByText('Test Agent')
+    expect(nameEl.className).toContain('text-base')
+  })
+
+  it('uses py-3 padding on result card container', () => {
+    render(<AgentResultCard result={makeResult()} />)
+    const card = screen.getByTestId('agent-result-msg-1')
+    expect(card.className).toContain('py-3')
+  })
+
+  it('renders content with text-base via markdownClassName', () => {
+    render(<AgentResultCard result={makeResult({ content: 'Some text' })} />)
+    const md = screen.getByTestId('markdown-content')
+    expect(md.className).toContain('text-base')
   })
 })

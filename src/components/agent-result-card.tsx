@@ -81,7 +81,7 @@ export function AgentResultCard({ result }: AgentResultCardProps) {
 
   return (
     <div
-      className="py-2"
+      className="py-3"
       aria-busy={isStreaming ? 'true' : undefined}
       data-testid={`agent-result-${result.messageId}`}
     >
@@ -91,7 +91,7 @@ export function AgentResultCard({ result }: AgentResultCardProps) {
           agentId={result.agentId}
           agentName={result.agentName}
           agentSource={result.agentSource}
-          size="sm"
+          size="md"
         />
         <StatusIndicator status={result.status} />
       </div>
@@ -110,7 +110,8 @@ export function AgentResultCard({ result }: AgentResultCardProps) {
           <TruncatedContent
             content={result.content}
             maxLines={6}
-            className="text-sm text-foreground"
+            className="text-foreground"
+            markdownClassName="text-base"
           />
         </div>
       )}
