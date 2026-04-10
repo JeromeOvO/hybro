@@ -141,15 +141,15 @@ class TestRelayServiceRegistration:
 # ===========================================================================
 
 
-class TestIsHubConnected:
+class TestIsHubConnectedLocally:
     def test_returns_false_when_not_connected(self):
         svc = _make_relay_service()
-        assert svc.is_hub_connected("hub-001") is False
+        assert svc._is_hub_connected_locally("hub-001") is False
 
     def test_returns_true_for_queue_path(self):
         svc = _make_relay_service()
         svc._hub_queues["hub-001"] = MagicMock()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
     def test_returns_true_for_streams_path(self):
         """Streams path uses _hub_disconnect_events, not _hub_queues."""
@@ -157,7 +157,7 @@ class TestIsHubConnected:
 
         svc = _make_relay_service()
         svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
     def test_returns_true_for_both_paths(self):
         """If somehow both are present, still returns True."""
@@ -166,7 +166,7 @@ class TestIsHubConnected:
         svc = _make_relay_service()
         svc._hub_queues["hub-001"] = MagicMock()
         svc._hub_disconnect_events["hub-001"] = asyncio.Event()
-        assert svc.is_hub_connected("hub-001") is True
+        assert svc._is_hub_connected_locally("hub-001") is True
 
 
 # ===========================================================================
@@ -463,6 +463,31 @@ class TestRelayServiceAgentSync:
         assert "agent_card.url" in captured_data
         # Hybro-managed field must never be written from hub data
         assert "agent_card.iconUrl" not in captured_data
+
+    @pytest.mark.asyncio
+    async def test_sync_agents_skips_invalid_agent_card(self):
+        """Agents with an invalid agent_card (e.g. error dict) must be skipped."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="corrupt-1",
+                name="Corrupt Agent",
+                description="Desc",
+                agent_card={"error": "Unexpected endpoint or method."},
+            ),
+            HubAgentSync(
+                local_agent_id="good-1",
+                name="Good Agent",
+                description="Desc",
+                agent_card=_make_agent_card("Good Agent"),
+            ),
+        ]
+        synced = await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        assert len(synced) == 1
+        assert synced[0]["local_agent_id"] == "good-1"
 
 
 # ===========================================================================

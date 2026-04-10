@@ -4,11 +4,9 @@ During pre-dispatch, checks ``agent.hub_id``. If the agent is associated
 with a hub (whether originally hub-sourced or enriched from a cloud
 registration) the transport is switched to ``"relay"``.
 
-A live check against the relay service's in-memory queue map determines
-whether the hub is actually connected.  If not, the DB flag is corrected
-immediately so the frontend shows accurate status, and the
-``queued_for_offline`` metadata is set so the relay transport can handle
-the message appropriately (queue during grace period, reject after).
+An authoritative Redis-backed liveness check determines whether the hub
+is actually connected.  If not, the DB flag is corrected immediately so
+the frontend shows accurate status, and the dispatch is denied.
 """
 
 from __future__ import annotations
@@ -29,7 +27,7 @@ class HubTransportMiddleware:
     async def pre_dispatch(self, ctx: DispatchContext) -> DispatchContext:
         if ctx.agent.hub_id:
             ctx.transport = "relay"
-            if not self._relay.is_hub_connected(ctx.agent.hub_id):
+            if not await self._relay.is_hub_alive(ctx.agent.hub_id):
                 await self._relay.mark_hub_agents_offline(ctx.agent.hub_id)
                 ctx.denied = True
                 ctx.deny_reason = "Agent is offline — hub is disconnected"
