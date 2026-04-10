@@ -20,6 +20,35 @@ class RelayStreamService:
     Each hub gets its own stream (hub:relay:{hub_id}). Events are pushed
     by push_event() and consumed by read_events(). Heartbeat liveness
     is tracked via a simple TTL key (hub:heartbeat:{hub_id}).
+
+    Hub Liveness State Machine (Redis Streams path)
+    ------------------------------------------------
+    AUTHORITATIVE SIGNAL: Redis TTL key (hub:heartbeat:{hub_id}).
+    PERSISTED PROJECTION: MongoDB ``is_online`` flag (eventually consistent,
+        may lag by up to one heartbeat interval).
+    QUERY SURFACE: all real-time liveness queries MUST use
+        ``is_hub_alive()`` (in RelayService), which always consults
+        the authoritative Redis signal. MongoDB ``is_online`` is never
+        consulted for liveness decisions; it is a projection maintained by
+        ``_do_heartbeat_check`` for offline consumers (dashboards, batch
+        exports).
+
+    Signals that refresh the Redis TTL:
+        1. Client ``POST /heartbeat`` (primary, proves hub application is
+           healthy).
+        2. Server-side SSE loop iteration (secondary, proves TCP connection
+           is alive).
+        3. ``connect_hub()`` initial connection setup.
+
+    Transitions:
+        Online -> Offline: Redis TTL expires, ``_do_heartbeat_check``
+            corrects MongoDB and signals SSE disconnect (best-effort).
+        Offline -> Online: ``connect_hub()`` (new SSE) OR
+            ``_do_heartbeat_check`` self-heal (Redis alive, MongoDB stale).
+
+    Invariant: if the Redis key exists the hub SHOULD be online. If the
+    Redis key is absent but MongoDB says online, the hub is offline (stale
+    flag that will be corrected on the next heartbeat check).
     """
     STREAM_PREFIX = "hub:relay:"
     HEARTBEAT_PREFIX = "hub:heartbeat:"
@@ -76,7 +105,12 @@ class RelayStreamService:
     async def record_heartbeat(self, hub_id: str) -> None:
         """Record hub heartbeat (sets TTL key)."""
         key = f"{self.HEARTBEAT_PREFIX}{hub_id}"
-        await self._redis.set_with_ttl(key, "1", ex=self._heartbeat_ttl)
+        ok = await self._redis.set_with_ttl(key, "1", ex=self._heartbeat_ttl)
+        if not ok:
+            logger.warning(
+                "Failed to record heartbeat for hub %s in Redis (set_with_ttl returned falsy)",
+                hub_id,
+            )
 
     async def is_hub_alive(self, hub_id: str) -> bool:
         """Check if hub has a valid heartbeat."""
