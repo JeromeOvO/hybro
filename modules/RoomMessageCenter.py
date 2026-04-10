@@ -1114,6 +1114,38 @@ class RoomMessageCenter:
         )
         room_config.room_agent_set = room.room_agent_set or {}
 
+        # --- Debate participant preservation ---
+        # If this is a debate resume, ensure all original debate participants
+        # are present in agent_registry even if they were removed from the room
+        # during the pause. This prevents participant drift.
+        if (
+            trajectory.debate_agent_ids
+            and room_config.is_debate_mode
+        ):
+            current_ids = {a.agent_id for a in agent_registry}
+            missing_ids = [
+                aid for aid in trajectory.debate_agent_ids
+                if aid not in current_ids
+            ]
+            if missing_ids:
+                serialized_registry = continuation.get("agent_registry", [])
+                serialized_map = {
+                    p["agent_id"]: p for p in serialized_registry
+                    if isinstance(p, dict) and "agent_id" in p
+                }
+                for mid in missing_ids:
+                    if mid in serialized_map:
+                        try:
+                            agent_registry.append(AgentProfile(**serialized_map[mid]))
+                        except (TypeError, KeyError):
+                            pass
+                    # If not in serialized registry either, executor will
+                    # create a FAILED entry and skip (unhealthy agent path).
+                logger.info(
+                    "supervisor_v2_resume: merged %d debate participants from continuation",
+                    len(missing_ids),
+                )
+
         # 6. Create/reuse cancellation token
         token = self.sse_manager.get_token(user_message_id)
         if token is None:
