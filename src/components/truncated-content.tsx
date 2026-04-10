@@ -47,8 +47,9 @@ export function TruncatedContent({
         <button
           type="button"
           onClick={() => setIsExpanded((v) => !v)}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 rounded-sm"
           data-testid="truncated-toggle"
+          aria-label={isExpanded ? 'Show less content' : 'Show more content'}
         >
           {isExpanded ? 'Show less' : 'Show more'}
         </button>

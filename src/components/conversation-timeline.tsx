@@ -167,9 +167,14 @@ export function ConversationTimeline({ onQuote }: ConversationTimelineProps) {
     setShouldAutoScroll(checkIfNearBottom())
   }, [checkIfNearBottom])
 
-  // Auto scroll when new messages arrive
+  // Track the active turn's ID for scroll anchoring
+  const prevActiveTurnIdRef = useRef<string | null>(null)
+
+  // Auto scroll when new messages arrive or active turn changes
   useEffect(() => {
-    if (messageCount > prevCountRef.current) {
+    const activeTurnId = turns.length > 0 ? turns[turns.length - 1].id : null
+
+    if (messageCount > prevCountRef.current || activeTurnId !== prevActiveTurnIdRef.current) {
       const store = useMessageStore.getState()
       const lastId = store.orderedIds[store.orderedIds.length - 1]
       const lastEntity = lastId ? store.entities[lastId] : null
@@ -180,8 +185,10 @@ export function ConversationTimeline({ onQuote }: ConversationTimelineProps) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
       }
     }
+
     prevCountRef.current = messageCount
-  }, [messageCount, shouldAutoScroll])
+    prevActiveTurnIdRef.current = activeTurnId
+  }, [messageCount, shouldAutoScroll, turns])
 
   if (!hydrated) {
     return <LoadingState />

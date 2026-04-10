@@ -115,8 +115,8 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
       {/* User prompt -- always visible */}
       <div
         className={cn(
-          'cursor-default',
-          !isActive && !showExpanded && 'cursor-pointer',
+          'cursor-default rounded-sm',
+          !isActive && !showExpanded && 'cursor-pointer focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2',
         )}
         onClick={!isActive && !showExpanded ? handleToggle : undefined}
         role={!isActive && !showExpanded ? 'button' : undefined}
@@ -149,7 +149,8 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
             <button
               type="button"
               onClick={handleToggle}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 rounded-sm"
+              aria-label={`Expand turn: ${turn.agentResults.length} agent${turn.agentResults.length !== 1 ? 's' : ''} responded`}
             >
               <ChevronRight className="h-3 w-3" />
               <span>
@@ -191,7 +192,8 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
             <button
               type="button"
               onClick={handleToggle}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 rounded-sm"
+              aria-label="Collapse turn"
             >
               Collapse
             </button>

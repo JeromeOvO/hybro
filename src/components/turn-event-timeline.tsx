@@ -123,15 +123,12 @@ export function TurnEventTimeline({ events }: TurnEventTimelineProps) {
 
   return (
     <div role="log" aria-live="polite" aria-label="Agent activity log">
-      {/* Vertical rail line + events */}
-      <div className="relative pl-1.5">
-        {/* Vertical connector line */}
+      {/* Desktop: show event rows directly */}
+      <div className="hidden md:block relative pl-1.5">
         <div
-          className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60"
+          className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60 timeline-rail-line"
           aria-hidden="true"
         />
-
-        {/* Event rows */}
         <div className="space-y-0">
           {displayEvents.map(event => (
             <React.Fragment key={event.id}>
@@ -142,14 +139,47 @@ export function TurnEventTimeline({ events }: TurnEventTimelineProps) {
         </div>
       </div>
 
-      {/* Show process toggle */}
+      {/* Mobile: collapsed by default */}
+      <div className="md:hidden">
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={`Show ${events.length} event${events.length !== 1 ? 's' : ''}`}
+            >
+              <ChevronRight className="h-3 w-3" />
+              <span>{events.length} event{events.length !== 1 ? 's' : ''}</span>
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="relative pl-1.5 mt-1">
+              <div
+                className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60 timeline-rail-line"
+                aria-hidden="true"
+              />
+              <div className="space-y-0">
+                {displayEvents.map(event => (
+                  <React.Fragment key={event.id}>
+                    <EventRow event={event} isNew={event.isLive} />
+                    <ArtifactPreview event={event} />
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+
+      {/* Show process toggle (desktop) */}
       {hiddenCount > 0 && (
         <Collapsible open={showHidden} onOpenChange={setShowHidden}>
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 ml-1.5"
+              className="hidden md:flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 ml-1.5"
               data-testid="show-process-toggle"
+              aria-label={showHidden ? 'Hide process' : `Show process with ${hiddenCount} events`}
             >
               <ChevronRight
                 className={cn(
@@ -166,15 +196,6 @@ export function TurnEventTimeline({ events }: TurnEventTimelineProps) {
           </CollapsibleTrigger>
         </Collapsible>
       )}
-
-      {/* Mobile summary (collapsed by default on < 768px) */}
-      <div className="md:hidden">
-        {!showHidden && events.length > 0 && hiddenCount === 0 && (
-          <p className="text-xs text-muted-foreground ml-6 mt-1">
-            {events.length} event{events.length !== 1 ? 's' : ''}
-          </p>
-        )}
-      </div>
     </div>
   )
 }

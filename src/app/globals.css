@@ -700,4 +700,14 @@ body[data-cookie-banner="visible"] {
   }
 }
 
+/* ── Timeline turn spacing ── */
+.timeline-turn + .timeline-turn {
+  padding-top: 0.5rem;
+}
+
+/* Ensure timeline event rail is visible in dark mode */
+.dark .timeline-rail-line {
+  background-color: hsl(var(--color-border) / 0.4);
+}
+
 } /* end @layer components */
