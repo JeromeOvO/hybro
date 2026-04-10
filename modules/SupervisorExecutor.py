@@ -1646,10 +1646,15 @@ class SupervisorExecutor:
         debate_agent_ids: list[str],
         trajectory: SupervisorTrajectory,
     ) -> list[str]:
-        """Return agent IDs not yet dispatched (preserving original order)."""
+        """Return agent IDs not yet dispatched (preserving original order).
+
+        Inflight entries (DELEGATE with empty results) are NOT counted as
+        dispatched — the crash happened before dispatch completed, so the
+        agent needs to be re-dispatched.
+        """
         dispatched: set[str] = set()
         for entry in trajectory.entries:
-            if entry.action.action == ActionType.DELEGATE:
+            if entry.action.action == ActionType.DELEGATE and entry.results:
                 for target in entry.action.targets:
                     dispatched.add(target.agent_id)
         return [aid for aid in debate_agent_ids if aid not in dispatched]
