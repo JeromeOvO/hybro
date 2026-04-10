@@ -725,7 +725,294 @@ The recommended path is:
 
 This is the smallest change set that can materially move the room experience toward Cursor-style process visibility and multi-agent readability.
 
-## 22. Approval Gate
+## 22. Design Review Decisions (2026-04-09)
+
+The following decisions were made during the design review and are binding for implementation.
+
+### 22.1 Visual Style: Borderless Blocks
+
+All new components use **borderless block** style, consistent with Cursor and modern TUI conventions.
+
+- No card borders, no box shadows on content blocks.
+- Visual hierarchy is created through **typography scale**, **color weight**, and **spacing**, not through borders/shadows/background-color.
+- Summary block, agent result blocks, event rows, and user prompt card are all borderless.
+- The only border in the timeline is the **1px turn separator line** between turns.
+
+### 22.2 Turn Ordering
+
+Turns are ordered **bottom-up** (latest turn at the bottom), consistent with chat convention and the existing UI. Auto-scroll keeps the user at the active turn.
+
+### 22.3 Event Rail Density
+
+- **Desktop:** Compact log style, **20-24px row height**. Monospace timestamps, left-aligned dots on a thin 1px vertical rule, agent color pill, event label. No connector lines between dots.
+- **Mobile (< 768px):** Event rail **defaults to collapsed** showing a one-line summary (e.g., "6 events"). Tapping expands to full event list with **44px row height** for touch targets.
+
+### 22.4 Event Animation
+
+New events enter the timeline with:
+- **Slide-in from left**, 150ms ease-out
+- **Dot pulse** animation on arrival (single pulse, not looping)
+- **Live events** get a subtle breathing glow (opacity oscillation 0.7-1.0, 2s cycle)
+
+### 22.5 Spacing Scale
+
+| Context | Spacing |
+|---------|---------|
+| Between sections within a turn (prompt → events → summary → results) | `16px` (Tailwind `space-y-4`) |
+| Between turns | `24px` gap + `1px` separator line (`border-border`) |
+| Between agent result blocks | `12px` (`space-y-3`) |
+| Event rail row internal padding | `4px` vertical |
+
+### 22.6 Old Turn Collapse Behavior
+
+Completed (non-active) turns default to showing **only**:
+- User prompt line
+- Summary block (if available)
+
+Hidden by default in old turns:
+- Event rail
+- Agent result blocks
+
+Click/tap anywhere on a collapsed turn expands it fully. User-expanded turns stay expanded until explicitly collapsed.
+
+### 22.7 Empty/Loading States
+
+| Component | Loading | Empty | Error | Partial |
+|-----------|---------|-------|-------|---------|
+| ConversationTimeline | Shimmer skeleton (3 placeholder turns) | "Start the conversation" with gradient icon (reuse existing) | Error banner with retry | Some turns loaded |
+| Event Rail (active turn) | No placeholder, events appear as they arrive | Just the event rail with no events, no extra placeholder | N/A | Live events arriving via slide-in |
+| Summary Block | Not shown until an agent completes | Not shown if no agent completed | N/A | Appears when first agent completes |
+| Agent Result Stack | Not shown while agents run | Not shown, just event rail | N/A | Results appear one by one as agents complete |
+| Agent Result Block | Shimmer for streaming content | "Completed with no output" one-liner | Red status + error text (collapsed) | Streaming content with typewriter |
+
+**Key rule:** When all agents are still running, the active turn shows only the user prompt and the live event rail. No placeholders, no "waiting" cards. Results materialize as agents complete.
+
+### 22.8 Content Truncation
+
+Agent result block content that exceeds **6 lines** is truncated with:
+- Gradient fade (`bg-linear-to-t from-background to-transparent`)
+- "Show more" text button below the fade
+- Click expands to full content
+
+This replaces the existing 500-character truncation with a line-based approach that is more predictable across viewport widths.
+
+### 22.9 Summary Block Visual Treatment
+
+The summary block is differentiated from agent result blocks through:
+- **Larger title typography** (16px / `text-base font-semibold` vs 14px / `text-sm` for result blocks)
+- **More generous top margin** (additional 8px above summary vs between result blocks)
+- **Agent color accent** — small color dot or pill next to the agent name, using the existing 8-color palette
+- No borders, no shadows, no background tint. Pure typographic hierarchy.
+
+### 22.10 Accessibility Requirements
+
+- Each turn: `<article>` element with `aria-label="Turn N: {user prompt preview}"`
+- Event rail: `role="log"` with `aria-live="polite"` for new events
+- All toggles (Show process, Show more, expand turn): `<button>` elements with descriptive `aria-label`
+- Status is communicated via **icon + text**, never color-only (for color-blind users)
+- Keyboard: Tab navigates between turns, Enter/Space expands a collapsed turn
+- Live streaming content uses `aria-busy="true"` while streaming
+
+### 22.11 Dark Mode
+
+New components inherit the existing dark mode system:
+- Turn separator line: `hsl(var(--border))` (adapts automatically)
+- Event rail dots: Use agent color palette dark variants (already defined as `dark:text-{color}-400`)
+- Text hierarchy: `text-foreground` (primary), `text-muted-foreground` (secondary), same as existing
+- No additional dark mode overrides needed if using CSS custom properties consistently
+
+## 23. Design Review — NOT in Scope
+
+The following design decisions were considered and explicitly deferred:
+
+1. **Turn navigation sidebar** — Useful for long rooms but adds complexity. Defer to a future iteration after validating the core timeline works.
+2. **DESIGN.md formalization** — The implicit design system should be documented, but this is a separate effort. Recommend running `/design-consultation` independently.
+3. **First-time onboarding** — What does a brand-new user see in their first room? Important but orthogonal to the timeline redesign.
+4. **Timestamp format** — Event rail timestamps should use relative format ("2s ago", "1m ago") for active turns and absolute short format ("12:04") for completed turns. Not deeply specified here, can be iterated.
+5. **All-agents-failed turn state** — When every agent in a turn fails, the summary block is absent. The turn shows user prompt + event rail (with failure events) + failed result blocks. No special treatment beyond the existing failure styling.
+
+## 24. Design Review — What Already Exists
+
+Existing patterns the implementation must reuse:
+
+| Pattern | Source | Reuse in |
+|---------|--------|----------|
+| 8-color agent palette | `message-bubble.tsx:AGENT_COLORS` | Event row agent pills, result block agent identity |
+| `derivePhase()` function | `message-bubble.tsx` | Map to `TurnStatus` for turn-level state |
+| shadcn `Collapsible` | Used in artifact-list, HITL panel | "Show process" toggle, turn expand/collapse |
+| Shimmer animation | `message-bubble.tsx` waiting phase | Loading skeletons in timeline |
+| Typewriter animation | `message-bubble.tsx` streaming phase | Streaming content in active result blocks |
+| Auto-scroll near-bottom | `room-messages.tsx` | Anchor to active turn instead of raw message |
+| Gradient fade truncation | `message-bubble.tsx` long messages | 6-line truncation in result blocks |
+| `MemoizedMessage` pattern | `room-messages.tsx` | `MemoizedTurn` for per-turn subscription |
+
+## 26. Engineering Review Decisions (2026-04-09)
+
+The following decisions were made during engineering review and are binding for implementation.
+
+### 26.1 Scope Reduction: 7 New Files (down from 12)
+
+View-model layer: `types.ts` + `build-turns.ts` (2 files, merged from 4).
+Presentation: `conversation-timeline.tsx`, `conversation-turn.tsx`, `turn-event-timeline.tsx`, `agent-result-stack.tsx`, `agent-result-card.tsx` (5 files, merged from 8).
+Utility components: `agent-badge.tsx`, `truncated-content.tsx` (2 shared components).
+Data layer: `event-log.ts` (1 new store for append-only events).
+Total: 10 new files + 4 modified = 14 file changes.
+
+### 26.2 Incremental Turn Derivation
+
+`buildTurnsIncremental()` only rebuilds the active turn on SSE updates. Older turns maintain referential stability so `React.memo` skips re-rendering. Late-arriving messages (via `relatedMessageId`) trigger rebuild of the specific target turn.
+
+### 26.3 Turn Boundary: relatedMessageId Priority
+
+Grouping algorithm priority:
+1. `relatedMessageId` present → route to corresponding turn (cross-turn routing)
+2. No `relatedMessageId` → timestamp + user-message boundary fallback
+
+### 26.4 Scroll Migration: Port First, Enhance Later
+
+Phase 2: Copy existing scroll logic (near-bottom 100px, programmatic scroll flag, auto-scroll) verbatim.
+Phase 6: Enhance to turn-anchored scrolling.
+
+### 26.5 Event Accumulator (event-log.ts)
+
+New append-only in-memory store captures timeline events from SSE handlers before message normalization. Events are captured at the SSE handler level (before content merge/artifact promotion). Lost on page refresh, which is acceptable because old turns collapse and hide the event rail.
+
+### 26.6 Failed Turn Collapse
+
+Failed turns (all agents failed, no summary) show a failure summary line when collapsed:
+`⚠ N agents failed: "first error message truncated..."` instead of only the user prompt.
+
+### 26.7 HITL Turn Context (Phase 2)
+
+`useHitlTurnContext(hitlMessageId)` hook exposed in Phase 2 (not Phase 5). Page-level HITL panel uses this to display turn association and jump links without duplicating grouping logic.
+
+### 26.8 ErrorBoundary Safety Net (Phase 2)
+
+`ConversationTimeline` wrapped in ErrorBoundary. Fallback renders the old flat message list (`orderedIds.map`). Prevents white screen if derivation layer has bugs.
+
+### 26.9 Agent Identity: AgentBadge Component
+
+Shared `AgentBadge` component (name + color dot/pill + optional source badge) reused across event rows, result cards, and summary section. Uses existing `AGENT_COLORS` palette.
+
+### 26.10 Content Truncation: TruncatedContent Component
+
+Shared `TruncatedContent` component with `maxLines` prop. Replaces existing 500-character truncation in `message-bubble.tsx` with line-based approach. Used in both `agent-result-card.tsx` and refactored `message-bubble.tsx`.
+
+### 26.11 Extraction Trigger
+
+If `conversation-turn.tsx` exceeds 250 lines, UserPrompt and/or Summary sections must be extracted to independent files.
+
+### 26.12 Performance: Zustand shallow + Stable References
+
+`useConversationTurns()` uses Zustand `shallow` comparator. Combined with incremental derivation's referential stability, only the active turn's component re-renders during SSE streaming. Same pattern as existing `useMessage(id)`.
+
+### 26.13 Test Coverage: 52 Paths
+
+10 unit test files (30 view-model + 19 component cases) + 1 E2E file (3 cases). Full coverage of all new codepaths. See test plan artifact for details.
+
+## 27. Design Review Round 2 Decisions (2026-04-09)
+
+The following decisions were made during the second design review pass and are binding for implementation.
+
+### 27.1 Information Architecture: Page Layout
+
+```
+┌─────────────────────────────────────────────┐
+│  Room Header (title, members, settings)     │
+├─────────────────────────────────────────────┤
+│                                             │
+│  ┌─ Turn N-2 (collapsed) ─────────────────┐ │
+│  │ User prompt line                       │ │
+│  │ Summary block                          │ │
+│  └────────────────────────────────────────┘ │
+│  ── 1px separator, 24px gap ──              │
+│  ┌─ Turn N-1 (collapsed) ─────────────────┐ │
+│  │ User prompt line                       │ │
+│  │ Summary block                          │ │
+│  └────────────────────────────────────────┘ │
+│  ── 1px separator, 24px gap ──              │
+│  ┌─ Turn N (active, expanded) ────────────┐ │
+│  │ User prompt card                       │ │
+│  │ ├── Event rail (live, compact)         │ │
+│  │ │   · user_prompt      0.1s            │ │
+│  │ │   · agent_started    AgentA  0.3s    │ │
+│  │ │   · agent_started    AgentB  0.5s    │ │
+│  │ │   · agent_progress   AgentA  2.1s    │ │
+│  │ │   · artifact_emitted AgentB  3.4s    │ │
+│  │ │   · agent_completed  AgentA  4.2s    │ │
+│  │ ├── Summary block (appears on first    │ │
+│  │ │   agent completion)                  │ │
+│  │ ├── Agent Result: AgentA               │ │
+│  │ │   [content, 6-line truncated]        │ │
+│  │ └── Agent Result: AgentB               │ │
+│  │     [content, artifacts inline]        │ │
+│  └────────────────────────────────────────┘ │
+│                                             │
+├─────────────────────────────────────────────┤
+│  [HITL Panel if active]                     │
+│  [Chat Input / Composer]                    │
+└─────────────────────────────────────────────┘
+```
+
+### 27.2 Interaction States Matrix
+
+| Component | Idle | Hover | Active/Pressed | Focus-visible | Disabled | Live |
+|-----------|------|-------|----------------|---------------|----------|------|
+| Collapsed turn | prompt + summary | subtle bg tint | expanding | ring-2 ring-ring | N/A | N/A |
+| Show process toggle | text-muted | text-foreground | scale-95 | ring pattern | N/A | N/A |
+| Show more button | text-muted | text-foreground underline | scale-95 | ring pattern | N/A | N/A |
+| Event row | static | N/A | N/A | N/A | N/A | dot-pulse + slide-in |
+| Agent result block | static | N/A | N/A | N/A | N/A | shimmer (streaming) |
+
+### 27.3 First-Second Experience: Immediate Events
+
+When the user sends a message, the first second unfolds as:
+- **0.0s**: User prompt card appears (instant, optimistic)
+- **0.1s**: `user_prompt` event slides into event rail
+- **0.2-0.5s**: `agent_started` events slide in as agents begin processing
+- No shimmer placeholder, no "thinking" indicator. The event rail IS the loading state.
+
+This approach was chosen over shimmer placeholders because it provides concrete information (which agents are starting) rather than generic loading UI.
+
+### 27.4 Reduced Motion Handling
+
+All new animations must respect `prefers-reduced-motion`:
+- **Slide-in (150ms)**: Degrades to instant appear (opacity only, no transform)
+- **Dot pulse**: Degrades to static dot (no animation)
+- **Breathing glow**: Degrades to static highlight (no opacity oscillation)
+- Implementation: Use `globals.css` existing `@media (prefers-reduced-motion: reduce)` block
+- New keyframes (`event-slide-in`, `dot-pulse`, `breathing-glow`) must have reduced-motion overrides
+
+### 27.5 Agent Color Source
+
+Agent colors use the existing `AGENT_COLOR_PALETTE` from `src/lib/agent-colors.ts`:
+- 8 colors: sky, violet, teal, rose, amber, emerald, indigo, pink
+- Assignment via `getAgentColorClasses(agentId)` (hash-based, stable per agent)
+- Each palette entry provides: `bg`, `border`, `accent`, `text`, `content` classes
+- AgentBadge uses `accent` class for the color dot, `text` class for the name
+
+### 27.6 Animation Implementation: CSS-Only
+
+No animation library. All new animations use CSS keyframes + Tailwind utilities, consistent with existing patterns:
+- Event slide-in: new `@keyframes event-slide-in` (reuse existing `fadeSlideIn` pattern)
+- Collapsible: reuse existing `animate-collapsible-down/up`
+- Shimmer: reuse existing `shimmer-sweep` for streaming content
+- Focus rings: reuse existing `focus-visible:ring-ring/50 focus-visible:ring-[3px]`
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | ISSUES | 6 findings, 3 tension points resolved |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 8 issues, 0 critical gaps, scope reduced |
+| Design Review | `/plan-design-review` | UI/UX gaps | 2 | CLEAR (FULL) | R1: 5→7/10, 11 decisions. R2: 7→9/10, 6 decisions |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **UNRESOLVED:** 0 decisions
+- **VERDICT:** ENG + DESIGN reviewed (2 rounds). 13 eng decisions + 17 design decisions. Score: 9/10. Ready to implement.
+
+## 25. Approval Gate
 
 This design is ready for review.
 
