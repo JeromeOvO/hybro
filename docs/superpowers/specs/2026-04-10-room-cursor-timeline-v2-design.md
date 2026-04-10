@@ -221,7 +221,13 @@ Supervisor mode adds a header bar above the agent results within a turn:
 
 **Completed stats:** Static text showing agent count + total duration.
 
-**Detection:** `isSupervisorTurn` is derived purely from turn content — the presence of supervisor-specific system agent entities (`supervisor_hitl` or `supervisor_synthesis`) in the turn. See §5.2. No dependency on `room.extend_info`.
+**Detection:** `isSupervisorTurn` is derived from turn content — the presence of supervisor-specific system agent entities (`supervisor_hitl` or `supervisor_synthesis`) in the turn. See §5.2. No dependency on `room.extend_info`.
+
+**Early processing gap:** During the initial supervisor phase ("Evaluating...", "Dispatching agents..."), the only entity in the turn is the HYBRO AI ephemeral placeholder (`senderName: 'HYBRO AI'`, no `agentId`, `isEphemeral: true`). This placeholder is created by the processing_status SSE handler (`sse-handlers/index.ts:131`) and does NOT carry an `agentId` or `stepNumber`/`totalSteps`. Therefore `isSupervisorTurn` is false until the first `task_submitted` event creates an entity with a supervisor-specific `agentId`.
+
+**In practice:** This gap is brief (the backend sends `task_submitted` for supervisor agents early in the orchestration). During the gap, the existing HYBRO AI placeholder row displays the stage text ("Evaluating...") in its current format. Once a supervisor entity arrives, the SupervisorHeader takes over.
+
+**Optional enhancement (not in V2 scope):** Extend the processing_status handler to forward `stepNumber: sseMessage.data.step_number` and `totalSteps: sseMessage.data.total_steps` to the placeholder entity. Then add `(e.stepNumber != null && e.totalSteps != null)` to the `isSupervisorTurn` check. This would close the gap entirely. Deferred because V2 scope excludes SSE handler changes, and the gap is acceptably short.
 
 ### 3.8 Summary from HYBRO AI
 
