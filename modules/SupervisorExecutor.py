@@ -1578,3 +1578,46 @@ class SupervisorExecutor:
             prior_response=last_text,
             max_chars=max_chars,
         )
+
+    @staticmethod
+    def _snapshot_debate_agents(
+        agent_registry: list[AgentProfile],
+        trajectory: SupervisorTrajectory,
+    ) -> list[str]:
+        """Initialize or restore debate participant snapshot.
+
+        First call: records healthy agent IDs into trajectory.debate_agent_ids.
+        Subsequent calls: returns the existing snapshot (idempotent).
+        """
+        if trajectory.debate_agent_ids is not None:
+            return trajectory.debate_agent_ids
+        ids = [a.agent_id for a in agent_registry if a.is_healthy]
+        trajectory.debate_agent_ids = ids
+        return ids
+
+    @staticmethod
+    def _get_remaining_debate_agent_ids(
+        debate_agent_ids: list[str],
+        trajectory: SupervisorTrajectory,
+    ) -> list[str]:
+        """Return agent IDs not yet dispatched (preserving original order)."""
+        dispatched: set[str] = set()
+        for entry in trajectory.entries:
+            if entry.action.action == ActionType.DELEGATE:
+                for target in entry.action.targets:
+                    dispatched.add(target.agent_id)
+        return [aid for aid in debate_agent_ids if aid not in dispatched]
+
+    @staticmethod
+    def _collect_prior_debate_responses(
+        trajectory: SupervisorTrajectory,
+    ) -> list[tuple[str, str]]:
+        """Collect (agent_name, response_text) pairs in order, successful results only."""
+        responses: list[tuple[str, str]] = []
+        for entry in trajectory.entries:
+            if entry.action.action != ActionType.DELEGATE:
+                continue
+            for result in entry.results:
+                if result.success and result.status == StepStatus.SUCCESS and result.response_text:
+                    responses.append((result.agent_name, result.response_text))
+        return responses
