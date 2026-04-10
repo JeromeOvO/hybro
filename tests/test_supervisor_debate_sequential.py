@@ -94,7 +94,9 @@ def _make_delegate_entry(
 
 
 class TestSnapshotDebateAgents:
-    def test_initialized_once(self):
+    @patch("modules.SupervisorExecutor.settings")
+    def test_initialized_once(self, mock_settings):
+        mock_settings.debate_rounds = 1
         registry = [
             _make_agent_profile("a1", "Alpha"),
             _make_agent_profile("a2", "Beta"),
@@ -110,6 +112,20 @@ class TestSnapshotDebateAgents:
         registry.append(_make_agent_profile("a4", "Delta"))
         ids2 = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
         assert ids2 == ["a1", "a2"]
+
+    @patch("modules.SupervisorExecutor.settings")
+    def test_multi_round_snapshot(self, mock_settings):
+        """With debate_rounds=2, each agent appears twice in the snapshot."""
+        mock_settings.debate_rounds = 2
+        registry = [
+            _make_agent_profile("a1", "Alpha"),
+            _make_agent_profile("a2", "Beta"),
+        ]
+        trajectory = SupervisorTrajectory()
+
+        ids = SupervisorExecutor._snapshot_debate_agents(registry, trajectory)
+        assert ids == ["a1", "a2", "a1", "a2"]
+        assert trajectory.debate_agent_ids == ["a1", "a2", "a1", "a2"]
 
     def test_survives_serialization(self):
         trajectory = SupervisorTrajectory()
@@ -232,6 +248,37 @@ class TestGetRemainingDebateAgentIds:
         )
         assert remaining == ["a3"]
 
+    def test_multi_round_remaining(self):
+        """With 2 rounds, after round 1 dispatches both agents,
+        round 2 appearances remain."""
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _make_delegate_entry(1, "a1", "Alpha"),
+                _make_delegate_entry(2, "a2", "Beta"),
+            ]
+        )
+        # 2-round list: [a1, a2, a1, a2]
+        remaining = SupervisorExecutor._get_remaining_debate_agent_ids(
+            ["a1", "a2", "a1", "a2"], trajectory
+        )
+        # Round 1 done, round 2 still pending
+        assert remaining == ["a1", "a2"]
+
+    def test_multi_round_fully_dispatched(self):
+        """All rounds dispatched → empty remaining."""
+        trajectory = SupervisorTrajectory(
+            entries=[
+                _make_delegate_entry(1, "a1", "Alpha"),
+                _make_delegate_entry(2, "a2", "Beta"),
+                _make_delegate_entry(3, "a1", "Alpha"),
+                _make_delegate_entry(4, "a2", "Beta"),
+            ]
+        )
+        remaining = SupervisorExecutor._get_remaining_debate_agent_ids(
+            ["a1", "a2", "a1", "a2"], trajectory
+        )
+        assert remaining == []
+
 
 # =========================================================================
 # _build_debate_task
@@ -318,6 +365,7 @@ class TestCollectPriorDebateResponses:
 # =========================================================================
 
 
+@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
 class TestSequentialDebateDispatch:
     """Integration tests that run the full executor loop with mocked dispatch."""
 
@@ -502,6 +550,7 @@ class TestSequentialDebateDispatch:
 # =========================================================================
 
 
+@patch("modules.SupervisorExecutor.settings", MagicMock(debate_rounds=1))
 class TestDebateResume:
     @pytest.fixture
     def se(self):

@@ -40,6 +40,7 @@ from models.supervisor_v2 import (
     TrajectoryStatus,
     V2StepResult,
 )
+from config.settings import settings
 from models.processing import ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
 
@@ -1632,12 +1633,15 @@ class SupervisorExecutor:
     ) -> list[str]:
         """Initialize or restore debate participant snapshot.
 
-        First call: records healthy agent IDs into trajectory.debate_agent_ids.
+        First call: records healthy agent IDs into trajectory.debate_agent_ids,
+        repeated for each debate round (e.g. 2 agents × 2 rounds = [a1, a2, a1, a2]).
         Subsequent calls: returns the existing snapshot (idempotent).
         """
         if trajectory.debate_agent_ids is not None:
             return trajectory.debate_agent_ids
-        ids = [a.agent_id for a in agent_registry if a.is_healthy]
+        num_rounds = settings.debate_rounds or 1
+        base_ids = [a.agent_id for a in agent_registry if a.is_healthy]
+        ids = base_ids * num_rounds
         trajectory.debate_agent_ids = ids
         return ids
 
@@ -1648,16 +1652,28 @@ class SupervisorExecutor:
     ) -> list[str]:
         """Return agent IDs not yet dispatched (preserving original order).
 
+        Supports multi-round debate where the same agent_id appears multiple
+        times in debate_agent_ids (e.g. [a1, a2, a1, a2] for 2 rounds).
+        Counts completed dispatches per agent and removes that many from the list.
+
         Inflight entries (DELEGATE with empty results) are NOT counted as
         dispatched — the crash happened before dispatch completed, so the
         agent needs to be re-dispatched.
         """
-        dispatched: set[str] = set()
+        from collections import Counter
+        dispatch_counts: Counter[str] = Counter()
         for entry in trajectory.entries:
             if entry.action.action == ActionType.DELEGATE and entry.results:
                 for target in entry.action.targets:
-                    dispatched.add(target.agent_id)
-        return [aid for aid in debate_agent_ids if aid not in dispatched]
+                    dispatch_counts[target.agent_id] += 1
+
+        remaining: list[str] = []
+        consume_counts: Counter[str] = Counter()
+        for aid in debate_agent_ids:
+            consume_counts[aid] += 1
+            if consume_counts[aid] > dispatch_counts.get(aid, 0):
+                remaining.append(aid)
+        return remaining
 
     @staticmethod
     def _collect_prior_debate_responses(
