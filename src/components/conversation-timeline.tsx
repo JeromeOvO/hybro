@@ -15,7 +15,7 @@ import {
 } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
 import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
-import type { TurnViewModel } from '@/lib/room-timeline/types'
+import { MemoizedTurn } from './conversation-turn'
 
 // ── Empty state ─────────────────────────────────────────────────
 
@@ -124,33 +124,6 @@ export class TimelineErrorBoundary extends React.Component<
   }
 }
 
-// ── Placeholder MemoizedTurn (until Task 14 delivers the real one) ──
-
-interface PlaceholderTurnProps {
-  turn: TurnViewModel
-  index: number
-  isActive: boolean
-  onQuote?: (data: QuoteData) => void
-}
-
-function PlaceholderTurn({ turn, index }: PlaceholderTurnProps) {
-  const preview = turn.userContent
-    ? turn.userContent.slice(0, 80) + (turn.userContent.length > 80 ? '...' : '')
-    : 'System turn'
-
-  return (
-    <div
-      data-testid="conversation-turn"
-      aria-label={`Turn ${index + 1}: ${preview}`}
-      className="px-4 py-2"
-    >
-      <span className="text-sm text-muted-foreground">
-        Turn {index + 1}: {preview}
-      </span>
-    </div>
-  )
-}
-
 // ── ConversationTimeline ────────────────────────────────────────
 
 interface ConversationTimelineProps {
@@ -237,7 +210,7 @@ export function ConversationTimeline({ onQuote }: ConversationTimelineProps) {
                         aria-hidden="true"
                       />
                     )}
-                    <PlaceholderTurn
+                    <MemoizedTurn
                       turn={turn}
                       index={index}
                       isActive={index === turns.length - 1}

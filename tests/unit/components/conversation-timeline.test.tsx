@@ -66,10 +66,10 @@ describe('ConversationTimeline', () => {
     )
 
     render(<ConversationTimeline />)
-    // PlaceholderTurn renders with data-testid="conversation-turn"
-    const turns = screen.getAllByTestId('conversation-turn')
+    // MemoizedTurn renders as <article aria-label="Turn N: ...">
+    const turns = screen.getAllByRole('article')
     expect(turns.length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText(/Turn 1/)).toBeTruthy()
+    expect(turns[0].getAttribute('aria-label')).toMatch(/Turn 1/)
   })
 
   it('error boundary falls back to flat message list', () => {
