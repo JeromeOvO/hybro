@@ -4,7 +4,7 @@
 > **Date:** 2026-04-10
 > **Branch:** `feat/room-cursor-timeline-ui`
 > **Builds on:** `docs/ROOM_TIMELINE_DESIGN.md` (Phase 1 implementation)
-> **Scope:** Visual/UX redesign + data model extensions. Changes touch: component rendering layer, `TurnViewModel` (new fields), `build-turns.ts` (HITL status fix + summary selection), `AgentResultViewModel` (new status value + fields). No changes to SSE handlers or message store.
+> **Scope:** Visual/UX redesign + data model extensions. Changes touch: component rendering layer, `TurnViewModel` (new fields), `build-turns.ts` (HITL status fix + summary selection + turnsAreEqual), `AgentResultViewModel` (new status value + fields), `system-agents.ts` (new narrowly-scoped helpers). Placeholder agent list flows via component props (not buildTurns). No changes to SSE handlers or message store.
 
 ---
 
@@ -221,7 +221,7 @@ Supervisor mode adds a header bar above the agent results within a turn:
 
 **Completed stats:** Static text showing agent count + total duration.
 
-**Detection:** Supervisor mode is active when `room.extend_info.use_supervisor === true`. The header only renders when supervisor-related messages are present in the turn.
+**Detection:** `isSupervisorTurn` is derived purely from turn content — the presence of supervisor-specific system agent entities (`supervisor_hitl` or `supervisor_synthesis`) in the turn. See §5.2. No dependency on `room.extend_info`.
 
 ### 3.8 Summary from HYBRO AI
 
@@ -232,7 +232,7 @@ The `supervisor_synthesis` system agent (currently named "Summary Agent") is ren
 - **Avatar:** HYBRO favicon icon (same `/favicon.svg`), 28×28px in a container with `border: 1px solid border, border-radius: 6px, background: background`
 - **Rendered as normal agent row** (per option D — no special layout treatment)
 
-Detection: `agentId` matches any of the system agent IDs in `SYSTEM_AGENTS` that map to "Summary Agent" (`supervisor_synthesis`, `debate_summary`, `non_debate_summary`, `summary`).
+Detection: `isSummarySystemAgent(agentId)` from `system-agents.ts` (see §5.7). Matches only the summary family (`supervisor_synthesis`, `debate_summary`, `non_debate_summary`, `summary`). Does NOT match `supervisor_hitl`.
 
 ### 3.9 Non-Supervisor HITL from Real Agents
 
@@ -259,12 +259,13 @@ This is the most common HITL pattern (single agent asking a clarifying question)
 
 | Component | Changes |
 |-----------|---------|
-| `conversation-turn.tsx` | Reads `turn.targetAgentIds` + `turn.isSupervisorTurn` (new TurnViewModel fields). Add `AgentPlaceholderRow` for waiting agents. Hide `SummaryBlock` in expanded state. Remove `TurnEventTimeline` rendering. Add `SupervisorHeader` when `isSupervisorTurn`. |
+| `conversation-timeline.tsx` | New prop `roomAgentList`. Computes `pendingAgents` for active turn by diffing `roomAgentList` against `turn.agentResults`. Passes `pendingAgents` prop to `MemoizedTurn`. |
+| `conversation-turn.tsx` | New prop `pendingAgents` (component-layer, not in TurnViewModel). Reads `turn.isSupervisorTurn` (TurnViewModel field). Renders `AgentPlaceholderRow` for pending agents. Hide `SummaryBlock` in expanded state. Remove `TurnEventTimeline` rendering. Add `SupervisorHeader` when `isSupervisorTurn`. |
 | `agent-result-card.tsx` | Add avatar (28×28). Replace `HitlHistoryList` with `HitlCompactCard`/`HitlQuestionCard`. Add `InlineChips`. Replace `isStreaming` logic: `'working'` + content → streaming. Handle `'awaiting_input'` → yellow shimmer "Needs input". |
-| `agent-badge.tsx` | Add avatar image support. Handle "Summary from HYBRO AI" display name + brand gradient for system agents (detect via `isSystemAgent()`). |
-| `build-turns.ts` | Add `'working'` status: `hitlResolved + isInteractiveState → 'working'`. Populate `targetAgentIds`, `isSupervisorTurn`, `supervisorStage` on TurnViewModel. Fix `selectSummary()` to use `isSystemAgent()` instead of string heuristic. Compute `eventCount`/`durationMs` per agent. |
-| `types.ts` | Extend `TurnViewModel`: `targetAgentIds`, `isSupervisorTurn`, `supervisorStage`. Extend `AgentResultViewModel`: `status` adds `'working'`, plus `isSystemAgent`, `hitlResolved`, `hitlPending`, `eventCount`, `durationMs`. |
-| `system-agents.ts` | No changes — existing `isSystemAgent()` and `SYSTEM_AGENTS` used as-is. |
+| `agent-badge.tsx` | Add avatar image support. Handle "Summary from HYBRO AI" display name + brand gradient for summary-family agents (detect via `isSummarySystemAgent()`, NOT `isSystemAgent()`). |
+| `build-turns.ts` | Add `'working'` status: `hitlResolved + isInteractiveState → 'working'`. Populate `isSupervisorTurn` (via `isSupervisorSystemAgent()`), `supervisorStage` on TurnViewModel. Fix `selectSummary()` to use `isSummarySystemAgent()`. Compute `eventCount`/`durationMs` per agent. Extend `turnsAreEqual()` for new fields (§5.8). |
+| `types.ts` | Extend `TurnViewModel`: `isSupervisorTurn`, `supervisorStage`. Extend `AgentResultViewModel`: `status` adds `'working'`, plus `isSummaryAgent`, `hitlResolved`, `hitlPending`, `eventCount`, `durationMs`. |
+| `system-agents.ts` | Add `isSupervisorSystemAgent()` and `isSummarySystemAgent()` helpers with narrowly-scoped ID sets (§5.7). Existing `isSystemAgent()` unchanged. |
 
 ### 4.3 Removed/Replaced
 
@@ -276,27 +277,54 @@ This is the most common HITL pattern (single agent asking a clarifying question)
 
 ## 5. Data Model Changes
 
-### 5.1 TurnViewModel Extensions
+### 5.1 Placeholder Target Agents — Component-Layer Prop, Not TurnViewModel
 
-Current `ConversationTurnProps` only receives `turn/index/isActive/onQuote`. Two new features need data that doesn't exist in the current model:
+**Problem:** Placeholder rows need the target agent list for the current turn. But `buildTurns()` only receives `entities`, `orderedIds`, and `events` (`build-turns.ts:31`). `MessageEntity` has no `resolvedAgents` or target list field (`types.ts:34`). The room's `room_agent_set` lives in `useRoomData` (`useRoomData.ts:83`), which is outside the message store / timeline builder input.
 
-**Problem:** Placeholder rows need target agent list; SupervisorHeader needs room context. Neither exists on `TurnViewModel` or `ConversationTurnProps`.
+**Decision: Placeholder logic belongs in the component layer, not in buildTurns.**
 
-**Solution:** Extend `TurnViewModel` with two new fields populated in `buildTurns()`:
+`buildTurns()` signature is unchanged — it stays a pure function of message store data. Placeholder rendering is a transient UI concern driven by room-level data that changes independently of messages.
+
+**Implementation:**
+
+1. `ConversationTimeline` receives a new prop `roomAgentList: { agentId: string; agentName: string }[]`, passed from the page component which already has access via `useRoomData.getAgentList()`.
+
+2. For the **active (last) turn only**, `ConversationTimeline` computes pending agents:
+   ```ts
+   const pendingAgents = isLastTurn
+     ? roomAgentList.filter(a => !turn.agentResults.some(r => r.agentId === a.agentId))
+     : []
+   ```
+
+3. `MemoizedTurn` receives `pendingAgents` as a separate prop (not part of `TurnViewModel`):
+   ```ts
+   <MemoizedTurn
+     turn={turn}
+     index={index}
+     isActive={isLastTurn}
+     pendingAgents={isLastTurn ? pendingAgents : EMPTY_ARRAY}
+     onQuote={onQuote}
+   />
+   ```
+
+4. `ConversationTurn` renders `AgentPlaceholderRow` for each entry in `pendingAgents`. When an agent's result arrives (appears in `turn.agentResults`), it drops out of the pending list automatically.
+
+**Why not extend buildTurns:** Room agent data comes from `useRoomData` (TanStack Query), not the message store. Threading room data into `buildTurns` would create a cross-concern dependency (message store ↔ room query), violate the current clean separation, and force unnecessary turn rebuilds whenever room data refetches. The component layer already bridges these two data sources — that's where this logic belongs.
+
+**Limitations:** For non-default targeting (mentions, saved groups), the room's `room_agent_set` may not exactly match the agents that will respond. Placeholders will still be correct for the common `room_default` case, and disappear as actual results arrive regardless.
+
+### 5.2 TurnViewModel Extensions — isSupervisorTurn and supervisorStage
+
+These fields CAN be derived from message store data (entity `agentId` values and SSE fields), so they belong in `TurnViewModel` populated by `buildTurns()`.
 
 ```ts
 // src/lib/room-timeline/types.ts — additions to TurnViewModel
 interface TurnViewModel {
   // ... existing fields ...
   
-  /** Agent IDs targeted by this turn's user message. Populated from the user
-   *  message entity's resolved target list. Used by ConversationTurn to render
-   *  AgentPlaceholderRow for agents that haven't responded yet. */
-  targetAgentIds: { agentId: string; agentName: string }[]
-  
-  /** Whether this turn was dispatched via Supervisor mode.
-   *  Populated from the presence of system agent messages in the turn
-   *  (any agentId matching SYSTEM_AGENTS keys from system-agents.ts).
+  /** Whether this turn was dispatched via Supervisor orchestration.
+   *  Derived from presence of supervisor-specific system agent entities
+   *  (supervisor_hitl, supervisor_synthesis) in the turn.
    *  Drives SupervisorHeader rendering. */
   isSupervisorTurn: boolean
   
@@ -310,21 +338,22 @@ interface TurnViewModel {
 }
 ```
 
-**Data source for `targetAgentIds`:** The user message entity carries `resolvedAgents` or the room's `room_agent_set` is available via the message store. In `buildTurns()`, when constructing a turn from a user message, extract the target agent list from the corresponding room snapshot or message metadata. If unavailable (legacy messages), fall back to an empty array (no placeholders shown).
-
-**Data source for `isSupervisorTurn`:** Check if any entity in the turn has an `agentId` matching a key in `SYSTEM_AGENTS` (from `src/lib/system-agents.ts`). Use the existing `isSystemAgent()` function:
+**Data source for `isSupervisorTurn`:** Check if any entity in the turn has an `agentId` matching a **supervisor-specific** system agent ID. NOT all system agents — only the two that are unique to supervisor orchestration:
 
 ```ts
-import { isSystemAgent } from '@/lib/system-agents'
+import { isSupervisorSystemAgent } from '@/lib/system-agents'
 
-const isSupervisorTurn = entities.some(e => isSystemAgent(e.agentId))
+// In buildTurn():
+const isSupervisorTurn = turnEntities.some(e => isSupervisorSystemAgent(e.agentId))
 ```
+
+Where `isSupervisorSystemAgent()` is a new helper in `system-agents.ts` (see §5.7) that matches only `supervisor_hitl` and `supervisor_synthesis`. This is distinct from `isSystemAgent()` which also matches `debate_summary`, `non_debate_summary`, and `summary` — those indicate other orchestration modes, not supervisor mode.
+
+**Single rule — no §3.7 conflict:** The §3.7 mention of `room.extend_info.use_supervisor === true` is removed. `isSupervisorTurn` is derived purely from turn content (supervisor-specific entities present), not from room-level config. This avoids the need to thread room data into buildTurns and is a more reliable signal (a turn either has supervisor entities or it doesn't).
 
 **Data source for `supervisorStage`:** From `MessageEntity.stepNumber`, `totalSteps`, and `taskContent` fields. These are set by SSE `processing_status` handler. Extract from the latest processing entity in the turn.
 
-This keeps `ConversationTurn` as a pure presenter — all data injection happens in the view-model layer, not via React context or extra props.
-
-### 5.2 AgentResultViewModel Extensions
+### 5.3 AgentResultViewModel Extensions
 
 ```ts
 // src/lib/room-timeline/types.ts — additions to AgentResultViewModel
@@ -337,8 +366,11 @@ interface AgentResultViewModel {
    *  and render the resolved HITL compact card simultaneously. */
   status: 'completed' | 'failed' | 'awaiting_input' | 'working'
   
-  /** Whether this agent is a system agent (supervisor_synthesis, etc.) */
-  isSystemAgent: boolean
+  /** Whether this agent is a summary-family system agent
+   *  (supervisor_synthesis, debate_summary, non_debate_summary, summary).
+   *  Detected via isSummarySystemAgent() — NOT isSystemAgent() which also
+   *  includes supervisor_hitl. Used for HYBRO AI visual treatment. */
+  isSummaryAgent: boolean
   
   /** Resolved HITL: prompt and user answer. Separate from hitlHistory to
    *  distinguish "HITL answered, agent still working" from "historical HITL". */
@@ -353,7 +385,7 @@ interface AgentResultViewModel {
 }
 ```
 
-### 5.3 Streaming / Status Semantics (Fix for Review Issue #2)
+### 5.4 Streaming / Status Semantics (Fix for Review Issue #2)
 
 **Current problem:** `AgentResultCard` derives `isStreaming` from `result.status === 'awaiting_input' && result.content.length > 0` (line 61). This conflates "HITL pending with partial content" and "actively streaming". If we change resolved-HITL status to `'completed'`, streaming shimmer disappears prematurely.
 
@@ -392,7 +424,7 @@ if (entity.taskStatus && isFailureState(entity.taskStatus)) {
 const isStreaming = result.status === 'working' && result.content.length > 0
 ```
 
-### 5.4 Inline Chips Data Derivation
+### 5.5 Inline Chips Data Derivation
 
 From `turn.events`, for each agent:
 - `eventCount = turn.events.filter(e => e.agentId === agentId).length`
@@ -400,26 +432,101 @@ From `turn.events`, for each agent:
 
 Computed in `buildAgentResult()` by passing the turn's events array.
 
-### 5.5 Summary Selection Fix (Fix for Review Issue #3)
+### 5.6 Summary Selection Fix (Fix for Review Issue #3)
 
 **Current problem:** `selectSummary()` uses `agentName.toLowerCase().includes('supervisor')` string heuristic. This doesn't match the actual system agent names ("Summary Agent", "Question & Answer") and won't match the new display name "Summary from HYBRO AI".
 
-**Fix:** Replace the string heuristic with `isSystemAgent()` from `src/lib/system-agents.ts`:
+**Fix:** Replace the string heuristic with `isSummarySystemAgent()` (see §5.7):
 
 ```ts
-import { isSystemAgent, SYSTEM_AGENTS } from '@/lib/system-agents'
+import { isSummarySystemAgent } from '@/lib/system-agents'
 
 // In selectSummary():
 // Priority 1: system summary agent (supervisor_synthesis, debate_summary, etc.)
-const systemSummary = completedWithContent.find(r => {
-  if (!r.agentId || !isSystemAgent(r.agentId)) return false
-  // Exclude supervisor_hitl — it's not a summary agent
-  return r.agentId !== 'supervisor_hitl'
-})
+const systemSummary = completedWithContent.find(r =>
+  isSummarySystemAgent(r.agentId)
+)
 if (systemSummary) return buildSummaryFromResult(systemSummary)
 ```
 
-This uses the existing `SYSTEM_AGENTS` registry rather than inventing a new `SYSTEM_AGENT_IDS` constant. The `isSystemAgent()` function already exists at `src/lib/system-agents.ts:41`.
+Uses `isSummarySystemAgent()` which matches only summary-family IDs. No ad-hoc exclusions needed.
+
+### 5.7 system-agents.ts — New Helpers
+
+Add two narrowly-scoped helpers alongside the existing `isSystemAgent()`:
+
+```ts
+// src/lib/system-agents.ts — new additions
+
+/** Supervisor-specific system agent IDs. Used for isSupervisorTurn derivation.
+ *  These are the two agent IDs unique to supervisor orchestration mode. */
+const SUPERVISOR_SYSTEM_AGENT_IDS = new Set(['supervisor_hitl', 'supervisor_synthesis'])
+
+/** Summary-family system agent IDs. Used for HYBRO AI visual treatment
+ *  (brand gradient name, HYBRO icon avatar, "Summary from HYBRO AI" display).
+ *  Excludes supervisor_hitl which is NOT a summary agent. */
+const SUMMARY_SYSTEM_AGENT_IDS = new Set([
+  'supervisor_synthesis',
+  'debate_summary',
+  'non_debate_summary',
+  'summary',
+])
+
+export function isSupervisorSystemAgent(agentId: string | undefined): boolean {
+  return !!agentId && SUPERVISOR_SYSTEM_AGENT_IDS.has(agentId)
+}
+
+export function isSummarySystemAgent(agentId: string | undefined): boolean {
+  return !!agentId && SUMMARY_SYSTEM_AGENT_IDS.has(agentId)
+}
+```
+
+**Three helpers, three scopes:**
+
+| Helper | Matches | Used by |
+|--------|---------|---------|
+| `isSystemAgent()` (existing) | All 5 system agent IDs | General system agent detection |
+| `isSupervisorSystemAgent()` (new) | `supervisor_hitl`, `supervisor_synthesis` | `isSupervisorTurn` in buildTurns (§5.2) |
+| `isSummarySystemAgent()` (new) | `supervisor_synthesis`, `debate_summary`, `non_debate_summary`, `summary` | `selectSummary()` (§5.6), `agent-badge.tsx` visual treatment (§3.8), `isSummaryAgent` field on AgentResultViewModel (§5.3) |
+
+### 5.8 Incremental Build — turnsAreEqual Update
+
+**Problem:** `turnsAreEqual()` (`build-turns.ts:412`) preserves referential identity for unchanged turns so `React.memo` can skip re-renders. The current comparison checks: `id`, `status`, `agentResults.length`, `userContent`, agent `messageId`/`status`/`content`/`artifacts`, and `events.length`. It does NOT check any of the new fields.
+
+If `isSupervisorTurn`, `supervisorStage`, or per-agent `hitlResolved`/`hitlPending`/`eventCount`/`durationMs` change without the existing fields changing, `turnsAreEqual` returns true, the old reference is preserved, and React.memo skips the re-render. The new data is computed but never displayed.
+
+**Fix:** Extend the comparison:
+
+```ts
+function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
+  // ... existing checks (id, status, agentResults.length, userContent, events.length) ...
+
+  // New TurnViewModel fields
+  if (a.isSupervisorTurn !== b.isSupervisorTurn) return false
+  if (a.supervisorStage?.stepNumber !== b.supervisorStage?.stepNumber) return false
+  if (a.supervisorStage?.totalSteps !== b.supervisorStage?.totalSteps) return false
+  if (a.supervisorStage?.details !== b.supervisorStage?.details) return false
+
+  // Per-agent result: extend existing loop
+  for (let i = 0; i < a.agentResults.length; i++) {
+    // ... existing checks (messageId, status, content, artifacts) ...
+    
+    // New AgentResultViewModel fields
+    if (a.agentResults[i].hitlResolved?.answer !== b.agentResults[i].hitlResolved?.answer) return false
+    if (a.agentResults[i].hitlPending?.prompt !== b.agentResults[i].hitlPending?.prompt) return false
+    if (a.agentResults[i].eventCount !== b.agentResults[i].eventCount) return false
+    if (a.agentResults[i].durationMs !== b.agentResults[i].durationMs) return false
+  }
+
+  // Summary equality (already missing from current implementation)
+  if ((a.summary?.sourceAgentId ?? null) !== (b.summary?.sourceAgentId ?? null)) return false
+  if ((a.summary?.body ?? '') !== (b.summary?.body ?? '')) return false
+
+  return true
+}
+```
+
+**Note:** `targetAgentIds` (now a component-layer prop, not on TurnViewModel per §5.1) does NOT need to be checked here. `pendingAgents` is computed at render time from `roomAgentList` and `turn.agentResults` — changes to either trigger re-render through their own React update paths.
 
 ## 6. Animations
 
@@ -449,11 +556,13 @@ These test the data model changes that feed the components. Must pass before com
 
 | Category | File | Tests |
 |----------|------|-------|
-| **Placeholder target list** | `build-turns.test.ts` | `targetAgentIds` populated from user message entity; empty when no target info; placeholder row rendered for agents not yet in `agentResults` |
-| **System summary selection** | `build-turns.test.ts` | `selectSummary()` picks `supervisor_synthesis` over regular agents; does NOT pick `supervisor_hitl`; works with `isSystemAgent()` not string heuristic; collapsed turn summary matches "Summary from HYBRO AI" display |
-| **HITL + streaming coexistence** | `build-turns.test.ts` | `hitlResolved=true` + `hitlUserAnswer` + `isInteractiveState` → status is `'working'` (not `'awaiting_input'`); component shows shimmer "Generating" AND resolved HITL compact card simultaneously; `hitlResolved=false` + `isInteractiveState` → status stays `'awaiting_input'` |
-| **isSupervisorTurn derivation** | `build-turns.test.ts` | Turn with `supervisor_synthesis` entity → `isSupervisorTurn=true`; turn with only real agents → `isSupervisorTurn=false` |
+| **Placeholder pending agents** | `conversation-timeline.test.ts` | `pendingAgents` computed correctly: `roomAgentList` minus agents in `turn.agentResults`; empty for non-active turns; empty when `roomAgentList` is empty |
+| **System summary selection** | `build-turns.test.ts` | `selectSummary()` picks `supervisor_synthesis` over regular agents; does NOT pick `supervisor_hitl`; uses `isSummarySystemAgent()` not string heuristic |
+| **HITL + streaming coexistence** | `build-turns.test.ts` | `hitlResolved=true` + `hitlUserAnswer` + `isInteractiveState` → status is `'working'` (not `'awaiting_input'`); `hitlResolved=false` + `isInteractiveState` → status stays `'awaiting_input'` |
+| **isSupervisorTurn derivation** | `build-turns.test.ts` | Turn with `supervisor_synthesis` entity → `isSupervisorTurn=true`; turn with `debate_summary` only → `isSupervisorTurn=false`; turn with only real agents → `isSupervisorTurn=false` |
 | **'working' status semantics** | `build-turns.test.ts` | Non-terminal non-interactive taskStatus → `'working'`; `AgentResultCard` maps `'working'` + content to streaming display; `'working'` + no content to "Thinking" shimmer |
+| **turnsAreEqual new fields** | `build-turns.test.ts` | `turnsAreEqual` returns false when `isSupervisorTurn` changes; returns false when `supervisorStage.details` changes; returns false when agent `hitlResolved` changes; returns false when `summary` changes |
+| **system-agents helpers** | `system-agents.test.ts` | `isSupervisorSystemAgent('supervisor_hitl')` → true; `isSupervisorSystemAgent('debate_summary')` → false; `isSummarySystemAgent('supervisor_synthesis')` → true; `isSummarySystemAgent('supervisor_hitl')` → false |
 
 ### 8.2 Component Tests
 
@@ -465,8 +574,9 @@ These test the data model changes that feed the components. Must pass before com
 | SupervisorHeader | Shows stage shimmer when processing; shows stats when completed; hidden when `isSupervisorTurn=false` |
 | InlineChips | Renders step count + duration; handles missing data gracefully |
 | agent-result-card (updated) | Avatar renders; HITL compact card renders for resolved HITL; shimmer "Generating" for `'working'` status with content; "Needs input" yellow shimmer for `'awaiting_input'` |
-| conversation-turn (updated) | Placeholder rows for missing agents in `targetAgentIds`; summary hidden in expanded state; event rail not rendered; SupervisorHeader rendered when `isSupervisorTurn=true` |
-| agent-badge (updated) | "Summary from HYBRO AI" brand gradient for system summary agents; HYBRO icon avatar for system agents |
+| conversation-timeline (updated) | `pendingAgents` prop passed to active turn; empty for non-active turns |
+| conversation-turn (updated) | `AgentPlaceholderRow` for `pendingAgents` prop; summary hidden in expanded state; event rail not rendered; SupervisorHeader rendered when `isSupervisorTurn=true` |
+| agent-badge (updated) | "Summary from HYBRO AI" brand gradient for summary-family agents (`isSummarySystemAgent`); HYBRO icon avatar for summary agents only |
 
 ## 9. Out of Scope
 
