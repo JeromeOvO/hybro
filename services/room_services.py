@@ -2328,6 +2328,26 @@ class RoomServices:
                     status_code=500,
                 )
 
+        # Debate + all_agents: return all active agents directly (no LLM selector)
+        if target_group == "all_agents" and is_debate_mode:
+            all_agents = await self.database_service.get_all_active_agents(
+                user_id=sender_user_id
+            )
+            if not all_agents:
+                return RoomCenterUserMessageResponse(
+                    message_id=None, message=None, success=False,
+                    error="No active agents available for debate",
+                    status_code=404,
+                )
+            # Stable sort for deterministic debate dispatch order
+            all_agents.sort(key=lambda a: (a.agent_card.name.lower(), a.agent_id))
+            selected = {a.agent_id: a.agent_card.name for a in all_agents}
+            logger.info(
+                "All Agents + Debate: returning all %d active agents (bypassed LLM selector)",
+                len(all_agents),
+            )
+            return selected, True, all_agents
+
         if target_group == "all_agents":
             return await select_agents_all_agents_mode()
 
