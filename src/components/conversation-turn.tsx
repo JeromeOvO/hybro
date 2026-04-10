@@ -3,11 +3,13 @@
 
 import React, { useState, useCallback } from 'react'
 import { cn } from '@/lib/utils'
-import { AlertTriangle, ChevronRight, Paperclip } from 'lucide-react'
+import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { AgentBadge } from './agent-badge'
 import { TurnEventTimeline } from './turn-event-timeline'
 import { AgentResultStack } from './agent-result-stack'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
+import { LinkifiedContent } from './markdown-content'
+import { UserAttachmentCard } from './message-bubble'
 import type { QuoteData } from './message-bubble'
 
 // -- User prompt block -------------------------------------------------------
@@ -22,27 +24,21 @@ function UserPromptBlock({
   if (!content && (!attachments || attachments.length === 0)) return null
 
   return (
-    <div className="space-y-1">
-      {content && (
-        <p className="text-sm text-foreground font-medium whitespace-pre-wrap break-words">
-          {content}
-        </p>
-      )}
-      {attachments && attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {attachments.map((att, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted/50 px-2 py-0.5 rounded"
-            >
-              <Paperclip className="h-3 w-3" />
-              <span className="truncate max-w-[120px]">
-                {att.fileName || `Attachment ${i + 1}`}
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
+    <div className="flex justify-end w-full" data-testid="user-prompt-wrapper">
+      <div className="max-w-[80%] space-y-2 rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground">
+        {content && (
+          <div className="text-sm font-medium leading-relaxed whitespace-pre-wrap break-words">
+            <LinkifiedContent content={content} />
+          </div>
+        )}
+        {attachments && attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((att) => (
+              <UserAttachmentCard key={att.fileId} attachment={att} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -15,6 +15,12 @@ vi.mock('@/lib/agent-colors', () => ({
   }),
 }))
 
+vi.mock('@/components/message-bubble', () => ({
+  UserAttachmentCard: ({ attachment }: { attachment: { fileId: string; fileName: string } }) => (
+    <div data-testid={`attachment-card-${attachment.fileId}`}>{attachment.fileName}</div>
+  ),
+}))
+
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
@@ -142,5 +148,36 @@ describe('ConversationTurn', () => {
 
     expect(screen.getByText('What is the weather?')).toBeTruthy()
     expect(screen.getByText('screenshot.png')).toBeTruthy()
+  })
+
+  it('renders user prompt right-aligned', () => {
+    const turn = makeTurn({ userContent: 'Hello world' })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    const wrapper = screen.getByTestId('user-prompt-wrapper')
+    expect(wrapper.className).toContain('justify-end')
+    expect(screen.getByText('Hello world')).toBeTruthy()
+  })
+
+  it('renders mentions as clickable links in user prompt', () => {
+    const turn = makeTurn({ userContent: 'Ask <@agent-1|CodeBot> for help' })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    const link = screen.getByText('@CodeBot')
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('href')).toBe('/c/agents/agent-1')
+  })
+
+  it('renders attachments via UserAttachmentCard', () => {
+    const turn = makeTurn({
+      userContent: 'See this',
+      userAttachments: [
+        { fileId: 'f1', fileName: 'photo.png', mimeType: 'image/png', sizeBytes: 2048, fileUrl: 'https://example.com/photo.png' },
+        { fileId: 'f2', fileName: 'report.pdf', mimeType: 'application/pdf', sizeBytes: 51200, fileUrl: 'https://example.com/report.pdf' },
+      ],
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.getByTestId('attachment-card-f1')).toBeTruthy()
+    expect(screen.getByTestId('attachment-card-f2')).toBeTruthy()
+    expect(screen.getByText('photo.png')).toBeTruthy()
+    expect(screen.getByText('report.pdf')).toBeTruthy()
   })
 })
