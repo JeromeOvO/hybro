@@ -49,12 +49,14 @@ function SummaryBlock({ summary }: { summary: TurnViewModel['summary'] }) {
   if (!summary) return null
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-2 space-y-1" data-testid="turn-summary">
       <div className="flex items-center gap-2">
         <AgentBadge
           agentId={summary.sourceAgentId}
           agentName={summary.sourceAgentName}
           size="sm"
+          hideSource
+          showDeletedIndicator={false}
         />
       </div>
       <p className="text-base font-semibold text-foreground leading-snug">

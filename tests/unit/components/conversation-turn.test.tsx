@@ -1,4 +1,5 @@
 // tests/unit/components/conversation-turn.test.tsx
+import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { MemoizedTurn } from '@/components/conversation-turn'
@@ -19,6 +20,16 @@ vi.mock('@/components/message-bubble', () => ({
   UserAttachmentCard: ({ attachment }: { attachment: { fileId: string; fileName: string } }) => (
     <div data-testid={`attachment-card-${attachment.fileId}`}>{attachment.fileName}</div>
   ),
+}))
+
+vi.mock('@/components/agent-source-badge', () => ({
+  AgentSourceBadge: ({ source }: { source: string }) => (
+    <span data-testid={`source-badge-${source}`} />
+  ),
+}))
+
+vi.mock('@/components/ui/tooltip', () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
@@ -179,5 +190,33 @@ describe('ConversationTurn', () => {
     expect(screen.getByTestId('attachment-card-f2')).toBeTruthy()
     expect(screen.getByText('photo.png')).toBeTruthy()
     expect(screen.getByText('report.pdf')).toBeTruthy()
+  })
+
+  it('summary badge does NOT show source icon', () => {
+    const turn = makeTurn({
+      summary: {
+        sourceAgentId: 'agent-1',
+        sourceAgentName: 'Weather Agent',
+        title: 'Sunny',
+        body: 'Clear skies.',
+      },
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    const summaryBlock = screen.getByTestId('turn-summary')
+    expect(summaryBlock.querySelector('[data-testid^="source-badge-"]')).toBeNull()
+  })
+
+  it('summary badge does NOT show (deleted) even without sourceAgentId', () => {
+    const turn = makeTurn({
+      summary: {
+        sourceAgentId: undefined,
+        sourceAgentName: 'System Summary',
+        title: 'Overview',
+        body: 'A synthesis.',
+      },
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.getByText('System Summary')).toBeTruthy()
+    expect(screen.queryByText(/deleted/i)).toBeNull()
   })
 })
