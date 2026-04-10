@@ -276,24 +276,17 @@ async def test_no_matching_agents_graceful_fallback():
 
 
 @pytest.mark.asyncio
-async def test_matcher_error_graceful_fallback():
-    """Verify matcher exceptions produce error response with reasoning."""
-    # Mock AgentMatcher.match to raise exception
+async def test_matcher_error_propagates_to_caller():
+    """Verify matcher exceptions propagate so callers can return proper 500s."""
     with patch("services.agent_matcher.AgentMatcher.match", new_callable=AsyncMock) as mock_match:
         mock_match.side_effect = RuntimeError("Database connection failed")
 
         service = AgentSelectionService()
-        result = await service.select_agents_for_message(
-            message_text="Test message",
-            is_debate_mode=False,
-        )
-
-        # Verify error handling
-        assert result.strategy == RoutingStrategy.SINGLE
-        assert result.agents == []
-        assert "Agent matching failed" in result.reasoning
-        assert "Database connection failed" in result.reasoning
-        assert result.needs_debate is False
+        with pytest.raises(RuntimeError, match="Database connection failed"):
+            await service.select_agents_for_message(
+                message_text="Test message",
+                is_debate_mode=False,
+            )
 
 
 def test_capability_score_integrated_with_vector_score():

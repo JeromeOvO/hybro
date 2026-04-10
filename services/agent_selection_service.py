@@ -63,7 +63,7 @@ class AgentSelectionService:
 
         Args:
             message_text: The user's message to route
-            top_k: Unused (kept for backward compatibility)
+            top_k: Maximum number of agents to return (caps matcher output)
             user_id: Optional sender ID for private agent visibility
             required_input_modes: If present (non-None), message has attachments
             is_debate_mode: If True, returns 3-5 agents for debate diversity
@@ -76,24 +76,14 @@ class AgentSelectionService:
             len(message_text), is_debate_mode
         )
 
-        # Delegate to AgentMatcher
-        try:
-            match_result = await self._matcher.match(
-                message_text=message_text,
-                user_id=user_id,
-                is_debate_mode=is_debate_mode,
-                required_input_modes=required_input_modes,
-            )
-        except Exception as e:
-            logger.error(
-                "AgentSelectionService: AgentMatcher.match() failed: %s", e
-            )
-            return AgentSelectionResult(
-                strategy=RoutingStrategy.SINGLE,
-                agents=[],
-                reasoning=f"Agent matching failed: {e}",
-                needs_debate=False,
-            )
+        # Delegate to AgentMatcher — let exceptions propagate so callers
+        # (e.g. _resolve_explicit_target_scope) can surface a proper 500.
+        match_result = await self._matcher.match(
+            message_text=message_text,
+            user_id=user_id,
+            is_debate_mode=is_debate_mode,
+            required_input_modes=required_input_modes,
+        )
 
         # Convert MatchResult to AgentSelectionResult for backward compatibility
         if not match_result.agents:
@@ -105,7 +95,7 @@ class AgentSelectionService:
                 needs_debate=False
             )
 
-        # Map MatchedAgent to AgentSelection
+        # Map MatchedAgent to AgentSelection, respecting top_k cap
         agent_selections = [
             AgentSelection(
                 agent_id=matched.agent.agent_id,
@@ -113,7 +103,7 @@ class AgentSelectionService:
                 reason=f"Match score: {matched.final_score:.2f} (vector: {matched.vector_score:.2f}, capability: {matched.capability_score:.2f})",
                 score=matched.final_score,
             )
-            for matched in match_result.agents
+            for matched in match_result.agents[:top_k]
         ]
 
         # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1

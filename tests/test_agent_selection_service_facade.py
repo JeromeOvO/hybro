@@ -305,22 +305,43 @@ def test_resolve_strategy_single():
 
 
 @pytest.mark.asyncio
-async def test_facade_handles_matcher_error():
-    """Test that facade returns graceful fallback when matcher throws."""
+async def test_facade_propagates_matcher_error():
+    """Test that matcher exceptions propagate to callers for proper error handling."""
     with patch("services.agent_matcher.AgentMatcher") as MockMatcher:
         mock_matcher_instance = AsyncMock()
         mock_matcher_instance.match.side_effect = RuntimeError("Pinecone unreachable")
         MockMatcher.return_value = mock_matcher_instance
 
         service = AgentSelectionService()
+        with pytest.raises(RuntimeError, match="Pinecone unreachable"):
+            await service.select_agents_for_message(
+                message_text="test message",
+            )
+
+
+@pytest.mark.asyncio
+async def test_facade_respects_top_k(mock_matched_agents):
+    """Test that top_k caps the number of returned agents."""
+    mock_match_result = MatchResult(
+        agents=mock_matched_agents,  # 3 agents
+        total_candidates=10,
+        filtered_count=5,
+    )
+
+    with patch("services.agent_matcher.AgentMatcher") as MockMatcher:
+        mock_matcher_instance = AsyncMock()
+        mock_matcher_instance.match.return_value = mock_match_result
+        MockMatcher.return_value = mock_matcher_instance
+
+        service = AgentSelectionService()
         result = await service.select_agents_for_message(
             message_text="test message",
+            top_k=1,
         )
 
+        assert len(result.agents) == 1
+        assert result.agents[0].agent_id == "agent-0"
         assert result.strategy == RoutingStrategy.SINGLE
-        assert result.needs_debate is False
-        assert len(result.agents) == 0
-        assert "Agent matching failed" in result.reasoning
 
 
 def test_resolve_strategy_supervisor_overrides_debate():

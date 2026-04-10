@@ -20,8 +20,12 @@ class SequentialDebateDispatcher:
         First agent: returns original_task unchanged.
         Subsequent agents: injects last agent's response (truncated).
         """
-        if not prior_agent_name or not prior_response:
+        if not prior_response:
             return original_task
+
+        # Fallback name for stale/deleted agents whose name lookup returns None
+        if not prior_agent_name:
+            prior_agent_name = "Previous Agent"
 
         truncated = prior_response[:max_chars]
         if len(prior_response) > max_chars:

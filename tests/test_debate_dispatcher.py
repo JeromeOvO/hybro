@@ -69,15 +69,19 @@ class TestSequentialDebateDispatcher:
         )
         assert result == original
 
-    def test_none_prior_agent_name_returns_raw_task(self):
-        """None prior_agent_name returns raw task."""
+    def test_none_prior_agent_name_uses_fallback(self):
+        """None prior_agent_name uses 'Previous Agent' fallback to preserve debate context."""
         original = "Do something"
+        prior_response = "Some response from a deleted agent"
         result = SequentialDebateDispatcher.build_debate_prompt(
             original_task=original,
             prior_agent_name=None,
-            prior_response="Some response",
+            prior_response=prior_response,
         )
-        assert result == original
+        # Should still include debate context with fallback name
+        assert "RESPONSE FROM PREVIOUS AGENT (Previous Agent)" in result
+        assert prior_response in result
+        assert "YOUR TASK: Do something" in result
 
     def test_prompt_contains_all_expected_sections(self):
         """Prompt contains all expected sections."""
