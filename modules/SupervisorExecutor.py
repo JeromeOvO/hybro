@@ -138,28 +138,49 @@ class SupervisorExecutor:
                 for r in entry.results
             )
             if not still_unresolved:
-                done_entry = TrajectoryEntry(
-                    step_number=len(trajectory.entries) + 1,
-                    action=SupervisorAction(
-                        action=ActionType.DONE,
-                        reasoning="Debate mode complete (resumed after push notification)",
-                    ),
-                    started_at=utcnow(),
-                    completed_at=utcnow(),
+                # Check if there are remaining debate agents to dispatch
+                remaining_ids = self._get_remaining_debate_agent_ids(
+                    trajectory.debate_agent_ids or [],
+                    trajectory,
                 )
-                trajectory.entries.append(done_entry)
-                trajectory.status = TrajectoryStatus.COMPLETED
-                return self._log_and_return(
-                    room_id, trajectory,
-                    SupervisorRunResult(
-                        status=RunStatus.COMPLETED, trajectory=trajectory
-                    ),
-                    debate_mode=True,
+                if not remaining_ids:
+                    # All agents done — complete
+                    done_entry = TrajectoryEntry(
+                        step_number=len(trajectory.entries) + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning="Debate mode complete (resumed after push notification)",
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                    )
+                    trajectory.entries.append(done_entry)
+                    trajectory.status = TrajectoryStatus.COMPLETED
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        ),
+                        debate_mode=True,
+                    )
+                # Still have agents to dispatch — fall through to main loop
+                logger.info(
+                    "supervisor_debate_resume_continuing",
+                    extra={
+                        "room_id": room_id,
+                        "remaining_agents": len(remaining_ids),
+                    },
                 )
 
         clarify_fallback_count = 0
 
-        while step_number < self.MAX_STEPS:
+        # Debate mode: expand step budget to accommodate all agents + 1 (for DONE)
+        effective_max_steps = self.MAX_STEPS
+        if room_config.is_debate_mode:
+            debate_agent_ids = self._snapshot_debate_agents(agent_registry, trajectory)
+            effective_max_steps = max(self.MAX_STEPS, len(debate_agent_ids) + 1)
+
+        while step_number < effective_max_steps:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
@@ -216,33 +237,79 @@ class SupervisorExecutor:
             # --- Debate mode fast-path (§8.13) ---
             if inflight_entry is not None:
                 action = inflight_entry.action
-            elif room_config.is_debate_mode and step_number == 0:
-                healthy_agents = [a for a in agent_registry if a.is_healthy]
-                if not healthy_agents:
-                    logger.warning(
-                        "supervisor_debate_no_healthy_agents",
-                        extra={
-                            "room_id": room_id,
-                            "trajectory_id": trajectory.trajectory_id,
-                        },
+            elif room_config.is_debate_mode:
+                # Sequential debate: dispatch one agent per step
+                debate_agent_ids = self._snapshot_debate_agents(agent_registry, trajectory)
+
+                remaining_ids = self._get_remaining_debate_agent_ids(debate_agent_ids, trajectory)
+
+                if not remaining_ids:
+                    # All agents dispatched — done
+                    done_entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning="Debate mode complete: all agents have responded",
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
                     )
-                    trajectory.status = TrajectoryStatus.FAILED
+                    trajectory.entries.append(done_entry)
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
-                            status=RunStatus.FAILED, trajectory=trajectory
+                            status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
+                        debate_mode=True,
                     )
+
+                next_id = remaining_ids[0]
+                # Find agent profile
+                next_profile = next((a for a in agent_registry if a.agent_id == next_id), None)
+
+                if next_profile is None or not next_profile.is_healthy:
+                    # Skip unhealthy agent: create FAILED entry, checkpoint, continue
+                    skip_entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=f"Debate: skipping unhealthy agent {next_id}",
+                            targets=[DelegateTarget(agent_id=next_id, agent_name=next_id, task="")],
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                        results=[V2StepResult(
+                            step_number=step_number + 1,
+                            agent_id=next_id,
+                            agent_name=next_id,
+                            task="",
+                            response_text="",
+                            success=False,
+                            status=StepStatus.FAILED,
+                            error_message="Agent unhealthy at dispatch time",
+                        )],
+                    )
+                    trajectory.entries.append(skip_entry)
+                    _checkpoint_msg = await self._checkpoint_trajectory(
+                        user_message_id, trajectory, cached_user_message=_checkpoint_msg,
+                    )
+                    step_number += 1
+                    continue
+
+                # Build debate task with prior responses
+                prior_responses = self._collect_prior_debate_responses(trajectory)
+                task_text = self._build_debate_task(message_text, prior_responses)
+
                 action = SupervisorAction(
                     action=ActionType.DELEGATE,
-                    reasoning="Debate mode: delegating to all agents concurrently",
+                    reasoning=f"Debate mode: dispatching agent {next_profile.agent_name} ({len(prior_responses)} prior responses)",
                     targets=[
                         DelegateTarget(
-                            agent_id=a.agent_id,
-                            agent_name=a.agent_name,
-                            task=message_text,
+                            agent_id=next_profile.agent_id,
+                            agent_name=next_profile.agent_name,
+                            task=task_text,
                         )
-                        for a in healthy_agents
                     ],
                 )
             else:
@@ -637,27 +704,6 @@ class SupervisorExecutor:
                         )
                     except Exception:
                         logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
-
-                    # Debate mode: after all agents respond, done (no synthesis)
-                    if room_config.is_debate_mode and step_number == 0:
-                        done_entry = TrajectoryEntry(
-                            step_number=len(trajectory.entries) + 1,
-                            action=SupervisorAction(
-                                action=ActionType.DONE,
-                                reasoning="Debate mode complete",
-                            ),
-                            started_at=utcnow(),
-                            completed_at=utcnow(),
-                        )
-                        trajectory.entries.append(done_entry)
-                        trajectory.status = TrajectoryStatus.COMPLETED
-                        return self._log_and_return(
-                            room_id, trajectory,
-                            SupervisorRunResult(
-                                status=RunStatus.COMPLETED, trajectory=trajectory
-                            ),
-                            debate_mode=True,
-                        )
 
                 case ActionType.SYNTHESIZE:
                     entry = TrajectoryEntry(
