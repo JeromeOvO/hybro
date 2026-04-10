@@ -191,55 +191,7 @@ class TestCallSupervisorLlmJson:
 
 
 # ---------------------------------------------------------------------------
-# Group 4: analyze_message_routing
-# ---------------------------------------------------------------------------
-
-class TestAnalyzeMessageRouting:
-
-    @pytest.mark.asyncio
-    async def test_returns_routing_dict_with_strategy_and_agents(self, openai_svc):
-        routing_json = json.dumps({
-            "strategy": "parallel",
-            "agent_ids": ["agent-1", "agent-2"],
-            "agent_reasons": {
-                "agent-1": "Expert in research",
-                "agent-2": "Expert in writing",
-            },
-            "reasoning": "Task benefits from parallel expertise",
-            "needs_debate": True,
-        })
-        openai_svc.client.chat.completions.create.return_value = _chat_completion(routing_json)
-
-        agents = [
-            _make_agent("agent-1", "Agent One", "First agent"),
-            _make_agent("agent-2", "Agent Two", "Second agent"),
-        ]
-        result = await openai_svc.analyze_message_routing("Compare Python and Rust", agents)
-
-        assert isinstance(result, dict)
-        assert result["strategy"] == "parallel"
-        assert result["agent_ids"] == ["agent-1", "agent-2"]
-        assert "agent-1" in result["agent_reasons"]
-        assert "reasoning" in result
-        assert result["needs_debate"] is True
-
-    @pytest.mark.asyncio
-    async def test_error_returns_fallback_with_first_agent(self, openai_svc):
-        openai_svc.client.chat.completions.create.side_effect = Exception("timeout")
-
-        agents = [
-            _make_agent("agent-1", "Agent One", "First agent"),
-            _make_agent("agent-2", "Agent Two", "Second agent"),
-        ]
-        result = await openai_svc.analyze_message_routing("some query", agents)
-
-        assert result["strategy"] == "single"
-        assert result["agent_ids"] == ["agent-1"]
-        assert result["needs_debate"] is False
-
-
-# ---------------------------------------------------------------------------
-# Group 5: select_best_agent_for_task
+# Group 4: select_best_agent_for_task
 # ---------------------------------------------------------------------------
 
 class TestSelectBestAgentForTask:

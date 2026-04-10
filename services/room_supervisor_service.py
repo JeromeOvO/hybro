@@ -263,10 +263,9 @@ class RoomSupervisorService:
             if room_config.is_debate_mode:
                 debate_note = (
                     "## Room Mode\n"
-                    "DEBATE MODE is enabled. Delegate the SAME user message to ALL "
-                    "agents concurrently as a single multi-target DELEGATE. Each agent "
-                    "must respond independently. Do NOT synthesize — use DONE after all "
-                    "agents respond."
+                    "DEBATE MODE is enabled. Agents are dispatched sequentially, each "
+                    "building on prior responses. Do NOT synthesize — use DONE after "
+                    "all agents have responded."
                 )
 
             trajectory_summary = self._format_trajectory(trajectory)

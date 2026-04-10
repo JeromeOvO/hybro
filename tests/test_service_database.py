@@ -602,3 +602,293 @@ class TestAccumulateArtifactOnMessage:
         call_args = db_svc.mongo.room_agent_messages_collection.update_one.call_args
         update_doc = call_args[0][1]
         assert update_doc["$set"]["message_content.message_text"] == "nested text"
+
+
+# =============================================================================
+# query_similar_agents_with_scores Tests
+# =============================================================================
+
+
+class TestQuerySimilarAgentsWithScores:
+    """Tests for query_similar_agents_with_scores method."""
+
+    @pytest.mark.asyncio
+    async def test_returns_agents_with_scores(self, db_svc):
+        """Test that scores are preserved and paired correctly with agents."""
+        from models.agent import AgentStatus
+
+        # Setup mocks
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+        # Mock Pinecone results with scores
+        mock_matches = [
+            MagicMock(id="agent-1", score=0.95),
+            MagicMock(id="agent-2", score=0.85),
+            MagicMock(id="agent-3", score=0.75),
+        ]
+        mock_results = MagicMock(matches=mock_matches)
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=mock_results)
+
+        # Mock MongoDB results
+        agent1 = MagicMock()
+        agent1.agent_id = "agent-1"
+        agent1.agent_status = AgentStatus.active
+        agent2 = MagicMock()
+        agent2.agent_id = "agent-2"
+        agent2.agent_status = AgentStatus.active
+        agent3 = MagicMock()
+        agent3.agent_id = "agent-3"
+        agent3.agent_status = AgentStatus.active
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(
+            return_value=[agent1, agent2, agent3]
+        )
+
+        # Call method
+        result = await db_svc.query_similar_agents_with_scores(
+            query_text="test query", count=3
+        )
+
+        # Verify results
+        assert len(result) == 3
+        assert result[0] == (agent1, 0.95)
+        assert result[1] == (agent2, 0.85)
+        assert result[2] == (agent3, 0.75)
+
+    @pytest.mark.asyncio
+    async def test_maintains_pinecone_score_ordering(self, db_svc):
+        """Test that Pinecone score ordering is maintained in results."""
+        from models.agent import AgentStatus
+
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1, 0.2])
+
+        # Pinecone returns in descending score order
+        mock_matches = [
+            {"id": "agent-3", "score": 0.90},
+            {"id": "agent-1", "score": 0.80},
+            {"id": "agent-2", "score": 0.70},
+        ]
+        mock_results = MagicMock(matches=mock_matches)
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=mock_results)
+
+        # MongoDB returns in arbitrary order
+        agent1 = MagicMock()
+        agent1.agent_id = "agent-1"
+        agent1.agent_status = AgentStatus.active
+        agent2 = MagicMock()
+        agent2.agent_id = "agent-2"
+        agent2.agent_status = AgentStatus.active
+        agent3 = MagicMock()
+        agent3.agent_id = "agent-3"
+        agent3.agent_status = AgentStatus.active
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(
+            return_value=[agent1, agent2, agent3]
+        )
+
+        result = await db_svc.query_similar_agents_with_scores("test", count=3)
+
+        # Should be sorted by score descending
+        assert result[0][0].agent_id == "agent-3"
+        assert result[0][1] == 0.90
+        assert result[1][0].agent_id == "agent-1"
+        assert result[1][1] == 0.80
+        assert result[2][0].agent_id == "agent-2"
+        assert result[2][1] == 0.70
+
+    @pytest.mark.asyncio
+    async def test_active_only_filtering(self, db_svc):
+        """Test that active_only filtering works correctly."""
+        from models.agent import AgentStatus
+
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        mock_matches = [
+            {"id": "agent-1", "score": 0.9},
+            {"id": "agent-2", "score": 0.8},
+        ]
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=mock_matches))
+
+        # One active, one inactive
+        agent1 = MagicMock()
+        agent1.agent_id = "agent-1"
+        agent1.agent_status = AgentStatus.active
+        agent2 = MagicMock()
+        agent2.agent_id = "agent-2"
+        agent2.agent_status = AgentStatus.inactive
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(
+            return_value=[agent1, agent2]
+        )
+
+        result = await db_svc.query_similar_agents_with_scores(
+            "test", count=2, active_only=True
+        )
+
+        # Should only return active agent
+        assert len(result) == 1
+        assert result[0][0].agent_id == "agent-1"
+        assert result[0][1] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_excluded_agent_ids_filter(self, db_svc):
+        """Test that excluded_agent_ids filtering works correctly."""
+        from models.agent import AgentStatus
+
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        mock_matches = [{"id": "agent-2", "score": 0.8}]
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=mock_matches))
+
+        agent2 = MagicMock()
+        agent2.agent_id = "agent-2"
+        agent2.agent_status = AgentStatus.active
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(return_value=[agent2])
+
+        result = await db_svc.query_similar_agents_with_scores(
+            "test", count=2, excluded_agent_ids={"agent-1"}
+        )
+
+        # Verify Pinecone was called with $nin filter
+        call_args = db_svc.pinecone.query.call_args
+        filter_arg = call_args[1]["filter"]
+        assert filter_arg == {"agent_id": {"$nin": ["agent-1"]}}
+
+        # Should only return agent-2
+        assert len(result) == 1
+        assert result[0][0].agent_id == "agent-2"
+
+    @pytest.mark.asyncio
+    async def test_empty_results(self, db_svc):
+        """Test handling of empty Pinecone results."""
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        # Empty matches
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=[]))
+
+        result = await db_svc.query_similar_agents_with_scores("test", count=5)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_none_pinecone_results(self, db_svc):
+        """Test handling of None Pinecone results."""
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=None)
+
+        result = await db_svc.query_similar_agents_with_scores("test", count=5)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_top_k_calculation_with_active_only(self, db_svc):
+        """Test that top_k is calculated correctly when active_only=True."""
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=[]))
+
+        await db_svc.query_similar_agents_with_scores(
+            "test", count=5, active_only=True
+        )
+
+        # top_k should be max(5 * 3, 15) = 15
+        call_args = db_svc.pinecone.query.call_args
+        assert call_args[1]["top_k"] == 15
+
+    @pytest.mark.asyncio
+    async def test_top_k_calculation_without_active_only(self, db_svc):
+        """Test that top_k equals count when active_only=False."""
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=[]))
+
+        await db_svc.query_similar_agents_with_scores(
+            "test", count=5, active_only=False
+        )
+
+        # top_k should equal count when active_only=False
+        call_args = db_svc.pinecone.query.call_args
+        assert call_args[1]["top_k"] == 5
+
+    @pytest.mark.asyncio
+    async def test_respects_count_limit(self, db_svc):
+        """Test that results are limited to count parameter."""
+        from models.agent import AgentStatus
+
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        # Pinecone returns 5 matches
+        mock_matches = [
+            {"id": f"agent-{i}", "score": 0.9 - i * 0.1} for i in range(5)
+        ]
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(return_value=MagicMock(matches=mock_matches))
+
+        agents = []
+        for i in range(5):
+            agent = MagicMock()
+            agent.agent_id = f"agent-{i}"
+            agent.agent_status = AgentStatus.active
+            agents.append(agent)
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(return_value=agents)
+
+        # Request only 2
+        result = await db_svc.query_similar_agents_with_scores("test", count=2)
+
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_handles_dict_and_object_matches(self, db_svc):
+        """Test handling of both dict-like and object-like Pinecone matches."""
+        from models.agent import AgentStatus
+
+        db_svc.ai_service = MagicMock()
+        db_svc.ai_service.get_embedding = AsyncMock(return_value=[0.1])
+
+        # Mix of dict and object-like matches
+        mock_dict_match = {"id": "agent-1", "score": 0.9}
+        mock_obj_match = MagicMock()
+        mock_obj_match.id = "agent-2"
+        mock_obj_match.score = 0.8
+
+        db_svc.pinecone = MagicMock()
+        db_svc.pinecone.query = MagicMock(
+            return_value=MagicMock(matches=[mock_dict_match, mock_obj_match])
+        )
+
+        agent1 = MagicMock()
+        agent1.agent_id = "agent-1"
+        agent1.agent_status = AgentStatus.active
+        agent2 = MagicMock()
+        agent2.agent_id = "agent-2"
+        agent2.agent_status = AgentStatus.active
+
+        db_svc.mongo.get_agents_with_conditions = AsyncMock(
+            return_value=[agent1, agent2]
+        )
+
+        result = await db_svc.query_similar_agents_with_scores("test", count=2)
+
+        assert len(result) == 2
+        assert result[0] == (agent1, 0.9)
+        assert result[1] == (agent2, 0.8)

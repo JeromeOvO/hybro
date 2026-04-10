@@ -1,6 +1,7 @@
 import re
 import uuid
 from datetime import timedelta
+from enum import Enum
 from uuid import uuid4
 
 from a2a.types import (
@@ -72,6 +73,29 @@ from services.task_service import task_service
 logger = get_logger(__name__)
 
 
+class DispatchStrategy(str, Enum):
+    """Dispatch strategy resolved after agent selection."""
+    SINGLE = "single"
+    SEQUENTIAL = "sequential"
+    SEQUENTIAL_DEBATE = "sequential_debate"
+    SUPERVISOR = "supervisor"
+
+
+def resolve_strategy(
+    use_supervisor: bool,
+    is_debate_mode: bool,
+    agent_count: int,
+) -> DispatchStrategy:
+    """Resolve dispatch strategy from room flags and agent count."""
+    if use_supervisor:
+        return DispatchStrategy.SUPERVISOR
+    if is_debate_mode:
+        return DispatchStrategy.SEQUENTIAL_DEBATE
+    if agent_count > 1:
+        return DispatchStrategy.SEQUENTIAL
+    return DispatchStrategy.SINGLE
+
+
 def _human_size(size_bytes: int) -> str:
     """Format bytes as human-readable string: 512B, 245KB, 1.2MB."""
     if size_bytes < 1024:
@@ -136,6 +160,23 @@ class RoomServices:
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _derive_required_input_modes(
+        user_message: RoomUserMessage,
+    ) -> list[str] | None:
+        """Return resolved MIME types if the message has attachments, else None.
+
+        The return value signals binary "has attachments" to AgentMatcher's I/O scoring.
+        A non-None list (even empty after dedup) means attachments are present.
+        """
+        attachments = (
+            user_message.message_content.attachments
+            if user_message.message_content else None
+        )
+        if not attachments:
+            return None
+        return [att.mime_type for att in attachments]
 
     def _normalize_room_agent_set(self, room_agent_set: dict | None) -> dict[str, str]:
         """
@@ -1372,7 +1413,12 @@ class RoomServices:
             # Clear it so the frontend shows a generic "Working on your request…" instead.
             # Also clear in multi-agent rooms when the LLM simply passed through the
             # user's message verbatim (no meaningful decomposition).
-            if is_direct_chat or task_content.strip() == original_text.strip():
+            # BUT: never clear task_content in debate mode — debate_service needs it
+            # to inject prior agent responses into the prompt.
+            is_debate = parsed_result.get("message_type", "").startswith("DEBATE")
+            if not is_debate and (
+                is_direct_chat or task_content.strip() == original_text.strip()
+            ):
                 agent_message.task_content = None
 
             agent_messages.append(agent_message)
@@ -1929,9 +1975,11 @@ class RoomServices:
 
         # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
         if target_group == "all_agents":
+            required_modes = self._derive_required_input_modes(user_message)
             selection_result = await self._resolve_explicit_target_scope(
                 room, message_text, target_group, is_debate_mode,
                 sender_user_id=request.user_id,
+                required_input_modes=required_modes,
             )
             if isinstance(selection_result, RoomCenterUserMessageResponse):
                 # all_agents runs after persist — attach the real message_id
@@ -1949,6 +1997,13 @@ class RoomServices:
             return await self._handle_no_agents_fallback(
                 request, user_message, target_group
             )
+
+        # Resolve dispatch strategy and annotate in-memory user_message for
+        # downstream dispatch logic. NOT persisted back to DB (message already written).
+        dispatch_strategy = resolve_strategy(use_supervisor, is_debate_mode, len(selected_agent_set))
+        if user_message.extend_info is None:
+            user_message.extend_info = {}
+        user_message.extend_info["dispatch_strategy"] = dispatch_strategy.value
 
         # Fetch room memory for context assembly.
         # V2 supervisor always needs room_memory for ContextAssemblyService (§11.1).
@@ -2211,6 +2266,7 @@ class RoomServices:
         target_group: str,
         is_debate_mode: bool,
         sender_user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
     ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
         """Resolve selected agents and auto-assign flag based on target_group.
 
@@ -2226,7 +2282,10 @@ class RoomServices:
             try:
                 selection_result = (
                     await agent_selection_service.select_agents_for_message(
-                        message_text, user_id=sender_user_id,
+                        message_text,
+                        user_id=sender_user_id,
+                        required_input_modes=required_input_modes,
+                        is_debate_mode=is_debate_mode,
                     )
                 )
 
@@ -2248,9 +2307,6 @@ class RoomServices:
                         len(selection_result.agents),
                         selection_result.strategy.value,
                     )
-
-                    if selection_result.needs_debate and not is_debate_mode:
-                        logger.info("All Agents mode: Debate mode suggested")
 
                     return selected, True, full_agents
 

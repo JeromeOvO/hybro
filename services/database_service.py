@@ -340,6 +340,98 @@ class DatabaseService:
         # Return only the requested count
         return sorted_agents[:count]
 
+    async def query_similar_agents_with_scores(
+        self,
+        query_text: str,
+        count: int = 5,
+        excluded_agent_ids: set[str] | None = None,
+        active_only: bool = True,
+        user_id: str | None = None,
+    ) -> list[tuple[Agent, float]]:
+        """
+        Find similar agents based on task description embedding and return agents with similarity scores.
+
+        Args:
+            query_text: Text to find similar agents for
+            count: Number of results to return
+            excluded_agent_ids: Optional set of agent IDs to exclude ($nin filter)
+            active_only: If True, only return agents with active status (default: True)
+            user_id: Optional user ID to include private agents
+
+        Returns:
+            list[tuple[Agent, float]]: List of (agent, score) tuples ordered by score descending.
+                                      Scores range from 0.0 to 1.0 (Pinecone similarity).
+        """
+        # Make sure to await the embedding generation
+        embedding = await self.ai_service.get_embedding(query_text)
+
+        # Request more candidates from Pinecone to account for filtering
+        # Use max(count * 3, 15) to give downstream filters more candidates
+        top_k = max(count * 3, 15) if active_only else count
+        pinecone_filter = None
+
+        # Exclude agents with repeated capability issues
+        if excluded_agent_ids:
+            excluded_strs = [str(aid) for aid in excluded_agent_ids]
+            nin_filter = {"agent_id": {"$nin": excluded_strs}}
+            pinecone_filter = nin_filter
+
+        # Query Pinecone for similar agents
+        results = self.pinecone.query(
+            vector=embedding, top_k=top_k, filter=pinecone_filter
+        )
+
+        # Extract agent IDs and build score mapping from Pinecone results
+        matches = getattr(results, "matches", []) if results else []
+        if not matches:
+            return []
+
+        # Build id→score mapping (handle both dict and object-like matches)
+        scores_map: dict[str, float] = {}
+        agent_ids = []
+        for match in matches:
+            agent_id = match["id"] if isinstance(match, dict) else match.id
+            score = (
+                match.get("score", 0.0)
+                if isinstance(match, dict)
+                else getattr(match, "score", 0.0)
+            )
+            agent_ids.append(agent_id)
+            scores_map[agent_id] = score
+
+        if not agent_ids:
+            return []
+
+        # Fetch complete agent information from MongoDB
+        query = {"agent_id": {"$in": agent_ids}}
+
+        # Apply visibility filter
+        visibility_filter = self._build_visibility_filter(user_id)
+        query = {"$and": [query, visibility_filter]}
+
+        agents = await self.mongo.get_agents_with_conditions(query)
+
+        # Filter for active agents only if requested
+        if active_only:
+            agents = [
+                agent for agent in agents if agent.agent_status == AgentStatus.active
+            ]
+            logger.debug(
+                "DatabaseService: Filtered to %d active agents from query results",
+                len(agents),
+            )
+
+        # Pair each agent with its score
+        agent_score_pairs = [
+            (agent, scores_map.get(agent.agent_id, 0.0)) for agent in agents
+        ]
+
+        # Sort by score descending (preserve Pinecone ordering)
+        sorted_pairs = sorted(agent_score_pairs, key=lambda pair: pair[1], reverse=True)
+
+        # Return only the requested count
+        return sorted_pairs[:count]
+
     async def update_agent_agent_card_by_agent_id(
         self, agent_id: str, agent_card: AgentCard
     ) -> bool:

@@ -1294,6 +1294,38 @@ class RoomMessageCenter:
         )
         room_config.room_agent_set = room.room_agent_set or {}
 
+        # --- Debate participant preservation ---
+        # If this is a debate resume, ensure all original debate participants
+        # are present in agent_registry even if they were removed from the room
+        # during the pause. This prevents participant drift.
+        if (
+            trajectory.debate_agent_ids
+            and room_config.is_debate_mode
+        ):
+            current_ids = {a.agent_id for a in agent_registry}
+            missing_ids = [
+                aid for aid in trajectory.debate_agent_ids
+                if aid not in current_ids
+            ]
+            if missing_ids:
+                serialized_registry = continuation.get("agent_registry", [])
+                serialized_map = {
+                    p["agent_id"]: p for p in serialized_registry
+                    if isinstance(p, dict) and "agent_id" in p
+                }
+                for mid in missing_ids:
+                    if mid in serialized_map:
+                        try:
+                            agent_registry.append(AgentProfile(**serialized_map[mid]))
+                        except (TypeError, KeyError):
+                            pass
+                    # If not in serialized registry either, executor will
+                    # create a FAILED entry and skip (unhealthy agent path).
+                logger.info(
+                    "supervisor_v2_resume: merged %d debate participants from continuation",
+                    len(missing_ids),
+                )
+
         # 6. Create/reuse cancellation token
         token = self.sse_manager.get_token(user_message_id)
         if token is None:
@@ -1673,6 +1705,18 @@ class RoomMessageCenter:
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, user_message_id
                 )
+
+        # Unconditionally clear DB processing status for terminal run statuses.
+        # The SSE dedup layer may suppress the second "canceled/completed/failed"
+        # event (correct — no need to re-send to clients), but the DB
+        # processing_message_id can be re-set by mid-loop PROCESSING events
+        # that fire between the cancel endpoint and the executor's cancellation
+        # check.  Clearing here is the authoritative last-write and prevents
+        # a stale "Processing your request..." on page refresh.
+        if result.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED):
+            await self.database_service.clear_room_processing_status_if_matches(
+                room_id, user_message_id
+            )
 
         # Clean up cancellation token for all terminal statuses.
         # PAUSED and AWAITING_INPUT runs keep their token alive — the

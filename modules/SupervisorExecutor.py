@@ -25,6 +25,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.hitl import InterruptKind
+from modules.debate_dispatcher import SequentialDebateDispatcher
 from models.supervisor_v2 import (
     ActionType,
     AgentProfile,
@@ -39,6 +40,7 @@ from models.supervisor_v2 import (
     TrajectoryStatus,
     V2StepResult,
 )
+from config.settings import settings
 from models.processing import ProcessingStatus
 from services.a2a_constants import SSEProcessingStatus
 
@@ -137,28 +139,49 @@ class SupervisorExecutor:
                 for r in entry.results
             )
             if not still_unresolved:
-                done_entry = TrajectoryEntry(
-                    step_number=len(trajectory.entries) + 1,
-                    action=SupervisorAction(
-                        action=ActionType.DONE,
-                        reasoning="Debate mode complete (resumed after push notification)",
-                    ),
-                    started_at=utcnow(),
-                    completed_at=utcnow(),
+                # Check if there are remaining debate agents to dispatch
+                remaining_ids = self._get_remaining_debate_agent_ids(
+                    trajectory.debate_agent_ids or [],
+                    trajectory,
                 )
-                trajectory.entries.append(done_entry)
-                trajectory.status = TrajectoryStatus.COMPLETED
-                return self._log_and_return(
-                    room_id, trajectory,
-                    SupervisorRunResult(
-                        status=RunStatus.COMPLETED, trajectory=trajectory
-                    ),
-                    debate_mode=True,
+                if not remaining_ids:
+                    # All agents done — complete
+                    done_entry = TrajectoryEntry(
+                        step_number=len(trajectory.entries) + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning="Debate mode complete (resumed after push notification)",
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                    )
+                    trajectory.entries.append(done_entry)
+                    trajectory.status = TrajectoryStatus.COMPLETED
+                    return self._log_and_return(
+                        room_id, trajectory,
+                        SupervisorRunResult(
+                            status=RunStatus.COMPLETED, trajectory=trajectory
+                        ),
+                        debate_mode=True,
+                    )
+                # Still have agents to dispatch — fall through to main loop
+                logger.info(
+                    "supervisor_debate_resume_continuing",
+                    extra={
+                        "room_id": room_id,
+                        "remaining_agents": len(remaining_ids),
+                    },
                 )
 
         clarify_fallback_count = 0
 
-        while step_number < self.MAX_STEPS:
+        # Debate mode: expand step budget to accommodate all agents + 1 (for DONE)
+        effective_max_steps = self.MAX_STEPS
+        if room_config.is_debate_mode:
+            debate_agent_ids = self._snapshot_debate_agents(agent_registry, trajectory)
+            effective_max_steps = max(self.MAX_STEPS, len(debate_agent_ids) + 1)
+
+        while step_number < effective_max_steps:
 
             # --- Cancellation check ---
             if token and token.is_cancelled:
@@ -204,44 +227,92 @@ class SupervisorExecutor:
                 )
 
             # SSE: notify frontend of planning stage
-            try:
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                    details="Planning next action...",
-                )
-            except Exception:
-                logger.debug("SSE stage notification failed (planning)", exc_info=True)
+            # Skip if already cancelled — prevents re-setting processing_message_id
+            # in the DB after the cancel endpoint has cleared it.
+            if not (token and token.is_cancelled):
+                try:
+                    await self.sse_manager.send_processing_status(
+                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                        details="Planning next action...",
+                    )
+                except Exception:
+                    logger.debug("SSE stage notification failed (planning)", exc_info=True)
 
             # --- Debate mode fast-path (§8.13) ---
             if inflight_entry is not None:
                 action = inflight_entry.action
-            elif room_config.is_debate_mode and step_number == 0:
-                healthy_agents = [a for a in agent_registry if a.is_healthy]
-                if not healthy_agents:
-                    logger.warning(
-                        "supervisor_debate_no_healthy_agents",
-                        extra={
-                            "room_id": room_id,
-                            "trajectory_id": trajectory.trajectory_id,
-                        },
+            elif room_config.is_debate_mode:
+                # Sequential debate: dispatch one agent per step
+                # (debate_agent_ids already computed before the loop; snapshot is idempotent)
+                remaining_ids = self._get_remaining_debate_agent_ids(debate_agent_ids, trajectory)
+
+                if not remaining_ids:
+                    # All agents dispatched — done
+                    done_entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DONE,
+                            reasoning="Debate mode complete: all agents have responded",
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
                     )
-                    trajectory.status = TrajectoryStatus.FAILED
+                    trajectory.entries.append(done_entry)
+                    trajectory.status = TrajectoryStatus.COMPLETED
                     return self._log_and_return(
                         room_id, trajectory,
                         SupervisorRunResult(
-                            status=RunStatus.FAILED, trajectory=trajectory
+                            status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
+                        debate_mode=True,
                     )
+
+                next_id = remaining_ids[0]
+                # Find agent profile
+                next_profile = next((a for a in agent_registry if a.agent_id == next_id), None)
+
+                if next_profile is None or not next_profile.is_healthy:
+                    # Skip unhealthy agent: create FAILED entry, checkpoint, continue
+                    skip_entry = TrajectoryEntry(
+                        step_number=step_number + 1,
+                        action=SupervisorAction(
+                            action=ActionType.DELEGATE,
+                            reasoning=f"Debate: skipping unhealthy agent {next_id}",
+                            targets=[DelegateTarget(agent_id=next_id, agent_name=next_id, task="")],
+                        ),
+                        started_at=utcnow(),
+                        completed_at=utcnow(),
+                        results=[V2StepResult(
+                            step_number=step_number + 1,
+                            agent_id=next_id,
+                            agent_name=next_id,
+                            task="",
+                            response_text="",
+                            success=False,
+                            status=StepStatus.FAILED,
+                            error_message="Agent unhealthy at dispatch time",
+                        )],
+                    )
+                    trajectory.entries.append(skip_entry)
+                    _checkpoint_msg = await self._checkpoint_trajectory(
+                        user_message_id, trajectory, cached_user_message=_checkpoint_msg,
+                    )
+                    step_number += 1
+                    continue
+
+                # Build debate task with prior responses
+                prior_responses = self._collect_prior_debate_responses(trajectory)
+                task_text = self._build_debate_task(message_text, prior_responses)
+
                 action = SupervisorAction(
                     action=ActionType.DELEGATE,
-                    reasoning="Debate mode: delegating to all agents concurrently",
+                    reasoning=f"Debate mode: dispatching agent {next_profile.agent_name} ({len(prior_responses)} prior responses)",
                     targets=[
                         DelegateTarget(
-                            agent_id=a.agent_id,
-                            agent_name=a.agent_name,
-                            task=message_text,
+                            agent_id=next_profile.agent_id,
+                            agent_name=next_profile.agent_name,
+                            task=task_text,
                         )
-                        for a in healthy_agents
                     ],
                 )
             else:
@@ -457,13 +528,14 @@ class SupervisorExecutor:
                     )
 
                     # SSE: notify frontend of delegation stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details=f"Delegating to {len(action.targets)} agent(s)...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (delegating)", exc_info=True)
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details=f"Delegating to {len(action.targets)} agent(s)...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (delegating)", exc_info=True)
 
                     results = await self._dispatch_targets(
                         targets=action.targets,
@@ -629,34 +701,14 @@ class SupervisorExecutor:
                     )
 
                     # SSE: notify frontend of evaluation stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details="Evaluating agent results...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
-
-                    # Debate mode: after all agents respond, done (no synthesis)
-                    if room_config.is_debate_mode and step_number == 0:
-                        done_entry = TrajectoryEntry(
-                            step_number=len(trajectory.entries) + 1,
-                            action=SupervisorAction(
-                                action=ActionType.DONE,
-                                reasoning="Debate mode complete",
-                            ),
-                            started_at=utcnow(),
-                            completed_at=utcnow(),
-                        )
-                        trajectory.entries.append(done_entry)
-                        trajectory.status = TrajectoryStatus.COMPLETED
-                        return self._log_and_return(
-                            room_id, trajectory,
-                            SupervisorRunResult(
-                                status=RunStatus.COMPLETED, trajectory=trajectory
-                            ),
-                            debate_mode=True,
-                        )
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details="Evaluating agent results...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (evaluating)", exc_info=True)
 
                 case ActionType.SYNTHESIZE:
                     entry = TrajectoryEntry(
@@ -686,13 +738,14 @@ class SupervisorExecutor:
                         )
 
                     # SSE: notify frontend of synthesis stage
-                    try:
-                        await self.sse_manager.send_processing_status(
-                            room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                            details="Synthesizing responses...",
-                        )
-                    except Exception:
-                        logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
+                    if not (token and token.is_cancelled):
+                        try:
+                            await self.sse_manager.send_processing_status(
+                                room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                                details="Synthesizing responses...",
+                            )
+                        except Exception:
+                            logger.debug("SSE stage notification failed (synthesizing)", exc_info=True)
 
                     synth_coro = self.supervisor_service.synthesize_v2(
                         trajectory=trajectory,
@@ -884,6 +937,7 @@ class SupervisorExecutor:
                         SupervisorRunResult(
                             status=RunStatus.COMPLETED, trajectory=trajectory
                         ),
+                        debate_mode=room_config.is_debate_mode,
                     )
 
             step_number += 1
@@ -912,13 +966,14 @@ class SupervisorExecutor:
                     ),
                 )
             # SSE: notify frontend of budget-exhaustion synthesis
-            try:
-                await self.sse_manager.send_processing_status(
-                    room_id, SSEProcessingStatus.PROCESSING, user_message_id,
-                    details="Synthesizing responses...",
-                )
-            except Exception:
-                logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
+            if not (token and token.is_cancelled):
+                try:
+                    await self.sse_manager.send_processing_status(
+                        room_id, SSEProcessingStatus.PROCESSING, user_message_id,
+                        details="Synthesizing responses...",
+                    )
+                except Exception:
+                    logger.debug("SSE stage notification failed (budget synthesis)", exc_info=True)
 
             budget_synth_coro = self.supervisor_service.synthesize_v2(
                 trajectory=trajectory,
@@ -1549,3 +1604,94 @@ class SupervisorExecutor:
             "SupervisorExecutor: Unknown interrupt kind %s", kind
         )
         return False
+
+    @staticmethod
+    def _build_debate_task(
+        original_task: str,
+        prior_responses: list[tuple[str, str]],
+        max_chars: int = 3000,
+    ) -> str:
+        """Build the debate-enriched task for the next agent.
+
+        Delegates to shared SequentialDebateDispatcher.
+
+        Args:
+            original_task: The original user task
+            prior_responses: List of (agent_name, response_text) tuples
+            max_chars: Maximum characters to include from prior response
+
+        Returns:
+            The debate-enriched task prompt, or original_task if no prior responses
+        """
+        if not prior_responses:
+            return original_task
+        last_name, last_text = prior_responses[-1]
+        return SequentialDebateDispatcher.build_debate_prompt(
+            original_task=original_task,
+            prior_agent_name=last_name,
+            prior_response=last_text,
+            max_chars=max_chars,
+        )
+
+    @staticmethod
+    def _snapshot_debate_agents(
+        agent_registry: list[AgentProfile],
+        trajectory: SupervisorTrajectory,
+    ) -> list[str]:
+        """Initialize or restore debate participant snapshot.
+
+        First call: records healthy agent IDs into trajectory.debate_agent_ids,
+        repeated for each debate round (e.g. 2 agents × 2 rounds = [a1, a2, a1, a2]).
+        Subsequent calls: returns the existing snapshot (idempotent).
+        """
+        if trajectory.debate_agent_ids is not None:
+            return trajectory.debate_agent_ids
+        num_rounds = settings.debate_rounds or 1
+        base_ids = [a.agent_id for a in agent_registry if a.is_healthy]
+        ids = base_ids * num_rounds
+        trajectory.debate_agent_ids = ids
+        return ids
+
+    @staticmethod
+    def _get_remaining_debate_agent_ids(
+        debate_agent_ids: list[str],
+        trajectory: SupervisorTrajectory,
+    ) -> list[str]:
+        """Return agent IDs not yet dispatched (preserving original order).
+
+        Supports multi-round debate where the same agent_id appears multiple
+        times in debate_agent_ids (e.g. [a1, a2, a1, a2] for 2 rounds).
+        Counts completed dispatches per agent and removes that many from the list.
+
+        Inflight entries (DELEGATE with empty results) are NOT counted as
+        dispatched — the crash happened before dispatch completed, so the
+        agent needs to be re-dispatched.
+        """
+        from collections import Counter
+        dispatch_counts: Counter[str] = Counter()
+        for entry in trajectory.entries:
+            if entry.action.action == ActionType.DELEGATE and entry.results:
+                for target in entry.action.targets:
+                    dispatch_counts[target.agent_id] += 1
+
+        remaining: list[str] = []
+        consume_counts: Counter[str] = Counter()
+        for aid in debate_agent_ids:
+            consume_counts[aid] += 1
+            if consume_counts[aid] > dispatch_counts.get(aid, 0):
+                remaining.append(aid)
+        return remaining
+
+    @staticmethod
+    def _collect_prior_debate_responses(
+        trajectory: SupervisorTrajectory,
+    ) -> list[tuple[str, str]]:
+        """Collect (agent_name, response_text) pairs in order, successful results only."""
+        responses: list[tuple[str, str]] = []
+        for entry in trajectory.entries:
+            if entry.action.action != ActionType.DELEGATE:
+                continue
+            for result in entry.results:
+                if result.success and result.status == StepStatus.SUCCESS and result.response_text:
+                    responses.append((result.agent_name, result.response_text))
+        return responses
