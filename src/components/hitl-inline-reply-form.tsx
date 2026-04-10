@@ -319,6 +319,12 @@ function HitlAnsweredDisplay({ prompt, answer }: { prompt: string; answer: strin
 
 /* ─── Panel: HITL card attached above chat input ─── */
 
+// TODO(timeline): Wire useHitlTurnContext(current.hitlRequestId) here to display
+// which conversation turn this HITL request belongs to (e.g. "Turn 3 — Agent X").
+// The hook is defined in src/hooks/useRoomMessages.ts. Wiring it requires
+// page-level layout changes (passing the turn label into the header) which is
+// outside timeline component scope. See Task 16 step 2 in the implementation plan.
+
 export interface HitlPanelProps {
   requests: MessageEntity[]
   onSubmit: (requestId: string, userInput: string) => Promise<void>

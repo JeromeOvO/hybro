@@ -28,6 +28,36 @@ function formatTimestamp(iso: string): string {
   }
 }
 
+// ── Inline artifact preview ─────────────────────────────────────
+
+function ArtifactPreview({ event }: { event: TimelineEventViewModel }) {
+  if (event.kind !== 'artifact_emitted' || !event.artifactPayload) return null
+
+  const artifact = event.artifactPayload
+  const firstFilePart = artifact.parts.find(p => p.kind === 'file' && p.file)
+  const isImage = firstFilePart?.file?.mime_type?.startsWith('image/')
+
+  return (
+    <div className="ml-[72px] mt-0.5 mb-1">
+      {isImage && firstFilePart?.file?.uri ? (
+        <div className="w-16 h-16 rounded bg-muted/50 overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={firstFilePart.file.uri}
+            alt={artifact.name || 'Artifact preview'}
+            className="w-full h-full object-cover"
+          />
+        </div>
+      ) : (
+        <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/30 px-2 py-1 rounded">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+          <span className="truncate max-w-[200px]">{artifact.name || 'Artifact'}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Event row ───────────────────────────────────────────────────
 
 interface EventRowProps {
@@ -104,7 +134,10 @@ export function TurnEventTimeline({ events }: TurnEventTimelineProps) {
         {/* Event rows */}
         <div className="space-y-0">
           {displayEvents.map(event => (
-            <EventRow key={event.id} event={event} isNew={event.isLive} />
+            <React.Fragment key={event.id}>
+              <EventRow event={event} isNew={event.isLive} />
+              <ArtifactPreview event={event} />
+            </React.Fragment>
           ))}
         </div>
       </div>

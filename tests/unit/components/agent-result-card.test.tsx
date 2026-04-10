@@ -96,6 +96,31 @@ describe('AgentResultCard', () => {
     expect(screen.getByTestId('truncated-content-body')).toBeTruthy()
   })
 
+  it('renders HITL history Q&A pairs', () => {
+    render(
+      <AgentResultCard
+        result={makeResult({
+          hitlHistory: [
+            { prompt: 'What is the target region?', answer: 'North America' },
+            { prompt: 'Confirm budget?', answer: 'Yes, approved' },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Human-in-the-loop')).toBeTruthy()
+    expect(screen.getByText('Q: What is the target region?')).toBeTruthy()
+    expect(screen.getByText('A: North America')).toBeTruthy()
+    expect(screen.getByText('Q: Confirm budget?')).toBeTruthy()
+    expect(screen.getByText('A: Yes, approved')).toBeTruthy()
+  })
+
+  it('does not render HITL section when no history', () => {
+    render(<AgentResultCard result={makeResult()} />)
+
+    expect(screen.queryByText('Human-in-the-loop')).toBeNull()
+  })
+
   it('renders artifacts list', () => {
     render(
       <AgentResultCard
