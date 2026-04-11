@@ -389,6 +389,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
 
+            // Clean up any stale index entries pointing to this same entity.
+            // When a new HITL request reuses the same message_id, the old
+            // request's index entry must be removed so that a late-arriving
+            // hitl_status_update for the old request can't resolve to this entity.
+            for (const [oldReqId, oldEntityId] of hitlRequestIndex.current) {
+              if (oldEntityId === message_id && oldReqId !== request_id) {
+                hitlRequestIndex.current.delete(oldReqId)
+              }
+            }
+
             let resolvedAgentName = agent_name
             if (!resolvedAgentName && agent_id) {
               resolvedAgentName = await getAgentName(agent_id)
@@ -409,6 +419,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               hitlChoices: choices,
               hitlExpiresAt: expires_at,
               hitlResolved: false,
+              hitlUserAnswer: '',
               hitlGroupId: group_id ?? undefined,
               hitlGroupTotal: group_total ?? undefined,
               hitlGroupIndex: group_index ?? undefined,
