@@ -321,6 +321,12 @@ export default function RoomChatPage() {
     }))
   }, [gm.availableAgents])
 
+  // Agent list for V2 timeline placeholder rows
+  const roomAgentList = useMemo(
+    () => agentList.map(a => ({ agentId: a.id, agentName: a.name })),
+    [agentList],
+  )
+
   // Get room form data for initialization (memoized to avoid unstable references)
   const roomFormData = useMemo(() => getRoomFormData(), [getRoomFormData])
 
@@ -448,6 +454,7 @@ export default function RoomChatPage() {
 
           <main className="flex-1 overflow-hidden">
             <RoomMessages
+              roomAgentList={roomAgentList}
               onQuote={handleQuote}
             />
           </main>

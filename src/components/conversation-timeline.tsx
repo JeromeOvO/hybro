@@ -126,11 +126,14 @@ export class TimelineErrorBoundary extends React.Component<
 
 // ── ConversationTimeline ────────────────────────────────────────
 
+const EMPTY_AGENTS: { agentId: string; agentName: string }[] = []
+
 interface ConversationTimelineProps {
+  roomAgentList?: { agentId: string; agentName: string }[]
   onQuote?: (data: QuoteData) => void
 }
 
-export function ConversationTimeline({ onQuote }: ConversationTimelineProps) {
+export function ConversationTimeline({ roomAgentList, onQuote }: ConversationTimelineProps) {
   const turns = useConversationTurns()
   const hydrated = useMessagesHydrated()
   const messageCount = useMessageCount()
@@ -208,23 +211,30 @@ export function ConversationTimeline({ onQuote }: ConversationTimelineProps) {
           ) : (
             <TimelineErrorBoundary>
               <div className="space-y-6">
-                {turns.map((turn, index) => (
-                  <React.Fragment key={turn.id}>
-                    {index > 0 && (
-                      <div
-                        className="h-px bg-border/50 mx-4"
-                        role="separator"
-                        aria-hidden="true"
+                {turns.map((turn, index) => {
+                  const isLastTurn = index === turns.length - 1
+                  const pendingAgents = isLastTurn && roomAgentList
+                    ? roomAgentList.filter(a => !turn.agentResults.some(r => r.agentId === a.agentId))
+                    : EMPTY_AGENTS
+                  return (
+                    <React.Fragment key={turn.id}>
+                      {index > 0 && (
+                        <div
+                          className="h-px bg-border/50 mx-4"
+                          role="separator"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <MemoizedTurn
+                        turn={turn}
+                        index={index}
+                        isActive={isLastTurn}
+                        pendingAgents={pendingAgents}
+                        onQuote={onQuote}
                       />
-                    )}
-                    <MemoizedTurn
-                      turn={turn}
-                      index={index}
-                      isActive={index === turns.length - 1}
-                      onQuote={onQuote}
-                    />
-                  </React.Fragment>
-                ))}
+                    </React.Fragment>
+                  )
+                })}
               </div>
               <div ref={messagesEndRef} className="h-4" />
             </TimelineErrorBoundary>
