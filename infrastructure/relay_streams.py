@@ -60,6 +60,11 @@ class RelayStreamService:
         self._maxlen = maxlen
         self._heartbeat_ttl = heartbeat_ttl
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether the underlying Redis client is connected."""
+        return self._redis.is_connected
+
     async def push_event(self, hub_id: str, event: dict) -> str | None:
         """Push an event to a hub's relay stream.
 
