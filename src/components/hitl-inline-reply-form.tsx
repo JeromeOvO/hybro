@@ -1,14 +1,9 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Loader2, CheckCircle, XCircle, HelpCircle, ChevronUp, ChevronDown } from 'lucide-react'
+import { Loader2, CheckCircle, XCircle, ChevronUp, ChevronDown, ArrowUp } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import type { HITLPromptType } from '@/lib/types/sse'
 import type { MessageEntity } from '@/stores/message-store'
 import { cn } from '@/lib/utils'
@@ -85,32 +80,32 @@ function HitlQuestionForm({
 
   if (formState === 'submitted') {
     return (
-      <p className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-2 py-2">
-        <CheckCircle className="h-4 w-4" />
+      <p className="text-xs text-muted-foreground flex items-center gap-1.5 py-1">
+        <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
         Reply sent
       </p>
     )
   }
 
   return (
-    <div className="space-y-3">
-      {/* Question text */}
-      <p className="text-sm font-semibold text-foreground leading-relaxed">
+    <div className="space-y-2.5">
+      {/* Prompt text */}
+      <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">
         {prompt}
       </p>
 
-      {/* Text prompt — own input + Continue button (design doc §5.7a Variant A) */}
+      {/* Text prompt — input + submit */}
       {promptType === 'text' && (
-        <div className="flex gap-2 items-start">
+        <div className="flex gap-2 items-center">
           <Input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your reply..."
+            placeholder={`Reply to ${agentName}...`}
             disabled={isSubmitting}
             aria-label={`Reply to ${agentName}`}
             data-testid="hitl-reply-input"
-            className="flex-1 h-9 text-sm"
+            className="flex-1 h-8 text-[13px] bg-transparent border-border/40 focus-visible:ring-1 focus-visible:ring-ring/30"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -118,24 +113,30 @@ function HitlQuestionForm({
               }
             }}
           />
-          <Button
+          <button
+            type="button"
             onClick={() => handleSubmitValue(input)}
             disabled={!canSubmit}
-            size="sm"
-            className="h-9 px-3 shrink-0"
+            className={cn(
+              "shrink-0 h-8 w-8 rounded-lg flex items-center justify-center transition-colors",
+              canSubmit
+                ? "bg-foreground text-background hover:bg-foreground/90"
+                : "bg-muted text-muted-foreground cursor-not-allowed"
+            )}
+            aria-label="Send reply"
           >
             {isSubmitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              'Continue'
+              <ArrowUp className="h-3.5 w-3.5" />
             )}
-          </Button>
+          </button>
         </div>
       )}
 
       {/* Choice prompt */}
       {promptType === 'choice' && choices?.length ? (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {choices.map((choice, i) => {
             const letter = OPTION_LETTERS[i] || String(i + 1)
             const isSelected = selectedChoice === choice
@@ -146,25 +147,25 @@ function HitlQuestionForm({
                 disabled={isSubmitting}
                 onClick={() => setSelectedChoice(choice)}
                 className={cn(
-                  "w-full text-left px-3 py-2 rounded-lg flex items-start gap-3 transition-all duration-150 text-sm",
+                  "w-full text-left px-3 py-1.5 rounded-lg flex items-start gap-2.5 transition-all duration-100 text-[13px]",
                   isSelected
-                    ? "bg-primary/10 dark:bg-primary/15 ring-1 ring-primary/30"
-                    : "hover:bg-muted/60 dark:hover:bg-muted/30",
-                  isSubmitting && "opacity-60 cursor-not-allowed"
+                    ? "bg-foreground/[0.06] dark:bg-foreground/[0.08]"
+                    : "hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.04]",
+                  isSubmitting && "opacity-50 cursor-not-allowed"
                 )}
                 aria-label={`Option ${letter}: ${choice}`}
               >
                 <span className={cn(
-                  "shrink-0 w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center",
+                  "shrink-0 w-5 h-5 rounded text-[10px] font-semibold flex items-center justify-center mt-px",
                   isSelected
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground"
+                    ? "bg-foreground text-background"
+                    : "bg-foreground/10 text-muted-foreground"
                 )}>
                   {letter}
                 </span>
                 <span className={cn(
                   "leading-snug",
-                  isSelected ? "text-foreground font-medium" : "text-foreground/80"
+                  isSelected ? "text-foreground" : "text-foreground/80"
                 )}>
                   {choice}
                 </span>
@@ -174,10 +175,10 @@ function HitlQuestionForm({
 
           {/* Other option */}
           <div className={cn(
-            "px-3 py-2 rounded-lg flex items-start gap-3 transition-all duration-150",
+            "px-3 py-1.5 rounded-lg flex items-start gap-2.5 transition-all duration-100",
             isOtherSelected
-              ? "bg-primary/10 dark:bg-primary/15 ring-1 ring-primary/30"
-              : "hover:bg-muted/60 dark:hover:bg-muted/30"
+              ? "bg-foreground/[0.06] dark:bg-foreground/[0.08]"
+              : "hover:bg-foreground/[0.04] dark:hover:bg-foreground/[0.04]"
           )}>
             <button
               type="button"
@@ -187,10 +188,10 @@ function HitlQuestionForm({
                 setTimeout(() => customChoiceRef.current?.focus(), 0)
               }}
               className={cn(
-                "shrink-0 w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center",
+                "shrink-0 w-5 h-5 rounded text-[10px] font-semibold flex items-center justify-center mt-px",
                 isOtherSelected
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground"
+                  ? "bg-foreground text-background"
+                  : "bg-foreground/10 text-muted-foreground"
               )}
               aria-label="Other option"
             >
@@ -198,8 +199,8 @@ function HitlQuestionForm({
             </button>
             <div className="flex-1 min-w-0 flex items-center gap-2">
               <span className={cn(
-                "text-sm shrink-0",
-                isOtherSelected ? "text-foreground font-medium" : "text-foreground/80"
+                "text-[13px] shrink-0",
+                isOtherSelected ? "text-foreground" : "text-foreground/80"
               )}>
                 Other:
               </span>
@@ -210,36 +211,53 @@ function HitlQuestionForm({
                 onFocus={() => setSelectedChoice(CUSTOM_CHOICE_SENTINEL)}
                 placeholder="Type your own answer..."
                 disabled={isSubmitting}
-                className="flex-1 h-7 text-sm bg-transparent border-0 border-b border-border/40 rounded-none px-0 focus-visible:ring-0 focus-visible:border-primary/50"
+                className="flex-1 h-6 text-[13px] bg-transparent border-0 border-b border-border/30 rounded-none px-0 focus-visible:ring-0 focus-visible:border-foreground/30"
               />
             </div>
+          </div>
+
+          {/* Submit for choice */}
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => handleSubmitValue(submitValue)}
+              disabled={!canSubmit}
+              className={cn(
+                "h-7 px-3 rounded-lg text-xs font-medium transition-colors",
+                canSubmit
+                  ? "bg-foreground text-background hover:bg-foreground/90"
+                  : "bg-muted text-muted-foreground cursor-not-allowed"
+              )}
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                'Submit'
+              )}
+            </button>
           </div>
         </div>
       ) : null}
 
-      {/* Confirmation prompt (design doc §5.7a Variant C) */}
+      {/* Confirmation prompt */}
       {promptType === 'confirmation' && (
-        <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={isSubmitting}
             onClick={() => handleConfirmation('approved')}
             className={cn(
-              "w-full text-left px-3 py-2 rounded-lg flex items-center gap-3 transition-all duration-150 text-sm",
+              "h-8 px-4 rounded-lg flex items-center gap-2 text-[13px] font-medium transition-colors",
               lastAction === 'approved'
-                ? "bg-emerald-500/10 ring-1 ring-emerald-500/30"
-                : "hover:bg-muted/60 dark:hover:bg-muted/30",
-              isSubmitting && "opacity-60 cursor-not-allowed"
+                ? "bg-emerald-600 text-white dark:bg-emerald-500"
+                : "bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600",
+              isSubmitting && "opacity-50 cursor-not-allowed"
             )}
           >
-            <span className={cn(
-              "shrink-0 w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center",
-              lastAction === 'approved' ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground"
-            )}>A</span>
-            <CheckCircle className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Approve</span>
+            <CheckCircle className="h-3.5 w-3.5" />
+            Approve
             {isSubmitting && lastAction === 'approved' && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin ml-auto text-muted-foreground" />
+              <Loader2 className="h-3 w-3 animate-spin" />
             )}
           </button>
           <button
@@ -247,58 +265,34 @@ function HitlQuestionForm({
             disabled={isSubmitting}
             onClick={() => handleConfirmation('rejected')}
             className={cn(
-              "w-full text-left px-3 py-2 rounded-lg flex items-center gap-3 transition-all duration-150 text-sm",
+              "h-8 px-4 rounded-lg flex items-center gap-2 text-[13px] font-medium transition-colors",
               lastAction === 'rejected'
-                ? "bg-red-500/10 ring-1 ring-red-500/30"
-                : "hover:bg-muted/60 dark:hover:bg-muted/30",
-              isSubmitting && "opacity-60 cursor-not-allowed"
+                ? "bg-red-600 text-white dark:bg-red-500"
+                : "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600",
+              isSubmitting && "opacity-50 cursor-not-allowed"
             )}
           >
-            <span className={cn(
-              "shrink-0 w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center",
-              lastAction === 'rejected' ? "bg-red-600 text-white" : "bg-muted text-muted-foreground"
-            )}>B</span>
-            <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
-            <span>Reject</span>
+            <XCircle className="h-3.5 w-3.5" />
+            Reject
             {isSubmitting && lastAction === 'rejected' && (
-              <Loader2 className="h-3.5 w-3.5 animate-spin ml-auto text-muted-foreground" />
+              <Loader2 className="h-3 w-3 animate-spin" />
             )}
           </button>
         </div>
       )}
 
-      {/* Backend error (routing failure, etc.) — user can re-submit to retry */}
+      {/* Error messages */}
       {backendError && !error && (
-        <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5">
-          <XCircle className="h-3.5 w-3.5 shrink-0" />
-          {backendError} — you can retry your response.
+        <p className="text-xs text-red-500 dark:text-red-400 flex items-center gap-1.5">
+          <XCircle className="h-3 w-3 shrink-0" />
+          {backendError} — you can retry.
         </p>
       )}
-
-      {/* Local submit error */}
       {error && (
-        <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5">
-          <XCircle className="h-3.5 w-3.5 shrink-0" />
+        <p className="text-xs text-red-500 dark:text-red-400 flex items-center gap-1.5">
+          <XCircle className="h-3 w-3 shrink-0" />
           {error}
         </p>
-      )}
-
-      {/* Submit button for choice type only (text has inline Send, confirmation has inline buttons) */}
-      {promptType === 'choice' && (
-        <div className="flex items-center justify-end gap-2 pt-1">
-          <Button
-            onClick={() => handleSubmitValue(submitValue)}
-            disabled={!canSubmit}
-            size="sm"
-            className="h-7 text-xs px-3"
-          >
-            {isSubmitting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              'Submit'
-            )}
-          </Button>
-        </div>
       )}
     </div>
   )
@@ -308,16 +302,16 @@ function HitlQuestionForm({
 
 function HitlAnsweredDisplay({ prompt, answer }: { prompt: string; answer: string }) {
   return (
-    <div className="space-y-1.5 py-2">
-      <p className="text-sm font-semibold text-foreground leading-relaxed">{prompt}</p>
-      <p className="text-sm text-muted-foreground bg-muted/40 rounded-md px-3 py-1.5">
-        {answer}
+    <div className="space-y-1 py-1">
+      <p className="text-[13px] text-foreground leading-relaxed">{prompt}</p>
+      <p className="text-[13px] text-foreground/70">
+        &rarr; {answer}
       </p>
     </div>
   )
 }
 
-/* ─── Panel: HITL card attached above chat input ─── */
+/* ─── Panel: HITL block attached above chat input ─── */
 
 export interface HitlPanelProps {
   requests: MessageEntity[]
@@ -362,84 +356,86 @@ export function HitlPanel({ requests, onSubmit }: HitlPanelProps) {
   const isGrouped = current.hitlGroupTotal != null && current.hitlGroupTotal > 1
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className="border-b border-border/30 animate-in fade-in duration-200">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-1.5">
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <HelpCircle className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium text-foreground">
-                {isGrouped ? `Questions (${answeredCount}/${total} answered)` : 'Question'}
-              </span>
-            </button>
-          </CollapsibleTrigger>
+    <div className="animate-in fade-in slide-in-from-bottom-2 duration-200">
+      {/* Header row — agent label + pagination + collapse */}
+      <div className="flex items-center justify-between px-4 pt-2.5 pb-1">
+        <button
+          type="button"
+          onClick={() => setIsOpen(o => !o)}
+          className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <span className="text-xs font-medium text-foreground">
+            {current.senderName}
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            {isGrouped ? `${answeredCount}/${total}` : 'needs input'}
+          </span>
+          {!isOpen && (
+            <ChevronDown className="h-3 w-3 text-muted-foreground/50" />
+          )}
+        </button>
 
+        {isOpen && (
           <div className="flex items-center gap-0.5">
-            {/* Pagination */}
             {total > 1 && (
               <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5"
+                <button
+                  type="button"
+                  className="h-5 w-5 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors disabled:opacity-30"
                   disabled={safeIndex === 0}
                   onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
                   aria-label="Previous question"
                 >
                   <ChevronUp className="h-3 w-3" />
-                </Button>
+                </button>
                 <span className="text-[10px] text-muted-foreground tabular-nums min-w-[3ch] text-center">
                   {safeIndex + 1}/{total}
                 </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5"
+                <button
+                  type="button"
+                  className="h-5 w-5 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors disabled:opacity-30"
                   disabled={safeIndex >= total - 1}
                   onClick={() => setCurrentPage(p => Math.min(total - 1, p + 1))}
                   aria-label="Next question"
                 >
                   <ChevronDown className="h-3 w-3" />
-                </Button>
+                </button>
               </>
             )}
-
-            {/* Collapse toggle */}
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-5 w-5 text-muted-foreground">
-                {isOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              </Button>
-            </CollapsibleTrigger>
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="h-5 w-5 flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors ml-0.5"
+              aria-label="Collapse"
+            >
+              <ChevronUp className="h-3 w-3" />
+            </button>
           </div>
-        </div>
-
-        {/* Body */}
-        <CollapsibleContent>
-          <div className="px-4 pb-3">
-            {isAnswered ? (
-              <HitlAnsweredDisplay
-                prompt={prompt}
-                answer={current.hitlUserAnswer || 'Answered'}
-              />
-            ) : (
-              <HitlQuestionForm
-                key={current.hitlRequestId}
-                requestId={current.hitlRequestId}
-                prompt={prompt}
-                promptType={current.hitlPromptType || 'text'}
-                choices={current.hitlChoices}
-                agentName={current.senderName}
-                onSubmit={handleSubmit}
-                backendError={current.taskError}
-              />
-            )}
-          </div>
-        </CollapsibleContent>
+        )}
       </div>
-    </Collapsible>
+
+      {/* Body */}
+      {isOpen && (
+        <div className="px-4 pb-2.5">
+          {isAnswered ? (
+            <HitlAnsweredDisplay
+              prompt={prompt}
+              answer={current.hitlUserAnswer || 'Answered'}
+            />
+          ) : (
+            <HitlQuestionForm
+              key={current.hitlRequestId}
+              requestId={current.hitlRequestId}
+              prompt={prompt}
+              promptType={current.hitlPromptType || 'text'}
+              choices={current.hitlChoices}
+              agentName={current.senderName}
+              onSubmit={handleSubmit}
+              backendError={current.taskError}
+            />
+          )}
+        </div>
+      )}
+    </div>
   )
 }
