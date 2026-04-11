@@ -16,13 +16,15 @@ function sortPriority(
   if (summarySourceId && result.agentId === summarySourceId) return 0
   // 1: completed with content
   if (result.status === 'completed' && result.content.trim().length > 0) return 1
-  // 2: awaiting input
-  if (result.status === 'awaiting_input') return 2
-  // 3: failed
-  if (result.status === 'failed') return 3
-  // 4: completed but empty
-  if (result.status === 'completed' && result.content.trim().length === 0) return 4
-  return 5
+  // 2: working (streaming or thinking)
+  if (result.status === 'working') return 2
+  // 3: awaiting input
+  if (result.status === 'awaiting_input') return 3
+  // 4: failed
+  if (result.status === 'failed') return 4
+  // 5: completed but empty
+  if (result.status === 'completed' && result.content.trim().length === 0) return 5
+  return 6
 }
 
 // ── Main component ──────────────────────────────────────────────

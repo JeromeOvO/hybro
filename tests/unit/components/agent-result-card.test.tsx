@@ -34,6 +34,14 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
+vi.mock('@/lib/agent-avatar', () => ({
+  getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
+}))
+
+vi.mock('@/lib/system-agents', () => ({
+  isSummarySystemAgent: () => false,
+}))
+
 afterEach(() => {
   cleanup()
 })
@@ -46,6 +54,7 @@ function makeResult(overrides: Partial<AgentResultViewModel> = {}): AgentResultV
     status: 'completed',
     content: 'This is the agent response content.',
     artifacts: [],
+    isSummaryAgent: false,
     ...overrides,
   }
 }
@@ -79,7 +88,7 @@ describe('AgentResultCard', () => {
     const { container } = render(
       <AgentResultCard
         result={makeResult({
-          status: 'awaiting_input',
+          status: 'working',
           content: 'Partial streaming response...',
         })}
       />,
@@ -172,5 +181,68 @@ describe('AgentResultCard', () => {
     render(<AgentResultCard result={makeResult({ content: 'Some text' })} />)
     const md = screen.getByTestId('markdown-content')
     expect(md.className).toContain('text-base')
+  })
+
+  // --- V2: Shimmer status states ---
+
+  it('shows shimmer "Generating" for working status with content', () => {
+    const { container } = render(
+      <AgentResultCard result={makeResult({ status: 'working', content: 'Partial...' })} />,
+    )
+    expect(screen.getByText('Generating')).toBeTruthy()
+    expect(container.querySelector('.shimmer-text')).toBeTruthy()
+    const card = screen.getByTestId('agent-result-msg-1')
+    expect(card.getAttribute('aria-busy')).toBe('true')
+  })
+
+  it('shows shimmer "Thinking" for working status without content', () => {
+    render(
+      <AgentResultCard result={makeResult({ status: 'working', content: '' })} />,
+    )
+    expect(screen.getByText('Thinking')).toBeTruthy()
+  })
+
+  it('shows yellow shimmer "Needs input" for awaiting_input status', () => {
+    const { container } = render(
+      <AgentResultCard result={makeResult({ status: 'awaiting_input', content: '' })} />,
+    )
+    expect(screen.getByText('Needs input')).toBeTruthy()
+    expect(container.querySelector('.shimmer-text-yellow')).toBeTruthy()
+  })
+
+  it('renders HitlCompactCard for resolved HITL', () => {
+    render(
+      <AgentResultCard
+        result={makeResult({
+          hitlResolved: { prompt: 'What range?', answer: 'last 30 days' },
+        })}
+      />,
+    )
+    expect(screen.getByText('What range?')).toBeTruthy()
+    expect(screen.getByText('last 30 days')).toBeTruthy()
+  })
+
+  it('renders HitlQuestionCard for pending HITL', () => {
+    render(
+      <AgentResultCard
+        result={makeResult({
+          status: 'awaiting_input',
+          hitlPending: { prompt: 'What date range?' },
+        })}
+      />,
+    )
+    expect(screen.getByText('What date range?')).toBeTruthy()
+    // "Needs input" appears in both StatusText header and HitlQuestionCard
+    expect(screen.getAllByText('Needs input').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('renders InlineChips when eventCount/durationMs present', () => {
+    render(
+      <AgentResultCard
+        result={makeResult({ eventCount: 4, durationMs: 3200 })}
+      />,
+    )
+    expect(screen.getByText('4 steps')).toBeTruthy()
+    expect(screen.getByText('3.2s')).toBeTruthy()
   })
 })

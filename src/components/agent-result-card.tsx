@@ -6,33 +6,44 @@ import { cn } from '@/lib/utils'
 import { AgentBadge } from './agent-badge'
 import { TruncatedContent } from './truncated-content'
 import { ArtifactList } from './artifact-list'
+import { InlineChips } from './inline-chips'
+import { HitlCompactCard } from './hitl-compact-card'
+import { HitlQuestionCard } from './hitl-question-card'
 import { AlertTriangle } from 'lucide-react'
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
 import type { QuoteData } from './message-bubble'
 
-// ── Status indicator ────────────────────────────────────────────
+// ── Status text ────────────────────────────────────────────────
 
-function StatusIndicator({ status }: { status: AgentResultViewModel['status'] }) {
+function StatusText({ result }: { result: AgentResultViewModel }) {
+  const { status, content } = result
+
   switch (status) {
-    case 'completed':
-      return null
-    case 'failed':
+    case 'working':
       return (
-        <span className="inline-flex items-center gap-1 text-xs text-destructive">
-          <AlertTriangle className="h-3 w-3" />
-          <span>Failed</span>
+        <span className="shimmer-text text-sm text-muted-foreground">
+          {content.length > 0 ? 'Generating' : 'Thinking'}
         </span>
       )
     case 'awaiting_input':
       return (
-        <span className="text-xs text-muted-foreground">
-          Awaiting input...
+        <span className="shimmer-text-yellow text-sm text-muted-foreground">
+          Needs input
         </span>
       )
+    case 'failed':
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-destructive">
+          <AlertTriangle className="h-3 w-3" />
+          Failed
+        </span>
+      )
+    case 'completed':
+      return null
   }
 }
 
-// ── HITL history ────────────────────────────────────────────────
+// ── HITL history (legacy compat) ───────────────────────────────
 
 function HitlHistoryList({ history }: { history: { prompt: string; answer: string }[] }) {
   if (!history || history.length === 0) return null
@@ -58,39 +69,52 @@ interface AgentResultCardProps {
 }
 
 export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
-  const isStreaming = result.status === 'awaiting_input' && result.content.length > 0
+  const isStreaming = result.status === 'working' && result.content.length > 0
   const isEmpty = result.content.trim().length === 0 && result.status === 'completed'
   const isFailed = result.status === 'failed'
+  const isWorking = result.status === 'working'
+  const isAwaitingInput = result.status === 'awaiting_input'
 
   return (
     <div
-      className="py-3"
-      aria-busy={isStreaming ? 'true' : undefined}
+      className="py-3 border-b border-border last:border-b-0"
+      aria-busy={isStreaming || (isWorking && result.content.length === 0) ? 'true' : undefined}
       data-testid={`agent-result-${result.messageId}`}
     >
-      {/* Header: badge + status */}
-      <div className="flex items-center justify-between gap-2 mb-1.5">
-        <AgentBadge
-          agentId={result.agentId}
-          agentName={result.agentName}
-          agentSource={result.agentSource}
-          size="md"
-          showDeletedIndicator={result.status !== 'awaiting_input' && !result.agentId}
-        />
-        <StatusIndicator status={result.status} />
+      {/* Header: badge + status + inline chips */}
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <AgentBadge
+            agentId={result.agentId}
+            agentName={result.agentName}
+            agentSource={result.agentSource}
+            size="md"
+            showDeletedIndicator={result.status !== 'awaiting_input' && result.status !== 'working' && !result.agentId}
+          />
+          <InlineChips eventCount={result.eventCount} durationMs={result.durationMs} />
+        </div>
+        <StatusText result={result} />
       </div>
+
+      {/* Pending HITL question card */}
+      {isAwaitingInput && result.hitlPending && (
+        <HitlQuestionCard prompt={result.hitlPending.prompt} />
+      )}
+
+      {/* Resolved HITL compact card */}
+      {result.hitlResolved && (
+        <HitlCompactCard prompt={result.hitlResolved.prompt} answer={result.hitlResolved.answer} />
+      )}
 
       {/* Content */}
       {isEmpty ? (
-        <p className="text-xs text-muted-foreground italic">
+        <p className="text-xs text-muted-foreground italic mt-1">
           No response content
         </p>
       ) : isFailed ? (
-        <div className="space-y-1">
-          <p className="text-xs text-destructive">{result.content || 'An error occurred'}</p>
-        </div>
-      ) : (
-        <div className={cn(isStreaming && 'shimmer-text')}>
+        <p className="text-xs text-destructive mt-1">{result.content || 'An error occurred'}</p>
+      ) : result.content.length > 0 ? (
+        <div className={cn('mt-2', isStreaming && 'shimmer-text')}>
           <TruncatedContent
             content={result.content}
             maxLines={6}
@@ -98,13 +122,15 @@ export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
             markdownClassName="text-base"
           />
         </div>
-      )}
+      ) : null}
 
       {/* Artifacts */}
       <ArtifactList artifacts={result.artifacts} />
 
-      {/* HITL history */}
-      <HitlHistoryList history={result.hitlHistory ?? []} />
+      {/* HITL history (legacy compat — only renders if no V2 hitlResolved/hitlPending) */}
+      {!result.hitlResolved && !result.hitlPending && (
+        <HitlHistoryList history={result.hitlHistory ?? []} />
+      )}
     </div>
   )
 }
