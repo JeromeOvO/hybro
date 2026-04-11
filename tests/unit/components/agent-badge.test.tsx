@@ -13,6 +13,15 @@ vi.mock('@/lib/agent-colors', () => ({
   }),
 }))
 
+vi.mock('@/lib/agent-avatar', () => ({
+  getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
+}))
+
+vi.mock('@/lib/system-agents', () => ({
+  isSummarySystemAgent: (id: string | undefined) =>
+    ['supervisor_synthesis', 'debate_summary', 'non_debate_summary', 'summary'].includes(id ?? ''),
+}))
+
 vi.mock('@/components/agent-source-badge', () => ({
   AgentSourceBadge: ({ source, className }: { source: string; className?: string }) => (
     <span data-testid={`source-badge-${source}`} className={className} />
@@ -28,12 +37,12 @@ afterEach(() => {
 })
 
 describe('AgentBadge', () => {
-  it('renders agent name with a color dot', () => {
+  it('renders agent name with avatar', () => {
     render(<AgentBadge agentId="agent-1" agentName="Code Agent" />)
     expect(screen.getByText('Code Agent')).toBeTruthy()
-    const dot = screen.getByText('Code Agent').previousElementSibling
-    expect(dot).toBeTruthy()
-    expect(dot?.getAttribute('aria-hidden')).toBe('true')
+    const avatar = screen.getByText('Code Agent').previousElementSibling
+    expect(avatar).toBeTruthy()
+    expect(avatar?.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('renders cloud source badge when agentSource is "cloud"', () => {
@@ -106,5 +115,48 @@ describe('AgentBadge', () => {
     const dot = screen.getByText('Unknown Agent').previousElementSibling
     expect(dot).toBeTruthy()
     expect(dot?.className).toContain('bg-muted-foreground')
+  })
+
+  // --- V2: Avatar rendering ---
+
+  it('renders avatar image when agentId provided', () => {
+    const { container } = render(<AgentBadge agentId="a1" agentName="Bot" size="md" />)
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img!.getAttribute('src')).toContain('seed=a1')
+  })
+
+  it('does NOT render avatar when agentId missing', () => {
+    const { container } = render(<AgentBadge agentName="Bot" showDeletedIndicator={false} />)
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  // --- V2: Summary agent brand treatment ---
+
+  it('renders brand gradient name for summary-family agents', () => {
+    render(<AgentBadge agentId="supervisor_synthesis" agentName="Summary Agent" size="md" />)
+    const name = screen.getByText('Summary from HYBRO AI')
+    expect(name.className).toContain('text-brand-gradient')
+  })
+
+  it('renders HYBRO favicon for summary-family agents', () => {
+    const { container } = render(<AgentBadge agentId="supervisor_synthesis" agentName="Summary Agent" size="md" />)
+    const faviconImg = container.querySelector('img[src="/favicon.svg"]')
+    expect(faviconImg).toBeTruthy()
+  })
+
+  it('does NOT use brand gradient for non-summary agents', () => {
+    render(<AgentBadge agentId="agent-1" agentName="Bot" size="md" />)
+    expect(screen.getByText('Bot').className).not.toContain('text-brand-gradient')
+  })
+
+  it('does NOT use brand gradient for supervisor_hitl', () => {
+    render(<AgentBadge agentId="supervisor_hitl" agentName="Q&A" size="md" />)
+    expect(screen.getByText('Q&A').className).not.toContain('text-brand-gradient')
+  })
+
+  it('does NOT render source badge for summary-family agents', () => {
+    render(<AgentBadge agentId="supervisor_synthesis" agentName="Summary Agent" agentSource="cloud" />)
+    expect(screen.queryByTestId('source-badge-cloud')).toBeNull()
   })
 })
