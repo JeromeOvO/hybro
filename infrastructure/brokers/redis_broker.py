@@ -48,6 +48,7 @@ class RedisBroker:
                 self._url,
                 decode_responses=True,
                 retry_on_timeout=True,
+                max_connections=settings.redis_max_connections,
             )
             await self._client.ping()
             self._pubsub = self._client.pubsub()
@@ -200,6 +201,7 @@ class RedisBroker:
                 self._url,
                 decode_responses=True,
                 retry_on_timeout=True,
+                max_connections=settings.redis_max_connections,
             )
             await self._client.ping()
             self._pubsub = self._client.pubsub()

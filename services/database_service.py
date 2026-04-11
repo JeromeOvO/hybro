@@ -1184,7 +1184,7 @@ class DatabaseService:
         )
 
     async def persist_hitl_user_answer(
-        self, message_id: str, user_answer: str,
+        self, message_id: str, user_answer: str | None,
     ) -> bool:
         """Persist the user's HITL answer on the agent message for DB hydration."""
         try:

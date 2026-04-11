@@ -86,114 +86,169 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager to handle startup and shutdown events."""
-    # await init_db(app)        # gets "app" from FastAPI
-    await mongodb.connect()
-    pinecone_db.connect()
+    """Lifespan context manager to handle startup and shutdown events.
 
-    # Initialize RedisService variables (used later in startup and finally block)
+    Startup is split into two phases with a multi-worker safety guard:
+      Phase 1 — Infrastructure (DB + Redis, no background work)
+      Guard   — Fail if gunicorn without fully connected Redis
+      Phase 2 — Background services (only after guard passes)
+
+    Cleanup is split into two separate paths:
+      Startup failure — tears down only what was opened, does NOT poison
+          singleton state (no set_draining, no stop_change_stream_watcher)
+      Normal shutdown — full teardown including draining and change stream
+    """
     _redis_service = None
     _redis_streams_service = None
+    _leader = None
+    _relay_svc = None
+    _change_stream_started = False
+    _bg_started = False
 
-    await mongodb.create_context_memory_indexes()
-    await mongodb.ensure_agent_indexes()
-    await mongodb.create_capability_issue_indexes()
-
-    # Start the agent health check service
-    await agent_health_service.start()
-
-    # Initialize task tracking indexes for room_agent_messages
-    if settings.webhook_signing_key:
-        await mongodb.create_task_tracking_indexes()
-        # Create HITL indexes
-        from services.database_service import db_service
-        await db_service.ensure_hitl_indexes()
-        # Start stale task checker background job
-        await stale_task_checker.start()
-        # Run cleanup immediately on startup to recover tasks orphaned by a
-        # previous server restart, instead of waiting for the first interval.
-        await stale_task_checker.check_stale_tasks()
-        logger.info(
-            "A2A long-running tasks support initialized (using room_agent_messages)"
-        )
-    else:
-        logger.warning("WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled")
-
-    # Start change stream watcher for message cancellations
     try:
-        await sse_manager.start_change_stream_watcher(
-            mongodb.cancelled_messages_collection
+        # ── Phase 1: Infrastructure (DB + Redis, no background work) ──
+
+        await mongodb.connect()
+        pinecone_db.connect()
+
+        await mongodb.create_context_memory_indexes()
+        await mongodb.ensure_agent_indexes()
+        await mongodb.create_capability_issue_indexes()
+
+        if settings.webhook_signing_key:
+            await mongodb.create_task_tracking_indexes()
+            from services.database_service import db_service
+            await db_service.ensure_hitl_indexes()
+
+        # Init all three Redis subsystems before the guard
+        from infrastructure.brokers import create_event_broker
+        from infrastructure.redis_service import create_redis_service
+
+        _event_broker = create_event_broker()
+        if _event_broker:
+            await sse_manager.start_event_broker(_event_broker)
+            logger.info("Event broker started (cross-instance SSE fan-out enabled)")
+        else:
+            logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
+
+        _redis_service = create_redis_service()
+        if _redis_service:
+            await _redis_service.start()
+            await sse_manager.start_redis_service(_redis_service)
+            logger.info("RedisService started (shared cancellation/dedup enabled)")
+        else:
+            logger.info("RedisService disabled (REDIS_URL not set)")
+
+        _redis_streams_service = create_redis_service()  # separate pool for blocking XREAD
+        if _redis_streams_service:
+            await _redis_streams_service.start()
+
+        # ── Guard: fail if gunicorn without fully connected Redis ──
+        check_multi_worker_safety(
+            is_gunicorn=os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn"),
+            broker_connected=sse_manager.broker_connected,
+            redis_service_connected=bool(
+                _redis_service and _redis_service.is_connected
+            ),
+            relay_streams_connected=bool(
+                _redis_streams_service and _redis_streams_service.is_connected
+            ),
         )
-        logger.info("Message cancellation change stream watcher started")
-    except Exception as e:
-        logger.warning(
-            f"Could not start change stream watcher (may not have replica set): {e}"
+
+        # ── Phase 2: Background services (only after guard passes) ──
+
+        from infrastructure.leader_election import LeaderElection
+        if _redis_service and _redis_service.is_connected:
+            _leader = LeaderElection(
+                _redis_service, instance_id=sse_manager._instance_id
+            )
+            logger.info("Leader election enabled for background jobs")
+
+        agent_health_service.set_leader_election(_leader)
+        stale_task_checker.set_leader_election(_leader)
+        compaction_sweep.set_leader_election(_leader)
+        orphaned_upload_cleaner.set_leader_election(_leader)
+
+        _bg_started = True
+        await agent_health_service.start()
+
+        if settings.webhook_signing_key:
+            await stale_task_checker.start()
+            await stale_task_checker.check_stale_tasks()
+            logger.info(
+                "A2A long-running tasks support initialized (using room_agent_messages)"
+            )
+        else:
+            logger.warning("WEBHOOK_SIGNING_KEY not set - A2A long-running tasks disabled")
+
+        try:
+            await sse_manager.start_change_stream_watcher(
+                mongodb.cancelled_messages_collection
+            )
+            _change_stream_started = True
+            logger.info("Message cancellation change stream watcher started")
+        except Exception as e:
+            logger.warning(
+                f"Could not start change stream watcher (may not have replica set): {e}"
+            )
+
+        await compaction_sweep.start()
+        await orphaned_upload_cleaner.start()
+
+        # Initialize relay service
+        from services.database_service import db_service as _db_svc
+        from services.relay_service import init_relay_service
+        from modules.RoomMessageCenter import room_message_center as _rmc
+        _rmc.set_redis_service(_redis_service)
+        _relay_svc = init_relay_service(
+            mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
+            room_message_center=_rmc,
         )
+        _relay_svc.set_leader_election(_leader)
+        await _relay_svc.start()
+        logger.info("Relay service initialized and heartbeat checker started")
 
-    # Start event broker for cross-instance SSE fan-out
-    from infrastructure.brokers import create_event_broker
-    _event_broker = create_event_broker()
-    if _event_broker:
-        await sse_manager.start_event_broker(_event_broker)
-        logger.info("Event broker started (cross-instance SSE fan-out enabled)")
-    else:
-        logger.info("Event broker disabled (REDIS_URL not set — single-instance mode)")
+        # Attach Redis Streams to relay service
+        if _redis_streams_service and _redis_streams_service.is_connected:
+            from infrastructure.relay_streams import RelayStreamService
+            _relay_streams = RelayStreamService(
+                _redis_streams_service,
+                maxlen=settings.relay_stream_maxlen,
+                heartbeat_ttl=settings.relay_hub_heartbeat_ttl,
+            )
+            _relay_svc.set_stream_service(_relay_streams)
+            logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
 
-    # Start RedisService for shared cancellation/dedup state
-    from infrastructure.redis_service import create_redis_service
-    _redis_service = create_redis_service()
-    if _redis_service:
-        await _redis_service.start()
-        await sse_manager.start_redis_service(_redis_service)
-        logger.info("RedisService started (shared cancellation/dedup enabled)")
-    else:
-        logger.info("RedisService disabled (REDIS_URL not set)")
+    except BaseException:
+        # ── Startup failure: tear down only what was opened ──
+        # DO NOT call set_draining() — poisons _draining flag (sse_services.py:163)
+        # DO NOT call stop_change_stream_watcher() — sets _shutdown_flag (sse_services.py:730)
+        # which start_change_stream_watcher() never resets (sse_services.py:611)
+        if _relay_svc:
+            await _relay_svc.stop()
+        if _redis_streams_service:
+            await _redis_streams_service.stop()
+        if _bg_started:
+            await stale_task_checker.stop()
+            await compaction_sweep.stop()
+            await orphaned_upload_cleaner.stop()
+            await agent_health_service.stop()
+        if _change_stream_started and sse_manager._change_stream_task:
+            sse_manager._change_stream_task.cancel()
+            try:
+                await sse_manager._change_stream_task
+            except asyncio.CancelledError:
+                pass
+        if _leader:
+            await _leader.release_all(ALL_JOB_NAMES)
+        await sse_manager.stop_redis_service()
+        if _redis_service:
+            await _redis_service.stop()
+        await sse_manager.stop_event_broker()
+        await mongodb.close_database_connection()
+        raise
 
-    # Initialize leader election for background jobs
-    from infrastructure.leader_election import LeaderElection
-    _leader: LeaderElection | None = None
-    if _redis_service and _redis_service.is_connected:
-        _leader = LeaderElection(_redis_service, instance_id=sse_manager._instance_id)
-        logger.info("Leader election enabled for background jobs")
-
-    # Attach leader election to all background jobs
-    stale_task_checker.set_leader_election(_leader)
-    compaction_sweep.set_leader_election(_leader)
-    orphaned_upload_cleaner.set_leader_election(_leader)
-    agent_health_service.set_leader_election(_leader)
-
-    # Start background compaction sweep (§6 lossless compaction)
-    await compaction_sweep.start()
-
-    # Start orphaned upload cleaner
-    await orphaned_upload_cleaner.start()
-
-    # Initialize relay service (Phase 2a)
-    from services.database_service import db_service as _db_svc
-    from services.relay_service import init_relay_service
-    from modules.RoomMessageCenter import room_message_center as _rmc
-    _rmc.set_redis_service(_redis_service)
-    _relay_svc = init_relay_service(
-        mongo=mongodb, database_service=_db_svc, sse_manager=sse_manager,
-        room_message_center=_rmc,
-    )
-    _relay_svc.set_leader_election(_leader)
-    await _relay_svc.start()
-    logger.info("Relay service initialized and heartbeat checker started")
-
-    # Start separate RedisService for blocking XREAD (hub relay streams)
-    _redis_streams_service = create_redis_service()  # separate pool
-    if _redis_streams_service:
-        await _redis_streams_service.start()
-        from infrastructure.relay_streams import RelayStreamService
-        _relay_streams = RelayStreamService(
-            _redis_streams_service,
-            maxlen=settings.relay_stream_maxlen,
-            heartbeat_ttl=settings.relay_hub_heartbeat_ttl,
-        )
-        _relay_svc.set_stream_service(_relay_streams)
-        logger.info("Redis Streams relay enabled (separate pool for blocking XREAD)")
-
+    # ── Phase 3: Serve + Normal Shutdown ──
     try:
         yield
     finally:
@@ -206,16 +261,10 @@ async def lifespan(app: FastAPI):
         if _redis_streams_service:
             await _redis_streams_service.stop()
 
-        # Stop the stale task checker
+        # Stop background services
         await stale_task_checker.stop()
-
-        # Stop background compaction sweep
         await compaction_sweep.stop()
-
-        # Stop orphaned upload cleaner
         await orphaned_upload_cleaner.stop()
-
-        # Stop the agent health check service
         await agent_health_service.stop()
 
         # Release any leader locks
@@ -237,7 +286,6 @@ async def lifespan(app: FastAPI):
         # Stop change stream watcher
         await sse_manager.stop_change_stream_watcher()
 
-        # await close_db(app)
         await mongodb.close_database_connection()
 
 
@@ -256,6 +304,46 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key", "Cache-Control", "sentry-trace", "baggage"]
 )
+
+
+# Pure function — trivially testable without lifespan/DB
+def check_multi_worker_safety(
+    *,
+    is_gunicorn: bool,
+    broker_connected: bool,
+    redis_service_connected: bool,
+    relay_streams_connected: bool,
+) -> None:
+    """Refuse to start under gunicorn without fully connected Redis.
+
+    Gunicorn workers are separate processes. Without Redis:
+    - SSE broadcast is local-only (cross-worker delivery fails)
+    - Background jobs run N times (no leader election)
+    - Room locks use asyncio.Lock only (no cross-process coordination)
+    - Relay uses in-memory queues (hub messages lost across workers)
+
+    Raises:
+        RuntimeError: if gunicorn detected and any Redis service is not connected
+    """
+    if not is_gunicorn:
+        return
+
+    problems = []
+    if not broker_connected:
+        problems.append("Event broker (Pub/Sub) not connected")
+    if not redis_service_connected:
+        problems.append("RedisService (key-value) not connected")
+    if not relay_streams_connected:
+        problems.append("Relay streams not connected")
+
+    if problems:
+        raise RuntimeError(
+            "Running under gunicorn requires all Redis services. "
+            "Issues: " + "; ".join(problems) + ". "
+            "Fix: set REDIS_URL to a running Redis instance, "
+            "or use 'uvicorn main:app' for single-process mode."
+        )
+    logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -289,7 +377,11 @@ async def health_check():
         redis_url=settings.redis_url,
         change_stream_connected=sse_manager.change_stream_connected,
         redis_service_connected=sse_manager.redis_connected,
-        relay_streams_available=bool(_relay_svc_health and _relay_svc_health._streams),
+        relay_streams_available=bool(
+            _relay_svc_health
+            and _relay_svc_health._streams
+            and _relay_svc_health._streams.is_connected
+        ),
     )
     return JSONResponse(content=result["body"], status_code=result["status_code"])
 

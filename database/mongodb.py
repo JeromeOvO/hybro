@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from common.utils.time import utcnow
+from config.settings import settings
 from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
 from models.agent_group import AgentGroup
 from models.api_key import APIKey
@@ -51,8 +52,8 @@ class MongoDB:
         try:
             self.client = AsyncIOMotorClient(
                 os.getenv("MONGODB_URL"),
-                maxPoolSize=50,  # Maximum number of connections in the pool
-                minPoolSize=10,  # Minimum number of connections to maintain
+                maxPoolSize=settings.mongodb_max_pool_size,
+                minPoolSize=settings.mongodb_min_pool_size,
                 maxIdleTimeMS=30000,  # Close connections idle for 30 seconds
                 serverSelectionTimeoutMS=5000,  # Timeout for server selection
                 connectTimeoutMS=5000,  # Timeout for initial connection

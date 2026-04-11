@@ -502,6 +502,7 @@ class TestRedisServiceLifecycle:
                 "redis://localhost:6379/0",
                 decode_responses=True,
                 socket_connect_timeout=5,
+                max_connections=50,
             )
             mock_client.ping.assert_called_once()
             assert svc.is_connected is True

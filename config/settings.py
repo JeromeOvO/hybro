@@ -180,6 +180,11 @@ class Settings(BaseSettings):
         5.0  # Drain period for SSE connections during shutdown
     )
 
+    # Connection pool tuning (per-worker; total = workers * value)
+    mongodb_max_pool_size: int = 50
+    mongodb_min_pool_size: int = 10
+    redis_max_connections: int = 50
+
     class Config:
         env_file = ".env"
         extra = "ignore"

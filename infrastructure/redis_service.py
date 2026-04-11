@@ -60,6 +60,7 @@ class RedisService:
                 self._url,
                 decode_responses=True,
                 socket_connect_timeout=5,
+                max_connections=settings.redis_max_connections,
             )
             await self._client.ping()
             logger.info("RedisService connected to %s", self._url)

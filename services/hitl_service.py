@@ -12,6 +12,7 @@ See docs/HITL_DESIGN.md §6 for full design details.
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,47 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 MAX_HITL_ROUNDS = 15
+
+# ---------------------------------------------------------------------------
+# Prompt-type auto-detection for agent-sourced HITL requests
+# ---------------------------------------------------------------------------
+# A2A protocol's input_required state doesn't carry structured prompt types.
+# These heuristics detect confirmation-style prompts so the frontend can
+# render Approve/Reject buttons instead of a text input.
+
+_CONFIRMATION_PATTERNS: list[re.Pattern[str]] = [
+    # Explicit approve/reject CTA
+    re.compile(r"\bapprove\b.*\breject\b", re.IGNORECASE),
+    re.compile(r"\breject\b.*\bapprove\b", re.IGNORECASE),
+    # Confirm/cancel pair
+    re.compile(r"\bconfirm\b.*\bcancel\b", re.IGNORECASE),
+    re.compile(r"\bcancel\b.*\bconfirm\b", re.IGNORECASE),
+    # Yes/No style
+    re.compile(r"\b(yes|no)\b.*\bto\s+(proceed|continue|confirm|cancel)\b", re.IGNORECASE),
+    # "Do you want to proceed/confirm/continue"
+    re.compile(r"\bdo you (want|wish) to (proceed|continue|confirm)\b", re.IGNORECASE),
+    # "Click Approve" / "Click Confirm" (markdown bold optional)
+    re.compile(r"click\s+\*{0,2}(approve|confirm)\*{0,2}", re.IGNORECASE),
+    # "proceed or cancel"
+    re.compile(r"\bproceed\b.*\bcancel\b", re.IGNORECASE),
+]
+
+
+def _infer_prompt_type(prompt_text: str) -> HITLPromptType:
+    """Infer prompt type from agent response text.
+
+    Returns CONFIRMATION when the text matches known confirmation patterns,
+    otherwise TEXT.
+    """
+    for pattern in _CONFIRMATION_PATTERNS:
+        if pattern.search(prompt_text):
+            logger.info(
+                "hitl_prompt_type_inferred: CONFIRMATION (matched %s)",
+                pattern.pattern[:60],
+            )
+            return HITLPromptType.CONFIRMATION
+    logger.info("hitl_prompt_type_inferred: TEXT (no confirmation pattern matched)")
+    return HITLPromptType.TEXT
 
 
 class ContinuationLostError(RuntimeError):
@@ -97,6 +139,11 @@ class HITLService:
 
         Returns the created request, or None if max rounds exceeded.
         """
+        # Auto-detect prompt type for agent-sourced requests when not
+        # explicitly set (supervisor CLARIFY passes its own prompt_type).
+        if source == "agent" and prompt_type == HITLPromptType.TEXT:
+            prompt_type = _infer_prompt_type(prompt)
+
         if continuation_message_id:
             # For grouped questions, only count the first question (group_index == 0)
             # against the per-message round limit.  Questions 1..N in the same group
@@ -145,11 +192,17 @@ class HITLService:
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
+        # Clear any stale hitl_user_answer from a previous HITL round on
+        # the same display message — otherwise page refresh would show the
+        # old answer as if the new request is already answered.
         # Also persist group metadata for multi-question groups so
         # convertApiMessageToIncoming can reconstruct group context.
         if display_message_id:
             await self.database_service.update_agent_message_task_state(
                 display_message_id, "input-required"
+            )
+            await self.database_service.persist_hitl_user_answer(
+                display_message_id, None,
             )
             if group_id is not None:
                 await self.database_service.persist_hitl_group_metadata(
