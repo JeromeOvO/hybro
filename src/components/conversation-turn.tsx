@@ -5,8 +5,9 @@ import React, { useState, useCallback, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { AgentBadge } from './agent-badge'
-import { TurnEventTimeline } from './turn-event-timeline'
 import { AgentResultStack } from './agent-result-stack'
+import { AgentPlaceholderRow } from './agent-placeholder-row'
+import { SupervisorHeader } from './supervisor-header'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { LinkifiedContent } from './markdown-content'
 import { UserAttachmentCard } from './message-bubble'
@@ -86,10 +87,11 @@ interface ConversationTurnProps {
   turn: TurnViewModel
   index: number
   isActive: boolean
+  pendingAgents?: { agentId: string; agentName: string }[]
   onQuote?: (data: QuoteData) => void
 }
 
-function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnProps) {
+function ConversationTurn({ turn, index, isActive, pendingAgents, onQuote }: ConversationTurnProps) {
   const [isExpanded, setIsExpanded] = useState(isActive)
 
   // Auto-collapse when turn stops being active (new user message arrived)
@@ -111,6 +113,9 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
   const promptPreview = turn.userContent
     ? turn.userContent.slice(0, 50) + (turn.userContent.length > 50 ? '...' : '')
     : 'System turn'
+
+  // Supervisor header data
+  const isCompleted = turn.status === 'completed' || turn.status === 'partial' || turn.status === 'failed'
 
   return (
     <article
@@ -166,19 +171,19 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
         </>
       )}
 
-      {/* Expanded state: event rail + summary + agent results */}
+      {/* Expanded state: supervisor header + agent results + placeholders */}
       {showExpanded && (
         <>
-          {/* Event rail */}
-          {turn.events.length > 0 && (
-            <TurnEventTimeline events={turn.events} />
-          )}
-
-          {/* Summary block with extra top margin */}
-          {turn.summary && (
-            <div className="mt-2">
-              <SummaryBlock summary={turn.summary} />
-            </div>
+          {/* Supervisor header (V2) */}
+          {turn.isSupervisorTurn && (
+            <SupervisorHeader
+              isCompleted={isCompleted}
+              stepNumber={turn.supervisorStage?.stepNumber}
+              totalSteps={turn.supervisorStage?.totalSteps}
+              details={turn.supervisorStage?.details}
+              agentCount={turn.agentResults.length}
+              totalDurationMs={turn.agentResults.reduce((sum, r) => sum + (r.durationMs ?? 0), 0) || undefined}
+            />
           )}
 
           {/* Failed warning */}
@@ -192,6 +197,19 @@ function ConversationTurn({ turn, index, isActive, onQuote }: ConversationTurnPr
             summary={turn.summary}
             onQuote={onQuote}
           />
+
+          {/* Placeholder rows for pending agents (active turn only) */}
+          {isActive && pendingAgents && pendingAgents.length > 0 && (
+            <div>
+              {pendingAgents.map((agent) => (
+                <AgentPlaceholderRow
+                  key={agent.agentId}
+                  agentId={agent.agentId}
+                  agentName={agent.agentName}
+                />
+              ))}
+            </div>
+          )}
 
           {/* Collapse button for non-active expanded turns */}
           {!isActive && (

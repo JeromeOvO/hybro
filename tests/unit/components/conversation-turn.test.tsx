@@ -32,6 +32,26 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
+vi.mock('@/lib/agent-avatar', () => ({
+  getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
+}))
+
+vi.mock('@/lib/system-agents', () => ({
+  isSummarySystemAgent: () => false,
+}))
+
+vi.mock('@/components/agent-placeholder-row', () => ({
+  AgentPlaceholderRow: ({ agentId, agentName }: { agentId: string; agentName: string }) => (
+    <div data-testid={`placeholder-${agentId}`}>{agentName} — Thinking</div>
+  ),
+}))
+
+vi.mock('@/components/supervisor-header', () => ({
+  SupervisorHeader: ({ isCompleted }: { isCompleted: boolean }) => (
+    <div data-testid="supervisor-header">{isCompleted ? 'Completed' : 'Processing'}</div>
+  ),
+}))
+
 function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
   return {
     id: 'turn-1',
@@ -51,9 +71,11 @@ function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
         status: 'completed',
         content: 'The weather is sunny and 22C.',
         artifacts: [],
+        isSummaryAgent: false,
       },
     ],
     activeAgentIds: [],
+    isSupervisorTurn: false,
     ...overrides,
   }
 }
@@ -132,7 +154,7 @@ describe('ConversationTurn', () => {
     expect(screen.getByText('One or more agents failed in this turn')).toBeTruthy()
   })
 
-  it('renders summary when present in active turn', () => {
+  it('hides summary when turn is expanded (active)', () => {
     const turn = makeTurn({
       summary: {
         sourceAgentId: 'agent-1',
@@ -144,8 +166,8 @@ describe('ConversationTurn', () => {
 
     render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
 
-    expect(screen.getByText('Clear skies ahead')).toBeTruthy()
-    expect(screen.getByText('Detailed weather summary.')).toBeTruthy()
+    // V2: summary is hidden in expanded state
+    expect(screen.queryByTestId('turn-summary')).toBeNull()
   })
 
   it('renders user prompt with attachments', () => {
@@ -192,7 +214,7 @@ describe('ConversationTurn', () => {
     expect(screen.getByText('report.pdf')).toBeTruthy()
   })
 
-  it('summary badge does NOT show source icon', () => {
+  it('summary badge does NOT show source icon (collapsed state)', () => {
     const turn = makeTurn({
       summary: {
         sourceAgentId: 'agent-1',
@@ -201,12 +223,13 @@ describe('ConversationTurn', () => {
         body: 'Clear skies.',
       },
     })
-    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    // Summary only shows in collapsed (non-active) state
+    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
     const summaryBlock = screen.getByTestId('turn-summary')
     expect(summaryBlock.querySelector('[data-testid^="source-badge-"]')).toBeNull()
   })
 
-  it('summary badge does NOT show (deleted) even without sourceAgentId', () => {
+  it('summary badge does NOT show (deleted) even without sourceAgentId (collapsed state)', () => {
     const turn = makeTurn({
       summary: {
         sourceAgentId: undefined,
@@ -215,8 +238,73 @@ describe('ConversationTurn', () => {
         body: 'A synthesis.',
       },
     })
-    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    // Summary only shows in collapsed (non-active) state
+    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
     expect(screen.getByText('System Summary')).toBeTruthy()
     expect(screen.queryByText(/deleted/i)).toBeNull()
+  })
+
+  // --- V2: Placeholders ---
+
+  it('renders AgentPlaceholderRow for pending agents', () => {
+    const turn = makeTurn({ status: 'active' })
+    const pendingAgents = [
+      { agentId: 'a2', agentName: 'Data Bot' },
+      { agentId: 'a3', agentName: 'Image Bot' },
+    ]
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} pendingAgents={pendingAgents} />)
+    expect(screen.getByTestId('placeholder-a2')).toBeTruthy()
+    expect(screen.getByTestId('placeholder-a3')).toBeTruthy()
+    expect(screen.getByText('Data Bot — Thinking')).toBeTruthy()
+  })
+
+  it('does NOT render placeholders for non-active turns', () => {
+    const turn = makeTurn({ status: 'completed' })
+    const pendingAgents = [{ agentId: 'a2', agentName: 'Bot' }]
+    render(<MemoizedTurn turn={turn} index={0} isActive={false} pendingAgents={pendingAgents} />)
+    expect(screen.queryByTestId('placeholder-a2')).toBeNull()
+  })
+
+  // --- V2: SupervisorHeader ---
+
+  it('renders SupervisorHeader when isSupervisorTurn=true and expanded', () => {
+    const turn = makeTurn({ isSupervisorTurn: true })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.getByTestId('supervisor-header')).toBeTruthy()
+  })
+
+  it('does NOT render SupervisorHeader when isSupervisorTurn=false', () => {
+    const turn = makeTurn({ isSupervisorTurn: false })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.queryByTestId('supervisor-header')).toBeNull()
+  })
+
+  // --- V2: Summary hidden when expanded ---
+
+  it('shows SummaryBlock in collapsed state', () => {
+    const turn = makeTurn({
+      summary: {
+        sourceAgentId: 'agent-1',
+        sourceAgentName: 'Bot',
+        title: 'Summary title',
+        body: 'Summary body',
+      },
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
+    expect(screen.getByTestId('turn-summary')).toBeTruthy()
+  })
+
+  // --- V2: No TurnEventTimeline ---
+
+  it('does NOT render TurnEventTimeline even when events are present', () => {
+    const turn = makeTurn({
+      events: [{
+        id: 'e1', kind: 'agent_started', timestamp: '2026-01-01T00:00:00Z',
+        agentId: 'a1', agentName: 'Bot', label: 'Started', isLive: false, isHiddenInCompact: false,
+      }],
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.queryByTestId('live-dot')).toBeNull()
+    expect(screen.queryByTestId('show-process-toggle')).toBeNull()
   })
 })
