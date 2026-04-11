@@ -1,6 +1,6 @@
 // tests/unit/lib/build-turns.test.ts
 import { describe, it, expect } from 'vitest'
-import { buildTurns } from '@/lib/room-timeline/build-turns'
+import { buildTurns, selectSummary, buildTurnsIncremental } from '@/lib/room-timeline/build-turns'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -226,7 +226,7 @@ describe('buildTurns – core construction', () => {
 
     expect(turns).toHaveLength(1)
     expect(turns[0].agentResults[0].status).toBe('awaiting_input')
-    expect(turns[0].status).toBe('active')
+    expect(turns[0].status).toBe('awaiting_input')
   })
 
   it('10. turn status derives correctly for mixed results', () => {
@@ -264,8 +264,8 @@ describe('buildTurns – core construction', () => {
       })
       const supervisorAgent = makeAgentEntity({
         id: 'a2',
-        agentId: 'agent-sup',
-        senderName: 'Supervisor Agent',
+        agentId: 'supervisor_synthesis',
+        senderName: 'Summary Agent',
         taskStatus: 'completed',
         content: '# Summary\nThe team has completed the analysis.',
       })
@@ -274,7 +274,7 @@ describe('buildTurns – core construction', () => {
       const turns = buildTurns(entities, ['u1', 'a1', 'a2'], [])
 
       expect(turns[0].summary).not.toBeNull()
-      expect(turns[0].summary!.sourceAgentName).toBe('Supervisor Agent')
+      expect(turns[0].summary!.sourceAgentName).toBe('Summary Agent')
       expect(turns[0].summary!.title).toBe('Summary')
       expect(turns[0].summary!.body).toContain('The team has completed the analysis.')
     })
@@ -367,5 +367,277 @@ describe('buildTurns – core construction', () => {
       // Failed agent must not be selected
       expect(turns[0].summary!.sourceAgentName).toBe('Success Agent')
     })
+  })
+})
+
+describe('buildTurns – V2 data model', () => {
+  // ── Ephemeral placeholder filtering ───────────────────────
+
+  it('filters out ephemeral processing placeholder (no agentId)', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const placeholder = makeEntity({
+      id: 'placeholder-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      // no agentId
+      taskStatus: 'working' as any,
+      taskContent: 'Processing your request…',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'agent-real-1',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, placeholder, realAgent]),
+      ['u1', 'placeholder-1', 'a1'],
+      [],
+    )
+    // Placeholder should NOT appear in agent results
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].agentResults[0].agentId).toBe('agent-real-1')
+  })
+
+  // ── 'working' status ──────────────────────────────────────
+
+  it('non-terminal non-interactive taskStatus produces working status', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'submitted' as any,
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].status).toBe('working')
+  })
+
+  it('hitlResolved + isInteractiveState produces working, not awaiting_input', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'input-required' as any,
+      hitlResolved: true,
+      hitlUserAnswer: 'last 30 days',
+      hitlPrompt: 'What date range?',
+      content: 'Analyzing engagement...',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].status).toBe('working')
+    expect(turns[0].agentResults[0].hitlResolved).toEqual({
+      prompt: 'What date range?',
+      answer: 'last 30 days',
+    })
+  })
+
+  it('unresolved interactive state produces awaiting_input with hitlPending', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'input-required' as any,
+      hitlResolved: false,
+      hitlPrompt: 'What date range?',
+      content: '',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].status).toBe('awaiting_input')
+    expect(turns[0].agentResults[0].hitlPending).toEqual({
+      prompt: 'What date range?',
+    })
+  })
+
+  // ── isSupervisorTurn ──────────────────────────────────────
+
+  it('turn with supervisor_synthesis entity has isSupervisorTurn=true', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'supervisor_synthesis',
+      senderName: 'Summary Agent',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].isSupervisorTurn).toBe(true)
+  })
+
+  it('turn with supervisor_hitl entity has isSupervisorTurn=true', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'supervisor_hitl',
+      senderName: 'Question & Answer',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].isSupervisorTurn).toBe(true)
+  })
+
+  it('turn with debate_summary only has isSupervisorTurn=false', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'debate_summary',
+      senderName: 'Summary Agent',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].isSupervisorTurn).toBe(false)
+  })
+
+  it('turn with only real agents has isSupervisorTurn=false', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'agent-real-1',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].isSupervisorTurn).toBe(false)
+  })
+
+  // ── isSummaryAgent ────────────────────────────────────────
+
+  it('supervisor_synthesis agent has isSummaryAgent=true', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'supervisor_synthesis',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].isSummaryAgent).toBe(true)
+  })
+
+  it('supervisor_hitl agent has isSummaryAgent=false', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'supervisor_hitl',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].isSummaryAgent).toBe(false)
+  })
+
+  it('regular agent has isSummaryAgent=false', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
+    expect(turns[0].agentResults[0].isSummaryAgent).toBe(false)
+  })
+})
+
+describe('selectSummary – V2 fix', () => {
+  it('picks supervisor_synthesis over regular agents', () => {
+    const results = [
+      {
+        agentId: 'agent-1',
+        agentName: 'Excel Agent',
+        messageId: 'msg-1',
+        status: 'completed' as const,
+        content: 'Excel result',
+        artifacts: [],
+        isSummaryAgent: false,
+      },
+      {
+        agentId: 'supervisor_synthesis',
+        agentName: 'Summary Agent',
+        messageId: 'msg-2',
+        status: 'completed' as const,
+        content: 'Summary of all results',
+        artifacts: [],
+        isSummaryAgent: true,
+      },
+    ]
+    const summary = selectSummary(results)
+    expect(summary).not.toBeNull()
+    expect(summary!.sourceAgentId).toBe('supervisor_synthesis')
+  })
+
+  it('does NOT pick supervisor_hitl as summary', () => {
+    const results = [
+      {
+        agentId: 'supervisor_hitl',
+        agentName: 'Question & Answer',
+        messageId: 'msg-1',
+        status: 'completed' as const,
+        content: 'HITL question text',
+        artifacts: [],
+        isSummaryAgent: false,
+      },
+      {
+        agentId: 'agent-1',
+        agentName: 'Data Agent',
+        messageId: 'msg-2',
+        status: 'completed' as const,
+        content: 'Data analysis result',
+        artifacts: [],
+        isSummaryAgent: false,
+      },
+    ]
+    const summary = selectSummary(results)
+    expect(summary).not.toBeNull()
+    // Should pick agent-1 (first completed with content), NOT supervisor_hitl
+    expect(summary!.sourceAgentId).toBe('agent-1')
+  })
+})
+
+describe('buildTurnsIncremental – identity regression', () => {
+  it('summary.title change causes turn to lose referential identity', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      agentId: 'supervisor_synthesis',
+      senderName: 'Summary Agent',
+      taskStatus: 'completed',
+      content: '# Original Title\nBody text here',
+    })
+
+    const entities1 = entitiesToMap([user, agent])
+    const prevTurns = buildTurns(entities1, ['u1', 'a1'], [])
+    expect(prevTurns[0].summary?.title).toBe('Original Title')
+
+    // Change the summary title by updating agent content
+    const agent2 = { ...agent, content: '# Updated Title\nBody text here' }
+    const entities2 = entitiesToMap([user, agent2])
+    const nextTurns = buildTurnsIncremental(prevTurns, entities2, ['u1', 'a1'], [])
+
+    expect(nextTurns[0].summary?.title).toBe('Updated Title')
+    // Must be a NEW object — referential identity must break
+    expect(nextTurns[0]).not.toBe(prevTurns[0])
+  })
+
+  it('hitlResolved.prompt change causes turn to lose referential identity', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const agent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:01Z',
+      taskStatus: 'input-required' as any,
+      hitlResolved: true,
+      hitlUserAnswer: 'yes',
+      hitlPrompt: 'Original question?',
+      content: 'Working...',
+    })
+
+    const entities1 = entitiesToMap([user, agent])
+    const prevTurns = buildTurns(entities1, ['u1', 'a1'], [])
+    expect(prevTurns[0].agentResults[0].hitlResolved?.prompt).toBe('Original question?')
+
+    // Change the HITL prompt (e.g. correction from backend)
+    const agent2 = { ...agent, hitlPrompt: 'Corrected question?' }
+    const entities2 = entitiesToMap([user, agent2])
+    const nextTurns = buildTurnsIncremental(prevTurns, entities2, ['u1', 'a1'], [])
+
+    expect(nextTurns[0].agentResults[0].hitlResolved?.prompt).toBe('Corrected question?')
+    // Must be a NEW object — referential identity must break
+    expect(nextTurns[0]).not.toBe(prevTurns[0])
   })
 })

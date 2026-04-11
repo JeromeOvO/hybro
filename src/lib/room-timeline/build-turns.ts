@@ -11,6 +11,7 @@ import type {
 } from './types'
 import { isTerminalState, isFailureState, isInteractiveState } from '@/lib/types/sse'
 import type { TaskState } from '@/lib/types/sse'
+import { isSystemAgent, isSupervisorSystemAgent, isSummarySystemAgent } from '@/lib/system-agents'
 
 // ── Constants ──────────────────────────────────────────────────
 
@@ -164,8 +165,11 @@ function assembleTurn(
   entities: Record<string, MessageEntity>,
   events: readonly RawTimelineEvent[],
 ): TurnViewModel {
+  // Filter events for this turn first (needed by buildAgentResult for inline chips)
+  const turnEvents = filterEventsForTurn(scaffold, entities, events)
+
   const agentResults = scaffold.agentMessageIds
-    .map((id) => buildAgentResult(entities[id]))
+    .map((id) => buildAgentResult(entities[id], turnEvents))
     .filter((r): r is AgentResultViewModel => r !== null)
 
   const status = deriveTurnStatus(agentResults)
@@ -175,8 +179,24 @@ function assembleTurn(
     .map((r) => r.agentId)
     .filter((id): id is string => id !== undefined)
 
-  // Filter events that belong to this turn (by timestamp range)
-  const turnEvents = filterEventsForTurn(scaffold, entities, events)
+  // Supervisor detection (spec §5.2)
+  const isSupervisorTurn = agentResults.some(r => isSupervisorSystemAgent(r.agentId))
+
+  // Supervisor stage from latest entity with step/stage data.
+  let supervisorStage: TurnViewModel['supervisorStage']
+  if (isSupervisorTurn) {
+    for (let i = scaffold.agentMessageIds.length - 1; i >= 0; i--) {
+      const e = entities[scaffold.agentMessageIds[i]]
+      if (e && (e.stepNumber != null || e.totalSteps != null || e.taskContent)) {
+        supervisorStage = {
+          stepNumber: e.stepNumber,
+          totalSteps: e.totalSteps,
+          details: e.taskContent,
+        }
+        break
+      }
+    }
+  }
 
   return {
     id: turnId,
@@ -190,31 +210,70 @@ function assembleTurn(
     summary,
     agentResults,
     activeAgentIds,
+    isSupervisorTurn,
+    supervisorStage,
   }
 }
 
 // ── Agent result construction ──────────────────────────────────
 
-function buildAgentResult(entity: MessageEntity | undefined): AgentResultViewModel | null {
+function buildAgentResult(
+  entity: MessageEntity | undefined,
+  turnEvents: readonly RawTimelineEvent[],
+): AgentResultViewModel | null {
   if (!entity) return null
 
+  // Skip ephemeral processing placeholders (HYBRO AI global placeholder).
+  // These have isEphemeral=true and no agentId. V2 per-agent placeholders
+  // (pendingAgents prop) replace their visual function. Supervisor stage data
+  // is extracted separately in assembleTurn().
+  if (entity.isEphemeral && !entity.agentId) return null
+
+  // Status derivation (spec §5.4)
   let status: AgentResultViewModel['status'] = 'completed'
+  const hitlAnswered = entity.hitlResolved && !!entity.hitlUserAnswer
+
   if (entity.taskStatus && isFailureState(entity.taskStatus)) {
     status = 'failed'
   } else if (entity.taskStatus && isInteractiveState(entity.taskStatus)) {
-    status = 'awaiting_input'
+    if (hitlAnswered) {
+      status = 'working'
+    } else {
+      status = 'awaiting_input'
+    }
   } else if (entity.taskStatus && !isTerminalState(entity.taskStatus)) {
-    // Still processing — treat as awaiting_input for UI purposes
-    status = 'awaiting_input'
+    status = 'working'
   }
 
-  // Build HITL history from resolved prompts
+  // HITL split (spec §5.3)
+  let hitlResolved: AgentResultViewModel['hitlResolved']
+  let hitlPending: AgentResultViewModel['hitlPending']
+  if (entity.hitlPrompt && entity.hitlResolved && entity.hitlUserAnswer) {
+    hitlResolved = { prompt: entity.hitlPrompt, answer: entity.hitlUserAnswer }
+  } else if (entity.hitlPrompt && !entity.hitlResolved) {
+    hitlPending = { prompt: entity.hitlPrompt }
+  }
+
+  // Legacy hitlHistory for backward compat
   const hitlHistory: { prompt: string; answer: string }[] = []
-  if (entity.hitlPrompt && entity.hitlUserAnswer && entity.hitlResolved) {
-    hitlHistory.push({
-      prompt: entity.hitlPrompt,
-      answer: entity.hitlUserAnswer,
-    })
+  if (hitlResolved) {
+    hitlHistory.push(hitlResolved)
+  }
+
+  // Inline chips data (spec §5.5)
+  const agentEvents = entity.agentId
+    ? turnEvents.filter(e => e.agentId === entity.agentId)
+    : []
+  const eventCount = agentEvents.length > 0 ? agentEvents.length : undefined
+
+  let durationMs: number | undefined
+  if (entity.agentId && agentEvents.length > 0) {
+    const started = agentEvents.find(e => e.kind === 'agent_started')
+    const completedEvts = agentEvents.filter(e => e.kind === 'agent_completed')
+    const lastCompleted = completedEvts[completedEvts.length - 1]
+    if (started && lastCompleted) {
+      durationMs = new Date(lastCompleted.timestamp).getTime() - new Date(started.timestamp).getTime()
+    }
   }
 
   return {
@@ -226,6 +285,11 @@ function buildAgentResult(entity: MessageEntity | undefined): AgentResultViewMod
     content: entity.content,
     artifacts: entity.artifacts ?? [],
     hitlHistory: hitlHistory.length > 0 ? hitlHistory : undefined,
+    isSummaryAgent: isSummarySystemAgent(entity.agentId),
+    hitlResolved,
+    hitlPending,
+    eventCount,
+    durationMs,
   }
 }
 
@@ -234,13 +298,15 @@ function buildAgentResult(entity: MessageEntity | undefined): AgentResultViewMod
 function deriveTurnStatus(agentResults: AgentResultViewModel[]): TurnStatus {
   if (agentResults.length === 0) return 'active'
 
-  const hasActive = agentResults.some((r) => r.status === 'awaiting_input')
+  const hasWorking = agentResults.some((r) => r.status === 'working')
+  const hasAwaitingInput = agentResults.some((r) => r.status === 'awaiting_input')
   const hasFailed = agentResults.some((r) => r.status === 'failed')
   const hasCompleted = agentResults.some((r) => r.status === 'completed')
   const allFailed = agentResults.every((r) => r.status === 'failed')
   const allCompleted = agentResults.every((r) => r.status === 'completed')
 
-  if (hasActive) return agentResults.some((r) => r.status === 'awaiting_input' && r.content === '') ? 'active' : 'awaiting_input'
+  if (hasWorking) return 'active'
+  if (hasAwaitingInput) return 'awaiting_input'
   if (allFailed) return 'failed'
   if (allCompleted) return 'completed'
   if (hasCompleted && hasFailed) return 'partial'
@@ -253,7 +319,7 @@ function deriveTurnStatus(agentResults: AgentResultViewModel[]): TurnStatus {
 /**
  * Select the best agent result as the turn summary.
  * Priority:
- *   1. Supervisor result (agentName contains 'supervisor' case-insensitive)
+ *   1. System summary agent (supervisor_synthesis, debate_summary, etc.)
  *   2. Highest-priority completed agent (first completed with content)
  *   3. Latest completed non-empty agent
  * Returns null if no agent has completed with content.
@@ -267,15 +333,19 @@ export function selectSummary(
 
   if (completedWithContent.length === 0) return null
 
-  // Priority 1: supervisor result
-  const supervisor = completedWithContent.find((r) =>
-    r.agentName.toLowerCase().includes('supervisor'),
+  // Priority 1: system summary agent
+  const systemSummary = completedWithContent.find((r) =>
+    isSummarySystemAgent(r.agentId),
   )
-  if (supervisor) return buildSummaryFromResult(supervisor)
+  if (systemSummary) return buildSummaryFromResult(systemSummary)
 
-  // Priority 2: first completed with content (highest priority by ordering)
-  const first = completedWithContent[0]
-  return buildSummaryFromResult(first)
+  // Priority 2: first completed with content, excluding non-summary system agents
+  // (e.g. supervisor_hitl produces HITL question text, not meaningful summaries)
+  const nonSystemOrSummary = completedWithContent.filter(
+    (r) => !isSystemAgent(r.agentId) || isSummarySystemAgent(r.agentId),
+  )
+  const first = nonSystemOrSummary[0] ?? completedWithContent[0]
+  return first ? buildSummaryFromResult(first) : null
 }
 
 function buildSummaryFromResult(
@@ -415,6 +485,12 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
   if (a.agentResults.length !== b.agentResults.length) return false
   if (a.userContent !== b.userContent) return false
 
+  // V2 TurnViewModel fields
+  if (a.isSupervisorTurn !== b.isSupervisorTurn) return false
+  if (a.supervisorStage?.stepNumber !== b.supervisorStage?.stepNumber) return false
+  if (a.supervisorStage?.totalSteps !== b.supervisorStage?.totalSteps) return false
+  if (a.supervisorStage?.details !== b.supervisorStage?.details) return false
+
   // Check that all agent results match (including artifacts)
   for (let i = 0; i < a.agentResults.length; i++) {
     if (a.agentResults[i].messageId !== b.agentResults[i].messageId) return false
@@ -426,10 +502,21 @@ function turnsAreEqual(a: TurnViewModel, b: TurnViewModel): boolean {
       if (a.agentResults[i].artifacts[j].isStreaming !== b.agentResults[i].artifacts[j].isStreaming) return false
       if (a.agentResults[i].artifacts[j].parts.length !== b.agentResults[i].artifacts[j].parts.length) return false
     }
+    // V2 AgentResultViewModel fields
+    if (a.agentResults[i].hitlResolved?.prompt !== b.agentResults[i].hitlResolved?.prompt) return false
+    if (a.agentResults[i].hitlResolved?.answer !== b.agentResults[i].hitlResolved?.answer) return false
+    if (a.agentResults[i].hitlPending?.prompt !== b.agentResults[i].hitlPending?.prompt) return false
+    if (a.agentResults[i].eventCount !== b.agentResults[i].eventCount) return false
+    if (a.agentResults[i].durationMs !== b.agentResults[i].durationMs) return false
   }
 
   // Check events count changed
   if (a.events.length !== b.events.length) return false
+
+  // Summary equality
+  if ((a.summary?.sourceAgentId ?? null) !== (b.summary?.sourceAgentId ?? null)) return false
+  if ((a.summary?.title ?? '') !== (b.summary?.title ?? '')) return false
+  if ((a.summary?.body ?? '') !== (b.summary?.body ?? '')) return false
 
   return true
 }
