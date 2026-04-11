@@ -24,6 +24,15 @@ export interface TurnViewModel {
   summary: TurnSummaryViewModel | null
   agentResults: AgentResultViewModel[]
   activeAgentIds: string[]
+  /** Whether this turn was dispatched via Supervisor orchestration.
+   *  Derived from presence of supervisor_hitl / supervisor_synthesis entities. */
+  isSupervisorTurn: boolean
+  /** Supervisor stage details (active turns only). */
+  supervisorStage?: {
+    stepNumber?: number
+    totalSteps?: number
+    details?: string
+  }
 }
 
 // ── Timeline event types ───────────────────────────────────────
@@ -69,10 +78,20 @@ export interface AgentResultViewModel {
   agentName: string
   agentSource?: 'hub' | 'cloud'
   messageId: string
-  status: 'completed' | 'failed' | 'awaiting_input'
+  status: 'completed' | 'failed' | 'awaiting_input' | 'working'
   content: string
   artifacts: ArtifactData[]
   hitlHistory?: { prompt: string; answer: string }[]
+  /** Whether this agent is a summary-family system agent. */
+  isSummaryAgent: boolean
+  /** Resolved HITL: prompt and user answer. */
+  hitlResolved?: { prompt: string; answer: string }
+  /** Active (unanswered) HITL prompt. */
+  hitlPending?: { prompt: string }
+  /** Event count for inline chips. */
+  eventCount?: number
+  /** Duration in ms for inline chips. */
+  durationMs?: number
 }
 
 // ── Event log input (raw event from SSE handler) ───────────────

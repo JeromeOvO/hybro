@@ -38,8 +38,28 @@ export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
   },
 }
 
+/** Supervisor-specific system agent IDs. Used for isSupervisorTurn derivation. */
+const SUPERVISOR_SYSTEM_AGENT_IDS = new Set(['supervisor_hitl', 'supervisor_synthesis'])
+
+/** Summary-family system agent IDs. Used for HYBRO AI visual treatment.
+ *  Excludes supervisor_hitl which is NOT a summary agent. */
+const SUMMARY_SYSTEM_AGENT_IDS = new Set([
+  'supervisor_synthesis',
+  'debate_summary',
+  'non_debate_summary',
+  'summary',
+])
+
 export function isSystemAgent(agentId: string | undefined): boolean {
   return !!agentId && agentId in SYSTEM_AGENTS
+}
+
+export function isSupervisorSystemAgent(agentId: string | undefined): boolean {
+  return !!agentId && SUPERVISOR_SYSTEM_AGENT_IDS.has(agentId)
+}
+
+export function isSummarySystemAgent(agentId: string | undefined): boolean {
+  return !!agentId && SUMMARY_SYSTEM_AGENT_IDS.has(agentId)
 }
 
 export function getSystemAgentName(agentId: string): string | undefined {
