@@ -19,32 +19,35 @@ export function useTurnHydration(
     store.reset()
 
     async function hydrate() {
-      const journals = await fetchRecentTurns(roomId, getToken)
+      // Fetch both sources in parallel. Either may fail independently.
+      const [journals, legacyResponse] = await Promise.all([
+        fetchRecentTurns(roomId, getToken).catch(() => null),
+        inquiryRoomMessagesByRoomId(roomId, getToken).catch(() => null),
+      ])
       if (canceled) return
 
+      // Phase 1: Inject turn journals (authoritative source)
+      const journalTurnIds = new Set<string>()
       if (journals && journals.length > 0) {
         for (const journal of journals) {
+          journalTurnIds.add(journal.turn_id)
           for (const wireEvent of journal.events) {
             const event = camelCaseEvent(wireEvent as Record<string, unknown>)
             store.append(event.turnId, event)
           }
         }
-        return
       }
 
-      try {
-        const response = await inquiryRoomMessagesByRoomId(roomId, getToken)
-        if (canceled) return
-        if (!response.success || !response.message_list?.length) return
-
-        const pseudoTurns = convertLegacyMessagesToTurnEvents(response.message_list)
+      // Phase 2: Convert legacy messages, but skip any turns already covered
+      // by journal data. Legacy turns use the user message_id as turnId.
+      if (legacyResponse?.success && legacyResponse.message_list?.length) {
+        const pseudoTurns = convertLegacyMessagesToTurnEvents(legacyResponse.message_list)
         for (const turn of pseudoTurns) {
+          if (journalTurnIds.has(turn.turnId)) continue
           for (const event of turn.events) {
             store.append(event.turnId, event)
           }
         }
-      } catch {
-        // Legacy fallback failed — store stays empty, SSE will populate on next events
       }
     }
 

@@ -1,4 +1,6 @@
-import type { TurnEvent } from '@/stores/turn-event-store/types'
+import type { TurnEvent, ArtifactData } from '@/stores/turn-event-store/types'
+import type { ArtifactPart } from '@/stores/message-store/types'
+import type { AttachmentData } from '@/lib/types/attachments'
 import type { RoomMessage } from '@/lib/types/response'
 
 export interface TurnPseudoEvents {
@@ -7,6 +9,62 @@ export interface TurnPseudoEvents {
 }
 
 function makeEventId(): string { return `legacy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` }
+
+/** Extract user-facing attachments from a message's content. */
+function extractAttachments(msg: RoomMessage): AttachmentData[] {
+  const raw = msg.message_content?.attachments
+  if (!Array.isArray(raw) || raw.length === 0) return []
+  return raw
+    .filter((att: Record<string, unknown>) => typeof att.file_id === 'string' && typeof att.mime_type === 'string')
+    .map((att: Record<string, unknown>) => ({
+      fileId: att.file_id as string,
+      fileUrl: (att.file_url as string) || undefined,
+      mimeType: att.mime_type as string,
+      fileName: (att.file_name as string) || 'unknown',
+      sizeBytes: (att.size_bytes as number) || 0,
+    }))
+}
+
+/** Extract multimodal artifacts from an agent message's task. */
+function extractArtifacts(msg: RoomMessage): ArtifactData[] {
+  const messageTask = msg.message_content?.message_task
+  const rawArtifacts = (messageTask as Record<string, unknown> | null | undefined)?.artifacts as Record<string, unknown>[] | undefined
+  if (!Array.isArray(rawArtifacts) || rawArtifacts.length === 0) return []
+
+  return rawArtifacts
+    .map((a) => {
+      const rawParts = a.parts as Record<string, unknown>[] | undefined
+      if (!Array.isArray(rawParts) || rawParts.length === 0) return null
+
+      const parts = rawParts
+        .map((p) => {
+          const root = (p.root ?? p) as Record<string, unknown>
+          const kind = (root.kind as string) || 'text'
+          if (kind === 'text') return null
+          const fileData = root.file as Record<string, unknown> | undefined
+          return {
+            kind: kind as ArtifactPart['kind'],
+            text: root.text as string | undefined,
+            file: fileData ? {
+              uri: fileData.uri as string | undefined,
+              bytes: fileData.bytes as string | undefined,
+              mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
+              name: fileData.name as string | undefined,
+            } : undefined,
+            data: root.data as Record<string, unknown> | undefined,
+          }
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null) as ArtifactPart[]
+
+      if (parts.length === 0) return null
+      return {
+        artifactId: (a.artifactId || a.artifact_id || `legacy-${msg.message_id}`) as string,
+        name: a.name as string | undefined,
+        parts,
+      }
+    })
+    .filter((a): a is NonNullable<typeof a> => a !== null) as ArtifactData[]
+}
 
 export function convertLegacyMessagesToTurnEvents(
   apiMessages: RoomMessage[],
@@ -44,7 +102,7 @@ export function convertLegacyMessagesToTurnEvents(
       type: 'turn_started',
       userInput: {
         text: userMsg.message_content?.message_text ?? '',
-        attachments: [],
+        attachments: extractAttachments(userMsg),
       },
     } as TurnEvent)
 
@@ -72,7 +130,7 @@ export function convertLegacyMessagesToTurnEvents(
         type: 'slot_snapshot',
         slotId: agentMsg.message_id,
         content: agentMsg.message_content?.message_text ?? '',
-        artifacts: [],
+        artifacts: extractArtifacts(agentMsg),
       } as TurnEvent)
 
       events.push({

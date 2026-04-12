@@ -8,6 +8,11 @@ import { useMessageStore } from '@/stores/message-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 
+export interface OptimisticTurnInput {
+  text: string
+  attachments: Array<{ fileId: string; fileUrl?: string; mimeType: string; fileName: string; sizeBytes: number }>
+}
+
 export function useSendMessage(
   roomId: string,
   userId: string | undefined,
@@ -20,6 +25,7 @@ export function useSendMessage(
   setSending: (v: boolean) => void,
   setCancelling: (v: boolean) => void,
   reconcileWithDb: (roomId: string) => Promise<void>,
+  onOptimisticTurn?: (clientRequestId: string, input: OptimisticTurnInput) => void,
 ) {
   const sendUserMessage = useCallback(async (
     userInput: string,
@@ -73,6 +79,20 @@ export function useSendMessage(
       timestamp: new Date(Date.now() + 1).toISOString(),
       isEphemeral: true,
     }, 'optimistic')
+
+    // Turn-based timeline: create optimistic turn so TurnList shows it immediately
+    if (onOptimisticTurn) {
+      onOptimisticTurn(clientRequestId, {
+        text: userInput,
+        attachments: pendingAttachments?.map(att => ({
+          fileId: att.id,
+          fileUrl: att.previewUrl || undefined,
+          mimeType: att.file.type,
+          fileName: att.file.name,
+          sizeBytes: att.file.size,
+        })) ?? [],
+      })
+    }
 
     try {
       setSending(true)  // Show spinner during message creation & parsing
@@ -243,7 +263,7 @@ export function useSendMessage(
       // to prevent a race window where the user could double-send between
       // lifecycle.setProcessing(true) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onOptimisticTurn])
 
   return { sendUserMessage }
 }
