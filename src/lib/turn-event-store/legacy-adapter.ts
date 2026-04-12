@@ -6,14 +6,13 @@ export interface TurnPseudoEvents {
   events: TurnEvent[]
 }
 
-let seqCounter = 0
-function nextSeq(): number { return ++seqCounter }
 function makeEventId(): string { return `legacy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` }
 
 export function convertLegacyMessagesToTurnEvents(
   apiMessages: RoomMessage[],
 ): TurnPseudoEvents[] {
-  seqCounter = 0
+  let seqCounter = 0
+  function nextSeq(): number { return ++seqCounter }
 
   const userMessages = apiMessages.filter(m => m.message_type === 'user')
   const agentMessages = apiMessages.filter(m => m.message_type === 'agent')

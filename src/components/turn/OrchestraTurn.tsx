@@ -3,7 +3,7 @@
 import React from 'react'
 import type { TurnEventLog } from '@/stores/turn-event-store/event-log'
 import { useTurnProjection } from '@/hooks/turn/useTurnProjection'
-import { contentSlotsReducer } from '@/stores/turn-event-store/projections/content-slots'
+import { contentSlotsReducer, getVisibleSlots } from '@/stores/turn-event-store/projections/content-slots'
 import { railReducer } from '@/stores/turn-event-store/projections/rail'
 import { UserInputBlock } from './UserInputBlock'
 import { ContentSlotRenderer } from './ContentSlotRenderer'
@@ -14,7 +14,8 @@ interface OrchestraTurnProps {
 }
 
 export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog }: OrchestraTurnProps) {
-  const contentSlots = useTurnProjection(turnLog, contentSlotsReducer)
+  const rawSlots = useTurnProjection(turnLog, contentSlotsReducer)
+  const contentSlots = getVisibleSlots(rawSlots)
   const railItems = useTurnProjection(turnLog, railReducer)
   const userInput = turnLog.getUserInput()
 

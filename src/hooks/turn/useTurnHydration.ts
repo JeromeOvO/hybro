@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { fetchRecentTurns } from '@/lib/api/turns'
 import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
 import { convertLegacyMessagesToTurnEvents } from '@/lib/turn-event-store/legacy-adapter'
@@ -11,17 +11,16 @@ export function useTurnHydration(
   roomId: string,
   getToken?: () => Promise<string | null>,
 ) {
-  const hydrationRef = useRef<string | null>(null)
-
   useEffect(() => {
-    if (!roomId || hydrationRef.current === roomId) return
-    hydrationRef.current = roomId
+    if (!roomId) return
+
+    let canceled = false
+    const store = useTurnEventStore.getState()
+    store.reset()
 
     async function hydrate() {
-      const store = useTurnEventStore.getState()
-      store.reset()
-
       const journals = await fetchRecentTurns(roomId, getToken)
+      if (canceled) return
 
       if (journals && journals.length > 0) {
         for (const journal of journals) {
@@ -30,16 +29,13 @@ export function useTurnHydration(
             store.append(event.turnId, event)
           }
         }
-        console.log(`[TurnHydration] Hydrated ${journals.length} turns from /turns/recent`)
         return
       }
 
       try {
         const response = await inquiryRoomMessagesByRoomId(roomId, getToken)
-        if (!response.success || !response.message_list?.length) {
-          console.log('[TurnHydration] No messages to hydrate')
-          return
-        }
+        if (canceled) return
+        if (!response.success || !response.message_list?.length) return
 
         const pseudoTurns = convertLegacyMessagesToTurnEvents(response.message_list)
         for (const turn of pseudoTurns) {
@@ -47,12 +43,12 @@ export function useTurnHydration(
             store.append(event.turnId, event)
           }
         }
-        console.log(`[TurnHydration] Hydrated ${pseudoTurns.length} turns via legacy adapter`)
-      } catch (err) {
-        console.warn('[TurnHydration] Legacy fallback failed:', err)
+      } catch {
+        // Legacy fallback failed — store stays empty, SSE will populate on next events
       }
     }
 
     hydrate()
+    return () => { canceled = true }
   }, [roomId, getToken])
 }
