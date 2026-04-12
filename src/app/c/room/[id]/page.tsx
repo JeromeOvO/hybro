@@ -99,6 +99,18 @@ export default function RoomChatPage() {
   const roomFlags = useRoomFlags(roomId)
   const turnBasedTimeline = roomFlags.turnBasedTimeline
 
+  // Detect ?newui=1 URL parameter to activate turn-based timeline
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const newUi = params.get('newui')
+    if (newUi === '1') {
+      useRoomUiStore.getState().setTurnBasedTimeline(roomId, true)
+    } else if (newUi === '0') {
+      useRoomUiStore.getState().setTurnBasedTimeline(roomId, false)
+    }
+  }, [roomId])
+
   // Group management (extracted hook)
   const gm = useGroupManagement({
     userId: user?.id,
