@@ -18,6 +18,7 @@ export interface RoomFlags {
   sseEnabled: boolean
   sseConnected: boolean
   sseError: string | null
+  turnBasedTimeline: boolean
 }
 
 export const DEFAULT_ROOM_FLAGS: RoomFlags = {
@@ -28,6 +29,7 @@ export const DEFAULT_ROOM_FLAGS: RoomFlags = {
   sseEnabled: true,
   sseConnected: false,
   sseError: null,
+  turnBasedTimeline: false,
 }
 
 function patchRoom(rooms: Record<RoomId, RoomFlags>, roomId: RoomId, patch: Partial<RoomFlags>): Record<RoomId, RoomFlags> {
@@ -47,6 +49,7 @@ interface RoomUiState {
   setSseEnabled: (roomId: RoomId, v: boolean) => void
   setSseConnected: (roomId: RoomId, v: boolean) => void
   setSseError: (roomId: RoomId, v: string | null) => void
+  setTurnBasedTimeline: (roomId: RoomId, v: boolean) => void
 
   // Non-reactive getter for getState() callers
   getRoomFlags: (roomId: RoomId) => RoomFlags
@@ -71,6 +74,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   setSseEnabled: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseEnabled: v }) })),
   setSseConnected: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseConnected: v }) })),
   setSseError: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseError: v }) })),
+  setTurnBasedTimeline: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { turnBasedTimeline: v }) })),
 
   getRoomFlags: (roomId) => get().rooms[roomId] ?? DEFAULT_ROOM_FLAGS,
 
