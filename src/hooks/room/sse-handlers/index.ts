@@ -531,6 +531,17 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         break
       }
 
+      case 'turn_event': {
+        const turnEventData = (sseMessage.data?.turn_event ?? sseMessage.data) as Record<string, unknown> | undefined
+        if (turnEventData?.turn_id && turnEventData?.type) {
+          const { camelCaseEvent } = await import('@/hooks/turn/useSSEToEventLog')
+          const { useTurnEventStore } = await import('@/stores/turn-event-store')
+          const event = camelCaseEvent(turnEventData)
+          useTurnEventStore.getState().append(event.turnId, event)
+        }
+        break
+      }
+
       default:
         console.log('❓ Unknown SSE message type:', sseMessage.type)
     }
