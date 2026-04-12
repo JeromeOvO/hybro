@@ -36,8 +36,12 @@ vi.mock('@/lib/agent-avatar', () => ({
   getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
 }))
 
+// Realistic mock: return true for known system agent IDs
 vi.mock('@/lib/system-agents', () => ({
-  isSummarySystemAgent: () => false,
+  isSystemAgent: (id: string | undefined) =>
+    ['supervisor_hitl', 'supervisor_synthesis', 'debate_summary', 'non_debate_summary', 'summary'].includes(id ?? ''),
+  isSummarySystemAgent: (id: string | undefined) =>
+    ['supervisor_synthesis', 'debate_summary', 'non_debate_summary', 'summary'].includes(id ?? ''),
 }))
 
 vi.mock('@/components/agent-placeholder-row', () => ({
@@ -97,7 +101,7 @@ describe('ConversationTurn', () => {
     expect(screen.queryByText('Collapse')).toBeNull()
   })
 
-  it('completed non-active turn shows collapsed with summary', () => {
+  it('completed non-active turn shows collapsed state with summary', () => {
     const turn = makeTurn({
       summary: {
         sourceAgentId: 'agent-1',
@@ -112,9 +116,17 @@ describe('ConversationTurn', () => {
     // User prompt visible
     expect(screen.getByText('What is the weather?')).toBeTruthy()
     // Summary visible in collapsed state
+    expect(screen.getByTestId('turn-summary')).toBeTruthy()
     expect(screen.getByText('Sunny weather today')).toBeTruthy()
     // Full agent result NOT visible (collapsed)
     expect(screen.queryByText('The weather is sunny and 22C.')).toBeNull()
+  })
+
+  it('collapsed state without summary shows expand hint', () => {
+    const turn = makeTurn({ summary: null })
+    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
+    expect(screen.getByTestId('turn-expand-button')).toBeTruthy()
+    expect(screen.getByText(/Show 1 response/)).toBeTruthy()
   })
 
   it('click expands a collapsed non-active turn', () => {
@@ -122,16 +134,14 @@ describe('ConversationTurn', () => {
 
     render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
 
-    // Should show the expand indicator
-    expect(screen.getByText(/1 agent responded/)).toBeTruthy()
+    expect(screen.getByTestId('turn-expand-button')).toBeTruthy()
 
-    // Click to expand
-    fireEvent.click(screen.getByText(/1 agent responded/))
+    fireEvent.click(screen.getByTestId('turn-expand-button'))
 
-    // Now the full content should be visible
     expect(screen.getByText('Weather Agent')).toBeTruthy()
     expect(screen.getByText('The weather is sunny and 22C.')).toBeTruthy()
-    expect(screen.getByText('Collapse')).toBeTruthy()
+    expect(screen.getByTestId('turn-collapse-button')).toBeTruthy()
+    expect(screen.getByText('Hide')).toBeTruthy()
   })
 
   it('failed turn shows warning line', () => {
@@ -145,29 +155,14 @@ describe('ConversationTurn', () => {
           status: 'failed',
           content: 'Connection error',
           artifacts: [],
+          isSummaryAgent: false,
         },
       ],
     })
 
     render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
 
-    expect(screen.getByText('One or more agents failed in this turn')).toBeTruthy()
-  })
-
-  it('hides summary when turn is expanded (active)', () => {
-    const turn = makeTurn({
-      summary: {
-        sourceAgentId: 'agent-1',
-        sourceAgentName: 'Weather Agent',
-        title: 'Clear skies ahead',
-        body: 'Detailed weather summary.',
-      },
-    })
-
-    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
-
-    // V2: summary is hidden in expanded state
-    expect(screen.queryByTestId('turn-summary')).toBeNull()
+    expect(screen.getByText('Some responses failed')).toBeTruthy()
   })
 
   it('renders user prompt with attachments', () => {
@@ -183,11 +178,12 @@ describe('ConversationTurn', () => {
     expect(screen.getByText('screenshot.png')).toBeTruthy()
   })
 
-  it('renders user prompt right-aligned', () => {
+  it('renders user prompt as an equal participant block', () => {
     const turn = makeTurn({ userContent: 'Hello world' })
     render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
     const wrapper = screen.getByTestId('user-prompt-wrapper')
-    expect(wrapper.className).toContain('justify-end')
+    expect(wrapper.className).toContain('py-3')
+    expect(screen.getByText('You')).toBeTruthy()
     expect(screen.getByText('Hello world')).toBeTruthy()
   })
 
@@ -214,34 +210,57 @@ describe('ConversationTurn', () => {
     expect(screen.getByText('report.pdf')).toBeTruthy()
   })
 
-  it('summary badge does NOT show source icon (collapsed state)', () => {
+  // --- V2: System agent visibility ---
+
+  it('hides ALL system agents in expanded state when real agents exist', () => {
     const turn = makeTurn({
-      summary: {
-        sourceAgentId: 'agent-1',
-        sourceAgentName: 'Weather Agent',
-        title: 'Sunny',
-        body: 'Clear skies.',
-      },
+      agentResults: [
+        {
+          agentId: 'agent-1', agentName: 'Real Agent', messageId: 'a1',
+          status: 'completed', content: 'Real response', artifacts: [], isSummaryAgent: false,
+        },
+        {
+          agentId: 'supervisor_synthesis', agentName: 'Summary Agent', messageId: 'a2',
+          status: 'completed', content: 'Summary content', artifacts: [], isSummaryAgent: true,
+        },
+        {
+          agentId: 'supervisor_hitl', agentName: 'Q&A Agent', messageId: 'a3',
+          status: 'completed', content: 'Orchestration planning content', artifacts: [], isSummaryAgent: false,
+        },
+      ],
     })
-    // Summary only shows in collapsed (non-active) state
-    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
-    const summaryBlock = screen.getByTestId('turn-summary')
-    expect(summaryBlock.querySelector('[data-testid^="source-badge-"]')).toBeNull()
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.getByText('Real response')).toBeTruthy()
+    expect(screen.queryByText('Summary content')).toBeNull()
+    expect(screen.queryByText('Orchestration planning content')).toBeNull()
   })
 
-  it('summary badge does NOT show (deleted) even without sourceAgentId (collapsed state)', () => {
+  it('hides system agents even when they are the only results', () => {
     const turn = makeTurn({
-      summary: {
-        sourceAgentId: undefined,
-        sourceAgentName: 'System Summary',
-        title: 'Overview',
-        body: 'A synthesis.',
-      },
+      agentResults: [
+        {
+          agentId: 'supervisor_synthesis', agentName: 'Summary Agent', messageId: 'a1',
+          status: 'completed', content: 'Summary-only content', artifacts: [], isSummaryAgent: true,
+        },
+      ],
     })
-    // Summary only shows in collapsed (non-active) state
-    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
-    expect(screen.getByText('System Summary')).toBeTruthy()
-    expect(screen.queryByText(/deleted/i)).toBeNull()
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    expect(screen.queryByText('Summary-only content')).toBeNull()
+  })
+
+  // --- V2: No TurnEventTimeline (inline chips replace rail) ---
+
+  it('does NOT render TurnEventTimeline even when events are present', () => {
+    const turn = makeTurn({
+      events: [{
+        id: 'e1', kind: 'agent_started', timestamp: '2026-01-01T00:00:00Z',
+        agentId: 'a1', agentName: 'Bot', label: 'Started', isLive: false, isHiddenInCompact: false,
+      }],
+    })
+    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
+    // TurnEventTimeline's characteristic UI elements must be absent
+    expect(screen.queryByTestId('live-dot')).toBeNull()
+    expect(screen.queryByTestId('show-process-toggle')).toBeNull()
   })
 
   // --- V2: Placeholders ---
@@ -277,34 +296,5 @@ describe('ConversationTurn', () => {
     const turn = makeTurn({ isSupervisorTurn: false })
     render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
     expect(screen.queryByTestId('supervisor-header')).toBeNull()
-  })
-
-  // --- V2: Summary hidden when expanded ---
-
-  it('shows SummaryBlock in collapsed state', () => {
-    const turn = makeTurn({
-      summary: {
-        sourceAgentId: 'agent-1',
-        sourceAgentName: 'Bot',
-        title: 'Summary title',
-        body: 'Summary body',
-      },
-    })
-    render(<MemoizedTurn turn={turn} index={0} isActive={false} />)
-    expect(screen.getByTestId('turn-summary')).toBeTruthy()
-  })
-
-  // --- V2: No TurnEventTimeline ---
-
-  it('does NOT render TurnEventTimeline even when events are present', () => {
-    const turn = makeTurn({
-      events: [{
-        id: 'e1', kind: 'agent_started', timestamp: '2026-01-01T00:00:00Z',
-        agentId: 'a1', agentName: 'Bot', label: 'Started', isLive: false, isHiddenInCompact: false,
-      }],
-    })
-    render(<MemoizedTurn turn={turn} index={0} isActive={true} />)
-    expect(screen.queryByTestId('live-dot')).toBeNull()
-    expect(screen.queryByTestId('show-process-toggle')).toBeNull()
   })
 })

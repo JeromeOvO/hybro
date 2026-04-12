@@ -29,28 +29,42 @@ export function SupervisorHeader({
     statusText = parts.join(' · ') || 'Completed'
   } else {
     const parts: string[] = []
-    if (stepNumber != null && totalSteps != null) parts.push(`Step ${stepNumber} of ${totalSteps}`)
-    if (details) parts.push(details)
-    statusText = parts.join(' · ') || 'Processing...'
+    if (stepNumber != null && totalSteps != null) {
+      parts.push(`Step ${stepNumber} of ${totalSteps}`)
+    }
+    // Never inline `details` (supervisor taskContent): it is internal orchestration text
+    // and can be thousands of characters — it must not appear in the transcript.
+    if (parts.length === 0) {
+      parts.push('Working…')
+    }
+    statusText = parts.join(' · ')
   }
+
+  const detailTitle =
+    details && details.trim().length > 0
+      ? details.length > 2000
+        ? `${details.slice(0, 2000)}…`
+        : details
+      : undefined
 
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center gap-2.5 pb-3 mb-3 border-b border-border"
+      title={detailTitle}
+      className="flex items-center gap-2 py-1.5 mb-1"
     >
       <img
         src="/favicon.svg"
         alt="HYBRO AI"
-        className="w-[18px] h-[18px] shrink-0"
+        className="w-4 h-4 shrink-0 opacity-90"
       />
-      <span className="text-brand-gradient text-xs font-semibold">HYBRO AI</span>
-      <span className="text-muted-foreground/50 text-[11px]">·</span>
+      <span className="text-brand-gradient text-[11px] font-semibold tracking-wide">HYBRO AI</span>
+      <span className="text-muted-foreground/40 text-[10px]">·</span>
       {isCompleted ? (
-        <span className="text-xs text-muted-foreground">{statusText}</span>
+        <span className="text-[11px] text-muted-foreground">{statusText}</span>
       ) : (
-        <span className="shimmer-text text-xs text-muted-foreground">{statusText}</span>
+        <span className="shimmer-text text-[11px] text-muted-foreground">{statusText}</span>
       )}
     </div>
   )

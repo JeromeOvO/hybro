@@ -41,7 +41,7 @@ describe('ConversationTimeline', () => {
 
   it('renders empty state when no messages', () => {
     render(<ConversationTimeline />)
-    expect(screen.getByText('Start the conversation')).toBeTruthy()
+    expect(screen.getByText('No messages yet')).toBeTruthy()
   })
 
   it('renders loading state when not hydrated', () => {

@@ -38,7 +38,7 @@ describe('HitlQuestionCard', () => {
   it('has yellow-tinted border', () => {
     const { container } = render(<HitlQuestionCard prompt="Q?" />)
     const card = container.firstElementChild!
-    expect(card.className).toContain('border-yellow-500/20')
+    expect(card.className).toContain('border-yellow-500/30')
   })
 
   it('has role status with aria-label', () => {

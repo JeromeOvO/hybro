@@ -80,22 +80,17 @@ test.describe('Room Timeline', () => {
     // Wait for the second turn
     await page.waitForTimeout(5000)
 
-    // The first turn should be collapsible (non-active)
-    // Look for a collapse/expand control
-    const collapseButton = page.getByText('Collapse')
-    const expandIndicator = page.getByText(/agent.*responded/)
+    // First turn is non-active: expand uses data-testid, collapse shows "Hide"
+    const collapseButton = page.getByTestId('turn-collapse-button')
+    const expandButton = page.getByTestId('turn-expand-button')
 
-    // If the first turn is collapsed, there should be an expand indicator
-    // If expanded, there should be a collapse button
     const hasCollapse = await collapseButton.count() > 0
-    const hasExpand = await expandIndicator.count() > 0
+    const hasExpand = await expandButton.count() > 0
 
     if (hasExpand) {
-      await expandIndicator.first().click()
-      // After clicking, the turn should expand
-      await expect(page.getByText('Collapse').first()).toBeVisible({ timeout: 3000 })
+      await expandButton.first().click()
+      await expect(collapseButton.first()).toBeVisible({ timeout: 3000 })
     } else if (hasCollapse) {
-      // Already expanded — click collapse
       await collapseButton.first().click()
     }
   })

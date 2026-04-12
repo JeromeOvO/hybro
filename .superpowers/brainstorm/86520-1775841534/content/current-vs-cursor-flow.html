@@ -1,0 +1,107 @@
+<h2>Timeline 状态流程对比：当前 vs Cursor</h2>
+<p class="subtitle">用户发送消息后，到 agent 回复到来前的体验是核心差距</p>
+
+<div class="section">
+  <h3>当前 Hybro Timeline — 用户发送后的状态流</h3>
+  <div class="mockup">
+    <div class="mockup-header">当前流程（问题标注）</div>
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; line-height: 1.8; padding: 20px;">
+      <div style="color: #888; margin-bottom: 8px;">用户发送 "Can you give me an excel"</div>
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d4a3e; color: #7dd3a0; padding: 2px 8px; border-radius: 4px; font-size: 11px;">1. 用户消息出现</span>
+        <span style="color: #666; margin-left: 8px;">→ 右对齐气泡 ✅</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #4a2d2d; color: #d37d7d; padding: 2px 8px; border-radius: 4px; font-size: 11px;">2. 等待期 — 空白</span>
+        <span style="color: #d37d7d; margin-left: 8px;">⚠️ 没有任何加载/thinking 指示</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #4a2d2d; color: #d37d7d; padding: 2px 8px; border-radius: 4px; font-size: 11px;">3. Event rail 出现</span>
+        <span style="color: #d37d7d; margin-left: 8px;">⚠️ 突然跳出时间戳列表，无动画过渡</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #4a2d2d; color: #d37d7d; padding: 2px 8px; border-radius: 4px; font-size: 11px;">4. Summary 块 + Agent Results</span>
+        <span style="color: #d37d7d; margin-left: 8px;">⚠️ Summary 和 Results 重复显示同一 agent 内容</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #4a2d2d; color: #d37d7d; padding: 2px 8px; border-radius: 4px; font-size: 11px;">5. HITL 状态卡住</span>
+        <span style="color: #d37d7d; margin-left: 8px;">⚠️ 回答后仍显示 "Awaiting input..."</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Cursor 风格 — Agent Workflow 状态流</h3>
+  <div class="mockup">
+    <div class="mockup-header">Cursor 的处理流程</div>
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; line-height: 1.8; padding: 20px;">
+      <div style="color: #888; margin-bottom: 8px;">用户发送请求</div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d3a4a; color: #7da8d3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">1. 即时反馈</span>
+        <span style="color: #7dd3a0; margin-left: 8px;">✅ 立刻出现 "thinking..." 或 spinner</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d3a4a; color: #7da8d3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">2. 渐进式展示</span>
+        <span style="color: #7dd3a0; margin-left: 8px;">✅ Agent 名出现 → 内容流式打字 → 完成</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d3a4a; color: #7da8d3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">3. 无冗余信息</span>
+        <span style="color: #7dd3a0; margin-left: 8px;">✅ 没有 summary 重复，每条信息只出现一次</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d3a4a; color: #7da8d3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">4. 状态实时更新</span>
+        <span style="color: #7dd3a0; margin-left: 8px;">✅ 交互完成后立即更新状态标签</span>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <span style="background: #2d3a4a; color: #7da8d3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">5. 紧凑事件轨迹</span>
+        <span style="color: #7dd3a0; margin-left: 8px;">✅ 工具调用/文件操作作为内联 chip，不占大量空间</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>你认为最需要优先解决的是哪些？</h3>
+  <p class="subtitle">可多选，帮助我确定本次设计的范围</p>
+</div>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>等待态：即时反馈</h3>
+      <p>发送消息后立即显示 loading/thinking 指示，而不是空白</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>去除展开态 Summary 重复</h3>
+      <p>展开时不再同时显示 Summary 和完整 Agent Results</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>HITL 状态修复</h3>
+      <p>回答后 "Awaiting input..." 应更新为完成状态</p>
+    </div>
+  </div>
+  <div class="option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>Event rail 精简</h3>
+      <p>将时间戳事件列表改为更紧凑的 inline chips/进度条</p>
+    </div>
+  </div>
+</div>

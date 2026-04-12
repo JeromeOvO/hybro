@@ -1,0 +1,218 @@
+<h2>等待态设计 V2：更贴近 Cursor 的风格</h2>
+<p class="subtitle">对比当前 mockup 和 Cursor 实际的等待态体验</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">❌ V1 — 卡片感太强</div>
+    <div class="mockup-body" style="padding: 16px; font-size: 13px;">
+      <div style="background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 7px; height: 7px; border-radius: 50%; background: #3b82f6; animation: pulse 1.5s infinite;"></div>
+          <span style="color: #7da8d3; font-weight: 500;">Excel Generator Agent</span>
+          <span style="color: #64748b; font-size: 11px;">thinking...</span>
+        </div>
+      </div>
+      <div style="background: #1e293b; border-radius: 8px; padding: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 7px; height: 7px; border-radius: 50%; background: #8b5cf6; animation: pulse 1.5s infinite; animation-delay: 0.3s;"></div>
+          <span style="color: #a78bfa; font-weight: 500;">Question & Answer</span>
+          <span style="color: #64748b; font-size: 11px;">thinking...</span>
+        </div>
+      </div>
+      <div style="margin-top: 16px; padding: 8px 12px; background: #1e293b; border-radius: 6px; border: 1px solid #dc2626;">
+        <div style="color: #dc2626; font-size: 11px;">问题：</div>
+        <ul style="color: #f87171; font-size: 11px; margin: 4px 0 0 16px; padding: 0;">
+          <li>背景色块 + 圆角 = 卡片感，不像 Cursor</li>
+          <li>每个 agent 单独一个块，太独立</li>
+          <li>缺少整体的"workflow 进行中"感觉</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">✅ V2 — Cursor 风格：无边框、内联</div>
+    <div class="mockup-body" style="padding: 16px 20px; font-size: 13px;">
+      <!-- Agent 1: thinking -->
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1e293b;">
+        <div style="position: relative; width: 8px; height: 8px;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #3b82f6;"></div>
+          <div style="position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #3b82f640; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+        </div>
+        <span style="color: #e2e8f0; font-weight: 500; font-size: 13px;">Excel Generator Agent</span>
+        <span style="color: #64748b; font-size: 12px; margin-left: auto;">
+          <span class="thinking-dots">Thinking</span>
+        </span>
+      </div>
+
+      <!-- Agent 2: thinking -->
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0;">
+        <div style="position: relative; width: 8px; height: 8px;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #8b5cf6;"></div>
+          <div style="position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #8b5cf640; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite; animation-delay: 0.3s;"></div>
+        </div>
+        <span style="color: #e2e8f0; font-weight: 500; font-size: 13px;">Question & Answer</span>
+        <span style="color: #64748b; font-size: 12px; margin-left: auto;">
+          <span class="thinking-dots" style="animation-delay: 0.5s;">Thinking</span>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>Cursor 风格的完整状态流转</h3>
+  <p class="subtitle">从 thinking → streaming → completed 的渐进过渡</p>
+</div>
+
+<div class="mockup" style="max-width: 600px; margin: 0 auto;">
+  <div class="mockup-header">Agent 状态流转演示</div>
+  <div class="mockup-body" style="padding: 16px 20px; font-size: 13px;">
+
+    <!-- Agent 1: completed -->
+    <div style="padding: 10px 0; border-bottom: 1px solid #1e293b;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+        <div style="width: 8px; height: 8px; border-radius: 50%; background: #3b82f6;"></div>
+        <span style="color: #e2e8f0; font-weight: 500; font-size: 13px;">Excel Generator Agent</span>
+        <svg style="margin-left: auto; color: #22c55e;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </div>
+      <div style="padding-left: 18px; color: #cbd5e1; font-size: 13px; line-height: 1.6;">
+        Here's the Excel spreadsheet with creators' contact emails. The file includes columns for Name, Email, Platform, and Followers count...
+      </div>
+    </div>
+
+    <!-- Agent 2: still streaming -->
+    <div style="padding: 10px 0; border-bottom: 1px solid #1e293b;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+        <div style="position: relative; width: 8px; height: 8px;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #8b5cf6;"></div>
+          <div style="position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #8b5cf640; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+        </div>
+        <span style="color: #e2e8f0; font-weight: 500; font-size: 13px;">Question & Answer</span>
+        <span style="color: #64748b; font-size: 12px; margin-left: auto;">Generating...</span>
+      </div>
+      <div style="padding-left: 18px; color: #cbd5e1; font-size: 13px; line-height: 1.6;">
+        Based on the contact list, I can help you draft outreach emails. Here are some key considerations<span style="display: inline-block; width: 2px; height: 14px; background: #e2e8f0; vertical-align: text-bottom; animation: blink 1s step-end infinite; margin-left: 1px;"></span>
+      </div>
+    </div>
+
+    <!-- Agent 3: waiting for HITL -->
+    <div style="padding: 10px 0;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+        <div style="position: relative; width: 8px; height: 8px;">
+          <div style="width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;"></div>
+          <div style="position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #f59e0b40; animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+        </div>
+        <span style="color: #e2e8f0; font-weight: 500; font-size: 13px;">Data Analyst</span>
+        <span style="color: #f59e0b; font-size: 12px; margin-left: auto;">Needs input</span>
+      </div>
+      <div style="padding-left: 18px;">
+        <div style="background: #1e293b; border: 1px solid #f59e0b30; border-radius: 6px; padding: 10px 12px; color: #e2e8f0; font-size: 13px; line-height: 1.5;">
+          What date range would you like me to analyze? (e.g., last 30 days, Q1 2026, custom range)
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>关键设计细节</h3>
+</div>
+
+<div class="mockup" style="max-width: 600px; margin: 0 auto;">
+  <div class="mockup-header">Cursor 风格要点</div>
+  <div class="mockup-body" style="padding: 20px; font-size: 13px;">
+    <div style="display: grid; gap: 16px;">
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="color: #22c55e; font-size: 16px; line-height: 1;">✓</span>
+        <div>
+          <div style="color: #e2e8f0; font-weight: 500;">无背景色块</div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">Agent 行直接嵌入内容流，用细分割线分隔，不用卡片</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="color: #22c55e; font-size: 16px; line-height: 1;">✓</span>
+        <div>
+          <div style="color: #e2e8f0; font-weight: 500;">状态在右侧，不跟在名字后面</div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">Thinking / Generating / ✓ 完成 — 对齐到行尾</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="color: #22c55e; font-size: 16px; line-height: 1;">✓</span>
+        <div>
+          <div style="color: #e2e8f0; font-weight: 500;">内容直接在 agent 名下方展开</div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">左侧 18px padding 与圆点对齐，内容无额外容器</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="color: #22c55e; font-size: 16px; line-height: 1;">✓</span>
+        <div>
+          <div style="color: #e2e8f0; font-weight: 500;">脉冲动画而非 spinner</div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">圆点外圈 ping 效果表示活跃，比旋转 spinner 更轻量</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: flex-start;">
+        <span style="color: #22c55e; font-size: 16px; line-height: 1;">✓</span>
+        <div>
+          <div style="color: #e2e8f0; font-weight: 500;">HITL 是唯一有背景的元素</div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">需要用户操作的内容用微弱边框突出，其余全部无框</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>这个方向对吗？</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>对，就是这个感觉</h3>
+      <p>无边框内联流式展示，agent 行 + 内容直接嵌入，状态右对齐</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>方向对了，但还需要调整</h3>
+      <p>整体方向 OK，但有些细节需要修改（请告诉我哪里需要改）</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>不是这个意思</h3>
+      <p>让我重新描述一下我想要的效果</p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes thinking {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
+.thinking-dots::after {
+  content: '';
+  animation: thinking 1.5s steps(4, end) infinite;
+}
+</style>

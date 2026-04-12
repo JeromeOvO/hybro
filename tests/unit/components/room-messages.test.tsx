@@ -79,7 +79,7 @@ describe('RoomMessages', () => {
     it('should show empty state when no messages exist', async () => {
       seedStore([])
       await renderMessages()
-      expect(screen.getByText('Start the conversation')).toBeTruthy()
+      expect(screen.getByText('No messages yet')).toBeTruthy()
     })
   })
 

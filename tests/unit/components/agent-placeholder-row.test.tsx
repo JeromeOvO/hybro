@@ -3,8 +3,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { AgentPlaceholderRow } from '@/components/agent-placeholder-row'
 
-vi.mock('@/lib/agent-avatar', () => ({
-  getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
+vi.mock('@/lib/agent-colors', () => ({
+  getAgentColorClasses: () => ({
+    bg: 'bg-blue-100',
+    border: 'border-blue-300',
+    accent: 'bg-blue-500',
+    text: 'text-blue-700',
+    content: 'text-blue-900',
+  }),
 }))
 
 afterEach(() => cleanup())
@@ -15,12 +21,7 @@ describe('AgentPlaceholderRow', () => {
     expect(screen.getByText('Weather Bot')).toBeTruthy()
   })
 
-  it('renders avatar image', () => {
-    const { container } = render(<AgentPlaceholderRow agentId="a1" agentName="Bot" />)
-    const img = container.querySelector('img')
-    expect(img).toBeTruthy()
-    expect(img!.getAttribute('src')).toContain('seed=a1')
-  })
+  // Removed dot indicator test since we now use AgentBadge with avatar
 
   it('renders shimmer "Thinking" text', () => {
     render(<AgentPlaceholderRow agentId="a1" agentName="Bot" />)
@@ -31,5 +32,10 @@ describe('AgentPlaceholderRow', () => {
     render(<AgentPlaceholderRow agentId="a1" agentName="Bot" />)
     const thinking = screen.getByText('Thinking')
     expect(thinking.className).toContain('shimmer-text')
+  })
+
+  it('has data-testid for integration tests', () => {
+    render(<AgentPlaceholderRow agentId="a1" agentName="Bot" />)
+    expect(screen.getByTestId('placeholder-a1')).toBeTruthy()
   })
 })

@@ -11,16 +11,35 @@ describe('SupervisorHeader', () => {
     expect(screen.getByText('HYBRO AI')).toBeTruthy()
   })
 
-  it('shows shimmer stage text when processing', () => {
+  it('shows step progress when processing (does not inline internal task details)', () => {
     render(
       <SupervisorHeader
         isCompleted={false}
         stepNumber={2}
         totalSteps={3}
-        details="Dispatching agents"
+        details="Dispatching agents — internal only"
       />,
     )
-    expect(screen.getByText('Step 2 of 3 · Dispatching agents')).toBeTruthy()
+    expect(screen.getByText('Step 2 of 3')).toBeTruthy()
+    expect(screen.queryByText(/internal only/)).toBeNull()
+    const row = screen.getByRole('status')
+    expect(row.getAttribute('title')).toContain('Dispatching agents')
+  })
+
+  it('shows Working when processing without step counts (details only in title)', () => {
+    render(
+      <SupervisorHeader
+        isCompleted={false}
+        details="Long internal supervisor context that must not appear inline"
+      />,
+    )
+    expect(screen.getByText('Working…')).toBeTruthy()
+    expect(
+      screen.queryByText(/Long internal supervisor context/),
+    ).toBeNull()
+    expect(screen.getByRole('status').getAttribute('title')).toContain(
+      'Long internal supervisor context',
+    )
   })
 
   it('shows static stats when completed', () => {

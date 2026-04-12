@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
-import { MarkdownContent } from './markdown-content'
+import { MarkdownContent, LinkifiedContent } from './markdown-content'
 
 interface TruncatedContentProps {
   content: string
@@ -17,7 +17,8 @@ export function TruncatedContent({
   maxLines = 6,
   className,
   markdownClassName,
-}: TruncatedContentProps) {
+  isMarkdown = true,
+}: TruncatedContentProps & { isMarkdown?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isTruncated, setIsTruncated] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -36,7 +37,13 @@ export function TruncatedContent({
         className="min-h-0 overflow-hidden break-words"
         style={!isExpanded ? { maxHeight: `${maxLines}lh` } : undefined}
       >
-        <MarkdownContent content={content} className={markdownClassName} />
+        {isMarkdown ? (
+          <MarkdownContent content={content} className={markdownClassName} />
+        ) : (
+          <div className={markdownClassName}>
+            <LinkifiedContent content={content} />
+          </div>
+        )}
       </div>
 
       {isTruncated && !isExpanded && (

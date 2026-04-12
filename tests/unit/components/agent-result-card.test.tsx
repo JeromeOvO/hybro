@@ -24,24 +24,6 @@ vi.mock('@/components/markdown-content', () => ({
   ),
 }))
 
-vi.mock('@/components/agent-source-badge', () => ({
-  AgentSourceBadge: ({ source, className }: { source: string; className?: string }) => (
-    <span data-testid={`source-badge-${source}`} className={className} />
-  ),
-}))
-
-vi.mock('@/components/ui/tooltip', () => ({
-  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}))
-
-vi.mock('@/lib/agent-avatar', () => ({
-  getAgentAvatarUri: (seed: string) => `data:image/svg+xml;seed=${seed}`,
-}))
-
-vi.mock('@/lib/system-agents', () => ({
-  isSummarySystemAgent: () => false,
-}))
-
 afterEach(() => {
   cleanup()
 })
@@ -60,13 +42,26 @@ function makeResult(overrides: Partial<AgentResultViewModel> = {}): AgentResultV
 }
 
 describe('AgentResultCard', () => {
-  it('renders completed result with content', () => {
+  it('renders completed result with agent name and content', () => {
     render(<AgentResultCard result={makeResult()} />)
 
     expect(screen.getByText('Test Agent')).toBeTruthy()
     expect(screen.getByText('This is the agent response content.')).toBeTruthy()
-    // No status indicator for completed
     expect(screen.queryByText('Failed')).toBeNull()
+  })
+
+  it('uses md size for agent badge in result header', () => {
+    render(<AgentResultCard result={makeResult()} />)
+    const nameEl = screen.getByText('Test Agent')
+    expect(nameEl.className).toContain('text-base')
+  })
+
+  // Removed dot indicator test since we now use AgentBadge with avatar
+
+  it('uses spacing-based separation', () => {
+    render(<AgentResultCard result={makeResult()} />)
+    const card = screen.getByTestId('agent-result-msg-1')
+    expect(card.className).toContain('py-3')
   })
 
   it('renders failed result with error message', () => {
@@ -94,10 +89,8 @@ describe('AgentResultCard', () => {
       />,
     )
 
-    // The aria-busy attribute indicates streaming
     const card = screen.getByTestId('agent-result-msg-1')
     expect(card.getAttribute('aria-busy')).toBe('true')
-    // shimmer-text class is applied to the content wrapper
     expect(container.querySelector('.shimmer-text')).toBeTruthy()
   })
 
@@ -119,8 +112,6 @@ describe('AgentResultCard', () => {
 
     render(<AgentResultCard result={makeResult({ content: longContent })} />)
 
-    // The TruncatedContent component handles truncation
-    // We verify the content body is present
     expect(screen.getByTestId('truncated-content-body')).toBeTruthy()
   })
 
@@ -136,17 +127,15 @@ describe('AgentResultCard', () => {
       />,
     )
 
-    expect(screen.getByText('Human-in-the-loop')).toBeTruthy()
-    expect(screen.getByText('Q: What is the target region?')).toBeTruthy()
-    expect(screen.getByText('A: North America')).toBeTruthy()
-    expect(screen.getByText('Q: Confirm budget?')).toBeTruthy()
-    expect(screen.getByText('A: Yes, approved')).toBeTruthy()
+    expect(screen.getByText('What is the target region?')).toBeTruthy()
+    expect(screen.getByText('North America')).toBeTruthy()
+    expect(screen.getByText('Confirm budget?')).toBeTruthy()
+    expect(screen.getByText('Yes, approved')).toBeTruthy()
   })
 
   it('does not render HITL section when no history', () => {
     render(<AgentResultCard result={makeResult()} />)
-
-    expect(screen.queryByText('Human-in-the-loop')).toBeNull()
+    expect(screen.queryByText('What is the target region?')).toBeNull()
   })
 
   it('renders artifacts list', () => {
@@ -165,22 +154,10 @@ describe('AgentResultCard', () => {
     expect(screen.getByText('chart.png')).toBeTruthy()
   })
 
-  it('uses md size for agent badge in result header', () => {
-    render(<AgentResultCard result={makeResult()} />)
-    const nameEl = screen.getByText('Test Agent')
-    expect(nameEl.className).toContain('text-base')
-  })
-
-  it('uses py-3 padding on result card container', () => {
-    render(<AgentResultCard result={makeResult()} />)
-    const card = screen.getByTestId('agent-result-msg-1')
-    expect(card.className).toContain('py-3')
-  })
-
-  it('renders content with text-base via markdownClassName', () => {
+  it('renders content with text-[15px] via markdownClassName', () => {
     render(<AgentResultCard result={makeResult({ content: 'Some text' })} />)
     const md = screen.getByTestId('markdown-content')
-    expect(md.className).toContain('text-base')
+    expect(md.className).toContain('text-[15px]')
   })
 
   // --- V2: Shimmer status states ---
@@ -232,7 +209,6 @@ describe('AgentResultCard', () => {
       />,
     )
     expect(screen.getByText('What date range?')).toBeTruthy()
-    // "Needs input" appears in both StatusText header and HitlQuestionCard
     expect(screen.getAllByText('Needs input').length).toBeGreaterThanOrEqual(1)
   })
 

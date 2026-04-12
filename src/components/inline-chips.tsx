@@ -28,13 +28,13 @@ export function InlineChips({ eventCount, durationMs }: InlineChipsProps) {
 
   return (
     <span
-      className="inline-flex items-center gap-1.5"
+      className="inline-flex items-center gap-1"
       aria-label={chips.map(c => c.ariaText).join(', ')}
     >
       {chips.map((chip) => (
         <span
           key={chip.label}
-          className="inline-flex bg-secondary rounded px-1.5 py-px text-[10px] text-muted-foreground"
+          className="inline-flex rounded px-1 py-px text-[10px] text-muted-foreground/60"
         >
           {chip.label}
         </span>

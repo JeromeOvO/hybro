@@ -117,7 +117,12 @@ export function buildTurns(
   for (let i = 0; i < turnScaffolds.length; i++) {
     const scaffold = turnScaffolds[i]
     const turnId = scaffold.userMessageId ?? `turn-${i}`
-    turns.push(assembleTurn(turnId, scaffold, entities, events))
+    // Pass the next turn's user message timestamp as an upper bound for event filtering.
+    // This prevents events from turn N+1 leaking into turn N when the same agent appears
+    // in both turns.
+    const nextScaffold = turnScaffolds[i + 1]
+    const nextTurnStart = nextScaffold?.userEntity?.timestamp
+    turns.push(assembleTurn(turnId, scaffold, entities, events, nextTurnStart))
   }
 
   return turns
@@ -164,13 +169,19 @@ function assembleTurn(
   },
   entities: Record<string, MessageEntity>,
   events: readonly RawTimelineEvent[],
+  nextTurnStart?: string,
 ): TurnViewModel {
   // Filter events for this turn first (needed by buildAgentResult for inline chips)
-  const turnEvents = filterEventsForTurn(scaffold, entities, events)
+  const turnEvents = filterEventsForTurn(scaffold, entities, events, nextTurnStart)
 
-  const agentResults = scaffold.agentMessageIds
+  const rawAgentResults = scaffold.agentMessageIds
     .map((id) => buildAgentResult(entities[id], turnEvents))
     .filter((r): r is AgentResultViewModel => r !== null)
+
+  // Deduplicate: when both task_update and agent_response SSE events create
+  // separate entities for the same agentId, keep the one with the most content
+  // (or terminal status). This avoids rendering the same agent response twice.
+  const agentResults = deduplicateAgentResults(rawAgentResults)
 
   const status = deriveTurnStatus(agentResults)
   const summary = selectSummary(agentResults)
@@ -223,11 +234,10 @@ function buildAgentResult(
 ): AgentResultViewModel | null {
   if (!entity) return null
 
-  // Skip ephemeral processing placeholders (HYBRO AI global placeholder).
-  // These have isEphemeral=true and no agentId. V2 per-agent placeholders
+  // Skip ALL ephemeral processing placeholders. V2 per-agent placeholders
   // (pendingAgents prop) replace their visual function. Supervisor stage data
-  // is extracted separately in assembleTurn().
-  if (entity.isEphemeral && !entity.agentId) return null
+  // is extracted separately in assembleTurn() from raw entities, not agentResults.
+  if (entity.isEphemeral) return null
 
   // Status derivation (spec §5.4)
   let status: AgentResultViewModel['status'] = 'completed'
@@ -291,6 +301,87 @@ function buildAgentResult(
     eventCount,
     durationMs,
   }
+}
+
+// ── Agent result deduplication ─────────────────────────────────
+
+/**
+ * Deduplicate agent results with the same agentId within a turn.
+ * This handles the case where both task_update and agent_response SSE events
+ * create separate entities for the same agent (different message IDs) with
+ * substantially the same content.
+ *
+ * Within a single turn, the same agentId can appear multiple times due to:
+ * 1. SSE race conditions — agent_response + task_update/task_submitted create
+ *    separate entities with the same or similar content. → Deduplicate.
+ * 2. relatedMessageId routing — a late response routed to an older turn produces
+ *    a second entity with genuinely different content. → Keep both.
+ *
+ * Heuristic: if content is identical, one side is empty, or both share the same
+ * first 100 characters (same response, different completeness), it's a duplicate.
+ * Genuinely different responses from relatedMessageId won't share the same prefix.
+ */
+function deduplicateAgentResults(results: AgentResultViewModel[]): AgentResultViewModel[] {
+  const seen = new Map<string, AgentResultViewModel>()
+  const output: AgentResultViewModel[] = []
+
+  for (const r of results) {
+    if (!r.agentId) {
+      output.push(r)
+      continue
+    }
+
+    const existing = seen.get(r.agentId)
+    if (!existing) {
+      seen.set(r.agentId, r)
+      output.push(r)
+      continue
+    }
+
+    // Check if this is an SSE duplicate or a genuinely different response
+    const a = existing.content.trim()
+    const b = r.content.trim()
+    const prefixLen = Math.min(100, Math.min(a.length, b.length))
+    const isDuplicate =
+      a === b ||
+      a.length === 0 ||
+      b.length === 0 ||
+      (prefixLen > 0 && a.slice(0, prefixLen) === b.slice(0, prefixLen))
+
+    if (!isDuplicate) {
+      // Genuinely different content (e.g. relatedMessageId late response)
+      output.push(r)
+      seen.set(r.agentId, r)
+      continue
+    }
+
+    // SSE duplicate — pick the better result: terminal status > artifacts > longer content.
+    const existingTerminal = existing.status === 'completed' || existing.status === 'failed'
+    const incomingTerminal = r.status === 'completed' || r.status === 'failed'
+    const existingHasArtifacts = existing.artifacts.length > 0
+    const incomingHasArtifacts = r.artifacts.length > 0
+
+    let winner: AgentResultViewModel
+    if (existingTerminal && !incomingTerminal) {
+      winner = existing
+    } else if (!existingTerminal && incomingTerminal) {
+      winner = r
+    } else if (existingHasArtifacts && !incomingHasArtifacts) {
+      winner = existing
+    } else if (!existingHasArtifacts && incomingHasArtifacts) {
+      winner = r
+    } else {
+      winner = r.content.length >= existing.content.length ? r : existing
+    }
+
+    if (winner !== existing) {
+      const idx = output.indexOf(existing)
+      if (idx >= 0) output[idx] = winner
+      seen.set(r.agentId, winner)
+    }
+  }
+
+  return output
 }
 
 // ── Turn status derivation ─────────────────────────────────────
@@ -376,6 +467,7 @@ function filterEventsForTurn(
   },
   entities: Record<string, MessageEntity>,
   events: readonly RawTimelineEvent[],
+  nextTurnStart?: string,
 ): TimelineEventViewModel[] {
   if (events.length === 0) return []
 
@@ -390,6 +482,20 @@ function filterEventsForTurn(
   const userEntity = scaffold.userMessageId ? entities[scaffold.userMessageId] : null
   const turnStart = userEntity?.timestamp ?? ''
 
+  // Effective upper bound: max(nextTurnStart, latest entity timestamp in this turn).
+  // This ensures late replies routed via relatedMessageId (whose entities and events
+  // arrive after the next user message) still have their events included.
+  let effectiveEnd = nextTurnStart
+  if (nextTurnStart) {
+    for (const id of scaffold.agentMessageIds) {
+      const e = entities[id]
+      if (e?.timestamp && e.timestamp > nextTurnStart) {
+        effectiveEnd = undefined // late reply detected — disable upper bound for this turn
+        break
+      }
+    }
+  }
+
   // Filter events that belong to this turn's agents within the time window
   const filtered: TimelineEventViewModel[] = []
   let counter = 0
@@ -403,10 +509,11 @@ function filterEventsForTurn(
       continue
     }
 
-    // Agent events: match by agentId
+    // Agent events: match by agentId within the turn's time window
     if (raw.agentId && turnAgentIds.has(raw.agentId)) {
-      // Only include events after the turn start (or if no start, include all)
-      if (!turnStart || raw.timestamp >= turnStart) {
+      const afterStart = !turnStart || raw.timestamp >= turnStart
+      const beforeEnd = !effectiveEnd || raw.timestamp < effectiveEnd
+      if (afterStart && beforeEnd) {
         filtered.push(rawToViewModel(raw, `evt-${raw.agentId}-${counter++}`))
       }
     }

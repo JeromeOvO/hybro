@@ -400,6 +400,72 @@ describe('buildTurns – V2 data model', () => {
     expect(turns[0].agentResults[0].agentId).toBe('agent-real-1')
   })
 
+  it('filters out ephemeral processing placeholder WITH agentId', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const ephemeralWithAgent = makeEntity({
+      id: 'eph-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'working' as any,
+      taskContent: 'Step 1 of 3 · Dispatching agents',
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const realAgent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'agent-real-1',
+      taskStatus: 'completed',
+      content: 'Real response',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, ephemeralWithAgent, realAgent]),
+      ['u1', 'eph-1', 'a1'],
+      [],
+    )
+    // Ephemeral entity with agentId should NOT appear in agent results
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].agentResults[0].agentId).toBe('agent-real-1')
+  })
+
+  it('ephemeral entity with agentId still contributes to supervisorStage', () => {
+    const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
+    const ephemeralSupervisor = makeEntity({
+      id: 'eph-1',
+      messageType: 'agent',
+      senderName: 'HYBRO AI',
+      isEphemeral: true,
+      agentId: 'supervisor_synthesis',
+      taskStatus: 'working' as any,
+      taskContent: 'Dispatching agents',
+      stepNumber: 2,
+      totalSteps: 3,
+      timestamp: '2026-01-01T00:00:01Z',
+    })
+    const supervisorAgent = makeAgentEntity({
+      id: 'a1',
+      timestamp: '2026-01-01T00:00:02Z',
+      agentId: 'supervisor_synthesis',
+      senderName: 'Summary Agent',
+      taskStatus: 'completed',
+      content: 'Summary result',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, ephemeralSupervisor, supervisorAgent]),
+      ['u1', 'eph-1', 'a1'],
+      [],
+    )
+    // The real agent should appear in results
+    expect(turns[0].agentResults).toHaveLength(1)
+    expect(turns[0].isSupervisorTurn).toBe(true)
+    // supervisorStage should still be populated from the ephemeral entity
+    expect(turns[0].supervisorStage).toBeDefined()
+    expect(turns[0].supervisorStage!.stepNumber).toBe(2)
+    expect(turns[0].supervisorStage!.totalSteps).toBe(3)
+    expect(turns[0].supervisorStage!.details).toBe('Dispatching agents')
+  })
+
   // ── 'working' status ──────────────────────────────────────
 
   it('non-terminal non-interactive taskStatus produces working status', () => {

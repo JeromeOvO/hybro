@@ -1,0 +1,252 @@
+<h2>整体效果预览 V2</h2>
+<p class="subtitle">修正：HITL 归属到发起提问的 agent 下，不再作为独立 agent 行</p>
+
+<div class="section">
+  <h3>对比：HITL 的显示位置</h3>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">❌ V1 — HITL 看起来像独立 agent</div>
+    <div class="mockup-body" style="padding: 0; font-size: 13px;">
+      <div style="display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #1e293b;">
+        <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 12px;">Excel Generator Agent</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; padding: 12px 16px; border: 1px solid #dc262640;">
+        <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; background: linear-gradient(135deg, #8b5cf6, #6d28d9); display: flex; align-items: center; justify-content: center;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21v-2a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7v2"/></svg>
+        </div>
+        <div style="flex: 1;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 12px;">Question & Answer</span>
+          <div style="color: #dc2626; font-size: 10px; margin-top: 2px;">← 看起来像另一个 agent</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">✅ V2 — HITL 嵌套在 agent 内部</div>
+    <div class="mockup-body" style="padding: 0; font-size: 13px;">
+      <div style="display: flex; gap: 12px; padding: 12px 16px;">
+        <div style="flex-shrink: 0; width: 24px; height: 24px; border-radius: 5px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 12px;">Excel Generator Agent</span>
+          <div style="color: #22c55e; font-size: 10px; margin-top: 2px;">↓ HITL 是这个 agent 的子交互</div>
+          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 11px;">
+            <div style="color: #94a3b8;">What would you like the Excel to contain?</div>
+            <div style="display: flex; align-items: center; gap: 4px; margin-top: 3px;">
+              <div style="width: 4px; height: 4px; border-radius: 50%; background: #22c55e;"></div>
+              <span style="color: #e2e8f0; font-weight: 500;">creators contact emails</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>完整流程 — 修正版</h3>
+</div>
+
+<div class="mockup" style="max-width: 680px; margin: 0 auto;">
+  <div class="mockup-header">Room Conversation Timeline</div>
+  <div class="mockup-body" style="padding: 0; font-size: 13px; background: #0c1222;">
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- TURN 1: 已完成的历史消息（折叠态）          -->
+    <!-- ═══════════════════════════════════════════ -->
+
+    <div style="padding: 16px 20px; border-bottom: 1px solid #1e293b;">
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 14px;">
+        <div style="max-width: 75%; background: #1e293b; border-radius: 12px; padding: 10px 14px;">
+          <div style="color: #e2e8f0; font-size: 13px;">How's the weather in Tokyo?</div>
+        </div>
+      </div>
+
+      <div style="cursor: pointer;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+          <div style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(135deg, #10b981, #059669); display: flex; align-items: center; justify-content: center;">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          </div>
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Weather Agent</span>
+        </div>
+        <div style="color: #e2e8f0; font-size: 13px; font-weight: 600; margin-bottom: 2px; padding-left: 28px;">Tokyo weather: Sunny, 24°C</div>
+        <div style="color: #94a3b8; font-size: 12px; padding-left: 28px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+          Currently sunny with clear skies. Temperature is 24°C with humidity at 45%. Expected to remain clear through the evening...
+        </div>
+        <div style="color: #475569; font-size: 11px; margin-top: 6px; padding-left: 28px;">▸ Show full response</div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- TURN 2: 当前活跃请求                        -->
+    <!-- ═══════════════════════════════════════════ -->
+
+    <div style="padding: 16px 20px;">
+
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
+        <div style="max-width: 75%; background: #1e293b; border-radius: 12px; padding: 10px 14px;">
+          <div style="color: #e2e8f0; font-size: 13px;">Can you give me an excel of creators contact emails and help me draft outreach messages?</div>
+        </div>
+      </div>
+
+      <!-- Agent 1: Completed with content + inline chips -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Excel Generator Agent</span>
+            <span style="display: inline-flex; align-items: center; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">4 steps</span>
+            <span style="display: inline-flex; align-items: center; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">3.2s</span>
+          </div>
+
+          <!-- HITL resolved — nested inside this agent -->
+          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;">
+            <div style="color: #94a3b8; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px;">
+              What would you like the Excel spreadsheet to contain?
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <div style="width: 4px; height: 4px; border-radius: 50%; background: #22c55e;"></div>
+              <span style="color: #e2e8f0; font-size: 12px; font-weight: 500;">creators contact emails</span>
+            </div>
+          </div>
+
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.6;">
+            Here's the Excel spreadsheet with creators' contact emails. The file includes columns for <strong style="color: #e2e8f0;">Name</strong>, <strong style="color: #e2e8f0;">Email</strong>, <strong style="color: #e2e8f0;">Platform</strong>, and <strong style="color: #e2e8f0;">Followers</strong> count. I've included 47 creators across YouTube, TikTok, and Instagram.
+          </div>
+          <div style="margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div>
+              <div style="color: #e2e8f0; font-size: 12px; font-weight: 500;">creators_contacts.xlsx</div>
+              <div style="color: #64748b; font-size: 10px;">47 rows · 12.4 KB</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent 2: Streaming content -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #8b5cf6, #6d28d9); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21v-2a7 7 0 0 1 7-7h4a7 7 0 0 1 7 7v2"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Outreach Drafter</span>
+            <span class="shimmer-text" style="font-size: 12px;">Generating</span>
+          </div>
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.6;">
+            Here are the draft outreach emails for the top creators. I've tailored each message based on their platform and content style<span style="display: inline-block; width: 2px; height: 14px; background: #e2e8f0; vertical-align: text-bottom; animation: blink 1s step-end infinite; margin-left: 1px;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent 3: HITL waiting — nested under the agent -->
+      <div style="display: flex; gap: 12px; padding: 12px 0;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #d97706); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 12l4-5 4 3 5-6"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Data Analyst</span>
+            <span class="shimmer-text-yellow" style="font-size: 12px;">Needs input</span>
+          </div>
+          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; color: #cbd5e1; font-size: 13px; line-height: 1.5;">
+            What date range would you like me to analyze for engagement rates? (e.g., last 30 days, Q1 2026)
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- TURN 3: 全新请求，全部 thinking               -->
+    <!-- ═══════════════════════════════════════════ -->
+
+    <div style="padding: 16px 20px; border-top: 1px solid #1e293b;">
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
+        <div style="max-width: 75%; background: #1e293b; border-radius: 12px; padding: 10px 14px;">
+          <div style="color: #e2e8f0; font-size: 13px;">Also analyze which creators have the highest engagement rate</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Excel Generator Agent</span>
+          <span class="shimmer-text" style="font-size: 12px;">Thinking</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; padding: 12px 0;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #d97706); display: flex; align-items: center; justify-content: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 12l4-5 4 3 5-6"/></svg>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Data Analyst</span>
+          <span class="shimmer-text" style="font-size: 12px;">Thinking</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>确认？</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>确认，可以写 spec</h3>
+      <p>整体效果符合预期</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>还需要调整</h3>
+      <p>告诉我哪里需要改</p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+.shimmer-text {
+  background: linear-gradient(90deg, #64748b 0%, #94a3b8 25%, #e2e8f0 50%, #94a3b8 75%, #64748b 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+.shimmer-text-yellow {
+  background: linear-gradient(90deg, #92400e 0%, #d97706 25%, #fbbf24 50%, #d97706 75%, #92400e 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+</style>

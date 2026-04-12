@@ -9,12 +9,10 @@ export function HitlQuestionCard({ prompt }: HitlQuestionCardProps) {
     <div
       role="status"
       aria-label={`Agent needs input: ${prompt}`}
-      className="bg-background border border-yellow-500/20 rounded-lg px-3 py-3 mt-2"
+      className="border-l-2 border-yellow-500/30 pl-3 mt-2 py-1"
     >
-      <div className="flex items-center gap-1.5 mb-2">
-        <span className="shimmer-text-yellow text-xs font-medium">Needs input</span>
-      </div>
-      <p className="text-sm text-foreground/80 leading-relaxed">{prompt}</p>
+      <span className="shimmer-text-yellow text-xs font-medium">Needs input</span>
+      <p className="text-sm text-foreground/70 leading-relaxed mt-0.5">{prompt}</p>
     </div>
   )
 }
