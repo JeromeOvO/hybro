@@ -16,7 +16,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
   const { agentId, agentName, content, artifacts, status, error } = slot
   const isStreaming = status === 'streaming'
   const isFailed = status === 'failed' || status === 'rejected'
-  const colors = getAgentColorClasses(agentId)
+  const colors = getAgentColorClasses(agentId ?? 'default')
 
   return (
     <div
