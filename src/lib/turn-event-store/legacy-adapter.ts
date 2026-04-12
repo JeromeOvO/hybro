@@ -75,9 +75,33 @@ export function convertLegacyMessagesToTurnEvents(
   const userMessages = apiMessages.filter(m => m.message_type === 'user')
   const agentMessages = apiMessages.filter(m => m.message_type === 'agent')
 
+  // Build lookup index for chain-routed agent messages.
+  // Some agent messages have related_message_id pointing to another agent
+  // message (chain routing) rather than directly to the user message.
+  const messageById = new Map<string, RoomMessage>()
+  for (const msg of apiMessages) {
+    messageById.set(msg.message_id, msg)
+  }
+  const userMessageIds = new Set(userMessages.map(m => m.message_id))
+
   const agentsByTurn = new Map<string, RoomMessage[]>()
   for (const msg of agentMessages) {
-    const turnId = msg.related_message_id
+    const relId = msg.related_message_id
+    if (!relId) continue
+
+    let turnId: string | undefined
+
+    // Direct: related_message_id is a user message
+    if (userMessageIds.has(relId)) {
+      turnId = relId
+    } else {
+      // Chain: related_message_id points to an agent — follow one level
+      const related = messageById.get(relId)
+      if (related?.related_message_id && userMessageIds.has(related.related_message_id)) {
+        turnId = related.related_message_id
+      }
+    }
+
     if (!turnId) continue
     const existing = agentsByTurn.get(turnId) ?? []
     existing.push(msg)

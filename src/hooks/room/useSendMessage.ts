@@ -5,6 +5,7 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
+import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 
@@ -145,6 +146,11 @@ export function useSendMessage(
         msgStoreNoId.removeMessage(tempMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
 
+        // Rollback optimistic turn from turn-event-store
+        if (onOptimisticTurn) {
+          useTurnEventStore.getState().removeTurn(clientRequestId)
+        }
+
         banner.error('Message sent but server returned no ID. Please try again.')
 
         // Revoke orphaned blob URLs since attachments have already been cleared
@@ -231,6 +237,11 @@ export function useSendMessage(
       const msgStoreErr = useMessageStore.getState()
       msgStoreErr.removeMessage(tempMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
+
+      // Rollback optimistic turn from turn-event-store
+      if (onOptimisticTurn) {
+        useTurnEventStore.getState().removeTurn(clientRequestId)
+      }
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 

@@ -20,6 +20,7 @@ interface TurnEventStoreState {
   // Actions
   append(turnId: string, event: TurnEvent): void
   createOptimisticTurn(clientRequestId: string, userInput: UserInputData): void
+  removeTurn(turnId: string): void
   reset(): void
 }
 
@@ -145,6 +146,39 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
       orderedTurnIds: [...state.orderedTurnIds, optimisticTurnId],
       turnIdByClientRequestId: newLookup,
       composerState: newComposerState,
+    })
+  },
+
+  removeTurn(turnId: string): void {
+    const state = get()
+    if (!state.turnLogs.has(turnId)) return
+
+    const newTurnLogs = new Map(state.turnLogs)
+    newTurnLogs.delete(turnId)
+
+    const newOrderedTurnIds = state.orderedTurnIds.filter(id => id !== turnId)
+
+    // Clean up clientRequestId lookup if this was an optimistic turn
+    const newLookup = new Map(state.turnIdByClientRequestId)
+    for (const [crId, tId] of newLookup) {
+      if (tId === turnId) { newLookup.delete(crId); break }
+    }
+
+    // Recompute composer state from scratch since we removed a turn
+    let composerState = composerReducer.init()
+    for (const id of newOrderedTurnIds) {
+      const log = newTurnLogs.get(id)
+      if (!log) continue
+      for (const event of log.getEvents()) {
+        composerState = composerReducer.reduce(composerState, event)
+      }
+    }
+
+    set({
+      turnLogs: newTurnLogs,
+      orderedTurnIds: newOrderedTurnIds,
+      turnIdByClientRequestId: newLookup,
+      composerState,
     })
   },
 
