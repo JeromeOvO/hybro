@@ -13,7 +13,7 @@ function RailIconComponent({ icon, isActive }: { icon: RailIcon; isActive: boole
   switch (icon) {
     case 'spinner':
       // Active items use a shimmer dot instead of a spinning loader
-      return <span className={cn(size, 'rounded-full bg-muted-foreground/40 animate-pulse')} data-testid="rail-spinner" />
+      return <span className={cn(size, 'rounded-full shimmer-dot')} data-testid="rail-spinner" />
     case 'check':
       return <Check className={cn(size, 'text-green-500')} />
     case 'x':
@@ -85,7 +85,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
         {showProcessingPlaceholder ? (
           <div className="flex items-center gap-1.5 py-0.5 text-muted-foreground">
             <RailIconComponent icon="spinner" isActive={true} />
-            <span className="text-xs animate-pulse">Processing</span>
+            <span className="text-xs shimmer-text">Processing</span>
           </div>
         ) : isExpanded ? (
           <>
@@ -99,7 +99,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
                   )}
                 >
                   <RailIconComponent icon={item.icon} isActive={item.isActive} />
-                  <span className={cn('text-xs', item.isActive && 'animate-pulse')}>{item.label}</span>
+                  <span className={cn('text-xs', item.isActive && 'shimmer-text')}>{item.label}</span>
                 </div>
               ))}
             </div>

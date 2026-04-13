@@ -348,6 +348,20 @@
   --shimmer-highlight: 0.7;
 }
 
+/* Shimmer sweep for small solid elements (dots, icons) */
+.shimmer-dot {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--color-muted-foreground) / 0.35) 0%,
+    hsl(var(--color-muted-foreground) / 0.35) 40%,
+    hsl(var(--color-muted-foreground) / 0.7) 50%,
+    hsl(var(--color-muted-foreground) / 0.35) 60%,
+    hsl(var(--color-muted-foreground) / 0.35) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 5s ease-in-out infinite;
+}
+
 /* Yellow "Needs input" shimmer for HITL states */
 .shimmer-text-yellow {
   background: linear-gradient(

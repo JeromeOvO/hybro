@@ -38,6 +38,18 @@ describe('OrchestrationRail', () => {
     const { container } = render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
     const shimmer = container.querySelector('[data-testid="rail-spinner"]')
     expect(shimmer).toBeDefined()
-    expect(shimmer?.classList.contains('animate-pulse')).toBe(true)
+    expect(shimmer?.classList.contains('shimmer-dot')).toBe(true)
+  })
+
+  it('applies shimmer-text to active item labels', () => {
+    const items: RailItemView[] = [
+      { key: 'p1', icon: 'spinner', label: 'Generating response', ts: 1000, isActive: true },
+      { key: 'p2', icon: 'check', label: 'Completed step', ts: 900, isActive: false },
+    ]
+    render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
+    const activeLabel = screen.getByText('Generating response')
+    const doneLabel = screen.getByText('Completed step')
+    expect(activeLabel.classList.contains('shimmer-text')).toBe(true)
+    expect(doneLabel.classList.contains('shimmer-text')).toBe(false)
   })
 })
