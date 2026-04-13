@@ -1,0 +1,265 @@
+<h2>Supervisor V2：HYBRO AI 四维方块 + 旋转动画</h2>
+<p class="subtitle">选择 A + C + D：Supervisor 头部栏 + HITL 独立卡片 + 其余按普通 agent 显示</p>
+
+<div class="section">
+  <h3>Supervisor 进行中</h3>
+</div>
+
+<div class="mockup" style="max-width: 680px; margin: 0 auto;">
+  <div class="mockup-header">处理中 — 四维方块旋转</div>
+  <div class="mockup-body" style="padding: 0; font-size: 13px; background: #0c1222;">
+
+    <div style="padding: 16px 20px;">
+      <!-- User message -->
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
+        <div style="max-width: 75%; background: #1e293b; border-radius: 12px; padding: 10px 14px;">
+          <div style="color: #e2e8f0; font-size: 13px;">Can you give me an excel of creators contact emails and analyze engagement?</div>
+        </div>
+      </div>
+
+      <!-- Supervisor header — processing with rotating tesseract -->
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #1a2332;">
+        <div class="tesseract-spin" style="flex-shrink: 0; width: 20px; height: 20px;">
+          <svg viewBox="0 0 100 100" width="20" height="20">
+            <defs>
+              <linearGradient id="hybro-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="hsl(270, 80%, 70%)"/>
+                <stop offset="100%" stop-color="hsl(180, 100%, 60%)"/>
+              </linearGradient>
+            </defs>
+            <!-- outer cube -->
+            <polygon points="50,5 95,30 95,70 50,95 5,70 5,30" fill="none" stroke="url(#hybro-grad)" stroke-width="4" stroke-linejoin="round"/>
+            <!-- inner cube -->
+            <polygon points="50,25 75,38 75,62 50,75 25,62 25,38" fill="none" stroke="url(#hybro-grad)" stroke-width="3" stroke-linejoin="round" opacity="0.6"/>
+            <!-- connecting lines -->
+            <line x1="50" y1="5" x2="50" y2="25" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+            <line x1="95" y1="30" x2="75" y2="38" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+            <line x1="95" y1="70" x2="75" y2="62" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+            <line x1="50" y1="95" x2="50" y2="75" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+            <line x1="5" y1="70" x2="25" y2="62" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+            <line x1="5" y1="30" x2="25" y2="38" stroke="url(#hybro-grad)" stroke-width="2" opacity="0.4"/>
+          </svg>
+        </div>
+        <span style="background: linear-gradient(to right, hsl(270, 80%, 70%), hsl(180, 100%, 60%)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; font-size: 12px; font-weight: 600;">HYBRO AI</span>
+        <span style="color: #475569; font-size: 11px;">·</span>
+        <span class="shimmer-text" style="font-size: 12px;">Step 2 of 3 · Dispatching agents</span>
+      </div>
+
+      <!-- Agent 1: Completed -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Excel Generator Agent</span>
+            <span style="display: inline-flex; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">3.2s</span>
+          </div>
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.6;">
+            Here's the Excel spreadsheet with 47 creators' contact emails across YouTube, TikTok, and Instagram.
+          </div>
+          <div style="margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div>
+              <div style="color: #e2e8f0; font-size: 12px; font-weight: 500;">creators_contacts.xlsx</div>
+              <div style="color: #64748b; font-size: 10px;">47 rows · 12.4 KB</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent 2: Thinking -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #d97706); display: flex; align-items: center; justify-content: center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 12l4-5 4 3 5-6"/></svg>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+          <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Data Analyst</span>
+          <span class="shimmer-text" style="font-size: 12px;">Thinking</span>
+        </div>
+      </div>
+
+      <!-- HITL: Standalone question card (not an agent row) -->
+      <div style="padding: 12px 0;">
+        <div style="background: #0f172a; border: 1px solid #f59e0b30; border-radius: 8px; padding: 12px 14px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span class="shimmer-text-yellow" style="font-size: 12px; font-weight: 500;">Needs input</span>
+          </div>
+          <div style="color: #cbd5e1; font-size: 13px; line-height: 1.5;">
+            What date range would you like to analyze for engagement rates?
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>Supervisor 完成</h3>
+</div>
+
+<div class="mockup" style="max-width: 680px; margin: 0 auto;">
+  <div class="mockup-header">完成 — 四维方块静止</div>
+  <div class="mockup-body" style="padding: 0; font-size: 13px; background: #0c1222;">
+
+    <div style="padding: 16px 20px;">
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
+        <div style="max-width: 75%; background: #1e293b; border-radius: 12px; padding: 10px 14px;">
+          <div style="color: #e2e8f0; font-size: 13px;">Can you give me an excel of creators contact emails and analyze engagement?</div>
+        </div>
+      </div>
+
+      <!-- Supervisor header — completed, static icon -->
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 20px; height: 20px;">
+          <svg viewBox="0 0 100 100" width="20" height="20">
+            <defs>
+              <linearGradient id="hybro-grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="hsl(270, 80%, 70%)"/>
+                <stop offset="100%" stop-color="hsl(180, 100%, 60%)"/>
+              </linearGradient>
+            </defs>
+            <polygon points="50,5 95,30 95,70 50,95 5,70 5,30" fill="none" stroke="url(#hybro-grad2)" stroke-width="4" stroke-linejoin="round"/>
+            <polygon points="50,25 75,38 75,62 50,75 25,62 25,38" fill="none" stroke="url(#hybro-grad2)" stroke-width="3" stroke-linejoin="round" opacity="0.6"/>
+            <line x1="50" y1="5" x2="50" y2="25" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+            <line x1="95" y1="30" x2="75" y2="38" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+            <line x1="95" y1="70" x2="75" y2="62" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+            <line x1="50" y1="95" x2="50" y2="75" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+            <line x1="5" y1="70" x2="25" y2="62" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+            <line x1="5" y1="30" x2="25" y2="38" stroke="url(#hybro-grad2)" stroke-width="2" opacity="0.4"/>
+          </svg>
+        </div>
+        <span style="background: linear-gradient(to right, hsl(270, 80%, 70%), hsl(180, 100%, 60%)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; font-size: 12px; font-weight: 600;">HYBRO AI</span>
+        <span style="color: #475569; font-size: 11px;">·</span>
+        <span style="color: #64748b; font-size: 12px;">3 agents · 12.4s</span>
+      </div>
+
+      <!-- Summary Agent result (as normal agent row per option D) -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, hsl(270, 80%, 70%), hsl(180, 100%, 60%)); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Summary Agent</span>
+            <span style="display: inline-flex; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">2.1s</span>
+          </div>
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.7;">
+            I've completed both tasks:<br><br>
+            <strong style="color: #e2e8f0;">1. Creator Contacts Excel</strong> — 47 creators across YouTube, TikTok, and Instagram with Name, Email, Platform, Followers.<br><br>
+            <strong style="color: #e2e8f0;">2. Engagement Analysis</strong> — Top 5: @creator_a (8.2%), @creator_b (7.1%), @creator_c (6.8%). Average: 3.4%.
+          </div>
+        </div>
+      </div>
+
+      <!-- Excel Generator result -->
+      <div style="display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #1a2332;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><circle cx="8.5" cy="16.5" r="1.5"/><circle cx="15.5" cy="16.5" r="1.5"/><path d="M12 2v4M8 6h8l1 5H7l1-5z"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Excel Generator Agent</span>
+            <span style="display: inline-flex; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">3.2s</span>
+          </div>
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.6;">
+            Here's the Excel spreadsheet with 47 creators' contact emails.
+          </div>
+          <div style="margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <div>
+              <div style="color: #e2e8f0; font-size: 12px; font-weight: 500;">creators_contacts.xlsx</div>
+              <div style="color: #64748b; font-size: 10px;">47 rows · 12.4 KB</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Analyst result -->
+      <div style="display: flex; gap: 12px; padding: 12px 0;">
+        <div style="flex-shrink: 0; width: 28px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #d97706); display: flex; align-items: center; justify-content: center; margin-top: 1px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 12l4-5 4 3 5-6"/></svg>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <span style="color: #e2e8f0; font-weight: 600; font-size: 13px;">Data Analyst</span>
+            <span style="display: inline-flex; background: #1e293b; border-radius: 4px; padding: 1px 6px; font-size: 10px; color: #64748b;">6.8s</span>
+          </div>
+
+          <!-- Resolved HITL card nested under this agent -->
+          <div style="background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px;">
+            <div style="color: #94a3b8; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px;">
+              What date range would you like to analyze for engagement rates?
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <div style="width: 4px; height: 4px; border-radius: 50%; background: #22c55e;"></div>
+              <span style="color: #e2e8f0; font-size: 12px; font-weight: 500;">last 30 days</span>
+            </div>
+          </div>
+
+          <div style="color: #b4bcd0; font-size: 13px; line-height: 1.6;">
+            Engagement analysis for the past 30 days: Top performers are @creator_a (8.2%), @creator_b (7.1%), and @creator_c (6.8%).
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 32px;">
+  <h3>确认？</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>确认，可以写 spec</h3>
+      <p>HYBRO AI 四维方块 + 旋转动画 + 所有设计决策确认</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>还需要调整</h3>
+      <p>告诉我哪里需要改</p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+@keyframes shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.shimmer-text {
+  background: linear-gradient(90deg, #64748b 0%, #94a3b8 25%, #e2e8f0 50%, #94a3b8 75%, #64748b 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+.shimmer-text-yellow {
+  background: linear-gradient(90deg, #92400e 0%, #d97706 25%, #fbbf24 50%, #d97706 75%, #92400e 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+.tesseract-spin {
+  animation: spin 3s linear infinite;
+}
+</style>

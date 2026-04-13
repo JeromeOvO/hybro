@@ -1,0 +1,156 @@
+import { describe, it, expect } from 'vitest'
+import { contentSlotsReducer } from '@/stores/turn-event-store/projections/content-slots'
+import type { TurnEvent, ContentSlotView, UserInputData } from '@/stores/turn-event-store/types'
+
+const userInput: UserInputData = { text: 'hello', attachments: [] }
+
+function evt(overrides: Partial<TurnEvent> & { type: TurnEvent['type'] }): TurnEvent {
+  return {
+    eventId: `evt-${Math.random().toString(36).slice(2)}`,
+    turnId: 'turn-1',
+    seq: 1,
+    ts: Date.now(),
+    ...overrides,
+  } as TurnEvent
+}
+
+describe('contentSlotsReducer', () => {
+  it('init returns empty array', () => {
+    expect(contentSlotsReducer.init()).toEqual([])
+  })
+
+  it('slot_opened creates a new slot in streaming state', () => {
+    const view = contentSlotsReducer.reduce(
+      contentSlotsReducer.init(),
+      evt({ type: 'slot_opened', slotId: 'msg-1', slotType: 'agent', agentId: 'a1', agentName: 'Agent A' }),
+    )
+    expect(view).toHaveLength(1)
+    expect(view[0]).toMatchObject({
+      slotId: 'msg-1',
+      slotType: 'agent',
+      agentId: 'a1',
+      agentName: 'Agent A',
+      content: '',
+      artifacts: [],
+      status: 'streaming',
+    })
+  })
+
+  it('slot_delta accumulates text content', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 2, slotId: 'msg-1', textDelta: 'Hello ' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 3, slotId: 'msg-1', textDelta: 'World' }))
+    expect(view[0].content).toBe('Hello World')
+  })
+
+  it('artifact_appended adds to artifacts array', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'artifact_appended', seq: 2, slotId: 'msg-1',
+      artifact: { artifactId: 'art-1', name: 'file.png', parts: [] },
+    }))
+    expect(view[0].artifacts).toHaveLength(1)
+    expect(view[0].artifacts[0].artifactId).toBe('art-1')
+  })
+
+  it('slot_snapshot replaces content and artifacts', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 2, slotId: 'msg-1', textDelta: 'partial' }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_snapshot', seq: 3, slotId: 'msg-1',
+      content: 'Final full content',
+      artifacts: [{ artifactId: 'art-1', name: 'result', parts: [] }],
+    }))
+    expect(view[0].content).toBe('Final full content')
+    expect(view[0].artifacts).toHaveLength(1)
+  })
+
+  it('slot_terminated changes status', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_terminated', seq: 2, slotId: 'msg-1', status: 'completed',
+    }))
+    expect(view[0].status).toBe('completed')
+  })
+
+  it('slot_terminated with error sets error field', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_terminated', seq: 2, slotId: 'msg-1', status: 'failed', error: 'agent crashed',
+    }))
+    expect(view[0].status).toBe('failed')
+    expect(view[0].error).toBe('agent crashed')
+  })
+
+  it('duplicate slot_terminated is ignored (idempotent)', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_terminated', seq: 2, slotId: 'msg-1', status: 'completed' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_terminated', seq: 3, slotId: 'msg-1', status: 'failed' }))
+    expect(view[0].status).toBe('completed') // first wins
+  })
+
+  it('hitl_requested + hitl_answered creates hitl_record slot', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'hitl_requested', seq: 1, hitlId: 'h1', source: 'agent', agentName: 'Agent A',
+      prompt: 'What color?', promptType: 'text',
+    }))
+    // Pending marker stored internally (hitl-pending:h1)
+    expect(view).toHaveLength(1)
+    expect(view[0].slotId).toBe('hitl-pending:h1')
+    expect(view[0].status).toBe('streaming')
+
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'hitl_answered', seq: 2, hitlId: 'h1', answer: 'Blue',
+    }))
+    // Pending marker removed, record created
+    expect(view).toHaveLength(1)
+    expect(view[0]).toMatchObject({
+      slotId: 'hitl-record:h1',
+      slotType: 'hitl_record',
+      hitlPrompt: 'What color?',
+      hitlAnswer: 'Blue',
+      hitlSource: 'agent',
+      status: 'completed',
+    })
+  })
+
+  it('turn_completed closes unterminated slots as completed', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'turn_completed', seq: 5, durationMs: 1000 }))
+    expect(view[0].status).toBe('completed')
+  })
+
+  it('turn_failed closes unterminated slots as failed', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'turn_failed', seq: 5, reason: 'error' }))
+    expect(view[0].status).toBe('failed')
+  })
+
+  it('summary slot_opened creates summary-typed slot', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_opened', seq: 1, slotId: 'sum-1', slotType: 'summary', mode: 'supervisor',
+    }))
+    expect(view[0]).toMatchObject({
+      slotId: 'sum-1',
+      slotType: 'summary',
+      mode: 'supervisor',
+      status: 'streaming',
+    })
+  })
+
+  it('events for unknown slotId are ignored', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 1, slotId: 'unknown', textDelta: 'data' }))
+    expect(view).toHaveLength(0)
+  })
+})

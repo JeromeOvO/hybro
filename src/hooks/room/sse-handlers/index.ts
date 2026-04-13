@@ -5,6 +5,7 @@ import { useMessageStore } from '@/stores/message-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
 import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { appendEvent } from '@/lib/room-timeline/event-log'
 import type { SSEHandlerDeps } from './types'
 
 function partsToArtifacts(
@@ -234,6 +235,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }, 'sse')
+
+          appendEvent(roomId, {
+            kind: 'agent_started',
+            timestamp: sseMessage.timestamp,
+            agentId: sseMessage.data.agent_id,
+            agentName: resolvedAgentName ?? 'Agent',
+            label: `${resolvedAgentName ?? 'Agent'} started`,
+          })
         }
         break
 
@@ -292,6 +301,30 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+
+            // Capture timeline events for terminal states
+            if (status === TASK_STATE.COMPLETED) {
+              appendEvent(roomId, {
+                kind: 'agent_completed',
+                timestamp: sseMessage.timestamp,
+                agentId: sseMessage.data.agent_id,
+                agentName: resolvedAgentName,
+                label: `${resolvedAgentName ?? 'Agent'} completed`,
+              })
+            } else if (
+              status === TASK_STATE.FAILED ||
+              status === TASK_STATE.REJECTED ||
+              status === TASK_STATE.CANCELED
+            ) {
+              appendEvent(roomId, {
+                kind: 'agent_failed',
+                timestamp: sseMessage.timestamp,
+                agentId: sseMessage.data.agent_id,
+                agentName: resolvedAgentName,
+                label: `${resolvedAgentName ?? 'Agent'} failed`,
+                body: sseMessage.data.error,
+              })
+            }
 
             // Cancel confirmation: task_update(canceled) confirms a cancel
             // succeeded — clear cancelling UI immediately.  processing_status
@@ -375,6 +408,15 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             artifacts: merged,
           }, 'sse')
+
+          if (!isAppend) {
+            appendEvent(roomId, {
+              kind: 'artifact_emitted',
+              timestamp: sseMessage.timestamp,
+              agentId: existing?.agentId || sseMessage.data.agent_id,
+              label: `Artifact: ${artifact.name ?? 'output'}`,
+            })
+          }
         }
         break
       }
@@ -388,16 +430,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           if (request_id && message_id) {
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
-
-            // Clean up any stale index entries pointing to this same entity.
-            // When a new HITL request reuses the same message_id, the old
-            // request's index entry must be removed so that a late-arriving
-            // hitl_status_update for the old request can't resolve to this entity.
-            for (const [oldReqId, oldEntityId] of hitlRequestIndex.current) {
-              if (oldEntityId === message_id && oldReqId !== request_id) {
-                hitlRequestIndex.current.delete(oldReqId)
-              }
-            }
 
             let resolvedAgentName = agent_name
             if (!resolvedAgentName && agent_id) {
@@ -419,7 +451,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               hitlChoices: choices,
               hitlExpiresAt: expires_at,
               hitlResolved: false,
-              hitlUserAnswer: '',
               hitlGroupId: group_id ?? undefined,
               hitlGroupTotal: group_total ?? undefined,
               hitlGroupIndex: group_index ?? undefined,
@@ -428,6 +459,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               relatedMessageId: related_message_id,
             }, 'sse')
             hitlRequestIndex.current.set(request_id, message_id)
+
+            appendEvent(roomId, {
+              kind: 'hitl_requested',
+              timestamp: sseMessage.timestamp,
+              agentId: agent_id,
+              label: 'Input requested',
+              hitlPayload: { prompt: prompt ?? '' },
+            })
           }
         }
         break
@@ -478,9 +517,27 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               }, 'sse')
               if (resolved) {
                 hitlRequestIndex.current.delete(request_id)
+
+                appendEvent(roomId, {
+                  kind: 'hitl_answered',
+                  timestamp: sseMessage.timestamp,
+                  agentId: entity.agentId,
+                  label: 'Input provided',
+                })
               }
             }
           }
+        }
+        break
+      }
+
+      case 'turn_event': {
+        const turnEventData = (sseMessage.data?.turn_event ?? sseMessage.data) as Record<string, unknown> | undefined
+        if (turnEventData?.turn_id && turnEventData?.type) {
+          const { camelCaseEvent } = await import('@/hooks/turn/useSSEToEventLog')
+          const { useTurnEventStore } = await import('@/stores/turn-event-store')
+          const event = camelCaseEvent(turnEventData)
+          useTurnEventStore.getState().append(event.turnId, event)
         }
         break
       }
