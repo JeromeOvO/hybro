@@ -12,11 +12,11 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 describe('OrchestrationRail', () => {
   it('renders rail items with labels', () => {
     const items: RailItemView[] = [
-      { key: 'p1', icon: 'check', label: 'Planning...', ts: 1000, isActive: false },
+      { key: 'p1', icon: 'check', label: 'Planning', ts: 1000, isActive: false },
       { key: 'p2', icon: 'spinner', label: 'Delegating to Agent A', ts: 2000, isActive: true },
     ]
     render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    expect(screen.getByText('Planning...')).toBeDefined()
+    expect(screen.getByText('Planning')).toBeDefined()
     expect(screen.getByText('Delegating to Agent A')).toBeDefined()
   })
 
@@ -27,17 +27,17 @@ describe('OrchestrationRail', () => {
 
   it('shows processing placeholder when isProcessing and no items', () => {
     render(<OrchestrationRail items={[]} isProcessing={true} />, { wrapper: Wrapper })
-    expect(screen.getByText('Processing...')).toBeDefined()
+    expect(screen.getByText('Processing')).toBeDefined()
     expect(screen.queryAllByTestId('rail-spinner').length).toBeGreaterThan(0)
   })
 
-  it('shows spinner animation for active items', () => {
+  it('shows shimmer animation for active items', () => {
     const items: RailItemView[] = [
-      { key: 'p1', icon: 'spinner', label: 'Working...', ts: 1000, isActive: true },
+      { key: 'p1', icon: 'spinner', label: 'Working', ts: 1000, isActive: true },
     ]
     const { container } = render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    const spinner = container.querySelector('[data-testid="rail-spinner"]')
-    expect(spinner).toBeDefined()
-    expect(spinner?.classList.contains('animate-spin')).toBe(true)
+    const shimmer = container.querySelector('[data-testid="rail-spinner"]')
+    expect(shimmer).toBeDefined()
+    expect(shimmer?.classList.contains('animate-pulse')).toBe(true)
   })
 })

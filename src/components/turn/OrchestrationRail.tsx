@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Check, X, Loader2, Pause, Info, ChevronRight } from 'lucide-react'
+import { Check, X, Pause, Info, ChevronRight } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
@@ -12,7 +12,8 @@ function RailIconComponent({ icon, isActive }: { icon: RailIcon; isActive: boole
   const size = 'h-3 w-3'
   switch (icon) {
     case 'spinner':
-      return <Loader2 className={cn(size, 'text-muted-foreground animate-spin')} data-testid="rail-spinner" />
+      // Active items use a shimmer dot instead of a spinning loader
+      return <span className={cn(size, 'rounded-full bg-muted-foreground/40 animate-pulse')} data-testid="rail-spinner" />
     case 'check':
       return <Check className={cn(size, 'text-green-500')} />
     case 'x':
@@ -82,9 +83,9 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
     <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
       <div className="border-l-2 border-muted pl-3">
         {showProcessingPlaceholder ? (
-          <div className="flex items-center gap-1.5 py-0.5 text-foreground">
+          <div className="flex items-center gap-1.5 py-0.5 text-muted-foreground">
             <RailIconComponent icon="spinner" isActive={true} />
-            <span className="text-xs">Processing...</span>
+            <span className="text-xs animate-pulse">Processing</span>
           </div>
         ) : isExpanded ? (
           <>
@@ -98,7 +99,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
                   )}
                 >
                   <RailIconComponent icon={item.icon} isActive={item.isActive} />
-                  <span className="text-xs">{item.label}</span>
+                  <span className={cn('text-xs', item.isActive && 'animate-pulse')}>{item.label}</span>
                 </div>
               ))}
             </div>

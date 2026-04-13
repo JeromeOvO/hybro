@@ -6,6 +6,7 @@ interface RailState {
   items: RailItemView[]
   keyIndex: Map<string, number> // key → items array index
   hitlLabels: Map<string, string> // hitlId → base label (to build answered label)
+  startTs: number | null // ts of first event, for computing duration
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -17,15 +18,15 @@ function formatDuration(ms: number): string {
 function makePhaseLabel(phase: TurnEvent & { type: 'phase_changed' }): string {
   switch (phase.phase.name) {
     case 'planning':
-      return 'Planning...'
+      return 'Planning'
     case 'delegating':
       return `Delegating to ${phase.phase.agentNames.join(', ')}`
     case 'evaluating':
-      return 'Evaluating...'
+      return 'Evaluating'
     case 'synthesizing':
-      return 'Synthesizing...'
+      return 'Synthesizing'
     case 'awaiting_input':
-      return 'Awaiting input...'
+      return 'Awaiting input'
     case 'round':
       return `Round ${phase.phase.current}/${phase.phase.total}`
     case 'workflow_step':
@@ -51,6 +52,7 @@ function init(): RailState {
     items: [],
     keyIndex: new Map(),
     hitlLabels: new Map(),
+    startTs: null,
   }
 }
 
@@ -59,6 +61,7 @@ function reduce(state: RailState, event: TurnEvent): RailState {
   const items = [...state.items]
   const keyIndex = new Map(state.keyIndex)
   const hitlLabels = new Map(state.hitlLabels)
+  const startTs = state.startTs ?? event.ts
 
   // After a turn terminal event, ignore non-terminal events.
   // This prevents stale phase_changed events (from processing_status SSE)
@@ -195,10 +198,14 @@ function reduce(state: RailState, event: TurnEvent): RailState {
       // Add terminal item (deduplicate: hydration + sync can both emit)
       const key = 'turn-terminal'
       if (keyIndex.has(key)) break
+      // Use event.durationMs if available, otherwise compute from first event ts
+      const duration = event.durationMs > 0
+        ? event.durationMs
+        : (startTs ? event.ts - startTs : 0)
       const item: RailItemView = {
         key,
         icon: 'check',
-        label: `Completed (${formatDuration(event.durationMs)})`,
+        label: `Completed (${formatDuration(duration)})`,
         ts: event.ts,
         isActive: false,
       }
@@ -261,7 +268,7 @@ function reduce(state: RailState, event: TurnEvent): RailState {
       break
   }
 
-  return { items, keyIndex, hitlLabels }
+  return { items, keyIndex, hitlLabels, startTs }
 }
 
 // ── Public API ────────────────────────────────────────────────────
@@ -273,6 +280,7 @@ export const railReducer: ProjectionReducer<RailItemView[]> = {
       items: view,
       keyIndex: new Map(view.map((item, idx) => [item.key, idx])),
       hitlLabels: new Map(), // reconstructed on replay
+      startTs: view.length > 0 ? view[0].ts : null,
     }
     return reduce(state, event).items
   },

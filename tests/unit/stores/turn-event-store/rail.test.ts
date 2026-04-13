@@ -25,7 +25,7 @@ describe('railReducer', () => {
     expect(view).toHaveLength(1)
     expect(view[0]).toMatchObject({
       icon: 'spinner',
-      label: 'Planning...',
+      label: 'Planning',
       isActive: true,
     })
   })
@@ -93,6 +93,19 @@ describe('railReducer', () => {
     expect(last).toMatchObject({
       icon: 'check',
       label: 'Completed (2.3s)',
+      isActive: false,
+    })
+  })
+
+  it('turn_completed with durationMs=0 computes from first event ts', () => {
+    let view = railReducer.init()
+    view = railReducer.reduce(view, evt({ type: 'phase_changed', seq: 1, ts: 1000, phase: { name: 'planning' } }))
+    view = railReducer.reduce(view, evt({ type: 'turn_completed', seq: 10, ts: 4500, durationMs: 0 }))
+
+    const last = view[view.length - 1]
+    expect(last).toMatchObject({
+      icon: 'check',
+      label: 'Completed (3.5s)',
       isActive: false,
     })
   })
