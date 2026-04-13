@@ -1138,15 +1138,10 @@ class DirectTransport(AgentTransport):
             if is_failure_state(final_state):
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
 
-        # Send non-text parts via agent_response for real-time clients
-        if streaming_state.non_text_parts and ctx.send_sse:
-            await self.sse_manager.send_agent_response(
-                ctx.room_id,
-                ctx.current_message.message_id,
-                ctx.current_message.agent_id,
-                streaming_state.full_response_text,
-                parts=streaming_state.non_text_parts,
-            )
+        # Non-text parts are already delivered via task_update SSE (which
+        # carries the parts field).  A separate send_agent_response here
+        # would create a duplicate entity on the frontend with a different
+        # message_id, causing the agent response to render twice.
 
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 

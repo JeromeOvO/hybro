@@ -443,6 +443,7 @@ class SSEManager:
     async def send_processing_status(
         self, room_id: str, status: str, message_id: str = None, details: str = None,
         client_request_id: str | None = None,
+        agents: list[dict] | None = None,
     ):
         """Send processing status and persist to room for page refresh recovery.
 
@@ -453,6 +454,8 @@ class SSEManager:
             details: Optional details about the status
             client_request_id: Pass-through correlation ID from the frontend request.
                 Included in the SSE payload so the frontend can map temp→real message IDs.
+            agents: Optional list of agent dicts with agent_id and agent_name,
+                used during Delegating phase to show agent names in the rail.
         """
         # Deduplicate terminal statuses — once a terminal status has been
         # sent for a (room, message) pair, suppress any subsequent terminal
@@ -503,6 +506,8 @@ class SSEManager:
         }
         if client_request_id is not None:
             data["client_request_id"] = client_request_id
+        if agents is not None:
+            data["agents"] = agents
         await self.broadcast_to_room(room_id, "processing_status", data)
 
     async def send_task_submitted(

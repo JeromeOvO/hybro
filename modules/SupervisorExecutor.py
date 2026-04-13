@@ -555,9 +555,14 @@ class SupervisorExecutor:
                     # SSE: notify frontend of delegation stage
                     if not (token and token.is_cancelled):
                         try:
+                            agent_names = [t.agent_name for t in action.targets]
                             await self.sse_manager.send_processing_status(
                                 room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                                 details=f"Delegating to {len(action.targets)} agent(s)...",
+                                agents=[
+                                    {"agent_id": t.agent_id, "agent_name": t.agent_name}
+                                    for t in action.targets
+                                ],
                             )
                         except Exception:
                             logger.debug("SSE stage notification failed (delegating)", exc_info=True)
