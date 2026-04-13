@@ -145,6 +145,7 @@ class RoomMessageCenter:
         # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._redis: RedisService | None = None
+        self._turn_event_appender = None
 
     # -- Redis wiring (called from main.py at startup) ---------------------
 
@@ -588,6 +589,15 @@ class RoomMessageCenter:
                 room_user_message_id,
                 details="Failed to process agent messages",
             )
+            # Emit turn_failed event
+            if self._turn_event_appender:
+                try:
+                    await self._turn_event_appender.append(
+                        room_id, room_user_message_id, "turn_failed",
+                        {"reason": "Queue processing failed", "code": "error"},
+                    )
+                except Exception:
+                    pass
             await self._notify_all_non_terminal_tasks_failed(
                 room_id, room_user_message_id
             )
@@ -603,6 +613,15 @@ class RoomMessageCenter:
             )
 
         if queue_processing_result.result == QueueResult.CANCELED:
+            # Emit turn_canceled event
+            if self._turn_event_appender:
+                try:
+                    await self._turn_event_appender.append(
+                        room_id, room_user_message_id, "turn_canceled",
+                        {},
+                    )
+                except Exception:
+                    pass
             return OrchestrationResponse(
                 success=True,
                 error="Processing cancelled by user",
@@ -623,6 +642,16 @@ class RoomMessageCenter:
         await self.sse_manager.send_processing_status(
             room_id, SSEProcessingStatus.COMPLETED, room_user_message_id
         )
+
+        # Emit turn_completed event
+        if self._turn_event_appender:
+            try:
+                await self._turn_event_appender.append(
+                    room_id, room_user_message_id, "turn_completed",
+                    {"duration_ms": 0},
+                )
+            except Exception:
+                pass
 
         # Log room memory stats (debug/monitoring)
         await self._log_room_memory_stats(room_id)
@@ -1624,6 +1653,15 @@ class RoomMessageCenter:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
+                # Emit turn_completed event
+                if self._turn_event_appender:
+                    try:
+                        await self._turn_event_appender.append(
+                            room_id, user_message_id, "turn_completed",
+                            {"duration_ms": 0},
+                        )
+                    except Exception:
+                        pass
 
             case RunStatus.PAUSED:
                 pass
@@ -1661,6 +1699,15 @@ class RoomMessageCenter:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.COMPLETED, user_message_id
                 )
+                # Emit turn_completed event (CLARIFYING is a soft complete)
+                if self._turn_event_appender:
+                    try:
+                        await self._turn_event_appender.append(
+                            room_id, user_message_id, "turn_completed",
+                            {"duration_ms": 0},
+                        )
+                    except Exception:
+                        pass
 
             case RunStatus.CANCELED:
                 canceled_parent_ids: list[str] = []
@@ -1678,6 +1725,15 @@ class RoomMessageCenter:
                 await self.sse_manager.send_processing_status(
                     room_id, SSEProcessingStatus.CANCELED, user_message_id
                 )
+                # Emit turn_canceled event
+                if self._turn_event_appender:
+                    try:
+                        await self._turn_event_appender.append(
+                            room_id, user_message_id, "turn_canceled",
+                            {},
+                        )
+                    except Exception:
+                        pass
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, user_message_id
                 )
@@ -1702,6 +1758,15 @@ class RoomMessageCenter:
                     user_message_id,
                     details="V2 supervisor execution failed",
                 )
+                # Emit turn_failed event
+                if self._turn_event_appender:
+                    try:
+                        await self._turn_event_appender.append(
+                            room_id, user_message_id, "turn_failed",
+                            {"reason": "V2 supervisor execution failed", "code": "error"},
+                        )
+                    except Exception:
+                        pass
                 await self._notify_all_non_terminal_tasks_failed(
                     room_id, user_message_id
                 )
