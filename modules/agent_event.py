@@ -31,6 +31,9 @@ class AgentEvent:
     room_id: str
     agent_id: str
 
+    # Turn attribution (optional in Phase 0, required in Phase 1a)
+    turn_id: str | None = None
+
     # Content (populated per kind)
     text: str = ""
     state: str | None = None

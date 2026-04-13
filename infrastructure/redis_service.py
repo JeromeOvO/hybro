@@ -83,6 +83,23 @@ class RedisService:
 
     # --- Key-Value Operations ---
 
+    async def incr(self, key: str) -> int:
+        """Increment key by 1 (INCR). Creates key with value 1 if it doesn't exist.
+
+        Args:
+            key: Redis key
+
+        Returns:
+            The value after incrementing, or 0 on error
+        """
+        if not self.is_connected:
+            return 0
+        try:
+            return await self._client.incr(key)
+        except Exception as e:
+            logger.warning("RedisService incr failed for key %s: %s", key, e)
+            return 0
+
     async def set_nx(self, key: str, value: str, ex: int | None = None) -> bool:
         """Set key to value if key does not exist (SET NX).
 

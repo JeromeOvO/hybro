@@ -880,6 +880,10 @@ class SSEManager:
         """Remove (but do not cancel) the token for *message_id*."""
         self._cancellation_tokens.pop(message_id, None)
 
+    async def broadcast_turn_event(self, room_id: str, event) -> None:
+        """Broadcast a TurnEvent to all room SSE connections."""
+        await self.broadcast_to_room(room_id, "turn_event", event.to_wire())
+
 
 # global SSE manager instance
 sse_manager = SSEManager()

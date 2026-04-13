@@ -137,3 +137,4 @@ class RoomAgentMessage(RoomMessage):
     task_content: str | None = None  # Task description being processed
     # Flag to indicate this message has task tracking enabled
     has_task_tracking: bool = False
+    turn_id: str | None = None  # Root user message_id that triggered this processing chain

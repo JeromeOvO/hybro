@@ -319,6 +319,15 @@ class MongoDB:
             )
         return self.db.agent_capability_issues
 
+    @property
+    def turn_events_collection(self):
+        """Get turn_events collection for event-sourced turn journals."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.turn_events
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -2559,6 +2568,23 @@ class MongoDB:
             )
         except Exception as e:
             logger.error("Error creating capability issue indexes: %s", e)
+
+    async def ensure_turn_events_indexes(self) -> None:
+        """Create indexes for the turn_events collection."""
+        col = self.turn_events_collection
+        await col.create_index(
+            [("room_id", 1), ("turn_id", 1)],
+            unique=True,
+            name="unique_room_turn",
+        )
+        await col.create_index(
+            [("room_id", 1), ("created_at", -1)],
+            name="room_turns_by_date",
+        )
+        await col.create_index(
+            [("room_id", 1), ("status", 1)],
+            name="room_turns_by_status",
+        )
 
 
 mongodb = MongoDB()
