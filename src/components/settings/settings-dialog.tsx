@@ -1,6 +1,7 @@
 "use client"
 
 import { useUser } from "@clerk/nextjs"
+import { usePathname } from "next/navigation"
 import { RefreshCw, House, ArrowRight } from "lucide-react"
 import Link from "next/link"
 
@@ -21,11 +22,13 @@ import { useHubStatus } from "@/hooks/useHubStatus"
 
 function HubStatusLine({ onNavigate }: { onNavigate: () => void }) {
   const { hasHub, isOnline, isLoading } = useHubStatus()
+  const pathname = usePathname()
+  const hubPath = pathname.startsWith("/d") ? "/d/hub" : "/c/hub"
 
   return (
     <SettingsCard title="My Hub" description="Local agent hub">
       <Link
-        href="/c/hub"
+        href={hubPath}
         onClick={onNavigate}
         className="flex items-center justify-between group hover:bg-muted/50 -mx-2 -my-1 px-2 py-1 rounded-md transition-colors"
       >

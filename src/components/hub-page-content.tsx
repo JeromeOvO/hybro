@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import { useAuth } from "@clerk/nextjs"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -10,8 +9,6 @@ import {
   KeyRound,
   Download,
   Play,
-  Copy,
-  Check,
   ExternalLink,
   Activity,
   ChevronRight,
@@ -22,30 +19,13 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import { InlineCopyButton } from "@/components/inline-copy-button"
 import { useHubStatus, HUB_STATUS_QUERY_KEY } from "@/hooks/useHubStatus"
 import { getAllActiveAgents } from "@/lib/api/agent"
 import { formatTimestamp } from "@/lib/time"
 import { getAgentAvatarUri } from "@/lib/agent-avatar"
 import { cn } from "@/lib/utils"
 import type { Agent } from "@/lib/types"
-
-function InlineCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-  return (
-    <button
-      onClick={handleCopy}
-      className="inline-flex items-center p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-      aria-label="Copy to clipboard"
-    >
-      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-    </button>
-  )
-}
 
 interface HubPageContentProps {
   apiKeysPath: string
@@ -253,13 +233,19 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
                   <Link
                     key={agent.agent_id}
                     href={`${basePath}/agents/${agent.agent_id}`}
-                    className={cn("block rounded-lg", !isOnline && "pointer-events-none opacity-50")}
+                    className={cn(
+                      "block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      !isOnline && "pointer-events-none opacity-50",
+                    )}
                   >
                     <Card className="transition-colors hover:bg-muted/50">
                       <CardContent className="pt-4 pb-4">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-9 w-9 shrink-0 rounded-lg">
-                            <AvatarImage src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} />
+                            <AvatarImage
+                              src={agent.agent_card.iconUrl || getAgentAvatarUri(agent.agent_id)}
+                              alt={agent.agent_card.name}
+                            />
                             <AvatarFallback className="rounded-lg text-xs">
                               {agent.agent_card.name?.charAt(0)?.toUpperCase() ?? "A"}
                             </AvatarFallback>

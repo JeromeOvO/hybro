@@ -2,32 +2,16 @@
 
 import { useAuth } from '@clerk/nextjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { House, RefreshCw, Wifi, WifiOff, Terminal, KeyRound, Download, Play, Copy, Check } from 'lucide-react'
+import { House, RefreshCw, Wifi, WifiOff, Terminal, KeyRound, Download, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { SettingsCard } from '@/components/settings/settings-card'
+import { InlineCopyButton } from '@/components/inline-copy-button'
 import { getMyHubStatus, type HubStatusResponse } from '@/lib/api/hub'
 import { getAllActiveAgents } from '@/lib/api/agent'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { formatTimestamp } from '@/lib/time'
 import type { Agent } from '@/lib/types'
-
-function InlineCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-  return (
-    <button
-      onClick={handleCopy}
-      className="inline-flex items-center p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-      aria-label="Copy to clipboard"
-    >
-      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-    </button>
-  )
-}
 
 export function HubSection() {
   const { getToken } = useAuth()
@@ -200,9 +184,15 @@ export function HubSection() {
                     !isOnline ? 'opacity-50' : ''
                   }`}
                 >
-                  <House className={`h-3.5 w-3.5 shrink-0 ${
-                    isOnline ? 'text-emerald-500' : 'text-muted-foreground/50'
-                  }`} />
+                  <Avatar className="h-7 w-7 shrink-0 rounded-md">
+                    <AvatarImage
+                      src={agent.agent_card.iconUrl || getAgentAvatarUri(agent.agent_id)}
+                      alt={agent.agent_card.name}
+                    />
+                    <AvatarFallback className="rounded-md text-[10px]">
+                      {agent.agent_card.name?.charAt(0)?.toUpperCase() ?? 'A'}
+                    </AvatarFallback>
+                  </Avatar>
                   <div className="min-w-0 flex-1">
                     <p className="font-medium truncate">{agent.agent_card.name}</p>
                     {agent.agent_card.description && (
