@@ -13,17 +13,23 @@ import type { SSEHandlerDeps } from './types'
  * Parse backend processing_status details string into a typed PhasePayload.
  * Backend sends: "Planning next action...", "Delegating to N agent(s)...",
  * "Evaluating agent results...", "Synthesizing responses..."
+ *
+ * When delegating, the backend also sends an `agents` array with
+ * `{ agent_id, agent_name }` objects so the rail can show actual names.
  */
-function parseStageDetails(details: string): PhasePayload | null {
+function parseStageDetails(
+  details: string,
+  agents?: Array<{ agent_id: string; agent_name: string }>,
+): PhasePayload | null {
   if (details.startsWith('Planning')) {
     return { name: 'planning' }
   }
   const delegatingMatch = details.match(/^Delegating to (\d+) agent/)
   if (delegatingMatch) {
     const count = parseInt(delegatingMatch[1], 10)
-    // Backend only sends the count, not agent names. Use placeholder names
-    // so the rail label reads "Delegating to 2 agent(s)" rather than empty.
-    const agentNames = [`${count} agent(s)`]
+    const agentNames = agents && agents.length > 0
+      ? agents.map(a => a.agent_name)
+      : [`${count} agent(s)`]
     return { name: 'delegating', agentNames, count }
   }
   if (details.startsWith('Evaluating')) {
@@ -174,7 +180,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               const turnId = realMessageId || lifecycle.getMessageId()
               if (turnId) {
                 const { useTurnEventStore } = await import('@/stores/turn-event-store')
-                const phase = parseStageDetails(stageDetails)
+                const sseAgents = sseMessage.data.agents as Array<{ agent_id: string; agent_name: string }> | undefined
+                const phase = parseStageDetails(stageDetails, sseAgents)
                 if (phase) {
                   useTurnEventStore.getState().append(turnId, {
                     eventId: `sse_phase_${turnId}_${Date.now()}`,
