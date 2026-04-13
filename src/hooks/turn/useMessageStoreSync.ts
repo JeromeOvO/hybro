@@ -46,9 +46,11 @@ export function useMessageStoreSync() {
         const userIds = new Set(userEntities.map(u => u.id))
         const entityById = new Map(orderedIds.map(id => [id, entities[id]]))
 
+        const unlinked: MessageEntity[] = []
+
         for (const agent of agentEntities) {
           const relId = agent.relatedMessageId
-          if (!relId) continue
+          if (!relId) { unlinked.push(agent); continue }
 
           let turnId: string | undefined
           if (userIds.has(relId)) {
@@ -60,11 +62,26 @@ export function useMessageStoreSync() {
               turnId = related.relatedMessageId
             }
           }
-          if (!turnId) continue
 
-          const list = agentsByTurn.get(turnId) ?? []
-          list.push(agent)
-          agentsByTurn.set(turnId, list)
+          if (turnId) {
+            const list = agentsByTurn.get(turnId) ?? []
+            list.push(agent)
+            agentsByTurn.set(turnId, list)
+          } else {
+            unlinked.push(agent)
+          }
+        }
+
+        // Fallback: assign unlinked agents to the most recent user message.
+        // This handles cases where relatedMessageId uses the server-assigned ID
+        // but the user entity still has a temp ID (pre-swap timing gap).
+        if (unlinked.length > 0 && userEntities.length > 0) {
+          const lastUser = userEntities[userEntities.length - 1]
+          const list = agentsByTurn.get(lastUser.id) ?? []
+          for (const agent of unlinked) {
+            list.push(agent)
+          }
+          agentsByTurn.set(lastUser.id, list)
         }
 
         // For each user message, check if this turn needs updating

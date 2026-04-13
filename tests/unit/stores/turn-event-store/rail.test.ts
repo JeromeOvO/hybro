@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { railReducer } from '@/stores/turn-event-store/projections/rail'
+import { railReducer, replayRail } from '@/stores/turn-event-store/projections/rail'
 import type { TurnEvent, RailItemView } from '@/stores/turn-event-store/types'
 
 function evt(overrides: Partial<TurnEvent> & { type: TurnEvent['type'] }): TurnEvent {
@@ -161,5 +161,74 @@ describe('railReducer', () => {
       icon: 'spinner',
       isActive: true,
     })
+  })
+
+  // ── Deduplication tests (Bug 3 fix) ──────────────────────────
+
+  it('duplicate slot_opened for same slotId is ignored', () => {
+    let view = railReducer.init()
+    view = railReducer.reduce(view, evt({
+      type: 'slot_opened', seq: 1, eventId: 'hydration-open',
+      slotId: 'msg-1', slotType: 'agent', agentName: 'Hello World Agent',
+    }))
+    // Second slot_opened from sync bridge (different eventId, same slotId)
+    view = railReducer.reduce(view, evt({
+      type: 'slot_opened', seq: 100, eventId: 'sync-open',
+      slotId: 'msg-1', slotType: 'agent', agentName: 'Hello World Agent',
+    }))
+
+    expect(view).toHaveLength(1)
+    expect(view[0].label).toBe('Hello World Agent: working')
+  })
+
+  it('duplicate turn_completed is ignored', () => {
+    let view = railReducer.init()
+    view = railReducer.reduce(view, evt({ type: 'turn_completed', seq: 10, eventId: 'tc1', durationMs: 1500 }))
+    view = railReducer.reduce(view, evt({ type: 'turn_completed', seq: 110, eventId: 'tc2', durationMs: 1600 }))
+
+    const terminals = view.filter(r => r.key === 'turn-terminal')
+    expect(terminals).toHaveLength(1)
+    expect(terminals[0].label).toBe('Completed (1.5s)')
+  })
+
+  it('duplicate turn_failed is ignored', () => {
+    let view = railReducer.init()
+    view = railReducer.reduce(view, evt({ type: 'turn_failed', seq: 10, eventId: 'tf1', reason: 'timeout' }))
+    view = railReducer.reduce(view, evt({ type: 'turn_failed', seq: 110, eventId: 'tf2', reason: 'timeout' }))
+
+    const terminals = view.filter(r => r.key === 'turn-terminal')
+    expect(terminals).toHaveLength(1)
+  })
+
+  it('duplicate turn_canceled is ignored', () => {
+    let view = railReducer.init()
+    view = railReducer.reduce(view, evt({ type: 'turn_canceled', seq: 10, eventId: 'tx1' }))
+    view = railReducer.reduce(view, evt({ type: 'turn_canceled', seq: 110, eventId: 'tx2' }))
+
+    const terminals = view.filter(r => r.key === 'turn-terminal')
+    expect(terminals).toHaveLength(1)
+  })
+
+  it('hydration + sync bridge produces single rail item per agent (replayRail)', () => {
+    // Simulates the exact scenario: hydration creates slot_opened, then
+    // sync bridge creates another slot_opened with a different eventId
+    const events: TurnEvent[] = [
+      evt({ type: 'turn_started', seq: 1, eventId: 'h-start', userInput: { text: 'hi', attachments: [] } }),
+      // Hydration events
+      evt({ type: 'slot_opened', seq: 2, eventId: 'h-open-1', slotId: 'msg-1', slotType: 'agent', agentName: 'Agent A' }),
+      evt({ type: 'slot_terminated', seq: 3, eventId: 'h-term-1', slotId: 'msg-1', status: 'completed' }),
+      evt({ type: 'turn_completed', seq: 4, eventId: 'h-done', durationMs: 1000 }),
+      // Sync bridge events (higher seq, different eventIds)
+      evt({ type: 'slot_opened', seq: 102, eventId: 'sync-open-1', slotId: 'msg-1', slotType: 'agent', agentName: 'Agent A' }),
+      evt({ type: 'slot_terminated', seq: 103, eventId: 'sync-term-1', slotId: 'msg-1', status: 'completed' }),
+      evt({ type: 'turn_completed', seq: 104, eventId: 'sync-done', durationMs: 1000 }),
+    ]
+
+    const items = replayRail(events)
+    const agentItems = items.filter(r => r.key === 'slot-msg-1')
+    const terminalItems = items.filter(r => r.key === 'turn-terminal')
+
+    expect(agentItems).toHaveLength(1)
+    expect(terminalItems).toHaveLength(1)
   })
 })

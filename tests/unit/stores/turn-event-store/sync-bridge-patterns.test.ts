@@ -56,6 +56,41 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       expect(state.turnLogs.has('req-abc')).toBe(false)
     })
 
+    it('chains merge through tempMessageId → realMessageId via preserved clientRequestId', () => {
+      const store = useTurnEventStore.getState()
+
+      // Step 1: User sends message → optimistic turn
+      store.createOptimisticTurn('req-abc', { text: 'hello', attachments: [] })
+      expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['req-abc'])
+
+      // Step 2: Sync bridge first run → merge optimistic into tempMessageId
+      store.append('temp-msg-123', evt({
+        type: 'turn_started', seq: 1, eventId: 'sync-1',
+        turnId: 'temp-msg-123', userInput, clientRequestId: 'req-abc',
+      }))
+
+      let state = useTurnEventStore.getState()
+      expect(state.orderedTurnIds).toEqual(['temp-msg-123'])
+      expect(state.turnLogs.has('req-abc')).toBe(false)
+      // clientRequestId mapping updated (not deleted) to point to tempMessageId
+      expect(state.turnIdByClientRequestId.get('req-abc')).toBe('temp-msg-123')
+
+      // Step 3: Message store swaps temp → real ID. Sync bridge fires again
+      // with realMessageId. The second merge should chain through.
+      store.append('real-msg-456', evt({
+        type: 'turn_started', seq: 1, eventId: 'sync-2',
+        turnId: 'real-msg-456', userInput, clientRequestId: 'req-abc',
+      }))
+
+      state = useTurnEventStore.getState()
+      // Only the real turn should remain — no duplicates
+      expect(state.orderedTurnIds).toEqual(['real-msg-456'])
+      expect(state.turnLogs.has('temp-msg-123')).toBe(false)
+      expect(state.turnLogs.has('real-msg-456')).toBe(true)
+      // clientRequestId mapping updated to real ID
+      expect(state.turnIdByClientRequestId.get('req-abc')).toBe('real-msg-456')
+    })
+
     it('does NOT merge when clientRequestId is missing from turn_started (the bug)', () => {
       const store = useTurnEventStore.getState()
 

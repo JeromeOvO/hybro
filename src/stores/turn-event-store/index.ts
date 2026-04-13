@@ -65,8 +65,11 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
             id === optimisticTurnId ? turnId : id
           )
 
+          // Keep the clientRequestId → turnId mapping updated (not deleted)
+          // so subsequent ID swaps (tempMessageId → realMessageId) can
+          // still find and merge the turn via the same clientRequestId.
           const newLookup = new Map(state.turnIdByClientRequestId)
-          newLookup.delete(event.clientRequestId)
+          newLookup.set(event.clientRequestId, turnId)
 
           set({
             turnLogs: newTurnLogs,

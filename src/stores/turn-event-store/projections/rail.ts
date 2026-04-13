@@ -87,6 +87,9 @@ function reduce(state: RailState, event: TurnEvent): RailState {
       // Only track agent slots, not summary slots
       if (event.slotType === 'agent') {
         const key = `slot-${event.slotId}`
+        // Deduplicate: hydration + sync bridge can both emit slot_opened
+        // with different eventIds for the same slot.
+        if (keyIndex.has(key)) break
         const agentName = event.agentName || 'Agent'
         const item: RailItemView = {
           key,
@@ -182,8 +185,9 @@ function reduce(state: RailState, event: TurnEvent): RailState {
         }
       }
 
-      // Add terminal item
+      // Add terminal item (deduplicate: hydration + sync can both emit)
       const key = 'turn-terminal'
+      if (keyIndex.has(key)) break
       const item: RailItemView = {
         key,
         icon: 'check',
@@ -204,8 +208,9 @@ function reduce(state: RailState, event: TurnEvent): RailState {
         }
       }
 
-      // Add terminal item
+      // Add terminal item (deduplicate)
       const key = 'turn-terminal'
+      if (keyIndex.has(key)) break
       const item: RailItemView = {
         key,
         icon: 'x',
@@ -226,8 +231,9 @@ function reduce(state: RailState, event: TurnEvent): RailState {
         }
       }
 
-      // Add terminal item
+      // Add terminal item (deduplicate)
       const key = 'turn-terminal'
+      if (keyIndex.has(key)) break
       const item: RailItemView = {
         key,
         icon: 'x',
