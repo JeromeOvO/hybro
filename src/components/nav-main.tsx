@@ -87,10 +87,11 @@ export function NavMain({
                           "relative flex items-center justify-center",
                           SIDEBAR_ICON_CENTER
                         )}>
-                          <item.icon className={cn(
-                            getIconClass(item.title),
-                            "transition-colors"
-                          )} />
+                        <item.icon className={cn(
+                          "h-4 w-4",
+                          getIconClass(item.title),
+                          "transition-colors"
+                        )} />
                           {hasActiveChild && state === "collapsed" && (
                             <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
                           )}

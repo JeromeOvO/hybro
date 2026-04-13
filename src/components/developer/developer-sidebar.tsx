@@ -7,6 +7,7 @@ import { Bot, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavAgent } from "@/components/nav-agent"
+import { NavHub } from "@/components/nav-hub"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
@@ -96,6 +97,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
       </SidebarHeader>
       <SidebarContent>
         <NavAgent navAgents={DEVELOPER_NAV} />
+        <NavHub basePath="/d" />
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>

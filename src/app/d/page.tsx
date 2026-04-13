@@ -23,6 +23,7 @@ import {
   ChevronRight,
   Settings,
   SquareArrowOutUpRight,
+  House,
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { getAgentsByProviderId } from "@/lib/api"
@@ -31,6 +32,7 @@ import { consumerUrl } from "@/lib/urls"
 import { DeveloperDocsContent } from "@/components/developer-docs-content"
 import { getAgentAvatarUri } from "@/lib/agent-avatar"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
+import { useHubStatus } from "@/hooks/useHubStatus"
 
 // Authenticated dashboard view
 function DeveloperDashboard() {
@@ -66,6 +68,7 @@ function DeveloperDashboard() {
     agentPage * AGENTS_PER_PAGE,
     (agentPage + 1) * AGENTS_PER_PAGE
   )
+  const { hasHub, isOnline, hub } = useHubStatus()
 
   return (
     <div className="page-container">
@@ -128,6 +131,50 @@ function DeveloperDashboard() {
             <span>Open Inspector</span>
           </Button>
         </div>
+
+        {/* Hub Status Card */}
+        <Card
+          className="cursor-pointer hover:bg-muted/30 transition-colors"
+          onClick={() => router.push('/hub')}
+        >
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {hasHub ? (
+                  isOnline ? (
+                    <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-emerald-500/10">
+                      <House className="h-5 w-5 text-emerald-500" />
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-amber-500/10">
+                      <House className="h-5 w-5 text-amber-500" />
+                    </div>
+                  )
+                ) : (
+                  <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-muted">
+                    <House className="h-5 w-5 text-muted-foreground/50" />
+                  </div>
+                )}
+                <div>
+                  <p className="font-medium flex items-center gap-2">
+                    My Hub
+                    <span className={`h-2 w-2 rounded-full ${
+                      hasHub && isOnline ? "bg-emerald-500" : hasHub ? "bg-amber-500" : "bg-muted-foreground/30"
+                    }`} />
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {hasHub
+                      ? isOnline
+                        ? `Connected${hub?.agent_count ? ` · ${hub.agent_count} agent${hub.agent_count !== 1 ? 's' : ''}` : ''}`
+                        : "Hub is offline"
+                      : "Not set up yet"}
+                  </p>
+                </div>
+              </div>
+              <ArrowRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </CardContent>
+        </Card>
 
         {/* My Agents Summary */}
         <div>

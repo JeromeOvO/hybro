@@ -27,6 +27,10 @@ vi.mock('@/lib/time', () => ({
   formatTimestamp: (ts: string) => ts,
 }))
 
+vi.mock('@/lib/agent-avatar', () => ({
+  getAgentAvatarUri: (seed: string) => `https://avatar.test/${seed}`,
+}))
+
 /* ── Helpers ── */
 
 function buildHub(overrides: Partial<HubStatus> = {}): HubStatus {

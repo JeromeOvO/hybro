@@ -39,6 +39,12 @@ vi.mock('@/components/agent-source-badge', () => ({
   AgentSourceBadge: () => null,
 }))
 
+const mockUseHubStatus = vi.fn()
+vi.mock('@/hooks/useHubStatus', () => ({
+  useHubStatus: () => mockUseHubStatus(),
+  HUB_STATUS_QUERY_KEY: ['hub', 'status'],
+}))
+
 vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
@@ -85,6 +91,7 @@ let DeveloperLandingPage: React.ComponentType
 beforeEach(async () => {
   vi.clearAllMocks()
   mockUseUser.mockReturnValue({ isLoaded: true, isSignedIn: true, user: { firstName: 'Alice' } })
+  mockUseHubStatus.mockReturnValue({ hasHub: false, isOnline: false, hub: null, isLoading: false, isError: false, error: null, hubs: [], invalidate: vi.fn() })
   const mod = await import('@/app/d/page')
   DeveloperLandingPage = mod.default
 })
