@@ -1,6 +1,6 @@
 # Hybro Recommended Architecture
-> Synthesized from design reviews, industry research (Hermes Agent, Claude Code, OpenClaw, Codex CLI), and PMF-stage strategic considerations.
-> Last updated: April 2026
+> Synthesized from design reviews, industry research, and PMF-stage strategic considerations.
+> Last updated: March 2026
 
 ---
 
@@ -270,92 +270,6 @@ This replaces:
 - arq (dying) → DBOS workflows
 - Leader election for background jobs → `@DBOS.scheduled()`
 
-#### Supervisor Actions as Tool Calls (P0 — Informed by Codex CLI + Claude Code)
-
-The `decide_next()` function above hides a critical design choice: **how the supervisor LLM selects its next action**. Both Codex CLI and Claude Code model every orchestration action — delegate to agent, request clarification, synthesize, terminate — as a **tool call** rather than free-text classification.
-
-This matters because:
-- **Structured output** — the LLM returns typed JSON for each action, not a string to parse
-- **Prompt cache stability** — the system message + tool definitions form a stable prefix; only the trajectory (conversation history) grows. This keeps prompt cache hit rates high (Codex CLI achieves ~90% cache hits by keeping its system prompt immutable)
-- **Auditability** — every supervisor decision is a tool call with a name and arguments, directly traceable in DBOS step history and AG-UI `TOOL_CALL_*` events
-- **Extensibility** — adding a new supervisor action (e.g., `search_memory`, `escalate_to_human`) is adding a tool definition, not editing a prompt
-
-The supervisor loop should expose its actions as LLM tool calls:
-
-```python
-SUPERVISOR_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "delegate",
-            "description": "Dispatch task to one or more agents",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "targets": {"type": "array", "items": {"type": "string"}},
-                    "instructions": {"type": "string"},
-                },
-                "required": ["targets", "instructions"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "clarify",
-            "description": "Ask the user for clarification before proceeding",
-            "parameters": {
-                "type": "object",
-                "properties": {"prompt": {"type": "string"}},
-                "required": ["prompt"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "done",
-            "description": "Finalize the run with a synthesis of results",
-            "parameters": {
-                "type": "object",
-                "properties": {"summary": {"type": "string"}},
-                "required": ["summary"],
-            },
-        },
-    },
-]
-
-@DBOS.workflow()
-async def supervisor_run(run_id: str, request: OrchestrationRequest):
-    trajectory: list[dict] = []
-
-    for step in range(request.config.max_steps):
-        response = await llm_gateway.chat(
-            model=request.config.supervisor_model,
-            messages=[SUPERVISOR_SYSTEM_MSG] + trajectory,
-            tools=SUPERVISOR_TOOLS,
-        )
-
-        tool_call = response.choices[0].message.tool_calls[0]
-        args = json.loads(tool_call.function.arguments)
-
-        match tool_call.function.name:
-            case "delegate":
-                results = await asyncio.gather(*[
-                    invoke_agent(run_id, aid, f"{run_id}:{aid}:{step}", request)
-                    for step, aid in enumerate(args["targets"])
-                ])
-                trajectory.extend(format_results(tool_call, results))
-            case "clarify":
-                await DBOS.set_event(f"hitl_prompt:{run_id}", {"prompt": args["prompt"]})
-                user_response = await DBOS.recv(f"hitl_response:{run_id}", timeout_seconds=3600)
-                trajectory.append(format_clarification(tool_call, user_response))
-            case "done":
-                return OrchestrationResult(status="completed", summary=args["summary"])
-```
-
-This is a Phase 2 design decision: when the orchestration module moves to DBOS workflows, the supervisor prompt should be restructured to use tool calls from the start.
-
 The `ExecutionRun`, `ExecutionStep`, `AgentInvocation`, `HumanInterruption` entity model from PR #127 remains valid as the **domain model** for business logic — DBOS is just the execution substrate underneath it.
 
 ### Change 3: Add Workflow Authoring Layer (the Missing Piece)
@@ -496,53 +410,6 @@ A user with multiple hubs (laptop + work desktop). Both online. A room has agent
 
 This is low priority at current scale. For enterprise fleet deployments (Hub Phase 3), it becomes a first-class concern.
 
-### Gap 6: Typed Relay Protocol Schema (P1 — Informed by OpenClaw)
-
-OpenClaw defines a **typed JSON schema** for every message between its core and plugin subsystems — each message has a `kind` discriminator, typed payload, and versioned schema. The Hub relay currently uses loosely-typed dicts for relay events (`RelayToHubEvent`, `RelayFromHubEvent`), making it fragile to schema drift between cloud and hub versions.
-
-**Recommendation**: define a versioned, discriminated-union schema for all relay messages:
-
-```python
-from pydantic import BaseModel, Field
-from typing import Literal, Union
-from datetime import datetime
-
-class RelayMessageBase(BaseModel):
-    version: Literal["1.0"] = "1.0"
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    correlation_id: str
-
-class RelayDispatch(RelayMessageBase):
-    kind: Literal["dispatch"] = "dispatch"
-    agent_id: str
-    task_id: str
-    payload: dict  # A2A SendMessageRequest
-
-class RelayResponse(RelayMessageBase):
-    kind: Literal["response"] = "response"
-    task_id: str
-    status: Literal["completed", "failed", "streaming"]
-    payload: dict  # A2A Task response
-
-class RelayCancel(RelayMessageBase):
-    kind: Literal["cancel"] = "cancel"
-    task_id: str
-
-class RelayHeartbeat(RelayMessageBase):
-    kind: Literal["heartbeat"] = "heartbeat"
-    hub_id: str
-    agent_count: int
-
-RelayMessage = Union[RelayDispatch, RelayResponse, RelayCancel, RelayHeartbeat]
-```
-
-Benefits:
-- **Version negotiation**: hub and cloud can detect schema mismatches on connect
-- **Exhaustive handling**: `match msg.kind` ensures all message types are handled
-- **Backward compatibility**: new `kind` values are additive; old hubs ignore unknown kinds
-
-This is a Phase 2 addition: formalize when building DBOS step semantics for hub agents (Gap 2), since the relay message format directly affects how `invoke_hub_agent` interprets responses.
-
 ### Hub Architecture Summary
 
 | Capability | Status | Notes |
@@ -554,7 +421,6 @@ This is a Phase 2 addition: formalize when building DBOS step semantics for hub 
 | Frontend hub badges + privacy indicators | ✅ Shipped | Phase 2c |
 | Offline message queue | ✅ Shipped (in-memory) | DBOS upgrade in Phase 2 |
 | DBOS step retry semantics for relay | ⚠️ Needs design | Phase 2 |
-| Typed relay protocol schema | ⚠️ Needs design | Phase 2 |
 | Streaming token latency (relay overhead) | ⚠️ Known issue | Phase 3 fix |
 | Hybrid orchestration (privacy-aware routing) | ❌ Not implemented | Phase 3 |
 | Multi-hub coordination | ❌ Not designed | Phase 3 / Enterprise |
@@ -627,43 +493,6 @@ For steps that are already in-flight when cancel arrives, the pattern is:
 - **Hub agents**: `DBOS.send(run_id, {"cancelled": True}, f"cancel_hub:{run_id}")` wakes the waiting `DBOS.recv()` in `invoke_hub_agent` immediately.
 
 **Browser receives**: `RUN_FINISHED { outcome: "cancelled" }` via the `interaction_adapter.emit()` above.
-
-#### Cascading Cancellation for Sub-Agents (P1 — Informed by Claude Code)
-
-Claude Code implements **hierarchical cancellation**: when a parent agent is cancelled, all sub-agents and their descendants receive the cancellation signal, with a grace period for cleanup. The current Hybro design cancels at the run level but doesn't cascade to individual in-flight agent invocations cleanly.
-
-When the supervisor dispatches multiple agents in parallel (`asyncio.gather`), cancellation should propagate to each:
-
-```python
-@DBOS.workflow()
-async def supervisor_run(run_id: str, request: OrchestrationRequest):
-    for step in range(request.config.max_steps):
-        if await redis.exists(f"cancel:{run_id}"):
-            # Cancel all in-flight invocations for this run
-            invocation_ids = await get_active_invocations(run_id)
-            await asyncio.gather(*[
-                cancel_invocation(inv_id) for inv_id in invocation_ids
-            ])
-            await interaction_adapter.emit(RunFinished(
-                run_id=run_id, thread_id=request.thread_id, outcome="cancelled"
-            ))
-            return OrchestrationResult(status="cancelled")
-        ...
-
-async def cancel_invocation(invocation_id: str):
-    """Signal a specific agent invocation to cancel."""
-    await redis.set(f"cancel_invocation:{invocation_id}", "1", ex=3600)
-    # For A2A agents that support cancellation:
-    # POST /tasks/{task_id}/cancel (A2A protocol)
-```
-
-Key design points:
-- **Grace period**: give in-flight agents 5s to complete before force-terminating the DBOS step
-- **A2A cancel propagation**: for agents that support it, send the A2A `tasks/cancel` request
-- **Hub agents**: `DBOS.send(f"cancel_hub:{invocation_id}")` wakes the waiting `DBOS.recv()`
-- **Trace cleanup**: cancelled invocations are marked `cancelled` in the invocation table, not `failed`
-
-This is a Phase 2 design requirement: wire it when building the DBOS-based supervisor workflow.
 
 ### Operational Observability
 
@@ -968,13 +797,11 @@ context_memory/               ← What context? (unchanged from PR #127)
 
 orchestration/                ← How to coordinate? (DBOS-powered)
   __init__.py                 ← OrchestratorFactory facade
-  plugin_contract.py          ← StepHandler protocol, StepContext, StepResult, StepHandlerMetadata
-  registry.py                 ← register_step_type() + discover_patterns()
-  workflows/                  ← One file per workflow mode (pluggable StepHandler implementations)
-    supervisor.py             ← @DBOS.workflow() supervisor loop (implements StepHandler)
-    debate.py                 ← @DBOS.workflow() debate mode (implements StepHandler)
-    direct.py                 ← @DBOS.workflow() direct dispatch (implements StepHandler)
-    # Adding new mode = new StepHandler implementation + register_step_type() call
+  workflows/                  ← One file per workflow mode (pluggable)
+    supervisor.py             ← @DBOS.workflow() supervisor loop
+    debate.py                 ← @DBOS.workflow() debate mode
+    direct.py                 ← @DBOS.workflow() direct dispatch
+    # Adding new mode = new file here + factory registration
   steps/
     invoke_agent.py           ← @DBOS.step() agent dispatch
     synthesize.py             ← @DBOS.step() synthesis
@@ -993,7 +820,7 @@ interaction/                  ← AG-UI event emission (replaces custom SSE sche
   hitl.py                     ← DBOS.send/recv wrapper with UX projection
 
 a2a_protocol/                 ← Pure protocol (unchanged from PR #127)
-llm/                          ← LLM Gateway (see § LLM Gateway Enhancements below)
+llm/                          ← LLM Gateway (unchanged from PR #127)
 developer_platform/           ← API keys, discovery, gateway (unchanged)
 room/                         ← Room/Thread management
 infrastructure/
@@ -1009,54 +836,6 @@ Adding a new workflow mode requires exactly:
 2. One line in `factory.py`: `factory.register("my_workflow", my_workflow_fn)`
 
 No schema migrations. No changes to execution infrastructure. No changes to other modules.
-
----
-
-## LLM Gateway Enhancements
-
-### Prompt Cache Stability (P1 — Informed by Codex CLI)
-
-Codex CLI achieves ~90% prompt cache hit rates by keeping its system message immutable across turns. The same principle applies to Hybro's supervisor and to user-facing agent calls.
-
-**Design rule**: the LLM Gateway should structure every call so that the **system message + tool definitions** form a stable prefix that does not change between steps in the same run. The growing part (conversation history / trajectory) is appended after the prefix. This maximizes prompt cache hit rates on providers that support it (OpenAI, Anthropic, Gemini).
-
-Concretely:
-- Supervisor system prompt and `SUPERVISOR_TOOLS` are frozen per run (not regenerated per step)
-- Agent-specific context (room history, user preferences) goes in a `user` message after the system message, not interpolated into the system message
-- The `llm/` module should track and log cache hit rates per model provider so degradation is detectable
-
-This is a Phase 2 design constraint: enforce it when restructuring the supervisor prompt for tool calls.
-
-### LLM Credential Pool and Failover Chain (P1 — Informed by Hermes + OpenClaw)
-
-Both Hermes Agent and OpenClaw implement multi-provider credential rotation: when one LLM provider returns a rate limit or error, the gateway transparently fails over to the next provider in a configured chain.
-
-Hybro already has multi-provider support (`OpenAI · Bedrock · Gemini · Router`), but the current router is selection-based (user or supervisor picks a model), not failover-based. The LLM Gateway should add:
-
-```python
-class LLMFailoverChain:
-    """Try providers in order; fail over on rate limit, timeout, or 5xx."""
-    def __init__(self, providers: list[LLMProvider]):
-        self.providers = providers
-
-    async def chat(self, request: ChatRequest) -> ChatResponse:
-        last_error = None
-        for provider in self.providers:
-            try:
-                return await provider.chat(request)
-            except (RateLimitError, TimeoutError, ServerError) as e:
-                last_error = e
-                logger.warning(f"Provider {provider.name} failed, trying next: {e}")
-                continue
-        raise AllProvidersExhaustedError(last_error)
-```
-
-Configuration per deployment:
-- **Cloud**: OpenAI → Gemini → Bedrock (cost-optimized ordering)
-- **Hub (local)**: Ollama → LM Studio → cloud fallback (if user opts in)
-- **Supervisor-specific**: can override chain to prefer lower-latency models
-
-This is a Phase 2 addition: the `llm/` module already has per-provider adapters; adding the failover chain is ~100 lines wrapping them.
 
 ---
 
@@ -1080,79 +859,18 @@ class AgentInvocation:
 
 Cost: one nullable FK on the invocation table. Benefit: enables hierarchical trace trees in the dashboard, sub-agent nesting in AG-UI (`parentRunId`), and a path toward composable multi-agent graphs later.
 
-### 2. Open `WorkflowStepType` Registry (Plugin Contract for Collaboration Patterns)
+### 2. Open `WorkflowStepType` Registry
 
-Today the workflow engine has a closed set of step types (`agent`, `fan_out`, `approval`). Add an explicit registry with a **formal plugin contract** — a `Protocol` class that any collaboration pattern must implement to participate in the orchestration engine:
-
-```python
-# orchestration/plugin_contract.py
-from typing import Protocol, Any
-from dataclasses import dataclass
-
-@dataclass
-class StepContext:
-    """Immutable context passed to every step handler."""
-    run_id: str
-    step_id: str
-    room_id: str
-    agents: list[AgentCard]           # available agents for this step
-    message_history: list[Message]    # conversation context
-    user_preferences: dict[str, Any]  # room-level routing prefs
-    parent_invocation_id: str | None  # for trace tree nesting
-
-@dataclass
-class StepResult:
-    """Typed output contract — every pattern must produce this."""
-    output_text: str                  # human-readable synthesis
-    structured_data: dict[str, Any]   # machine-readable output (ranked list, consensus, etc.)
-    agent_invocations: list[str]      # invocation IDs created by this step
-    status: Literal["completed", "failed", "needs_human_input"]
-
-class StepHandler(Protocol):
-    """The interface every collaboration pattern plugin must implement."""
-
-    @property
-    def metadata(self) -> StepHandlerMetadata:
-        """Declare pattern name, version, author, required capabilities."""
-        ...
-
-    async def run(self, ctx: StepContext, params: dict[str, Any]) -> StepResult:
-        """Execute the collaboration pattern. Must be idempotent for DBOS retry."""
-        ...
-
-    async def cancel(self, ctx: StepContext) -> None:
-        """Handle cancellation. Called when parent workflow is cancelled."""
-        ...
-
-@dataclass
-class StepHandlerMetadata:
-    name: str                         # e.g. "debate", "voting", "map_reduce"
-    version: str                      # semver, e.g. "1.0.0"
-    author: str                       # e.g. "hybro-core" or "community/username"
-    description: str
-    required_agent_capabilities: list[str]  # capabilities agents must declare
-    min_agents: int = 1
-    max_agents: int | None = None
-    params_schema: dict[str, Any] = field(default_factory=dict)  # JSON Schema for params
-```
-
-The registry itself is straightforward:
+Today the workflow engine has a closed set of step types (`agent`, `fan_out`, `approval`). Add an explicit registry instead of an enum:
 
 ```python
-# orchestration/registry.py
+# registry.py
 _step_handlers: dict[str, StepHandler] = {}
 
 def register_step_type(name: str, handler: StepHandler) -> None:
-    if not isinstance(handler.metadata, StepHandlerMetadata):
-        raise TypeError(f"Handler must implement StepHandler protocol")
     _step_handlers[name] = handler
 
-def get_step_handler(name: str) -> StepHandler:
-    if name not in _step_handlers:
-        raise KeyError(f"Unknown step type: {name}. Registered: {list(_step_handlers)}")
-    return _step_handlers[name]
-
-# Built-in registrations:
+# Built-in registrations (supervisor.py, fan_out.py, etc.):
 register_step_type("agent", AgentStepHandler())
 register_step_type("fan_out", FanOutStepHandler())
 register_step_type("approval", ApprovalStepHandler())
@@ -1161,13 +879,7 @@ register_step_type("approval", ApprovalStepHandler())
 register_step_type("debate", DebateStepHandler())
 ```
 
-The `StepHandler` protocol is the critical contract. It defines:
-- **`StepContext`** — the immutable environment a pattern operates in (what agents are available, what the conversation history is, what room-level preferences exist)
-- **`StepResult`** — the typed output every pattern must produce, enabling composability (a supervisor step can consume a debate step's `structured_data.consensus`)
-- **`StepHandlerMetadata`** — self-describing metadata for discovery, validation, and future catalog UI
-- **`params_schema`** — JSON Schema describing what `params` the pattern accepts, enabling WorkflowTemplate editors to render configuration UI
-
-This is the difference between multi-agent collaboration patterns being top-level modes (current) vs. composable step types (future). The contract costs ~60 lines now and avoids a significant refactor when patterns need to be composed, discovered, or contributed externally.
+This is the difference between multi-agent collaboration patterns being top-level modes (current) vs. composable step types (future). The registry costs ~20 lines now and avoids a significant refactor when debate/voting need to be embedded inside a `WorkflowTemplate`.
 
 ### 3. Domain Event Bus Placeholder
 
@@ -1202,134 +914,16 @@ class ExecutionRun:
 
 Adding this to a live schema later requires a data migration. Adding it to a new schema during Path C costs zero.
 
-### 5. A2A Extension-Based Agent Capability Declarations (P2 — Informed by OpenClaw + A2A Spec)
-
-OpenClaw's plugin system declares structured capabilities per plugin (supported input types, output types, interaction modes). Hybro's supervisor currently infers agent capabilities from limited fields (`capabilities.streaming`, `default_input_modes`, `default_output_modes`), which provides no structured signal about what an agent can actually do (e.g., "supports file upload," "can generate charts," "requires approval for purchases > $100").
-
-**Do NOT extend the `AgentCard` schema directly** — this would break A2A protocol compatibility. Instead, use the A2A protocol's designed extension mechanism: `AgentCapabilities.extensions`.
-
-Define a Hybro-specific A2A extension that agents declare in their Agent Card:
-
-```python
-# Extension URI — Hybro owns this namespace
-HYBRO_CAPABILITIES_URI = "https://hybro.ai/a2a-extension/capabilities/v1"
-
-# Example: agent declares structured capabilities in its Agent Card
-agent_card = AgentCard(
-    name="Financial Analyst",
-    capabilities=AgentCapabilities(
-        streaming=True,
-        extensions=[
-            AgentExtension(
-                uri=HYBRO_CAPABILITIES_URI,
-                description="Hybro structured capability declaration",
-                required=False,  # non-Hybro consumers can ignore this
-                params={
-                    "interaction_modes": ["chat", "form", "background_task"],
-                    "input_types": ["text", "file/csv", "file/xlsx"],
-                    "output_types": ["text", "chart", "file/pdf"],
-                    "cost_tier": "standard",
-                    "requires_approval_above": 1000,  # dollars
-                    "max_concurrent_tasks": 5,
-                    "estimated_latency_ms": {"p50": 2000, "p95": 8000},
-                },
-            ),
-        ],
-    ),
-    ...
-)
-```
-
-The supervisor reads this extension for smarter routing:
-
-```python
-from a2a.extensions.common import find_extension_by_uri
-
-def get_hybro_capabilities(agent_card: AgentCard) -> dict | None:
-    """Extract Hybro capabilities from an agent's A2A extensions."""
-    ext = find_extension_by_uri(
-        agent_card.capabilities.extensions or [],
-        HYBRO_CAPABILITIES_URI,
-    )
-    return ext.params if ext else None
-
-async def select_agents(request: OrchestrationRequest, candidates: list[AgentCard]):
-    for card in candidates:
-        caps = get_hybro_capabilities(card)
-        if caps:
-            # Structured routing: check input_type compatibility, cost tier, latency
-            if request.has_file and "file/csv" not in caps.get("input_types", []):
-                continue
-        else:
-            # Fallback: infer from standard A2A fields
-            # (capabilities.streaming, default_input_modes, skills, etc.)
-            ...
-```
-
-Benefits:
-- **Full A2A compatibility** — the extension is ignored by non-Hybro consumers (it's `required: False`)
-- **Graceful degradation** — agents without the extension still work; supervisor falls back to inference
-- **Marketplace differentiation** — agents advertising richer capabilities rank higher in recommendations
-- **No schema migration** — capability data lives in the existing `extensions` field, not custom DB columns
-
-This is a Phase 2 addition: implement when upgrading to A2A v1.0 (Phase 2 item 9), since the extension mechanism is already defined in the A2A spec.
-
-### 6. Room-Level Orchestration Learning (P2 — Informed by Hermes Agent)
-
-Hermes Agent's self-improving architecture learns from past interactions: it tracks which tools/agents succeeded for which types of tasks and adjusts its strategy. Hybro should apply a lightweight version at the room level.
-
-Add a `room_strategy` field to the room model that captures learned routing preferences:
-
-```python
-class RoomStrategy(BaseModel):
-    """Learned routing preferences for a room, updated after each run."""
-    agent_success_rates: dict[str, float] = {}     # agent_id → success rate (0-1)
-    preferred_agents: dict[str, list[str]] = {}     # task_category → [agent_ids]
-    avg_latency_ms: dict[str, float] = {}           # agent_id → p50 latency
-    last_updated: datetime | None = None
-```
-
-The supervisor consults `room_strategy` when scoring candidates, weighted alongside the existing multi-factor recommender. After each run, the orchestration layer updates the strategy with the run outcome.
-
-This is a Phase 3 addition: requires enough run history per room to produce meaningful signals. The `scope` field (item 4) enables per-user/per-org strategy isolation.
-
-### 7. User Preference Tracking (P2 — Informed by Hermes Agent)
-
-Hermes Agent maintains a per-user preference model that influences how the agent formats responses and selects interaction strategies. Hybro's `context_memory/` module already handles conversation context, but lacks explicit preference tracking.
-
-Add a lightweight preference store that the supervisor and agents can consult:
-
-```python
-class UserPreferences(BaseModel):
-    """Learned and explicit user preferences."""
-    user_id: str
-    response_style: str | None = None           # "concise" | "detailed" | "technical"
-    preferred_output_modes: list[str] = []       # ["text", "chart", "table"]
-    timezone: str | None = None
-    language: str | None = None
-    custom: dict[str, Any] = {}                  # agent-specific preferences
-```
-
-Stored in MongoDB alongside user profile data. Passed to the supervisor as part of `OrchestrationRequest` context. Agents that support it can read user preferences from the A2A message metadata.
-
-This is a Phase 3 addition: useful once room-level learning produces enough signal and user engagement patterns stabilize.
-
 ### Summary: What to Do in Phase 1–2 vs What to Wait For
 
 | Item | When | Reason |
 |---|---|---|
 | `parent_invocation_id` nullable field | Phase 1 (data model) | Schema migration is cheap now, painful later |
-| `StepHandler` protocol + registry | Phase 2 | Natural refactor as debate/voting get extracted to step types; formal plugin contract |
+| Open `WorkflowStepType` registry | Phase 2 | Natural refactor as debate/voting get extracted to workflow steps |
 | `DomainEventBus` no-op placeholder | Phase 1 | Interface is the investment; implementation evolves |
 | `scope` field on all major entities | Phase 1 (data model) | Migration cost grows with user count |
-| A2A extension-based capability declarations | Phase 2 (with A2A v1.0 upgrade) | Uses protocol-native extension mechanism; enables structured agent routing |
-| Migrate built-in patterns to `StepHandler` | Phase 2 | Prove the contract works with supervisor, debate, direct before opening to external |
-| Room-level orchestration learning | Phase 3 | Requires run history; complements multi-factor recommender |
-| User preference tracking | Phase 3 | Requires stable engagement patterns |
 | Full debate/voting as composable step types | Wait for user signal | Only if users actually create templates with them |
-| Python entrypoint-based pattern discovery | Phase 4 | Only after `StepHandler` contract is stable and external developers show interest |
-| Pattern catalog UI / dev portal | Phase 4+ | Only after external developers are a real customer segment |
-| Community pattern sandboxing / trust model | Phase 5 | Only after community patterns exist; depends on agent sandbox model |
+| Plugin registry UI / dev portal | Phase 4 | Only after external developers are a real customer segment |
 | Observable reasoning / telemetry hooks | Phase 3 | When users ask for it |
 
 ---
@@ -1357,9 +951,9 @@ At PMF stage, forcing all collaboration modes through a unified primitive model 
 
 This is expensive to build correctly and the user demand for nested collaboration is unproven.
 
-### The Forward Path: Collaboration Patterns as Plugins
+### The Forward Path (When Signal Appears)
 
-The `StepHandler` protocol (§ Future Extensibility Foundations, item 2) is the key enabler. Once collaboration modes implement the `StepHandler` contract, they become composable step types **and** pluggable units that can be contributed externally:
+The `WorkflowStepType` registry (§ Future Extensibility Foundations, item 2) is the key enabler. Once collaboration modes are registered as step types, they become composable:
 
 ```yaml
 # User-defined WorkflowTemplate (future):
@@ -1378,90 +972,11 @@ steps:
 
 The `parent_invocation_id` field (§ Future Extensibility Foundations, item 1) enables the trace tree needed to reason about nested collaboration.
 
-#### Industrial Precedent
-
-This approach is grounded in proven patterns from four systems:
-
-| System | What's pluggable | Interface | Community contribution model |
-|---|---|---|---|
-| **AutoGen** (Microsoft) | `GroupChat.speaker_selection_method` — custom function controlling which agent speaks next | `(last_speaker, groupchat) → Agent` | Custom functions, not packaged plugins |
-| **Apache Airflow** | Custom `Operator` classes — arbitrary execution primitives | `BaseOperator.execute(context)` | `plugins/` directory + PyPI provider packages; thousands of community operators |
-| **Semantic Kernel** (Microsoft) | Pluggable planners — different orchestration strategies | `Planner` interface with custom discovery/loading | Custom planner classes |
-| **CrewAI** | `Process` types (sequential, hierarchical, consensual) | Built-in enum; not yet open to external plugins | Closed set; "Flows" add composability |
-| **LangGraph** | The graph definition itself is the collaboration pattern | `StateGraph` with typed state + conditional edges | Shared as code; no marketplace |
-
-The key lesson: **every successful plugin ecosystem (Airflow, VSCode, Kubernetes operators) launched with a rich built-in library before opening to community contributions.** AutoGen keeps its interface narrow (`speaker → Agent`), which limits expressiveness but makes community patterns easy. Airflow's `BaseOperator.execute(context)` is broader but requires more documentation.
-
-Hybro's `StepHandler` protocol sits between these — broader than AutoGen's function (supports typed results, cancellation, metadata) but narrower than a full workflow engine (operates within the DBOS execution substrate).
-
-#### Plugin Packaging and Distribution (Phase 4+)
-
-When the `StepHandler` contract is stable and Hybro has built 5-10 internal patterns, the packaging model opens to external contributors:
-
-```toml
-# pyproject.toml of a community-contributed pattern package
-[project]
-name = "hybro-pattern-map-reduce"
-version = "1.0.0"
-
-[project.entry-points."hybro.orchestration_patterns"]
-map_reduce = "hybro_pattern_map_reduce:MapReduceStepHandler"
-```
-
-```python
-# Discovery at startup
-from importlib.metadata import entry_points
-
-def discover_patterns():
-    """Auto-discover installed pattern plugins via Python entrypoints."""
-    for ep in entry_points(group="hybro.orchestration_patterns"):
-        handler = ep.load()()
-        register_step_type(ep.name, handler)
-```
-
-A Git-based registry (similar to Airflow provider packages) provides discoverability:
-
-```yaml
-# hybro-pattern-registry/catalog.yaml
-patterns:
-  - name: map_reduce
-    pypi: hybro-pattern-map-reduce
-    version: ">=1.0.0"
-    author: community/alice
-    description: "Fan-out to N agents, reduce results with configurable reducer"
-    tags: [parallel, aggregation]
-    verified: false  # vs. true for Hybro-reviewed patterns
-
-  - name: tournament
-    pypi: hybro-pattern-tournament
-    version: ">=0.2.0"
-    author: community/bob
-    description: "Bracket-style elimination debate between agent pairs"
-    tags: [debate, competitive]
-    verified: false
-```
-
-#### Trust and Sandboxing (Phase 5+)
-
-Community-contributed patterns run within the DBOS execution substrate, which provides:
-- **Automatic retry and idempotency** — patterns that crash mid-execution are retried safely
-- **Cancellation propagation** — parent workflow cancel cascades to pattern steps
-- **Execution traces** — every agent invocation, LLM call, and HITL interaction is logged
-
-Additional sandboxing for untrusted community patterns:
-- **Resource limits** — max agent invocations per step, max LLM tokens per step, execution timeout
-- **Capability restrictions** — untrusted patterns cannot access raw credentials, modify room state, or invoke agents outside the provided `StepContext.agents` list
-- **Output validation** — `StepResult` schema validation before results propagate to downstream steps
-
-This maps to the "Agent execution sandbox / trust model" item in § What We're Explicitly NOT Building Yet.
-
 ### What to Do Now
 
-1. **Build the `StepHandler` protocol and registry** in Phase 2 (see above). This is the prerequisite.
-2. **Implement supervisor, debate, and direct as `StepHandler` implementations** — prove the contract works by migrating existing patterns to it.
-3. **Track usage of existing collaboration modes** — add analytics on which modes users actually invoke and how often. This is the signal to watch before investing in composability.
-4. **Defer nested collaboration design** until at least one user explicitly asks for it or a WorkflowTemplate user tries to combine modes.
-5. **Defer community plugin submission** until the `StepHandler` contract has been stable for at least two internal patterns beyond the initial three, and until there is external developer interest.
+1. **Build the `WorkflowStepType` registry** in Phase 2 (see above). This is the prerequisite.
+2. **Track usage of existing collaboration modes** — add analytics on which modes users actually invoke and how often. This is the signal to watch before investing in composability.
+3. **Defer nested collaboration design** until at least one user explicitly asks for it or a WorkflowTemplate user tries to combine modes.
 
 ---
 
@@ -1507,12 +1022,6 @@ The architecture supports these modes without redesign:
 7. **Migrate relay offline queue to DBOS** — replace the in-memory offline queue in `relay_service.py` with a `@DBOS.workflow()` that durably waits for hub reconnect via `DBOS.recv()`. Removes the periodic sweep job and the 100-message in-memory cap.
 8. **Explicit hub agent step semantics** — design `invoke_agent` DBOS step retry policy for `RELAY_DISPATCHED` status: `retries_allowed=0` + durable wait via `DBOS.recv(f"hub_response:{agent_message_id}")` instead of retry.
 9. **A2A v1.0 upgrade** — consolidate the dual type-system (`common/types.py` legacy path + `a2a-sdk` path) into a single SDK-backed module. Upgrade `a2a-sdk` and `a2a-server` to latest. See `A2A_UPGRADE_ROADMAP.md` for the full change list. Phase 2 is the right time: DBOS has stabilized the execution substrate, but before Phase 3 adds AG-UI event remapping that touches the same transport layer.
-10. **Supervisor tool-call refactor** — restructure `decide_next()` to use LLM tool calls for all supervisor actions (delegate, clarify, done). Keep system prompt + tool definitions as stable prefix for prompt cache optimization. See `§ Supervisor Actions as Tool Calls`.
-11. **Cascading cancellation** — implement hierarchical cancel propagation from run → invocations → A2A agents/hub agents. See `§ Cascading Cancellation for Sub-Agents`.
-12. **LLM failover chain** — add `LLMFailoverChain` to `llm/` module for transparent provider failover on rate limit/timeout. See `§ LLM Credential Pool and Failover Chain`.
-13. **Typed relay protocol schema** — define versioned, discriminated-union `RelayMessage` types for all hub↔cloud relay communication. See `§ Gap 6: Typed Relay Protocol Schema`.
-14. **Hybro A2A capabilities extension** — define `https://hybro.ai/a2a-extension/capabilities/v1` extension URI; implement `get_hybro_capabilities()` in supervisor for structured agent routing. See `§ A2A Extension-Based Agent Capability Declarations`.
-15. **`StepHandler` protocol + registry** — define the formal plugin contract (`StepHandler`, `StepContext`, `StepResult`, `StepHandlerMetadata`). Migrate supervisor, debate, and direct to `StepHandler` implementations. See `§ Open WorkflowStepType Registry (Plugin Contract for Collaboration Patterns)`.
 
 ### Phase 3: AG-UI + Streaming Unification + Module Extraction (8–12 weeks)
 *Goal: adopt open protocol, unify streaming persistence, complete module boundaries, add state sync*
@@ -1538,7 +1047,6 @@ The architecture supports these modes without redesign:
 - **Drag-and-drop workflow editor** (ReactFlow + `WorkflowTemplate` backend, or A2UI custom catalog `WorkflowCanvas` component)
 - **Additional interaction modes** (background tasks, scheduled, event-triggered)
 - **Generative UI components** (AG-UI `STATE_SNAPSHOT` + frontend component library)
-- **Open collaboration pattern plugin system** — enable Python entrypoint-based discovery (`hybro.orchestration_patterns` group); publish `StepHandler` SDK as a standalone package; add pattern catalog to Git-based registry. See `§ Plugin Packaging and Distribution`.
 - **Premium service modules** (identity/SSO, governance/policy, billing/metering)
 - **Hub deep integration** (offline execution, data residency model)
 
@@ -1550,17 +1058,12 @@ The architecture supports these modes without redesign:
 
 | Scenario | This Architecture | Lines Changed |
 |---|---|---|
-| Add new orchestration mode | New `StepHandler` implementation + `register_step_type()` | ~100 |
+| Add new orchestration mode | New `@DBOS.workflow()` + factory.register | ~100 |
 | Add HITL to any workflow | `DBOS.recv()` inline + API endpoint | ~20 |
 | Add scheduled agent report | `@DBOS.scheduled()` decorator | ~5 |
 | Add webhook-triggered run | HTTP endpoint → `DBOS.start_workflow()` | ~20 |
 | Add generative UI to any agent | `STATE_SNAPSHOT` event from InteractionAdapter | ~30 |
-| Add new LLM provider | `llm/providers/new_provider.py` + failover chain | ~100 |
-| Add new supervisor action | New tool definition in `SUPERVISOR_TOOLS` | ~20 |
-| Add LLM provider failover | New provider in `LLMFailoverChain.providers` list | ~10 (config) |
-| Declare agent capabilities | Add Hybro extension to Agent Card `capabilities.extensions` | ~15 per agent |
-| Community contributes new pattern | `pip install hybro-pattern-X`; auto-discovered via entrypoint | 0 (config) |
-| Compose patterns in workflow | Reference step types by name in `WorkflowTemplate` YAML | ~10 per step |
+| Add new LLM provider | `llm/providers/new_provider.py` + router | ~100 |
 | User creates custom workflow | WorkflowTemplate CRUD + executor | New module |
 | A2A v1.0 protocol upgrade | `a2a_protocol/version_adapter.py` + consolidate dual type-system | ~300 (Phase 2) |
 | Scale to 10x traffic | Add instances behind LB | 0 (config) |
@@ -1577,7 +1080,6 @@ The architecture supports these modes without redesign:
 The architecture deliberately avoids committing to:
 - A specific interaction mode (chat is the default, not the only)
 - A specific workflow paradigm (DBOS is a substrate; workflow logic is pluggable code)
-- A specific set of collaboration patterns (`StepHandler` is a protocol; patterns are pluggable implementations)
 - A specific frontend framework (AG-UI is protocol-level, not framework-level)
 - A specific agent runtime (Hub is one transport; others are additive)
 
@@ -1597,9 +1099,6 @@ These are real capabilities that should wait until product direction is clearer:
 - **Billing / metering hooks** — `AgentInvocation` records are the raw material; the billing module comes when the pricing model is stable
 - **Voice / audio pipeline** — real interaction mode; additive when there's user demand
 - **Observable reasoning / explainability** — AG-UI `REASONING_*` events + UI components when users ask for it
-- **Cross-room memory search** (informed by Hermes Agent) — Hermes persists all conversations in SQLite with FTS5 full-text search, enabling cross-session memory retrieval. Hybro's Pinecone vector search covers semantic similarity, but lacks structured cross-room search (e.g., "what did agent X say about topic Y in any room?"). Additive: a search endpoint over the `messages` MongoDB collection with text indexes. Build when users report losing context across rooms.
-- **Agent execution sandbox / trust model** (informed by Codex CLI + OpenClaw) — Codex CLI runs agent-generated shell commands in a sandboxed environment with configurable permission levels. OpenClaw applies layered policy (per-tool, per-user, per-session). Hybro currently trusts all marketplace agents equally. A trust/sandboxing model (rate limits per agent, output validation, cost caps) becomes important when third-party agents join the marketplace. Build when marketplace opens to external developers.
-- **Community collaboration pattern marketplace** (informed by Airflow provider ecosystem + LobeHub) — full community submission of `StepHandler` plugins with discoverability catalog, verification pipeline, and sandboxed execution. Requires: stable `StepHandler` contract (Phase 2), 5-10 internal patterns proving the interface (Phase 3), external developer interest (Phase 4). The plugin packaging mechanism (Python entrypoints + Git-based registry) is designed in § Multi-Agent Collaboration but should not be built until Phase 4 at earliest. No industrial multi-agent framework has successfully launched a community orchestration pattern marketplace — Airflow's operator ecosystem took years and millions of users to reach critical mass.
 - **A2UI renderer in frontend** — `@a2ui/react` integration; `a2ui_surface` CUSTOM event handling; `a2ui_action` routing in supervisor. Phase 3 adds the three no-regret hooks (stub method, `DataPart` schema, session field). Full integration waits for Phase 4 when there is user demand for rich interaction surfaces.
 - **`hybro-standard-catalog`** — Hybro's custom A2UI catalog extending Basic Catalog. Build when agents in the marketplace actually need differentiated UI components.
 
@@ -1614,12 +1113,6 @@ These are real capabilities that should wait until product direction is clearer:
 | Execution durability | DBOS (Postgres-backed) | Replaces arq (dying) + custom inbox/outbox with one open-source library |
 | Task queue | DBOS workflows | arq maintenance-only; DBOS is more capable |
 | HITL model | `DBOS.send/recv` | 5 lines vs 400-line spec |
-| Supervisor decision model | Tool calls (not free-text) | Structured output, prompt cache stability, auditability (Codex CLI + Claude Code pattern) |
-| LLM failover | Credential pool with provider chain | Transparent failover on rate limit/timeout (Hermes + OpenClaw pattern) |
-| Cancellation model | Hierarchical cascading | Parent cancel propagates to all in-flight invocations with grace period (Claude Code pattern) |
-| Agent capability declaration | A2A `extensions` field | Protocol-native; no schema changes; graceful degradation for non-Hybro consumers |
-| Relay protocol | Typed discriminated-union schema | Version negotiation, exhaustive handling, backward compatible (OpenClaw pattern) |
-| Collaboration pattern model | `StepHandler` plugin protocol | Formal contract enables composability, internal reuse, and future community contribution (Airflow + AutoGen pattern) |
 | SSE fan-out | Redis Pub/Sub (unchanged) | Built for this; better latency than Postgres LISTEN/NOTIFY |
 | Hub relay | Redis Streams (unchanged) | Already designed; not worth changing |
 | Postgres scope | DBOS execution only | One store per concern; avoids Postgres fan-out bottleneck |
