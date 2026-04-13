@@ -5,6 +5,9 @@ import { OrchestraTurn } from '@/components/turn/OrchestraTurn'
 import { TurnEventLog } from '@/stores/turn-event-store/event-log'
 import type { TurnEvent, UserInputData } from '@/stores/turn-event-store/types'
 
+vi.mock('@clerk/nextjs', () => ({
+  useUser: () => ({ user: { username: 'testuser', firstName: 'Test', imageUrl: null } }),
+}))
 vi.mock('@/components/markdown-content', () => ({
   MarkdownContent: ({ content }: { content: string }) => <div>{content}</div>,
   LinkifiedContent: ({ content }: { content: string }) => <span>{content}</span>,

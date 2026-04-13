@@ -118,6 +118,7 @@ export interface RailItemView {
   label: string
   ts: number
   isActive: boolean
+  agentId?: string
 }
 
 export interface HitlPromptView {

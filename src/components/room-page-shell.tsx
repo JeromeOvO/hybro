@@ -62,6 +62,7 @@ export interface TimelineAdapter {
 import { TurnList } from '@/components/turn/TurnList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
 import { useTurnHydration } from '@/hooks/turn/useTurnHydration'
+import { useMessageStoreSync } from '@/hooks/turn/useMessageStoreSync'
 import { RoomMessages } from '@/components/room-messages'
 import { RoomChatInput } from '@/components/room-chat-input'
 import { HitlPanel } from '@/components/hitl-inline-reply-form'
@@ -73,6 +74,7 @@ interface TurnBasedViewProps {
 
 function TurnBasedView({ adapter }: TurnBasedViewProps) {
   useTurnHydration(adapter.roomId, adapter.getToken)
+  useMessageStoreSync() // Bridge legacy SSE → turn events when Redis/journal is down
 
   return (
     <>

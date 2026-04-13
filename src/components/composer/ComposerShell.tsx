@@ -44,6 +44,11 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   const composerState = useTurnEventStore(s => s.composerState)
   const isHitlMode = composerState.mode === 'hitl_responding'
 
+  // Use turn event store's processing state — it correctly tracks turn_completed
+  // events from both SSE and the message-store sync bridge, unlike the legacy
+  // processing lifecycle which can get stuck when Redis is down.
+  const isProcessing = composerState.isProcessing && adapter.isProcessing
+
   const hitlBar = composerState.pendingHitls.length > 0 ? (
     <HitlResponseBar
       hitls={composerState.pendingHitls}
@@ -54,10 +59,10 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   return (
     <RoomChatInput
       onSubmit={adapter.onSendMessage}
-      disableSend={adapter.isSending || adapter.isProcessing || isHitlMode}
+      disableSend={adapter.isSending || isProcessing || isHitlMode}
       sending={adapter.isSending}
-      processing={adapter.isProcessing}
-      cancelling={adapter.isCancelling}
+      processing={isProcessing}
+      cancelling={adapter.isCancelling && isProcessing}
       onCancel={adapter.onCancelProcessing}
       agents={adapter.agents}
       roomAgentIds={adapter.roomAgentIds}

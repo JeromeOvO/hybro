@@ -87,13 +87,14 @@ function reduce(state: RailState, event: TurnEvent): RailState {
       // Only track agent slots, not summary slots
       if (event.slotType === 'agent') {
         const key = `slot-${event.slotId}`
-        const agentName = event.agentName || 'Unknown Agent'
+        const agentName = event.agentName || 'Agent'
         const item: RailItemView = {
           key,
           icon: 'spinner',
           label: `${agentName}: working`,
           ts: event.ts,
           isActive: true,
+          agentId: event.agentId,
         }
         keyIndex.set(key, items.length)
         items.push(item)
@@ -131,6 +132,7 @@ function reduce(state: RailState, event: TurnEvent): RailState {
         label: baseLabel,
         ts: event.ts,
         isActive: true,
+        agentId: undefined, // HITL events don't carry agentId
       }
       keyIndex.set(key, items.length)
       items.push(item)

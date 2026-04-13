@@ -1,9 +1,12 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Check, X, Loader2, Pause, Info, ChevronRight } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { SYSTEM_AGENTS } from '@/lib/system-agents'
 import type { RailItemView, RailIcon } from '@/stores/turn-event-store/types'
+import type { Agent } from '@/lib/types/agent'
 
 function RailIconComponent({ icon, isActive }: { icon: RailIcon; isActive: boolean }) {
   const size = 'h-3 w-3'
@@ -28,7 +31,31 @@ interface OrchestrationRailProps {
 export const OrchestrationRail = React.memo(function OrchestrationRail({ items }: OrchestrationRailProps) {
   if (items.length === 0) return null
 
-  const hasActiveItems = items.some(item => item.isActive)
+  // Resolve agent names from catalog for items that have agentId but generic labels
+  const queryClient = useQueryClient()
+  const agents = queryClient.getQueryData<Agent[]>(['agents', 'all'])
+
+  const resolvedItems = useMemo(() => {
+    if (!agents || agents.length === 0) return items
+    return items.map(item => {
+      if (!item.agentId) return item
+      // Check if label still uses the generic fallback "Agent"
+      const colonIdx = item.label.indexOf(':')
+      const currentName = colonIdx !== -1 ? item.label.slice(0, colonIdx) : null
+      if (currentName && currentName !== 'Agent') return item // already resolved
+      // Resolve name
+      const resolved =
+        SYSTEM_AGENTS[item.agentId]?.name
+        ?? agents.find(a => a.agent_id === item.agentId)?.agent_card?.name
+      if (!resolved) return item
+      const newLabel = colonIdx !== -1
+        ? `${resolved}${item.label.slice(colonIdx)}`
+        : item.label
+      return { ...item, label: newLabel }
+    })
+  }, [items, agents])
+
+  const hasActiveItems = resolvedItems.some(item => item.isActive)
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
   const wasActiveRef = useRef(hasActiveItems)
 
@@ -44,7 +71,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items }
   const isExpanded = userExpanded ?? hasActiveItems
 
   // Terminal summary line for collapsed state
-  const terminalItem = items.length > 0 ? items[items.length - 1] : null
+  const terminalItem = resolvedItems.length > 0 ? resolvedItems[resolvedItems.length - 1] : null
 
   return (
     <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
@@ -52,7 +79,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items }
         {isExpanded ? (
           <>
             <div className="space-y-0.5">
-              {items.map(item => (
+              {resolvedItems.map(item => (
                 <div
                   key={item.key}
                   className={cn(
