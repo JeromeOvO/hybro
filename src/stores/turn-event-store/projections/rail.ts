@@ -119,6 +119,9 @@ function reduce(state: RailState, event: TurnEvent): RailState {
 
     case 'hitl_requested': {
       const key = `hitl-${event.hitlId}`
+      // Deduplicate: if this hitlId already has a rail item (e.g. from
+      // journal replay), skip the duplicate from hydration/reconnect.
+      if (keyIndex.has(key)) break
       const agentName = event.agentName || 'Agent'
       const baseLabel = `${agentName} asked for input`
       hitlLabels.set(event.hitlId, baseLabel)
