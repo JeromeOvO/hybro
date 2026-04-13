@@ -205,15 +205,9 @@ class AgentResponseHandler:
             content=e.text,
             artifacts=e.artifacts,
         )
-        if e.parts:
-            await self._sse.send_agent_response(
-                room_id=e.room_id,
-                message_id=e.message_id,
-                agent_id=e.agent_id,
-                content=e.text,
-                related_message_id=e.related_message_id,
-                parts=e.parts,
-            )
+        # NOTE: send_agent_response removed — _notify() above already delivers
+        # content + parts via task_update SSE. The redundant agent_response SSE
+        # created a duplicate message entity in the frontend.
         await self._resume_orchestration(e.message_id, e.text)
 
     async def _on_error(self, e: AgentEvent) -> None:
