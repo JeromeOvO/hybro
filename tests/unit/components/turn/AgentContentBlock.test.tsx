@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentContentBlock } from '@/components/turn/AgentContentBlock'
 import type { ContentSlotView } from '@/stores/turn-event-store/types'
 
@@ -19,6 +20,11 @@ vi.mock('@/lib/agent-colors', () => ({
   getAgentInitials: (name: string) => name.slice(0, 2).toUpperCase(),
 }))
 
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function Wrapper({ children }: { children: React.ReactNode }) {
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+}
+
 function makeSlot(overrides: Partial<ContentSlotView> = {}): ContentSlotView {
   return {
     slotId: 'msg-1',
@@ -34,23 +40,23 @@ function makeSlot(overrides: Partial<ContentSlotView> = {}): ContentSlotView {
 
 describe('AgentContentBlock', () => {
   it('renders agent name and content', () => {
-    render(<AgentContentBlock slot={makeSlot()} />)
+    render(<AgentContentBlock slot={makeSlot()} />, { wrapper: Wrapper })
     expect(screen.getByText('Test Agent')).toBeDefined()
     expect(screen.getByText('Hello world')).toBeDefined()
   })
 
   it('shows streaming indicator when status is streaming', () => {
-    render(<AgentContentBlock slot={makeSlot({ status: 'streaming', content: 'typing...' })} />)
+    render(<AgentContentBlock slot={makeSlot({ status: 'streaming', content: 'typing...' })} />, { wrapper: Wrapper })
     expect(screen.getByTestId('streaming-indicator')).toBeDefined()
   })
 
   it('shows error marker when status is failed', () => {
-    render(<AgentContentBlock slot={makeSlot({ status: 'failed', error: 'agent crashed' })} />)
+    render(<AgentContentBlock slot={makeSlot({ status: 'failed', error: 'agent crashed' })} />, { wrapper: Wrapper })
     expect(screen.getByText('agent crashed')).toBeDefined()
   })
 
   it('renders empty content for complete-empty slot', () => {
-    const { container } = render(<AgentContentBlock slot={makeSlot({ content: '', status: 'completed' })} />)
+    const { container } = render(<AgentContentBlock slot={makeSlot({ content: '', status: 'completed' })} />, { wrapper: Wrapper })
     expect(container.textContent).toContain('Test Agent')
     expect(container.querySelector('.prose')).toBeNull()
   })

@@ -4,6 +4,7 @@ import React from 'react'
 import { UserCircle } from 'lucide-react'
 import type { UserInputData } from '@/stores/turn-event-store/types'
 import { UserAttachmentCard } from '@/components/message-bubble'
+import { LinkifiedContent } from '@/components/markdown-content'
 
 interface UserInputBlockProps {
   data: UserInputData
@@ -22,9 +23,9 @@ export const UserInputBlock = React.memo(function UserInputBlock({ data }: UserI
       </div>
       <div className="pl-10 pr-2">
         {data.text && (
-          <p className="text-[15px] font-normal leading-relaxed text-foreground whitespace-pre-wrap break-words">
-            {data.text}
-          </p>
+          <div className="text-[15px] font-normal leading-relaxed text-foreground whitespace-pre-wrap break-words">
+            <LinkifiedContent content={data.text} />
+          </div>
         )}
         {data.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 pt-2">
