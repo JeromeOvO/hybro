@@ -3,8 +3,11 @@
  *
  * Verifies that:
  * 1. A second sendUserMessage call is rejected while processing
- * 2. The ref guard is cleared when a terminal SSE event arrives
+ * 2. The ref guard is cleared when a terminal SSE processing_status event arrives
  * 3. After clearing, sending is allowed again
+ *
+ * NOTE: task_update terminal events do NOT clear processing — only
+ * processing_status does (see sse-handlers/index.ts comment block).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor, cleanup } from '@testing-library/react'
@@ -160,7 +163,7 @@ describe('useRoomWebhook double-send guard', () => {
     expect(mockSendMessage).toHaveBeenCalledTimes(2)
   })
 
-  it('clears the guard on terminal task_update status', async () => {
+  it('does NOT clear the guard on terminal task_update (only processing_status clears it)', async () => {
     const { result } = await mountAndWaitForRoom()
     expect(capturedOnMessage).toBeDefined()
 
@@ -169,6 +172,8 @@ describe('useRoomWebhook double-send guard', () => {
     })
     expect(flags().processing).toBe(true)
 
+    // task_update with terminal status does NOT clear processing —
+    // it means one agent finished, but room-level processing continues
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
@@ -179,6 +184,15 @@ describe('useRoomWebhook double-send guard', () => {
           agent_name: 'Agent',
           agent_id: 'a1',
         },
+      }))
+    })
+    expect(flags().processing).toBe(true)
+
+    // The authoritative signal is processing_status — that clears it
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: { status: 'completed', message_id: 'msg-1' },
       }))
     })
     expect(flags().processing).toBe(false)

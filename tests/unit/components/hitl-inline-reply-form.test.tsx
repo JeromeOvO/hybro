@@ -52,9 +52,10 @@ function renderPanel(entityOverrides: Record<string, unknown> = {}, propOverride
 /* ── HitlPanel: header, collapse, pagination ── */
 
 describe('HitlPanel', () => {
-  it('renders the "Question" header for single request', () => {
+  it('renders the agent name header for single request', () => {
     renderPanel()
-    expect(screen.getByText('Question')).toBeTruthy()
+    expect(screen.getByText('Supervisor')).toBeTruthy()
+    expect(screen.getByText('needs input')).toBeTruthy()
   })
 
   it('renders the question prompt', () => {
@@ -68,10 +69,12 @@ describe('HitlPanel', () => {
 
     expect(screen.getByText('What year range do you need?')).toBeTruthy()
 
-    await user.click(screen.getByText('Question'))
+    // Click the header button (contains senderName) to collapse
+    await user.click(screen.getByText('Supervisor'))
     expect(screen.queryByText('What year range do you need?')).toBeNull()
 
-    await user.click(screen.getByText('Question'))
+    // Click again to expand
+    await user.click(screen.getByText('Supervisor'))
     expect(screen.getByText('What year range do you need?')).toBeTruthy()
   })
 
@@ -92,7 +95,6 @@ describe('HitlPanel', () => {
     ]
     render(<HitlPanel requests={requests} {...defaultPanelProps} />)
 
-    // Auto-advances to first unanswered question (index 0)
     expect(screen.getByText('First question')).toBeTruthy()
 
     await user.click(screen.getByLabelText('Next question'))
@@ -111,10 +113,10 @@ describe('HitlPanel', () => {
 /* ── Text prompt type (design doc §5.7a Variant A) ── */
 
 describe('HitlPanel text prompt type', () => {
-  it('renders its own text input and Continue button', () => {
+  it('renders its own text input and Send reply button', () => {
     renderPanel({ hitlPromptType: 'text' })
-    expect(screen.getByPlaceholderText('Type your reply...')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /continue/i })).toBeTruthy()
+    expect(screen.getByPlaceholderText('Reply to Supervisor...')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /send reply/i })).toBeTruthy()
   })
 
   it('has the input with correct aria-label', () => {
@@ -122,27 +124,27 @@ describe('HitlPanel text prompt type', () => {
     expect(screen.getByLabelText('Reply to Research Agent')).toBeTruthy()
   })
 
-  it('disables Continue when input is empty', () => {
+  it('disables Send reply when input is empty', () => {
     renderPanel({ hitlPromptType: 'text' })
-    expect(screen.getByRole('button', { name: /continue/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /send reply/i })).toBeDisabled()
   })
 
-  it('enables Continue when text is typed', async () => {
+  it('enables Send reply when text is typed', async () => {
     const user = userEvent.setup()
     renderPanel({ hitlPromptType: 'text' })
-    await user.type(screen.getByPlaceholderText('Type your reply...'), 'my answer')
-    expect(screen.getByRole('button', { name: /continue/i })).not.toBeDisabled()
+    await user.type(screen.getByPlaceholderText('Reply to Supervisor...'), 'my answer')
+    expect(screen.getByRole('button', { name: /send reply/i })).not.toBeDisabled()
   })
 
-  it('submits the typed text on Continue click', async () => {
+  it('submits the typed text on Send reply click', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderPanel(
       { hitlPromptType: 'text', hitlRequestId: 'req-42' },
       { onSubmit }
     )
-    await user.type(screen.getByPlaceholderText('Type your reply...'), '2024-2026')
-    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.type(screen.getByPlaceholderText('Reply to Supervisor...'), '2024-2026')
+    await user.click(screen.getByRole('button', { name: /send reply/i }))
     expect(onSubmit).toHaveBeenCalledWith('req-42', '2024-2026')
   })
 
@@ -153,7 +155,7 @@ describe('HitlPanel text prompt type', () => {
       { hitlPromptType: 'text', hitlRequestId: 'req-42' },
       { onSubmit }
     )
-    const input = screen.getByPlaceholderText('Type your reply...')
+    const input = screen.getByPlaceholderText('Reply to Supervisor...')
     await user.type(input, '2024-2026{enter}')
     expect(onSubmit).toHaveBeenCalledWith('req-42', '2024-2026')
   })
@@ -161,8 +163,8 @@ describe('HitlPanel text prompt type', () => {
   it('shows "Reply sent" after successful submission', async () => {
     const user = userEvent.setup()
     renderPanel({ hitlPromptType: 'text' })
-    await user.type(screen.getByPlaceholderText('Type your reply...'), 'done')
-    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.type(screen.getByPlaceholderText('Reply to Supervisor...'), 'done')
+    await user.click(screen.getByRole('button', { name: /send reply/i }))
     await waitFor(() => {
       expect(screen.getByText('Reply sent')).toBeTruthy()
     })
@@ -172,8 +174,8 @@ describe('HitlPanel text prompt type', () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn().mockRejectedValue(new Error('Network error'))
     renderPanel({ hitlPromptType: 'text' }, { onSubmit })
-    await user.type(screen.getByPlaceholderText('Type your reply...'), 'test')
-    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.type(screen.getByPlaceholderText('Reply to Supervisor...'), 'test')
+    await user.click(screen.getByRole('button', { name: /send reply/i }))
     await waitFor(() => {
       expect(screen.getByText('Network error')).toBeTruthy()
     })
@@ -279,10 +281,8 @@ describe('HitlPanel choice prompt type', () => {
 /* ── Confirmation prompt type (design doc §5.7a Variant C) ── */
 
 describe('HitlPanel confirmation prompt type', () => {
-  it('renders Approve and Reject as lettered options', () => {
+  it('renders Approve and Reject buttons', () => {
     renderPanel({ hitlPromptType: 'confirmation' })
-    expect(screen.getByText('A')).toBeTruthy()
-    expect(screen.getByText('B')).toBeTruthy()
     expect(screen.getByText('Approve')).toBeTruthy()
     expect(screen.getByText('Reject')).toBeTruthy()
   })
@@ -326,7 +326,7 @@ describe('HitlPanel confirmation prompt type', () => {
 
   it('does not render a text input or Submit button', () => {
     renderPanel({ hitlPromptType: 'confirmation' })
-    expect(screen.queryByPlaceholderText('Type your reply...')).toBeNull()
+    expect(screen.queryByPlaceholderText('Reply to Supervisor...')).toBeNull()
     expect(screen.queryByRole('button', { name: /submit/i })).toBeNull()
   })
 })
@@ -334,14 +334,14 @@ describe('HitlPanel confirmation prompt type', () => {
 /* ── Multi-question group features ── */
 
 describe('HitlPanel group-aware display', () => {
-  it('shows "Questions (0/3 answered)" header for grouped requests', () => {
+  it('shows answered count header for grouped requests', () => {
     const requests = [
       makeHitlEntity({ id: 'e1', hitlRequestId: 'req-1', hitlPrompt: 'Q1', hitlGroupId: 'g1', hitlGroupTotal: 3, hitlGroupIndex: 0 }),
       makeHitlEntity({ id: 'e2', hitlRequestId: 'req-2', hitlPrompt: 'Q2', hitlGroupId: 'g1', hitlGroupTotal: 3, hitlGroupIndex: 1 }),
       makeHitlEntity({ id: 'e3', hitlRequestId: 'req-3', hitlPrompt: 'Q3', hitlGroupId: 'g1', hitlGroupTotal: 3, hitlGroupIndex: 2 }),
     ]
     render(<HitlPanel requests={requests} {...defaultPanelProps} />)
-    expect(screen.getByText('Questions (0/3 answered)')).toBeTruthy()
+    expect(screen.getByText('0/3')).toBeTruthy()
   })
 
   it('shows read-only Q&A display for answered questions', () => {
@@ -364,12 +364,12 @@ describe('HitlPanel group-aware display', () => {
     // Navigate back to Q1 (answered)
     await user.click(screen.getByLabelText('Previous question'))
     await waitFor(() => {
-      expect(screen.getByText('My answer')).toBeTruthy()
+      expect(screen.getByText(/My answer/)).toBeTruthy()
     })
   })
 
-  it('shows "Question" for single non-grouped request', () => {
+  it('shows "needs input" for single non-grouped request', () => {
     renderPanel()
-    expect(screen.getByText('Question')).toBeTruthy()
+    expect(screen.getByText('needs input')).toBeTruthy()
   })
 })
