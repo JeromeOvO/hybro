@@ -3,5 +3,5 @@
 import { HubPageContent } from "@/components/hub-page-content"
 
 export default function ConsumerHubPage() {
-  return <HubPageContent apiKeysPath="/d/discovery-api-keys" />
+  return <HubPageContent apiKeysPath="/d/discovery-api-keys" basePath="/c" />
 }

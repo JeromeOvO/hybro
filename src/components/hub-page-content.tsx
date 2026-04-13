@@ -13,15 +13,20 @@ import {
   Copy,
   Check,
   ExternalLink,
+  Activity,
+  ChevronRight,
 } from "lucide-react"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { useHubStatus, HUB_STATUS_QUERY_KEY } from "@/hooks/useHubStatus"
 import { getAllActiveAgents } from "@/lib/api/agent"
 import { formatTimestamp } from "@/lib/time"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
+import { cn } from "@/lib/utils"
 import type { Agent } from "@/lib/types"
 
 function InlineCopyButton({ text }: { text: string }) {
@@ -42,7 +47,13 @@ function InlineCopyButton({ text }: { text: string }) {
   )
 }
 
-export function HubPageContent({ apiKeysPath }: { apiKeysPath: string }) {
+interface HubPageContentProps {
+  apiKeysPath: string
+  /** Portal base path used for agent detail links (e.g. "/c" or "/d") */
+  basePath: string
+}
+
+export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
   const { getToken } = useAuth()
   const queryClient = useQueryClient()
   const { hub, isOnline, hasHub, isLoading: hubLoading } = useHubStatus()
@@ -239,26 +250,48 @@ export function HubPageContent({ apiKeysPath }: { apiKeysPath: string }) {
             ) : (
               <div className="grid gap-3">
                 {hubAgents.map(agent => (
-                  <Card key={agent.agent_id} className={!isOnline ? "opacity-50" : ""}>
-                    <CardContent className="pt-4 pb-4">
-                      <div className="flex items-center gap-3">
-                        <House className={`h-4 w-4 shrink-0 ${
-                          isOnline ? "text-emerald-500" : "text-muted-foreground/50"
-                        }`} />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium truncate">{agent.agent_card.name}</p>
-                          {agent.agent_card.description && (
-                            <p className="text-xs text-muted-foreground truncate">
-                              {agent.agent_card.description}
-                            </p>
+                  <Link
+                    key={agent.agent_id}
+                    href={`${basePath}/agents/${agent.agent_id}`}
+                    className={cn("block rounded-lg", !isOnline && "pointer-events-none opacity-50")}
+                  >
+                    <Card className="transition-colors hover:bg-muted/50">
+                      <CardContent className="pt-4 pb-4">
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-9 w-9 shrink-0 rounded-lg">
+                            <AvatarImage src={getAgentAvatarUri(agent.agent_id)} alt={agent.agent_card.name} />
+                            <AvatarFallback className="rounded-lg text-xs">
+                              {agent.agent_card.name?.charAt(0)?.toUpperCase() ?? "A"}
+                            </AvatarFallback>
+                          </Avatar>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium truncate">{agent.agent_card.name}</p>
+                              <span className={cn(
+                                "shrink-0 h-2 w-2 rounded-full",
+                                isOnline ? "bg-emerald-500" : "bg-muted-foreground/30"
+                              )} />
+                            </div>
+                            {agent.agent_card.description && (
+                              <p className="text-xs text-muted-foreground truncate">
+                                {agent.agent_card.description}
+                              </p>
+                            )}
+                          </div>
+
+                          {typeof agent.call_count === "number" && agent.call_count > 0 && (
+                            <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+                              <Activity className="h-3 w-3" />
+                              {agent.call_count}
+                            </div>
                           )}
+
+                          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
                         </div>
-                        <span className={`shrink-0 h-2 w-2 rounded-full ${
-                          isOnline ? "bg-emerald-500" : "bg-muted-foreground/30"
-                        }`} />
-                      </div>
-                    </CardContent>
-                  </Card>
+                      </CardContent>
+                    </Card>
+                  </Link>
                 ))}
               </div>
             )}
