@@ -18,15 +18,15 @@ function formatDuration(ms: number): string {
 function makePhaseLabel(phase: TurnEvent & { type: 'phase_changed' }): string {
   switch (phase.phase.name) {
     case 'planning':
-      return 'Planning'
+      return 'Plan'
     case 'delegating':
-      return `Delegating to ${phase.phase.agentNames.join(', ')}`
+      return `Delegate to ${phase.phase.agentNames.join(', ')}`
     case 'evaluating':
-      return 'Evaluating'
+      return 'Evaluate'
     case 'synthesizing':
-      return 'Synthesizing'
+      return 'Synthesize'
     case 'awaiting_input':
-      return 'Awaiting input'
+      return 'Await input'
     case 'round':
       return `Round ${phase.phase.current}/${phase.phase.total}`
     case 'workflow_step':

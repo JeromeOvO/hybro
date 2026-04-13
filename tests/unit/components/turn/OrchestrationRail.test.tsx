@@ -12,11 +12,11 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 describe('OrchestrationRail', () => {
   it('renders rail items with labels', () => {
     const items: RailItemView[] = [
-      { key: 'p1', icon: 'check', label: 'Planning', ts: 1000, isActive: false },
+      { key: 'p1', icon: 'check', label: 'Plan', ts: 1000, isActive: false },
       { key: 'p2', icon: 'spinner', label: 'Delegating to Agent A', ts: 2000, isActive: true },
     ]
     render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    expect(screen.getByText('Planning')).toBeDefined()
+    expect(screen.getByText('Plan')).toBeDefined()
     expect(screen.getByText('Delegating to Agent A')).toBeDefined()
   })
 

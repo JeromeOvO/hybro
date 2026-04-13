@@ -83,9 +83,9 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
     <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
       <div className="border-l-2 border-muted pl-3">
         {showProcessingPlaceholder ? (
-          <div className="flex items-center gap-1.5 py-0.5 text-muted-foreground">
+          <div className="flex items-center gap-1.5 py-0.5 text-foreground/70">
             <RailIconComponent icon="spinner" isActive={true} />
-            <span className="text-xs shimmer-text">Processing</span>
+            <span className="text-sm shimmer-text">Processing</span>
           </div>
         ) : isExpanded ? (
           <>
@@ -95,11 +95,11 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
                   key={item.key}
                   className={cn(
                     'flex items-center gap-1.5 py-0.5',
-                    item.isActive ? 'text-foreground' : 'text-muted-foreground',
+                    item.isActive ? 'text-foreground/80' : 'text-foreground/50',
                   )}
                 >
                   <RailIconComponent icon={item.icon} isActive={item.isActive} />
-                  <span className={cn('text-xs', item.isActive && 'shimmer-text')}>{item.label}</span>
+                  <span className={cn('text-sm', item.isActive && 'shimmer-text')}>{item.label}</span>
                 </div>
               ))}
             </div>
@@ -107,7 +107,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
               <button
                 type="button"
                 onClick={() => setUserExpanded(false)}
-                className="flex items-center gap-1 py-0.5 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                className="flex items-center gap-1 py-0.5 text-sm text-foreground/30 hover:text-foreground/50 transition-colors"
               >
                 <ChevronRight className="h-3 w-3 rotate-90" />
                 <span>Collapse</span>
@@ -124,7 +124,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
             {terminalItem && (
               <>
                 <RailIconComponent icon={terminalItem.icon} isActive={false} />
-                <span className="text-xs">{terminalItem.label}</span>
+                <span className="text-sm">{terminalItem.label}</span>
               </>
             )}
           </button>

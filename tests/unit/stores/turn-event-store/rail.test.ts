@@ -25,7 +25,7 @@ describe('railReducer', () => {
     expect(view).toHaveLength(1)
     expect(view[0]).toMatchObject({
       icon: 'spinner',
-      label: 'Planning',
+      label: 'Plan',
       isActive: true,
     })
   })
@@ -43,7 +43,7 @@ describe('railReducer', () => {
     expect(view[0].icon).toBe('check')
     expect(view[1]).toMatchObject({
       icon: 'spinner',
-      label: 'Delegating to Agent A, Agent B',
+      label: 'Delegate to Agent A, Agent B',
       isActive: true,
     })
   })

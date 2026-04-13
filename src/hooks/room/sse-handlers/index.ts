@@ -102,11 +102,18 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           const messageId = sseMessage.data.message_id
 
           // Deduplicate: the backend may send agent content via both
-          // task_update and agent_response with DIFFERENT message_ids.
-          // If this would create a NEW entity but a task-tracked entity
-          // for the same agent already exists, skip to avoid duplicate.
+          // task_update and agent_response. Skip if:
+          // (a) Same message_id already exists with a terminal taskStatus
+          //     (agent_response sets taskStatus: null which would clear it), OR
+          // (b) Different message_id but a task-tracked entity for the same
+          //     agent already exists in this room.
+          const existing = store.entities[messageId]
+          if (existing?.taskStatus && isTerminalState(existing.taskStatus)) {
+            console.log('🔄 Skipping agent_response for', messageId, '— already terminal')
+            break
+          }
           const agentIdForDedup = sseMessage.data?.agent_id as string | undefined
-          if (agentIdForDedup && !store.entities[messageId]) {
+          if (agentIdForDedup && !existing) {
             const hasDuplicate = store.orderedIds.some(id => {
               const e = store.entities[id]
               return e && e.agentId === agentIdForDedup && e.roomId === roomId
