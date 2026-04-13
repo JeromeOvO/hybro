@@ -177,6 +177,7 @@ class RoomMessageCenter:
             self.queue_executor._slot_lifecycle = self.slot_lifecycle
             self.queue_executor._turn_event_appender = self._turn_event_appender
             self.supervisor_executor._slot_lifecycle = self.slot_lifecycle
+            self.supervisor_executor._turn_appender = self._turn_event_appender
 
     # -- Distributed room lock ---------------------------------------------
 
