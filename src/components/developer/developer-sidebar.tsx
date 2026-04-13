@@ -61,7 +61,7 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
 
   const isCollapsed = state === "collapsed"
 
-  if (!isLoaded || !isSignedIn) return null
+  if (isLoaded && !isSignedIn) return null
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -96,9 +96,13 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <NavAgent navAgents={DEVELOPER_NAV} />
-        <NavHub basePath="/d" />
-        <NavMain items={navMainData} />
+        {isLoaded && (
+          <>
+            <NavAgent navAgents={DEVELOPER_NAV} />
+            <NavHub basePath="/d" />
+            <NavMain items={navMainData} />
+          </>
+        )}
       </SidebarContent>
       <SidebarFooter>
         <div className="border-t border-sidebar-border mx-2 mb-1" />
