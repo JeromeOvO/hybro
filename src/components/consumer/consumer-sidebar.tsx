@@ -8,6 +8,7 @@ import { Code, History, PanelLeftIcon } from "lucide-react"
 import { useUser } from "@clerk/nextjs"
 
 import { NavAgent } from "@/components/nav-agent"
+import { NavHub } from "@/components/nav-hub"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
@@ -136,6 +137,7 @@ export function ConsumerSidebar({ ...props }: React.ComponentProps<typeof Sideba
       </SidebarHeader>
       <SidebarContent>
         <NavAgent navAgents={CONSUMER_NAV} />
+        <NavHub basePath="/c" />
         <NavMain items={navMainData} />
       </SidebarContent>
       <SidebarFooter>
