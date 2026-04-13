@@ -320,6 +320,58 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
     })
   })
 
+  describe('synthesis slot classification (supervisor duplicate fix)', () => {
+    it('summary slot is rendered by content-slots as summary type', () => {
+      // When sync bridge classifies a synthesis entity as summary,
+      // the slot_opened event should have slotType: 'summary'
+      let view = contentSlotsReducer.init()
+
+      // Agent slot (task-tracked)
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_opened', seq: 1, slotId: 'agent-msg', slotType: 'agent',
+        agentId: 'a1', agentName: 'Agent One',
+      }))
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_snapshot', seq: 2, slotId: 'agent-msg',
+        content: 'Agent response', artifacts: [],
+      }))
+
+      // Synthesis slot (summary type from classifySlotType)
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_opened', seq: 3, slotId: 'synthesis-msg', slotType: 'summary',
+        mode: 'supervisor',
+      }))
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_snapshot', seq: 4, slotId: 'synthesis-msg',
+        content: 'Synthesized response', artifacts: [],
+      }))
+
+      expect(view).toHaveLength(2)
+      expect(view[0].slotType).toBe('agent')
+      expect(view[0].content).toBe('Agent response')
+      expect(view[1].slotType).toBe('summary')
+      expect(view[1].content).toBe('Synthesized response')
+    })
+
+    it('summary slot does NOT create a rail item', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        // Agent slot (shows in rail)
+        evt({ type: 'slot_opened', seq: 2, eventId: 'e2', slotId: 'agent-msg', slotType: 'agent', agentId: 'a1', agentName: 'Agent One' }),
+        evt({ type: 'slot_terminated', seq: 3, eventId: 'e3', slotId: 'agent-msg', status: 'completed' }),
+        // Summary slot (should NOT show in rail)
+        evt({ type: 'slot_opened', seq: 4, eventId: 'e4', slotId: 'synthesis-msg', slotType: 'summary', mode: 'supervisor' }),
+        evt({ type: 'slot_terminated', seq: 5, eventId: 'e5', slotId: 'synthesis-msg', status: 'completed' }),
+        evt({ type: 'turn_completed', seq: 6, eventId: 'e6', durationMs: 1000 }),
+      ]
+
+      const railItems = replayRail(events)
+      const agentItems = railItems.filter(r => r.key.startsWith('slot-'))
+      expect(agentItems).toHaveLength(1) // only the agent, not the summary
+      expect(agentItems[0].key).toBe('slot-agent-msg')
+    })
+  })
+
   describe('orphan optimistic turn cleanup', () => {
     it('removeTurn removes orphaned optimistic turns', () => {
       const store = useTurnEventStore.getState()

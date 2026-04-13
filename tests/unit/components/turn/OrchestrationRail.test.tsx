@@ -25,6 +25,12 @@ describe('OrchestrationRail', () => {
     expect(container.children).toHaveLength(0)
   })
 
+  it('shows processing placeholder when isProcessing and no items', () => {
+    render(<OrchestrationRail items={[]} isProcessing={true} />, { wrapper: Wrapper })
+    expect(screen.getByText('Processing...')).toBeDefined()
+    expect(screen.queryAllByTestId('rail-spinner').length).toBeGreaterThan(0)
+  })
+
   it('shows spinner animation for active items', () => {
     const items: RailItemView[] = [
       { key: 'p1', icon: 'spinner', label: 'Working...', ts: 1000, isActive: true },

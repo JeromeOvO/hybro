@@ -26,10 +26,12 @@ function RailIconComponent({ icon, isActive }: { icon: RailIcon; isActive: boole
 
 interface OrchestrationRailProps {
   items: RailItemView[]
+  isProcessing?: boolean
 }
 
-export const OrchestrationRail = React.memo(function OrchestrationRail({ items }: OrchestrationRailProps) {
-  if (items.length === 0) return null
+export const OrchestrationRail = React.memo(function OrchestrationRail({ items, isProcessing }: OrchestrationRailProps) {
+  // Nothing to show: no items and not processing
+  if (items.length === 0 && !isProcessing) return null
 
   // Resolve agent names from catalog for items that have agentId but generic labels
   const queryClient = useQueryClient()
@@ -55,7 +57,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items }
     })
   }, [items, agents])
 
-  const hasActiveItems = resolvedItems.some(item => item.isActive)
+  const hasActiveItems = resolvedItems.some(item => item.isActive) || !!isProcessing
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
   const wasActiveRef = useRef(hasActiveItems)
 
@@ -73,10 +75,18 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items }
   // Terminal summary line for collapsed state
   const terminalItem = resolvedItems.length > 0 ? resolvedItems[resolvedItems.length - 1] : null
 
+  // When processing but no items yet, show a default processing indicator
+  const showProcessingPlaceholder = isProcessing && resolvedItems.length === 0
+
   return (
     <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
       <div className="border-l-2 border-muted pl-3">
-        {isExpanded ? (
+        {showProcessingPlaceholder ? (
+          <div className="flex items-center gap-1.5 py-0.5 text-foreground">
+            <RailIconComponent icon="spinner" isActive={true} />
+            <span className="text-xs">Processing...</span>
+          </div>
+        ) : isExpanded ? (
           <>
             <div className="space-y-0.5">
               {resolvedItems.map(item => (

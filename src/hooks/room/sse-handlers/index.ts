@@ -6,7 +6,31 @@ import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message
 import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
+import type { PhasePayload } from '@/stores/turn-event-store/types'
 import type { SSEHandlerDeps } from './types'
+
+/**
+ * Parse backend processing_status details string into a typed PhasePayload.
+ * Backend sends: "Planning next action...", "Delegating to N agent(s)...",
+ * "Evaluating agent results...", "Synthesizing responses..."
+ */
+function parseStageDetails(details: string): PhasePayload | null {
+  if (details.startsWith('Planning')) {
+    return { name: 'planning' }
+  }
+  const delegatingMatch = details.match(/^Delegating to (\d+) agent/)
+  if (delegatingMatch) {
+    const count = parseInt(delegatingMatch[1], 10)
+    return { name: 'delegating', agentNames: [], count }
+  }
+  if (details.startsWith('Evaluating')) {
+    return { name: 'evaluating' }
+  }
+  if (details.startsWith('Synthesizing')) {
+    return { name: 'synthesizing' }
+  }
+  return null
+}
 
 function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
@@ -123,6 +147,27 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               lifecycle.setMessageId(sseMessage.data.message_id)
             }
             const stageDetails = sseMessage.data.details as string | undefined
+
+            // Bridge supervisor stage details into phase_changed turn events
+            // so the OrchestrationRail shows real-time Supervisor phases.
+            if (stageDetails) {
+              const turnId = realMessageId || lifecycle.getMessageId()
+              if (turnId) {
+                const { useTurnEventStore } = await import('@/stores/turn-event-store')
+                const phase = parseStageDetails(stageDetails)
+                if (phase) {
+                  useTurnEventStore.getState().append(turnId, {
+                    eventId: `sse_phase_${turnId}_${Date.now()}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: 'phase_changed',
+                    phase,
+                  } as import('@/stores/turn-event-store/types').TurnEvent)
+                }
+              }
+            }
+
             // When details are present (supervisor stage updates), always
             // re-show the placeholder — even after task_submitted dismissed
             // it — so the user sees "Evaluating...", "Synthesizing...", etc.

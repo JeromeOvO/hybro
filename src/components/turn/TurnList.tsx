@@ -69,7 +69,7 @@ export function TurnList() {
               <EmptyState />
             ) : (
               <>
-                <div className="flex justify-end mb-1">
+                <div className="sticky top-0 z-10 flex justify-end mb-1 bg-background/80 backdrop-blur-sm">
                   <Button
                     variant="ghost"
                     size="icon"

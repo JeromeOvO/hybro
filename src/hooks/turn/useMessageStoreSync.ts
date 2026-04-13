@@ -160,6 +160,7 @@ function pushIncrementalUpdates(
   for (const agent of agentEntities) {
     const slotId = agent.id
     const slotTs = new Date(agent.timestamp).getTime() || Date.now()
+    const slotType = classifySlotType(agent, agentEntities)
 
     // Ensure the slot is opened before pushing snapshots/termination.
     // Without slot_opened, the content-slots projection drops snapshots
@@ -175,7 +176,7 @@ function pushIncrementalUpdates(
         ts: slotTs,
         type: 'slot_opened',
         slotId,
-        slotType: 'agent',
+        slotType,
         agentId: agent.agentId ?? '',
         agentName: undefined,
       } as TurnEvent)
@@ -196,9 +197,10 @@ function pushIncrementalUpdates(
     }
 
     // Push terminal status if agent is done
-    const isTerminal = agent.taskStatus === 'completed' || agent.taskStatus === 'failed'
+    const isTaskTerminal = agent.taskStatus === 'completed' || agent.taskStatus === 'failed'
       || agent.taskStatus === 'canceled' || agent.taskStatus === 'rejected'
-    if (isTerminal) {
+    const isSynthesisComplete = slotType === 'summary' && agent.content
+    if (isTaskTerminal || isSynthesisComplete) {
       const status = agent.taskStatus === 'rejected' ? 'rejected'
         : agent.taskStatus === 'canceled' ? 'canceled'
         : agent.taskStatus === 'failed' ? 'failed'
@@ -216,10 +218,11 @@ function pushIncrementalUpdates(
   }
 
   // Push turn_completed if all agents are terminal
-  const allTerminal = agentEntities.length > 0 && agentEntities.every(a =>
+  const isEntityDone = (a: MessageEntity) =>
     a.taskStatus === 'completed' || a.taskStatus === 'failed'
-    || a.taskStatus === 'canceled' || a.taskStatus === 'rejected',
-  )
+    || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
+    || (a.taskStatus == null && a.content) // synthesis with content = done
+  const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityDone)
   if (allTerminal) {
     store.append(turnId, {
       eventId: `sync_done_${turnId}`,
@@ -239,6 +242,20 @@ function computeFingerprint(user: MessageEntity, agents: MessageEntity[]): numbe
     hash += a.sourceVersion
   }
   return hash
+}
+
+/**
+ * Classify agent entities into task-tracked (delegated agents) vs non-task
+ * (synthesis from agent_response SSE). When both exist in a turn, the
+ * non-task entities are supervisor/debate synthesis — rendered as 'summary'.
+ */
+function classifySlotType(agent: MessageEntity, allAgents: MessageEntity[]): 'agent' | 'summary' {
+  const hasTaskStatus = agent.taskStatus != null
+  if (hasTaskStatus) return 'agent'
+
+  // Non-task entity — check if coexists with task-tracked entities
+  const hasTaskTracked = allAgents.some(a => a.taskStatus != null)
+  return hasTaskTracked ? 'summary' : 'agent'
 }
 
 /** Convert message entities to deterministic turn events (for new turns only). */
@@ -270,6 +287,7 @@ function buildTurnEvents(
   for (const agent of agentEntities) {
     const slotTs = new Date(agent.timestamp).getTime() || ts
     const slotId = agent.id
+    const slotType = classifySlotType(agent, agentEntities)
 
     events.push({
       eventId: `sync_opened_${slotId}`,
@@ -278,7 +296,7 @@ function buildTurnEvents(
       ts: slotTs,
       type: 'slot_opened',
       slotId,
-      slotType: 'agent',
+      slotType,
       agentId: agent.agentId ?? '',
       agentName: undefined,
     } as TurnEvent)
@@ -296,9 +314,11 @@ function buildTurnEvents(
       } as TurnEvent)
     }
 
-    const isTerminal = agent.taskStatus === 'completed' || agent.taskStatus === 'failed'
+    // Synthesis entities (no taskStatus) with content are implicitly completed
+    const isTaskTerminal = agent.taskStatus === 'completed' || agent.taskStatus === 'failed'
       || agent.taskStatus === 'canceled' || agent.taskStatus === 'rejected'
-    if (isTerminal) {
+    const isSynthesisComplete = slotType === 'summary' && agent.content
+    if (isTaskTerminal || isSynthesisComplete) {
       const status = agent.taskStatus === 'rejected' ? 'rejected'
         : agent.taskStatus === 'canceled' ? 'canceled'
         : agent.taskStatus === 'failed' ? 'failed'
@@ -315,10 +335,11 @@ function buildTurnEvents(
     }
   }
 
-  const allTerminal = agentEntities.length > 0 && agentEntities.every(a =>
+  const isEntityTerminal = (a: MessageEntity) =>
     a.taskStatus === 'completed' || a.taskStatus === 'failed'
-    || a.taskStatus === 'canceled' || a.taskStatus === 'rejected',
-  )
+    || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
+    || (a.taskStatus == null && a.content) // synthesis with content = done
+  const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityTerminal)
   if (allTerminal) {
     const lastTs = agentEntities.length > 0
       ? new Date(agentEntities[agentEntities.length - 1].timestamp).getTime() || ts
