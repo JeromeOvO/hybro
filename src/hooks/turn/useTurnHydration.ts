@@ -93,11 +93,19 @@ export function useTurnHydration(
             if (log && !log.isTerminal()) { activeTurnId = id; break }
           }
           if (activeTurnId) {
+            // Derive seq from the turn's current max so events appear at the
+            // end of the log, preserving correct rail order.
+            const log = turnStore.turnLogs.get(activeTurnId)
+            const logEvents = log?.getEvents() ?? []
+            let nextSeq = logEvents.length > 0 ? logEvents[logEvents.length - 1].seq + 1 : 1
+
             for (const req of hitlRes.requests) {
+              // Deterministic eventId so TurnEventLog deduplicates if
+              // overlayPendingHitlRequests already injected the same request.
               turnStore.append(activeTurnId, {
-                eventId: `hitl-hydrate-${req.request_id}`,
+                eventId: `hitl-pending-${req.request_id}`,
                 turnId: activeTurnId,
-                seq: 0,
+                seq: nextSeq++,
                 ts: req.created_at ? new Date(req.created_at).getTime() : Date.now(),
                 type: 'hitl_requested',
                 hitlId: req.request_id,

@@ -47,6 +47,11 @@ export const composerReducer: ProjectionReducer<ComposerStateView> = {
         return { ...view, isProcessing: false }
 
       case 'hitl_requested': {
+        // Deduplicate by hitlId — multiple injection paths (hydration +
+        // overlay) may emit the same pending request with different eventIds.
+        if (view.pendingHitls.some(h => h.hitlId === event.hitlId)) {
+          return view
+        }
         const newHitl: HitlPromptView = {
           hitlId: event.hitlId,
           turnId: event.turnId,

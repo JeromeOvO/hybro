@@ -71,11 +71,17 @@ export async function overlayPendingHitlRequests(
     }
 
     if (activeTurnId) {
+      // Derive seq from the turn's current max so events appear at the end
+      // of the log, not at position 0 (which would precede planning/delegating).
+      const log = turnStore.turnLogs.get(activeTurnId)
+      const logEvents = log?.getEvents() ?? []
+      let nextSeq = logEvents.length > 0 ? logEvents[logEvents.length - 1].seq + 1 : 1
+
       for (const { req, name } of resolved) {
         const hitlEvent: TurnEvent = {
-          eventId: `hitl-restore-${req.request_id}`,
+          eventId: `hitl-pending-${req.request_id}`,
           turnId: activeTurnId,
-          seq: 0,
+          seq: nextSeq++,
           ts: req.created_at ? new Date(req.created_at).getTime() : Date.now(),
           type: 'hitl_requested',
           hitlId: req.request_id,
