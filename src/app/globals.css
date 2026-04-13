@@ -362,6 +362,28 @@
   animation: shimmer-sweep 5s ease-in-out infinite;
 }
 
+/* Stronger shimmer for orchestration rail — more contrast, faster sweep */
+.shimmer-rail {
+  --shimmer-highlight: 0.85;
+  background: linear-gradient(
+    90deg,
+    currentColor 0%,
+    currentColor 35%,
+    hsl(0 0% 100% / var(--shimmer-highlight)) 50%,
+    currentColor 65%,
+    currentColor 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 2.5s ease-in-out infinite;
+}
+
+.dark .shimmer-rail {
+  --shimmer-highlight: 0.95;
+}
+
 /* Yellow "Needs input" shimmer for HITL states */
 .shimmer-text-yellow {
   background: linear-gradient(

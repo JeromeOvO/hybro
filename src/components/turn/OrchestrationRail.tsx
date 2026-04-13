@@ -8,12 +8,11 @@ import { SYSTEM_AGENTS } from '@/lib/system-agents'
 import type { RailItemView, RailIcon } from '@/stores/turn-event-store/types'
 import type { Agent } from '@/lib/types/agent'
 
-function RailIconComponent({ icon, isActive }: { icon: RailIcon; isActive: boolean }) {
-  const size = 'h-3 w-3'
+function RailIconComponent({ icon }: { icon: RailIcon }) {
+  const size = 'h-3.5 w-3.5'
   switch (icon) {
     case 'spinner':
-      // Active items use a shimmer dot instead of a spinning loader
-      return <span className={cn(size, 'rounded-full shimmer-dot')} data-testid="rail-spinner" />
+      return <span className={cn(size, 'inline-block rounded-full bg-foreground/40')} data-testid="rail-spinner" />
     case 'check':
       return <Check className={cn(size, 'text-green-500')} />
     case 'x':
@@ -83,9 +82,9 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
     <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
       <div className="border-l-2 border-muted pl-3">
         {showProcessingPlaceholder ? (
-          <div className="flex items-center gap-1.5 py-0.5 text-foreground/70">
-            <RailIconComponent icon="spinner" isActive={true} />
-            <span className="text-sm shimmer-text">Processing</span>
+          <div className="flex items-center gap-1.5 py-0.5 text-foreground/70 shimmer-rail">
+            <RailIconComponent icon="spinner" />
+            <span className="text-sm">Processing</span>
           </div>
         ) : isExpanded ? (
           <>
@@ -95,11 +94,13 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
                   key={item.key}
                   className={cn(
                     'flex items-center gap-1.5 py-0.5',
-                    item.isActive ? 'text-foreground/80' : 'text-foreground/50',
+                    item.isActive
+                      ? 'text-foreground/80 shimmer-rail'
+                      : 'text-foreground/50',
                   )}
                 >
-                  <RailIconComponent icon={item.icon} isActive={item.isActive} />
-                  <span className={cn('text-sm', item.isActive && 'shimmer-text')}>{item.label}</span>
+                  <RailIconComponent icon={item.icon} />
+                  <span className="text-sm">{item.label}</span>
                 </div>
               ))}
             </div>

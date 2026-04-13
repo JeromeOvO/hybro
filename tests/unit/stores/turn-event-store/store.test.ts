@@ -83,6 +83,64 @@ describe('TurnEventLogManager store', () => {
     expect(useTurnEventStore.getState().composerState.isProcessing).toBe(false)
   })
 
+  it('optimistic merge deduplicates orderedTurnIds when real turnId already present', () => {
+    // Reproduces the race: slot_opened turn_event adds real turnId before merge
+    const store = useTurnEventStore.getState()
+
+    // Step 1: Optimistic turn created with clientRequestId
+    store.createOptimisticTurn('opt-abc', { text: 'hi', attachments: [] })
+    expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['opt-abc'])
+
+    // Step 2: slot_opened turn_event arrives with real turnId (no clientRequestId)
+    store.append('real-123', evt({
+      type: 'slot_opened', seq: 1, eventId: 'slot-e1', turnId: 'real-123',
+      slotId: 'slot-1', slotType: 'agent', agentId: 'agent-1',
+    }))
+    // Now orderedTurnIds has both: [opt-abc, real-123]
+    expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['opt-abc', 'real-123'])
+
+    // Step 3: Sync bridge fires turn_started with clientRequestId → merge
+    store.append('real-123', evt({
+      type: 'turn_started', seq: 1, eventId: 'merge-e1', turnId: 'real-123',
+      userInput, clientRequestId: 'opt-abc',
+    }))
+
+    // After merge, orderedTurnIds must have exactly one 'real-123', not two
+    const state = useTurnEventStore.getState()
+    expect(state.orderedTurnIds).toEqual(['real-123'])
+    expect(state.turnLogs.has('opt-abc')).toBe(false)
+    expect(state.turnLogs.has('real-123')).toBe(true)
+  })
+
+  it('normal append does not duplicate turnId already in orderedTurnIds', () => {
+    // Edge case: turnId is added via optimistic merge, then a late slot_opened
+    // arrives for same turnId — should not push a second entry.
+    const store = useTurnEventStore.getState()
+
+    // Create a turn normally
+    store.append('turn-1', evt({ type: 'turn_started', seq: 1, eventId: 'e1', turnId: 'turn-1', userInput }))
+    expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['turn-1'])
+
+    // Simulate a different zustand instance that doesn't have the log in memory
+    // (technically won't happen, but ensures the guard works):
+    // Force-clear the turnLog but keep the orderedTurnIds entry
+    const rawState = useTurnEventStore.getState()
+    const newLogs = new Map(rawState.turnLogs)
+    newLogs.delete('turn-1')
+    useTurnEventStore.setState({ turnLogs: newLogs })
+
+    // Now appending to 'turn-1' will see isNewTurn=true but orderedTurnIds already has it
+    store.append('turn-1', evt({
+      type: 'slot_opened', seq: 2, eventId: 'e2', turnId: 'turn-1',
+      slotId: 'slot-1', slotType: 'agent', agentId: 'agent-1',
+    }))
+
+    const state = useTurnEventStore.getState()
+    // Should NOT have ['turn-1', 'turn-1']
+    expect(state.orderedTurnIds).toEqual(['turn-1'])
+    expect(state.turnLogs.has('turn-1')).toBe(true)
+  })
+
   it('reset clears all state', () => {
     const store = useTurnEventStore.getState()
     store.append('turn-1', evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }))

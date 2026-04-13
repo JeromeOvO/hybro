@@ -13,11 +13,11 @@ describe('OrchestrationRail', () => {
   it('renders rail items with labels', () => {
     const items: RailItemView[] = [
       { key: 'p1', icon: 'check', label: 'Plan', ts: 1000, isActive: false },
-      { key: 'p2', icon: 'spinner', label: 'Delegating to Agent A', ts: 2000, isActive: true },
+      { key: 'p2', icon: 'spinner', label: 'Delegate to Agent A', ts: 2000, isActive: true },
     ]
     render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
     expect(screen.getByText('Plan')).toBeDefined()
-    expect(screen.getByText('Delegating to Agent A')).toBeDefined()
+    expect(screen.getByText('Delegate to Agent A')).toBeDefined()
   })
 
   it('renders nothing when items is empty', () => {
@@ -31,25 +31,21 @@ describe('OrchestrationRail', () => {
     expect(screen.queryAllByTestId('rail-spinner').length).toBeGreaterThan(0)
   })
 
-  it('shows shimmer animation for active items', () => {
+  it('applies shimmer-rail to active item rows', () => {
     const items: RailItemView[] = [
       { key: 'p1', icon: 'spinner', label: 'Working', ts: 1000, isActive: true },
-    ]
-    const { container } = render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    const shimmer = container.querySelector('[data-testid="rail-spinner"]')
-    expect(shimmer).toBeDefined()
-    expect(shimmer?.classList.contains('shimmer-dot')).toBe(true)
-  })
-
-  it('applies shimmer-text to active item labels', () => {
-    const items: RailItemView[] = [
-      { key: 'p1', icon: 'spinner', label: 'Generating response', ts: 1000, isActive: true },
       { key: 'p2', icon: 'check', label: 'Completed step', ts: 900, isActive: false },
     ]
     render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    const activeLabel = screen.getByText('Generating response')
-    const doneLabel = screen.getByText('Completed step')
-    expect(activeLabel.classList.contains('shimmer-text')).toBe(true)
-    expect(doneLabel.classList.contains('shimmer-text')).toBe(false)
+    const activeRow = screen.getByText('Working').parentElement!
+    const doneRow = screen.getByText('Completed step').parentElement!
+    expect(activeRow.classList.contains('shimmer-rail')).toBe(true)
+    expect(doneRow.classList.contains('shimmer-rail')).toBe(false)
+  })
+
+  it('applies shimmer-rail to processing placeholder', () => {
+    const { container } = render(<OrchestrationRail items={[]} isProcessing={true} />, { wrapper: Wrapper })
+    const row = container.querySelector('.shimmer-rail')
+    expect(row).not.toBeNull()
   })
 })

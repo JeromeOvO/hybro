@@ -61,9 +61,18 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
           newTurnLogs.delete(optimisticTurnId)
           newTurnLogs.set(turnId, newLog)
 
-          const newOrderedTurnIds = state.orderedTurnIds.map(id =>
+          // Replace optimistic turnId with real turnId, then deduplicate.
+          // A slot_opened turn_event may have already added the real turnId
+          // to orderedTurnIds before this merge runs, producing [realId, realId].
+          const mapped = state.orderedTurnIds.map(id =>
             id === optimisticTurnId ? turnId : id
           )
+          const seen = new Set<string>()
+          const newOrderedTurnIds = mapped.filter(id => {
+            if (seen.has(id)) return false
+            seen.add(id)
+            return true
+          })
 
           // Keep the clientRequestId → turnId mapping updated (not deleted)
           // so subsequent ID swaps (tempMessageId → realMessageId) can
@@ -107,7 +116,12 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
       const newTurnLogs = new Map(state.turnLogs)
       newTurnLogs.set(finalTurnId, log)
 
-      const newOrderedTurnIds = isNewTurn
+      // Guard against duplicate turnId in orderedTurnIds.
+      // This can happen when a turn_event SSE (e.g. slot_opened) arrives
+      // for a turnId that an optimistic entry will later merge into —
+      // adding it here would create a second entry alongside the optimistic one.
+      const alreadyTracked = isNewTurn && state.orderedTurnIds.includes(finalTurnId)
+      const newOrderedTurnIds = isNewTurn && !alreadyTracked
         ? [...state.orderedTurnIds, finalTurnId]
         : state.orderedTurnIds
 
