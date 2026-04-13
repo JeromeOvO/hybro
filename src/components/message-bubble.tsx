@@ -180,7 +180,7 @@ function GenericAttachmentLink({ url, fileName, sizeLabel, mimeType }: { url: st
   )
 }
 
-export function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
+function UserAttachmentCard({ attachment }: { attachment: AttachmentData }) {
   const [loadError, setLoadError] = useState(false)
   const isImg = attachment.mimeType.startsWith('image/')
   const isAudio = attachment.mimeType.startsWith('audio/')

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
-import { cn, formatIfJson } from '@/lib/utils'
+import { formatIfJson } from '@/lib/utils'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 /**
@@ -228,12 +228,10 @@ export function MarkdownContent({
   content,
   isStreaming = false,
   autoFormatJson = true,
-  className,
 }: {
   content: string
   isStreaming?: boolean
   autoFormatJson?: boolean
-  className?: string
 }) {
   const formatted = autoFormatJson ? formatIfJson(content) : content
   const processedContent = processMentions(formatted)
@@ -242,7 +240,7 @@ export function MarkdownContent({
   const components = React.useMemo(() => makeComponents(isStreaming), [isStreaming])
 
   return (
-    <div className={cn("min-w-0 text-sm leading-relaxed text-inherit", className)}>
+    <div className="min-w-0 text-sm leading-relaxed text-inherit">
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}

@@ -5,14 +5,8 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
-import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
-
-export interface OptimisticTurnInput {
-  text: string
-  attachments: Array<{ fileId: string; fileUrl?: string; mimeType: string; fileName: string; sizeBytes: number }>
-}
 
 export function useSendMessage(
   roomId: string,
@@ -26,7 +20,6 @@ export function useSendMessage(
   setSending: (v: boolean) => void,
   setCancelling: (v: boolean) => void,
   reconcileWithDb: (roomId: string) => Promise<void>,
-  onOptimisticTurn?: (clientRequestId: string, input: OptimisticTurnInput) => void,
 ) {
   const sendUserMessage = useCallback(async (
     userInput: string,
@@ -81,20 +74,6 @@ export function useSendMessage(
       isEphemeral: true,
     }, 'optimistic')
 
-    // Turn-based timeline: create optimistic turn so TurnList shows it immediately
-    if (onOptimisticTurn) {
-      onOptimisticTurn(clientRequestId, {
-        text: userInput,
-        attachments: pendingAttachments?.map(att => ({
-          fileId: att.id,
-          fileUrl: att.previewUrl || undefined,
-          mimeType: att.file.type,
-          fileName: att.file.name,
-          sizeBytes: att.file.size,
-        })) ?? [],
-      })
-    }
-
     try {
       setSending(true)  // Show spinner during message creation & parsing
       lifecycle.setSendGuard(true)
@@ -145,11 +124,6 @@ export function useSendMessage(
         const msgStoreNoId = useMessageStore.getState()
         msgStoreNoId.removeMessage(tempMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
-
-        // Rollback optimistic turn from turn-event-store
-        if (onOptimisticTurn) {
-          useTurnEventStore.getState().removeTurn(clientRequestId)
-        }
 
         banner.error('Message sent but server returned no ID. Please try again.')
 
@@ -238,11 +212,6 @@ export function useSendMessage(
       msgStoreErr.removeMessage(tempMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
 
-      // Rollback optimistic turn from turn-event-store
-      if (onOptimisticTurn) {
-        useTurnEventStore.getState().removeTurn(clientRequestId)
-      }
-
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 
       // Revoke orphaned blob URLs since attachments have already been cleared
@@ -274,7 +243,7 @@ export function useSendMessage(
       // to prevent a race window where the user could double-send between
       // lifecycle.setProcessing(true) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onOptimisticTurn])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb])
 
   return { sendUserMessage }
 }

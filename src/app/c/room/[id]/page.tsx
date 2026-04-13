@@ -13,12 +13,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { RoomMessages } from '@/components/room-messages'
+import { RoomChatInput } from '@/components/room-chat-input'
+import { HitlPanel } from '@/components/hitl-inline-reply-form'
 import { GroupManagementModal } from '@/components/group-management-modal'
 import { RoomDefaultAgentsEditor } from '@/components/room-default-agents-editor'
-import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
-import { useRoomUiStore, useRoomFlags } from '@/stores/room-ui-store'
+import { useRoomUiStore } from '@/stores/room-ui-store'
+import { useActiveHitlRequests } from '@/hooks/useRoomMessages'
 import type { QuoteData } from '@/components/message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
@@ -95,21 +98,8 @@ export default function RoomChatPage() {
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
   const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
-  // Feature flag: turn-based timeline
-  const roomFlags = useRoomFlags(roomId)
-  const turnBasedTimeline = roomFlags.turnBasedTimeline
-
-  // Detect ?newui=1 URL parameter to activate turn-based timeline
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const newUi = params.get('newui')
-    if (newUi === '1') {
-      useRoomUiStore.getState().setTurnBasedTimeline(roomId, true)
-    } else if (newUi === '0') {
-      useRoomUiStore.getState().setTurnBasedTimeline(roomId, false)
-    }
-  }, [roomId])
+  // Active HITL requests (for the panel above chat input)
+  const activeHitlRequests = useActiveHitlRequests()
 
   // Group management (extracted hook)
   const gm = useGroupManagement({
@@ -331,56 +321,8 @@ export default function RoomChatPage() {
     }))
   }, [gm.availableAgents])
 
-  // Agent list for V2 timeline placeholder rows.
-  // Only show placeholders for agents in the room's known agent set.
-  // When room_agent_set is empty (new room) or target is all_agents/saved_group,
-  // we don't know which agents will be dispatched, so show NO placeholders.
-  const roomAgentList = useMemo(
-    () => {
-      if (currentRoomAgentIds.length === 0) return []
-      const roomAgentIdSet = new Set(currentRoomAgentIds)
-      return agentList
-        .filter(a => roomAgentIdSet.has(a.id))
-        .map(a => ({ agentId: a.id, agentName: a.name }))
-    },
-    [agentList, currentRoomAgentIds],
-  )
-
   // Get room form data for initialization (memoized to avoid unstable references)
   const roomFormData = useMemo(() => getRoomFormData(), [getRoomFormData])
-
-  // Build TimelineAdapter for RoomPageShell
-  const timelineAdapter: TimelineAdapter = {
-    roomId,
-    getToken,
-    onSendMessage: handleSendMessage,
-    onCancelProcessing: cancelProcessing,
-    onRespondToHitl: respondToHitlRequest,
-    onChatModeChange: setLocalChatMode,
-    isSending: sending,
-    isProcessing: processing,
-    isCancelling: cancelling,
-    agents: agentList,
-    roomAgentIds: currentRoomAgentIds,
-    groupManagement: {
-      groups: gm.groups,
-      loadingGroups: gm.loadingGroups,
-      selectedGroup: gm.selectedGroup,
-      isOverride: gm.isOverride,
-      handleGroupChange: gm.handleGroupChange,
-      handleClearOverride: gm.handleClearOverride,
-      handleCreateGroup: gm.handleCreateGroup,
-      handleEditGroup: gm.handleEditGroup,
-      handleDeleteGroup: gm.handleDeleteGroup,
-      onEditRoomAgents: handleEditRoomAgents,
-    },
-    quoteState: {
-      quote,
-      setQuote: handleQuote,
-      clearQuote,
-    },
-    chatMode: effectiveChatMode,
-  }
 
   if (!isLoaded || loading) {
     return (
@@ -504,10 +446,50 @@ export default function RoomChatPage() {
             </div>
           </header>
 
-          <RoomPageShell
-            adapter={timelineAdapter}
-            roomAgentList={roomAgentList}
-            turnBasedTimeline={turnBasedTimeline}
+          <main className="flex-1 overflow-hidden">
+            <RoomMessages
+              onQuote={handleQuote}
+            />
+          </main>
+        </div>
+      </div>
+
+      <div className="bg-background p-4">
+        <div className="max-w-4xl mx-auto">
+          <RoomChatInput
+            onSubmit={handleSendMessage}
+            disableSend={sending || processing}
+            sending={sending}
+            processing={processing}
+            cancelling={cancelling}
+            onCancel={cancelProcessing}
+            agents={agentList}
+            roomAgentIds={currentRoomAgentIds}
+            showGroupSelector={true}
+            groups={gm.groups}
+            loadingGroups={gm.loadingGroups}
+            selectedGroup={gm.selectedGroup}
+            onGroupChange={gm.handleGroupChange}
+            roomAgentCount={roomAgentCount}
+            onCreateGroup={gm.handleCreateGroup}
+            onEditGroup={gm.handleEditGroup}
+            onDeleteGroup={gm.handleDeleteGroup}
+            onEditRoomAgents={handleEditRoomAgents}
+            isOverride={gm.isOverride}
+            onClearOverride={gm.handleClearOverride}
+            quote={quote}
+            onClearQuote={clearQuote}
+            chatMode={effectiveChatMode}
+            onChatModeChange={setLocalChatMode}
+            topSlot={activeHitlRequests.length > 0
+              ? (
+                <HitlPanel
+                  requests={activeHitlRequests}
+                  onSubmit={respondToHitlRequest}
+                />
+              )
+              : undefined
+            }
           />
         </div>
       </div>
