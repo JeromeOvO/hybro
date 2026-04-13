@@ -77,6 +77,7 @@ class SupervisorExecutor:
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         room_coordinator_service: RoomCoordinatorService,
+        slot_lifecycle=None,
     ) -> None:
         self.supervisor_service = supervisor_service
         self.room_services = room_services
@@ -88,6 +89,7 @@ class SupervisorExecutor:
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
         self.room_coordinator_service = room_coordinator_service
+        self._slot_lifecycle = slot_lifecycle
 
     # ------------------------------------------------------------------
     # Main loop
@@ -1052,6 +1054,30 @@ class SupervisorExecutor:
                     target.agent_id, room_id
                 )
                 if not agent:
+                    # --- Emit failed slot (Phase 1b) ---
+                    if getattr(self, '_slot_lifecycle', None) and user_message_id:
+                        try:
+                            failed_slot_id = f"sup-{target.agent_id}-{step_number}"
+                            await self._slot_lifecycle.open_slot(
+                                room_id=room_id,
+                                turn_id=user_message_id,
+                                slot_id=failed_slot_id,
+                                slot_type="agent",
+                                agent_id=target.agent_id,
+                                agent_name=target.agent_name,
+                            )
+                            await self._slot_lifecycle.terminate_slot(
+                                room_id=room_id,
+                                turn_id=user_message_id,
+                                slot_id=failed_slot_id,
+                                status="failed",
+                                error="agent_unavailable",
+                            )
+                        except Exception:
+                            logger.warning(
+                                "SupervisorExecutor: failed slot emission failed",
+                                exc_info=True,
+                            )
                     logger.warning(
                         "dispatch_one: agent %s not found or inactive",
                         target.agent_id,
@@ -1099,6 +1125,24 @@ class SupervisorExecutor:
                     task_content=target.task,
                 )
                 await self.database_service.add_room_agent_message(message)
+
+                # --- Emit slot_opened (Phase 1b) ---
+                if getattr(self, '_slot_lifecycle', None) and message.turn_id:
+                    try:
+                        await self._slot_lifecycle.open_slot(
+                            room_id=room_id,
+                            turn_id=message.turn_id,
+                            slot_id=message.message_id,
+                            slot_type="agent",
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "SupervisorExecutor: slot_opened emission failed for %s",
+                            message.message_id,
+                            exc_info=True,
+                        )
 
                 logger.info(
                     "supervisor_agent_dispatching",

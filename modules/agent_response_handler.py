@@ -32,10 +32,42 @@ class AgentResponseHandler:
         db: DatabaseService,
         sse: SSEManager,
         room_message_center: object,
+        slot_lifecycle=None,
     ) -> None:
         self._db = db
         self._sse = sse
         self._rmc = room_message_center
+        self._slot_lifecycle = slot_lifecycle
+
+    async def _terminate_slot(
+        self,
+        e: AgentEvent,
+        status: str,
+        content: str | None = None,
+        artifacts: list[dict] | None = None,
+        error: str | None = None,
+        has_partial_content: bool | None = None,
+    ) -> None:
+        """Emit slot_terminated turn event if slot_lifecycle is available and turn_id is set."""
+        if not getattr(self, '_slot_lifecycle', None) or not e.turn_id:
+            return
+        try:
+            await self._slot_lifecycle.terminate_slot(
+                room_id=e.room_id,
+                turn_id=e.turn_id,
+                slot_id=e.message_id,
+                status=status,
+                content=content,
+                artifacts=artifacts,
+                error=error,
+                has_partial_content=has_partial_content,
+            )
+        except Exception:
+            logger.warning(
+                "AgentResponseHandler: slot_terminated emission failed for %s",
+                e.message_id,
+                exc_info=True,
+            )
 
     async def handle(self, event: AgentEvent) -> None:
         match event.kind:
@@ -168,6 +200,11 @@ class AgentResponseHandler:
                 artifacts=artifacts_for_db,
             )
         await self._notify(e, TaskState.completed)
+        await self._terminate_slot(
+            e, "completed",
+            content=e.text,
+            artifacts=e.artifacts,
+        )
         if e.parts:
             await self._sse.send_agent_response(
                 room_id=e.room_id,
@@ -189,6 +226,13 @@ class AgentResponseHandler:
                 message_text=error,
             )
         await self._notify(e, TaskState(state), error=error)
+        has_partial = bool(e.text and e.text.strip())
+        await self._terminate_slot(
+            e, "failed",
+            content=e.text if has_partial else None,
+            error=error,
+            has_partial_content=has_partial or None,
+        )
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_canceled(self, e: AgentEvent) -> None:
@@ -199,6 +243,7 @@ class AgentResponseHandler:
                 message_text=e.text or "Task was canceled",
             )
         await self._notify(e, TaskState.canceled)
+        await self._terminate_slot(e, "canceled")
         await self._resume_orchestration(e.message_id, "", failed=True)
 
     async def _on_interactive(self, e: AgentEvent) -> None:
