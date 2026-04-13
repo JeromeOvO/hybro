@@ -209,6 +209,26 @@ describe('railReducer', () => {
     expect(terminals).toHaveLength(1)
   })
 
+  it('phase_changed after turn_completed is ignored', () => {
+    const events: TurnEvent[] = [
+      evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput: { text: 'hi', attachments: [] } }),
+      evt({ type: 'phase_changed', seq: 2, eventId: 'e2', phase: { name: 'planning' } }),
+      evt({ type: 'slot_opened', seq: 3, eventId: 'e3', slotId: 'msg-1', slotType: 'agent', agentName: 'Agent A' }),
+      evt({ type: 'slot_terminated', seq: 4, eventId: 'e4', slotId: 'msg-1', status: 'completed' }),
+      evt({ type: 'turn_completed', seq: 5, eventId: 'e5', durationMs: 1000 }),
+      // Stale phase events arriving after turn completed (from processing_status SSE)
+      evt({ type: 'phase_changed', seq: 6, eventId: 'e6', phase: { name: 'evaluating' } }),
+      evt({ type: 'phase_changed', seq: 7, eventId: 'e7', phase: { name: 'planning' } }),
+    ]
+
+    const items = replayRail(events)
+    // Should only have: planning(check), slot(check), turn-terminal
+    // The stale evaluating and planning should be ignored
+    const phaseItems = items.filter(r => r.key.startsWith('phase-'))
+    expect(phaseItems).toHaveLength(1) // only the first planning
+    expect(items.filter(r => r.key === 'turn-terminal')).toHaveLength(1)
+  })
+
   it('hydration + sync bridge produces single rail item per agent (replayRail)', () => {
     // Simulates the exact scenario: hydration creates slot_opened, then
     // sync bridge creates another slot_opened with a different eventId

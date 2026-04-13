@@ -21,7 +21,10 @@ function parseStageDetails(details: string): PhasePayload | null {
   const delegatingMatch = details.match(/^Delegating to (\d+) agent/)
   if (delegatingMatch) {
     const count = parseInt(delegatingMatch[1], 10)
-    return { name: 'delegating', agentNames: [], count }
+    // Backend only sends the count, not agent names. Use placeholder names
+    // so the rail label reads "Delegating to 2 agent(s)" rather than empty.
+    const agentNames = [`${count} agent(s)`]
+    return { name: 'delegating', agentNames, count }
   }
   if (details.startsWith('Evaluating')) {
     return { name: 'evaluating' }
@@ -91,6 +94,23 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         console.log('🤖 Agent response received via SSE')
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
+
+          // Deduplicate: the backend may send agent content via both
+          // task_update and agent_response with DIFFERENT message_ids.
+          // If this would create a NEW entity but a task-tracked entity
+          // for the same agent already exists, skip to avoid duplicate.
+          const agentIdForDedup = sseMessage.data?.agent_id as string | undefined
+          if (agentIdForDedup && !store.entities[messageId]) {
+            const hasDuplicate = store.orderedIds.some(id => {
+              const e = store.entities[id]
+              return e && e.agentId === agentIdForDedup && e.roomId === roomId
+                && e.taskStatus != null && !e.isEphemeral
+            })
+            if (hasDuplicate) {
+              console.log('🔄 Skipping duplicate agent_response for', agentIdForDedup, '— task entity exists')
+              break
+            }
+          }
 
           if (sseMessage.data?.content !== undefined || sseMessage.data?.parts) {
             const agentId = sseMessage.data?.agent_id as string | undefined
@@ -191,6 +211,43 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             lifecycle.disarmCancelTimeout()
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
+
+            // Emit turn terminal event — this is the authoritative signal
+            // that the room-level processing is done (not individual task completion).
+            const turnId = sseMessage.data.message_id || lifecycle.getMessageId()
+            if (turnId) {
+              const { useTurnEventStore } = await import('@/stores/turn-event-store')
+              const terminalType: 'turn_completed' | 'turn_failed' | 'turn_canceled' =
+                status === PROCESSING_STATUS.CANCELED ? 'turn_canceled'
+                : status === PROCESSING_STATUS.FAILED ? 'turn_failed'
+                : 'turn_completed'
+              const terminalEvent = terminalType === 'turn_failed'
+                ? {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                    reason: (sseMessage.data.details as string) || 'Processing failed',
+                  }
+                : terminalType === 'turn_completed'
+                ? {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                    durationMs: 0, // will be overridden by hydration
+                  }
+                : {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                  }
+              useTurnEventStore.getState().append(turnId, terminalEvent as import('@/stores/turn-event-store/types').TurnEvent)
+            }
 
             if (sseMessage.data.message_id === lifecycle.getMessageId()) {
               lifecycle.setMessageId(null)

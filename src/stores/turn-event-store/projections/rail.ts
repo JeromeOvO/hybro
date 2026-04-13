@@ -60,6 +60,13 @@ function reduce(state: RailState, event: TurnEvent): RailState {
   const keyIndex = new Map(state.keyIndex)
   const hitlLabels = new Map(state.hitlLabels)
 
+  // After a turn terminal event, ignore non-terminal events.
+  // This prevents stale phase_changed events (from processing_status SSE)
+  // that arrive after the turn has already completed from appearing in the rail.
+  if (keyIndex.has('turn-terminal')) {
+    return state
+  }
+
   switch (event.type) {
     case 'phase_changed': {
       // Deactivate all active items by setting them to check icon

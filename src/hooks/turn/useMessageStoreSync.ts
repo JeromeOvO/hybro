@@ -75,11 +75,19 @@ export function useMessageStoreSync() {
         // Fallback: assign unlinked agents to the most recent user message.
         // This handles cases where relatedMessageId uses the server-assigned ID
         // but the user entity still has a temp ID (pre-swap timing gap).
+        // Skip unlinked entities when a task-tracked entity with the same
+        // agentId already exists in the turn (prevents duplicate from
+        // agent_response SSE arriving after task_submitted).
         if (unlinked.length > 0 && userEntities.length > 0) {
           const lastUser = userEntities[userEntities.length - 1]
           const list = agentsByTurn.get(lastUser.id) ?? []
           for (const agent of unlinked) {
-            list.push(agent)
+            const isDuplicate = agent.agentId && list.some(
+              existing => existing.agentId === agent.agentId && existing.taskStatus != null,
+            )
+            if (!isDuplicate) {
+              list.push(agent)
+            }
           }
           agentsByTurn.set(lastUser.id, list)
         }
@@ -217,22 +225,13 @@ function pushIncrementalUpdates(
     }
   }
 
-  // Push turn_completed if all agents are terminal
-  const isEntityDone = (a: MessageEntity) =>
-    a.taskStatus === 'completed' || a.taskStatus === 'failed'
-    || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
-    || (a.taskStatus == null && a.content) // synthesis with content = done
-  const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityDone)
-  if (allTerminal) {
-    store.append(turnId, {
-      eventId: `sync_done_${turnId}`,
-      turnId,
-      seq: nextSeq++,
-      ts: Date.now(),
-      type: 'turn_completed',
-      durationMs: 0,
-    } as TurnEvent)
-  }
+  // NOTE: Do NOT emit turn_completed here. Individual agent terminal
+  // status does not mean the room-level processing is done (e.g. Supervisor
+  // may continue evaluating/planning after an agent completes). The
+  // authoritative signal is the processing_status terminal SSE event —
+  // that handler emits turn_completed/turn_failed/turn_canceled.
+  // buildTurnEvents() still emits turn_completed for historical data
+  // loaded via hydration, where the processing is already finished.
 }
 
 /** Simple numeric fingerprint based on entity versions + count. */
