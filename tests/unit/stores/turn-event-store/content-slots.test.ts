@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contentSlotsReducer } from '@/stores/turn-event-store/projections/content-slots'
+import { contentSlotsReducer, getVisibleSlots } from '@/stores/turn-event-store/projections/content-slots'
 import type { TurnEvent, ContentSlotView, UserInputData } from '@/stores/turn-event-store/types'
 
 const userInput: UserInputData = { text: 'hello', attachments: [] }
@@ -152,5 +152,160 @@ describe('contentSlotsReducer', () => {
     let view = contentSlotsReducer.init()
     view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 1, slotId: 'unknown', textDelta: 'data' }))
     expect(view).toHaveLength(0)
+  })
+})
+
+describe('getVisibleSlots filtering', () => {
+  it('filters out canceled slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'slot-1',
+        slotType: 'agent',
+        content: 'Completed response',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a1',
+        agentName: 'Agent One',
+      },
+      {
+        slotId: 'slot-2',
+        slotType: 'agent',
+        content: 'Canceled',
+        artifacts: [],
+        status: 'canceled',
+        agentId: 'a2',
+        agentName: 'Agent Two',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+
+    expect(visible).toHaveLength(1)
+    expect(visible[0].slotId).toBe('slot-1')
+  })
+
+  it('filters out failed slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'slot-1',
+        slotType: 'agent',
+        content: 'Completed response',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a1',
+        agentName: 'Agent One',
+      },
+      {
+        slotId: 'slot-2',
+        slotType: 'agent',
+        content: 'Failed',
+        artifacts: [],
+        status: 'failed',
+        error: 'agent crashed',
+        agentId: 'a2',
+        agentName: 'Agent Two',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+
+    expect(visible).toHaveLength(1)
+    expect(visible[0].slotId).toBe('slot-1')
+  })
+
+  it('filters out rejected slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'slot-1',
+        slotType: 'agent',
+        content: 'Completed response',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a1',
+        agentName: 'Agent One',
+      },
+      {
+        slotId: 'slot-2',
+        slotType: 'agent',
+        content: 'Rejected',
+        artifacts: [],
+        status: 'rejected',
+        agentId: 'a2',
+        agentName: 'Agent Two',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+
+    expect(visible).toHaveLength(1)
+    expect(visible[0].slotId).toBe('slot-1')
+  })
+
+  it('preserves completed and streaming slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'slot-1',
+        slotType: 'agent',
+        content: 'Completed',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a1',
+        agentName: 'Agent One',
+      },
+      {
+        slotId: 'slot-2',
+        slotType: 'agent',
+        content: 'Streaming...',
+        artifacts: [],
+        status: 'streaming',
+        agentId: 'a2',
+        agentName: 'Agent Two',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+
+    expect(visible).toHaveLength(2)
+    expect(visible[0].status).toBe('completed')
+    expect(visible[1].status).toBe('streaming')
+  })
+
+  it('filters both hitl-pending and terminal slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'hitl-pending:h1',
+        slotType: 'hitl_record',
+        content: '',
+        artifacts: [],
+        status: 'streaming',
+        hitlPrompt: 'What color?',
+        hitlSource: 'agent',
+      },
+      {
+        slotId: 'slot-1',
+        slotType: 'agent',
+        content: 'Canceled',
+        artifacts: [],
+        status: 'canceled',
+        agentId: 'a1',
+        agentName: 'Agent One',
+      },
+      {
+        slotId: 'slot-2',
+        slotType: 'agent',
+        content: 'Completed',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a2',
+        agentName: 'Agent Two',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+
+    // Only the completed slot should remain
+    expect(visible).toHaveLength(1)
+    expect(visible[0].slotId).toBe('slot-2')
+    expect(visible[0].status).toBe('completed')
   })
 })

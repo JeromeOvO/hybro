@@ -589,4 +589,144 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       expect(view[0].hydrated).toBe(true) // hydrated — no animation
     })
   })
+
+  describe('HITL entity sync bridge', () => {
+    it('emits hitl_requested for entity with hitlRequestId', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'hitl_requested', seq: 2, eventId: 'e2',
+          hitlId: 'hitl-1',
+          source: 'agent',
+          agentName: 'Test Agent',
+          prompt: 'Please describe...',
+          promptType: 'text',
+        }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Check that hitl_requested creates a pending slot
+      expect(view).toHaveLength(1)
+      expect(view[0].slotId).toBe('hitl-pending:hitl-1')
+      expect(view[0].hitlPrompt).toBe('Please describe...')
+      expect(view[0].hitlSource).toBe('agent')
+      expect(view[0].agentName).toBe('Test Agent')
+
+      // Verify no slot_opened or slot_snapshot was processed
+      const hasSlotOpened = events.some(e => e.type === 'slot_opened')
+      const hasSlotSnapshot = events.some(e => e.type === 'slot_snapshot')
+      expect(hasSlotOpened).toBe(false)
+      expect(hasSlotSnapshot).toBe(false)
+    })
+
+    it('emits hitl_answered for resolved HITL with answer', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'hitl_requested', seq: 2, eventId: 'e2',
+          hitlId: 'hitl-2',
+          source: 'agent',
+          agentName: 'Test Agent',
+          prompt: 'What do you want?',
+          promptType: 'text',
+        }),
+        evt({
+          type: 'hitl_answered', seq: 3, eventId: 'e3',
+          hitlId: 'hitl-2',
+          answer: 'A budget spreadsheet',
+        }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Should have the completed record slot
+      expect(view).toHaveLength(1)
+      expect(view[0].slotId).toBe('hitl-record:hitl-2')
+      expect(view[0].slotType).toBe('hitl_record')
+      expect(view[0].hitlPrompt).toBe('What do you want?')
+      expect(view[0].hitlAnswer).toBe('A budget spreadsheet')
+      expect(view[0].status).toBe('completed')
+    })
+
+    it('emits hitl_expired for resolved HITL without answer', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'hitl_requested', seq: 2, eventId: 'e2',
+          hitlId: 'hitl-3',
+          source: 'agent',
+          agentName: 'Test Agent',
+          prompt: 'Choose a color',
+          promptType: 'choice',
+        }),
+        evt({
+          type: 'hitl_expired', seq: 3, eventId: 'e3',
+          hitlId: 'hitl-3',
+        }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Pending marker should still exist (hitl_expired doesn't create a record)
+      expect(view).toHaveLength(1)
+      expect(view[0].slotId).toBe('hitl-pending:hitl-3')
+      expect(view[0].status).toBe('streaming')
+    })
+
+    it('treats resolved HITL as terminal for turn completion', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        // Regular agent (completed)
+        evt({
+          type: 'slot_opened', seq: 2, eventId: 'e2', slotId: 'agent-1',
+          slotType: 'agent', agentId: 'a1', agentName: 'Agent One',
+        }),
+        evt({
+          type: 'slot_terminated', seq: 3, eventId: 'e3', slotId: 'agent-1', status: 'completed',
+        }),
+        // HITL entity (resolved with answer)
+        evt({
+          type: 'hitl_requested', seq: 4, eventId: 'e4',
+          hitlId: 'hitl-4',
+          source: 'agent',
+          agentName: 'Test Agent',
+          prompt: 'Confirm?',
+          promptType: 'confirmation',
+        }),
+        evt({
+          type: 'hitl_answered', seq: 5, eventId: 'e5',
+          hitlId: 'hitl-4',
+          answer: 'yes',
+        }),
+        // Turn completes because both entities are terminal
+        evt({ type: 'turn_completed', seq: 6, eventId: 'e6', durationMs: 2000 }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Should have two slots: agent + hitl_record
+      expect(view).toHaveLength(2)
+      expect(view[0].slotId).toBe('agent-1')
+      expect(view[0].status).toBe('completed')
+      expect(view[1].slotId).toBe('hitl-record:hitl-4')
+      expect(view[1].status).toBe('completed')
+
+      // Verify turn_completed was processed
+      const hasTurnCompleted = events.some(e => e.type === 'turn_completed')
+      expect(hasTurnCompleted).toBe(true)
+    })
+  })
 })
