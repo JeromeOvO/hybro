@@ -12,7 +12,7 @@ function RailIconComponent({ icon }: { icon: RailIcon }) {
   const size = 'h-3.5 w-3.5'
   switch (icon) {
     case 'spinner':
-      return <span className={cn(size, 'inline-block rounded-full bg-foreground/40')} data-testid="rail-spinner" />
+      return <span className={cn(size, 'inline-block rounded-full bg-primary')} data-testid="rail-spinner" />
     case 'check':
       return <Check className={cn(size, 'text-green-500')} />
     case 'x':

@@ -362,18 +362,17 @@
   animation: shimmer-sweep 5s ease-in-out infinite;
 }
 
-/* Stronger shimmer for orchestration rail — explicit colors for contrast
-   in both light and dark mode (currentColor is too close to the highlight
-   in dark mode, producing an invisible sweep). */
+/* Blue/primary shimmer for orchestration rail — uses the theme primary
+   color hue for a branded sweep effect with strong contrast. */
 .shimmer-rail {
-  --shimmer-base: hsl(0 0% 40%);
-  --shimmer-highlight: hsl(0 0% 72%);
+  --shimmer-base: hsl(192 60% 35%);
+  --shimmer-highlight: hsl(192 90% 58%);
   background: linear-gradient(
     90deg,
     var(--shimmer-base) 0%,
-    var(--shimmer-base) 35%,
+    var(--shimmer-base) 30%,
     var(--shimmer-highlight) 50%,
-    var(--shimmer-base) 65%,
+    var(--shimmer-base) 70%,
     var(--shimmer-base) 100%
   );
   background-size: 200% 100%;
@@ -384,8 +383,8 @@
 }
 
 .dark .shimmer-rail {
-  --shimmer-base: hsl(0 0% 58%);
-  --shimmer-highlight: hsl(0 0% 92%);
+  --shimmer-base: hsl(180 50% 40%);
+  --shimmer-highlight: hsl(180 100% 70%);
 }
 
 /* Yellow "Needs input" shimmer for HITL states */
