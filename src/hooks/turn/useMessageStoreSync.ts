@@ -6,6 +6,7 @@ import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { TurnEvent, ArtifactData } from '@/stores/turn-event-store/types'
 import type { MessageEntity } from '@/stores/message-store/types'
 import type { ArtifactPart } from '@/stores/message-store/types'
+import { isSystemAgent } from '@/lib/system-agents'
 
 /**
  * Bridges the message store → turn event store in real time.
@@ -165,12 +166,13 @@ function pushIncrementalUpdates(
     ? existingEvents[existingEvents.length - 1].seq + 100 // leave room for ordering
     : 1
 
-  for (const agent of agentEntities) {
+  // Process HITL entities before regular agents so HITL Q&A cards render
+  // above agent response blocks (HITL happens during processing, before completion).
+  const ordered = orderEntitiesHitlFirst(agentEntities)
+
+  for (const agent of ordered) {
     // HITL entities → emit HITL turn events, skip regular slot creation.
-    // Detect via hitlRequestId (set by SSE/overlay) OR taskStatus 'input-required'
-    // (always present on DB-hydrated HITL entities even when hitlRequestId is missing).
-    const isHitlEntity = agent.hitlRequestId || agent.taskStatus === 'input-required'
-    if (isHitlEntity) {
+    if (detectHitlEntity(agent)) {
       const hitlId = agent.hitlRequestId || `hitl_db_${agent.id}`
       const slotTs = new Date(agent.timestamp).getTime() || Date.now()
       const hitlAlreadyEmitted = existingEvents.some(
@@ -185,7 +187,7 @@ function pushIncrementalUpdates(
           type: 'hitl_requested',
           hitlId,
           source: 'agent' as const,
-          agentName: agent.senderName || undefined,
+          agentName: resolveHitlAgentName(agent, agentEntities),
           prompt: agent.hitlPrompt || agent.content || '',
           promptType: (agent.hitlPromptType || 'text') as 'text' | 'choice' | 'confirmation',
           choices: agent.hitlChoices ?? undefined,
@@ -310,6 +312,56 @@ function classifySlotType(agent: MessageEntity, allAgents: MessageEntity[]): 'ag
   return hasTaskTracked ? 'summary' : 'agent'
 }
 
+/**
+ * Resolve the actual requesting agent name for a HITL entity.
+ *
+ * When HITL is stored in DB with agentId 'supervisor_hitl', the senderName
+ * becomes "Question & Answer". We look for the real requesting agent among
+ * sibling entities in the same turn — the non-HITL, non-system agent that
+ * triggered the HITL.
+ */
+export function resolveHitlAgentName(
+  hitlEntity: MessageEntity,
+  allAgents: MessageEntity[],
+): string | undefined {
+  // If the HITL entity already has a real agent name (not a system agent), use it
+  if (hitlEntity.agentId && !isSystemAgent(hitlEntity.agentId)) {
+    return hitlEntity.senderName || undefined
+  }
+  // Find a non-HITL, non-system agent in the same turn
+  const requestingAgent = allAgents.find(
+    a => a !== hitlEntity
+      && a.agentId
+      && !isSystemAgent(a.agentId)
+      && a.taskStatus !== 'input-required',
+  )
+  return requestingAgent?.senderName || hitlEntity.senderName || undefined
+}
+
+/**
+ * Detect whether an entity is HITL.
+ * Checks hitlRequestId (set by SSE/overlay) or taskStatus 'input-required'
+ * (always present on DB-hydrated HITL entities even when hitlRequestId is missing).
+ */
+function detectHitlEntity(agent: MessageEntity): boolean {
+  return !!(agent.hitlRequestId || agent.taskStatus === 'input-required')
+}
+
+/**
+ * Order agent entities so HITL entities come before regular agents.
+ * HITL Q&A is part of the "gathering information" phase and should render
+ * above the agent's final response in the content area.
+ */
+function orderEntitiesHitlFirst(agents: MessageEntity[]): MessageEntity[] {
+  const hitl: MessageEntity[] = []
+  const regular: MessageEntity[] = []
+  for (const a of agents) {
+    if (detectHitlEntity(a)) hitl.push(a)
+    else regular.push(a)
+  }
+  return [...hitl, ...regular]
+}
+
 /** Convert message entities to deterministic turn events (for new turns only). */
 export function buildTurnEvents(
   turnId: string,
@@ -335,12 +387,14 @@ export function buildTurnEvents(
     clientRequestId: userEntity.clientRequestId,
   } as TurnEvent)
 
+  // Process HITL entities before regular agents so HITL Q&A cards render
+  // above agent response blocks (HITL happens during processing, before completion).
+  const ordered = orderEntitiesHitlFirst(agentEntities)
+
   // For each agent: slot_opened + slot_snapshot + slot_terminated
-  for (const agent of agentEntities) {
+  for (const agent of ordered) {
     // HITL entities → emit HITL turn events, skip regular slot creation.
-    // Detect via hitlRequestId (SSE/overlay) OR taskStatus 'input-required' (DB hydration).
-    const isHitlEntity = agent.hitlRequestId || agent.taskStatus === 'input-required'
-    if (isHitlEntity) {
+    if (detectHitlEntity(agent)) {
       const hitlId = agent.hitlRequestId || `hitl_db_${agent.id}`
       const hitlTs = new Date(agent.timestamp).getTime() || ts
       events.push({
@@ -351,7 +405,7 @@ export function buildTurnEvents(
         type: 'hitl_requested',
         hitlId,
         source: 'agent' as const,
-        agentName: agent.senderName || undefined,
+        agentName: resolveHitlAgentName(agent, agentEntities),
         prompt: agent.hitlPrompt || agent.content || '',
         promptType: (agent.hitlPromptType || 'text') as 'text' | 'choice' | 'confirmation',
         choices: agent.hitlChoices ?? undefined,

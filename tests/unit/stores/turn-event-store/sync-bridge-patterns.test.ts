@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useTurnEventStore } from '@/stores/turn-event-store'
 import { contentSlotsReducer } from '@/stores/turn-event-store/projections/content-slots'
 import { railReducer, replayRail } from '@/stores/turn-event-store/projections/rail'
-import { buildTurnEvents } from '@/hooks/turn/useMessageStoreSync'
+import { buildTurnEvents, resolveHitlAgentName } from '@/hooks/turn/useMessageStoreSync'
 import type { TurnEvent, UserInputData } from '@/stores/turn-event-store/types'
 import type { MessageEntity } from '@/stores/message-store/types'
 
@@ -889,6 +889,269 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       // Should NOT have a slot-based rail item (agent)
       const agentItem = railItems.find(r => r.key === 'slot-hitl-msg-1')
       expect(agentItem).toBeUndefined()
+    })
+  })
+
+  describe('HITL ordering — HITL card before agent response', () => {
+    function makeUserEntity(id: string): MessageEntity {
+      return {
+        id,
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'Hello',
+        senderName: 'User',
+        timestamp: '2024-01-01T00:00:00Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+    }
+
+    it('HITL events come before agent slot events in buildTurnEvents', () => {
+      const user = makeUserEntity('user-1')
+      const excelAgent: MessageEntity = {
+        id: 'agent-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Here is your spreadsheet',
+        senderName: 'Excel Generator Agent',
+        timestamp: '2024-01-01T00:00:01Z',
+        agentId: 'excel-gen',
+        taskStatus: 'completed',
+        sourceVersion: 2,
+        source: 'db',
+        relatedMessageId: 'user-1',
+      } as MessageEntity
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What do you need?',
+        senderName: 'Question & Answer',
+        timestamp: '2024-01-01T00:00:02Z',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        hitlResolved: true,
+        hitlUserAnswer: 'creators contact emails',
+        sourceVersion: 1,
+        source: 'db',
+        relatedMessageId: 'user-1',
+      } as MessageEntity
+
+      // Agent entity appears first in array (inserted first), HITL second
+      const events = buildTurnEvents('user-1', user, [excelAgent, hitlEntity])
+
+      // Find indices of first HITL event and first slot event
+      const hitlIdx = events.findIndex(e => e.type === 'hitl_requested')
+      const slotIdx = events.findIndex(e => e.type === 'slot_opened')
+      expect(hitlIdx).toBeGreaterThan(-1)
+      expect(slotIdx).toBeGreaterThan(-1)
+      expect(hitlIdx).toBeLessThan(slotIdx)
+    })
+
+    it('HITL content-slot renders before agent content-slot', () => {
+      const user = makeUserEntity('user-1')
+      const excelAgent: MessageEntity = {
+        id: 'agent-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Here is your spreadsheet',
+        senderName: 'Excel Generator Agent',
+        timestamp: '2024-01-01T00:00:01Z',
+        agentId: 'excel-gen',
+        taskStatus: 'completed',
+        sourceVersion: 2,
+        source: 'db',
+        relatedMessageId: 'user-1',
+      } as MessageEntity
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What do you need?',
+        senderName: 'Question & Answer',
+        timestamp: '2024-01-01T00:00:02Z',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        hitlResolved: true,
+        hitlUserAnswer: 'creators contact emails',
+        sourceVersion: 1,
+        source: 'db',
+        relatedMessageId: 'user-1',
+      } as MessageEntity
+
+      const events = buildTurnEvents('user-1', user, [excelAgent, hitlEntity])
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // HITL record should be first, agent slot second
+      expect(view).toHaveLength(2)
+      expect(view[0].slotType).toBe('hitl_record')
+      expect(view[0].hitlAnswer).toBe('creators contact emails')
+      expect(view[1].slotType).toBe('agent')
+      expect(view[1].content).toBe('Here is your spreadsheet')
+    })
+  })
+
+  describe('HITL agent name resolution — use requesting agent name', () => {
+    it('resolves actual agent name when HITL entity has system agent ID', () => {
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What do you need?',
+        senderName: 'Question & Answer',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        timestamp: '2024-01-01T00:00:02Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+      const excelAgent: MessageEntity = {
+        id: 'agent-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'spreadsheet',
+        senderName: 'Excel Generator Agent',
+        agentId: 'excel-gen',
+        taskStatus: 'completed',
+        timestamp: '2024-01-01T00:00:01Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+
+      const name = resolveHitlAgentName(hitlEntity, [hitlEntity, excelAgent])
+      expect(name).toBe('Excel Generator Agent')
+    })
+
+    it('keeps original name when HITL entity has non-system agent ID', () => {
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Question?',
+        senderName: 'My Custom Agent',
+        agentId: 'custom-agent-id',
+        taskStatus: 'input-required',
+        timestamp: '2024-01-01T00:00:02Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+
+      const name = resolveHitlAgentName(hitlEntity, [hitlEntity])
+      expect(name).toBe('My Custom Agent')
+    })
+
+    it('falls back to HITL senderName when no sibling agent exists', () => {
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Question?',
+        senderName: 'Question & Answer',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        timestamp: '2024-01-01T00:00:02Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+
+      const name = resolveHitlAgentName(hitlEntity, [hitlEntity])
+      expect(name).toBe('Question & Answer')
+    })
+
+    it('agent name flows through to hitl_requested event in buildTurnEvents', () => {
+      const user: MessageEntity = {
+        id: 'user-1',
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'Hello',
+        senderName: 'User',
+        timestamp: '2024-01-01T00:00:00Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What do you need?',
+        senderName: 'Question & Answer',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        hitlResolved: true,
+        hitlUserAnswer: 'a budget',
+        timestamp: '2024-01-01T00:00:02Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+      const excelAgent: MessageEntity = {
+        id: 'agent-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Here it is',
+        senderName: 'Excel Generator Agent',
+        agentId: 'excel-gen',
+        taskStatus: 'completed',
+        timestamp: '2024-01-01T00:00:01Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+
+      const events = buildTurnEvents('user-1', user, [excelAgent, hitlEntity])
+
+      const hitlReq = events.find(e => e.type === 'hitl_requested') as any
+      expect(hitlReq).toBeDefined()
+      expect(hitlReq.agentName).toBe('Excel Generator Agent')
+    })
+
+    it('agent name shows in Rail as "Excel Generator Agent asked for input — answered"', () => {
+      const user: MessageEntity = {
+        id: 'user-1',
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'Hello',
+        senderName: 'User',
+        timestamp: '2024-01-01T00:00:00Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+      const hitlEntity: MessageEntity = {
+        id: 'hitl-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What do you need?',
+        senderName: 'Question & Answer',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        hitlResolved: true,
+        hitlUserAnswer: 'creators contact emails',
+        timestamp: '2024-01-01T00:00:02Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+      const excelAgent: MessageEntity = {
+        id: 'agent-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'Here is your file',
+        senderName: 'Excel Generator Agent',
+        agentId: 'excel-gen',
+        taskStatus: 'completed',
+        timestamp: '2024-01-01T00:00:01Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+
+      const events = buildTurnEvents('user-1', user, [excelAgent, hitlEntity])
+      const railItems = replayRail(events)
+
+      const hitlRailItem = railItems.find(r => r.key.includes('hitl'))
+      expect(hitlRailItem).toBeDefined()
+      expect(hitlRailItem!.label).toContain('Excel Generator Agent')
+      expect(hitlRailItem!.label).toContain('answered')
     })
   })
 })
