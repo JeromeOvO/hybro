@@ -31,16 +31,16 @@ describe('OrchestrationRail', () => {
     expect(screen.queryAllByTestId('rail-spinner').length).toBeGreaterThan(0)
   })
 
-  it('applies shimmer-rail to active item rows', () => {
+  it('applies shimmer-rail to active item labels', () => {
     const items: RailItemView[] = [
       { key: 'p1', icon: 'spinner', label: 'Working', ts: 1000, isActive: true },
       { key: 'p2', icon: 'check', label: 'Completed step', ts: 900, isActive: false },
     ]
     render(<OrchestrationRail items={items} />, { wrapper: Wrapper })
-    const activeRow = screen.getByText('Working').parentElement!
-    const doneRow = screen.getByText('Completed step').parentElement!
-    expect(activeRow.classList.contains('shimmer-rail')).toBe(true)
-    expect(doneRow.classList.contains('shimmer-rail')).toBe(false)
+    const activeLabel = screen.getByText('Working')
+    const doneLabel = screen.getByText('Completed step')
+    expect(activeLabel.classList.contains('shimmer-rail')).toBe(true)
+    expect(doneLabel.classList.contains('shimmer-rail')).toBe(false)
   })
 
   it('applies shimmer-rail to processing placeholder', () => {
