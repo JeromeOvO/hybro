@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 
 // Mock event-log
@@ -54,7 +55,12 @@ function seedStore(messages: Array<{
 
 async function renderMessages() {
   const { RoomMessages } = await import('@/components/room-messages')
-  return render(<RoomMessages />)
+  const queryClient = new QueryClient()
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RoomMessages />
+    </QueryClientProvider>
+  )
 }
 
 describe('RoomMessages', () => {
@@ -79,12 +85,12 @@ describe('RoomMessages', () => {
     it('should show empty state when no messages exist', async () => {
       seedStore([])
       await renderMessages()
-      expect(screen.getByText('No messages yet')).toBeTruthy()
+      expect(screen.getByText('Start the conversation')).toBeTruthy()
     })
   })
 
   describe('message rendering', () => {
-    it('should render user messages in turns', async () => {
+    it('should render user messages', async () => {
       seedStore([{
         id: 'msg-1',
         content: 'Hello from user',
@@ -92,11 +98,10 @@ describe('RoomMessages', () => {
         messageType: 'user',
       }])
       await renderMessages()
-      // ConversationTimeline renders turns; user content appears in the turn
       expect(screen.getByText('Hello from user')).toBeTruthy()
     })
 
-    it('should render multiple messages as turns', async () => {
+    it('should render multiple messages', async () => {
       seedStore([
         {
           id: 'msg-1',
@@ -116,9 +121,7 @@ describe('RoomMessages', () => {
       ])
       await renderMessages()
       expect(screen.getByText('User question')).toBeTruthy()
-      // Agent results are rendered within the turn
-      const turns = screen.getAllByRole('article')
-      expect(turns.length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText('Agent answer')).toBeTruthy()
     })
   })
 })
