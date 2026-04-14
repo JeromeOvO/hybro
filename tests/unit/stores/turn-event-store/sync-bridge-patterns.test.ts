@@ -430,4 +430,163 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       expect(useTurnEventStore.getState().turnIdByClientRequestId.has('req-id')).toBe(false)
     })
   })
+
+  describe('artifact-only agent rendering', () => {
+    it('slot_snapshot with empty content but artifacts creates a slot with artifacts', () => {
+      let view = contentSlotsReducer.init()
+
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_opened', seq: 1, slotId: 'img-agent', slotType: 'agent',
+        agentId: 'img-1', agentName: 'Image Generator',
+      }))
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_snapshot', seq: 2, slotId: 'img-agent',
+        content: '',
+        artifacts: [{
+          artifactId: 'art-img-1',
+          name: 'generated.png',
+          parts: [{ kind: 'file', file: { uri: 'https://s3/image.png', mime_type: 'image/png' } }],
+        }],
+      }))
+
+      expect(view).toHaveLength(1)
+      expect(view[0].content).toBe('')
+      expect(view[0].artifacts).toHaveLength(1)
+      expect(view[0].artifacts[0].parts[0].kind).toBe('file')
+    })
+
+    it('full sequence for artifact-only agent: opened → snapshot(empty content + artifacts) → terminated', () => {
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'slot_opened', seq: 2, eventId: 'e2', slotId: 'img-msg',
+          slotType: 'agent', agentId: 'img-1', agentName: 'Image Generator',
+        }),
+        evt({
+          type: 'slot_snapshot', seq: 3, eventId: 'e3', slotId: 'img-msg',
+          content: '',
+          artifacts: [{
+            artifactId: 'art-1', name: 'output.png',
+            parts: [{ kind: 'file', file: { uri: 'https://s3/img.png', mime_type: 'image/png' } }],
+          }],
+        }),
+        evt({ type: 'slot_terminated', seq: 4, eventId: 'e4', slotId: 'img-msg', status: 'completed' }),
+        evt({ type: 'turn_completed', seq: 5, eventId: 'e5', durationMs: 5000 }),
+      ]
+
+      let contentView = contentSlotsReducer.init()
+      for (const e of events) {
+        contentView = contentSlotsReducer.reduce(contentView, e)
+      }
+
+      expect(contentView).toHaveLength(1)
+      expect(contentView[0].content).toBe('')
+      expect(contentView[0].artifacts).toHaveLength(1)
+      expect(contentView[0].status).toBe('completed')
+
+      // Rail should still show the agent
+      const railItems = replayRail(events)
+      const agentItem = railItems.find(r => r.key === 'slot-img-msg')
+      expect(agentItem).toBeDefined()
+      expect(agentItem!.label).toContain('Image Generator')
+    })
+  })
+
+  describe('SSE source propagation via hydrated flag', () => {
+    it('slot_snapshot with hydrated: false (SSE source) produces non-hydrated slot', () => {
+      let view = contentSlotsReducer.init()
+
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent',
+        agentId: 'a1', agentName: 'Test Agent',
+      }))
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_snapshot', seq: 2, slotId: 'msg-1',
+        content: 'Hello World', artifacts: [],
+        hydrated: false, // SSE source
+      }))
+
+      expect(view[0].hydrated).toBe(false)
+      expect(view[0].content).toBe('Hello World')
+    })
+
+    it('slot_snapshot with hydrated: true (DB source) produces hydrated slot', () => {
+      let view = contentSlotsReducer.init()
+
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent',
+        agentId: 'a1', agentName: 'Test Agent',
+      }))
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_snapshot', seq: 2, slotId: 'msg-1',
+        content: 'Hello World', artifacts: [],
+        hydrated: true, // DB source
+      }))
+
+      expect(view[0].hydrated).toBe(true)
+    })
+
+    it('full SSE sequence: non-hydrated snapshot enables streaming animation window', () => {
+      // Simulates the live SSE flow:
+      // 1. slot_opened (task_submitted) → streaming
+      // 2. slot_snapshot with hydrated:false (artifact_update) → still streaming, content present
+      // 3. slot_terminated (task_update completed) → completed
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'slot_opened', seq: 2, eventId: 'e2', slotId: 'msg-1',
+          slotType: 'agent', agentId: 'a1', agentName: 'GPT Agent',
+        }),
+        evt({
+          type: 'slot_snapshot', seq: 3, eventId: 'e3', slotId: 'msg-1',
+          content: 'Agent response text', artifacts: [],
+          hydrated: false, // from SSE
+        }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Mid-stream: content present, still streaming, NOT hydrated
+      expect(view[0].content).toBe('Agent response text')
+      expect(view[0].status).toBe('streaming')
+      expect(view[0].hydrated).toBe(false)
+
+      // Now terminate
+      view = contentSlotsReducer.reduce(view, evt({
+        type: 'slot_terminated', seq: 4, slotId: 'msg-1', status: 'completed',
+      }))
+      expect(view[0].status).toBe('completed')
+      expect(view[0].hydrated).toBe(false) // hydrated flag preserved after termination
+    })
+
+    it('full DB hydration sequence: hydrated snapshot skips streaming animation', () => {
+      // Simulates page refresh: all events arrive at once, snapshots are hydrated
+      const events: TurnEvent[] = [
+        evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }),
+        evt({
+          type: 'slot_opened', seq: 2, eventId: 'e2', slotId: 'msg-1',
+          slotType: 'agent', agentId: 'a1', agentName: 'GPT Agent',
+        }),
+        evt({
+          type: 'slot_snapshot', seq: 3, eventId: 'e3', slotId: 'msg-1',
+          content: 'Agent response text', artifacts: [],
+          hydrated: true, // from DB
+        }),
+        evt({ type: 'slot_terminated', seq: 4, eventId: 'e4', slotId: 'msg-1', status: 'completed' }),
+        evt({ type: 'turn_completed', seq: 5, eventId: 'e5', durationMs: 1000 }),
+      ]
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      expect(view[0].content).toBe('Agent response text')
+      expect(view[0].status).toBe('completed')
+      expect(view[0].hydrated).toBe(true) // hydrated — no animation
+    })
+  })
 })

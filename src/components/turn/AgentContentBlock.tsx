@@ -256,7 +256,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
 })
 
 /** Remove text-only artifacts whose text is already contained in the main content. */
-function filterPromotedTextArtifacts(artifacts: ArtifactData[], content: string): ArtifactData[] {
+export function filterPromotedTextArtifacts(artifacts: ArtifactData[], content: string): ArtifactData[] {
   if (artifacts.length === 0) return artifacts
   return artifacts.filter(a => {
     const isTextOnly = a.parts.length > 0 && a.parts.every(p => p.kind === 'text')
