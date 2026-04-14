@@ -104,10 +104,10 @@ export function useMessageStoreSync() {
           const existingLog = store.turnLogs.get(turnId)
 
           if (existingLog) {
-            // Turn already exists (from hydration) — only push incremental updates
+            // Turn already exists — only push incremental updates
             pushIncrementalUpdates(store, turnId, existingLog, turnAgents)
           } else {
-            // Brand new turn (from real-time SSE) — create from scratch
+            // Brand new turn — create from scratch
             const events = buildTurnEvents(turnId, userEntity, turnAgents)
             for (const event of events) {
               store.append(turnId, event)
