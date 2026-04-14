@@ -2087,6 +2087,13 @@ class RoomMessageCenter:
         try:
             # 1. Determine content — check agent count BEFORE emitting placeholder
             if synthesis_text is not None and synthesis_text.strip():
+                # When the supervisor synthesized from fewer than 2 agent
+                # responses, the individual task_update SSE already delivered
+                # the agent's content — skip the redundant summary to avoid
+                # duplicate content in the UI.  This mirrors the < 2 guard
+                # on the non-synthesis (coordinator) path below.
+                if trajectory_responses is not None and len(trajectory_responses) < 2:
+                    return
                 content = synthesis_text
                 origin = "supervisor"
             else:

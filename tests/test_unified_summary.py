@@ -51,7 +51,7 @@ class TestEmitUnifiedSummary:
 
     @pytest.mark.asyncio
     async def test_supervisor_synthesis_used_directly(self, rmc):
-        """When synthesis_text is provided, it's used as-is without calling OpenAI."""
+        """When synthesis_text is provided with 2+ trajectory responses, it's used as-is."""
         rmc.database_service.upsert_room_agent_message = AsyncMock(return_value=True)
         rmc.database_service.get_room_user_message_by_message_id = AsyncMock(return_value=None)
 
@@ -59,6 +59,10 @@ class TestEmitUnifiedSummary:
             room_id="room-1",
             user_message_id="msg-1",
             synthesis_text="Supervisor generated this.",
+            trajectory_responses=[
+                {"agent_name": "A", "message": "text A"},
+                {"agent_name": "B", "message": "text B"},
+            ],
         )
 
         # OpenAI should NOT be called
@@ -71,6 +75,42 @@ class TestEmitUnifiedSummary:
         assert saved_msg.extend_info["summary_origin"] == "supervisor"
         # SSE agent_response should be sent
         rmc.sse_manager.send_agent_response.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_synthesis_single_agent_skipped(self, rmc):
+        """When supervisor synthesis is provided but only 1 agent responded, skip summary.
+
+        The individual agent's task_update SSE already delivers the content,
+        so emitting a redundant synthesis summary would create a duplicate.
+        """
+        await rmc._emit_unified_summary(
+            room_id="room-1",
+            user_message_id="msg-1",
+            synthesis_text="Supervisor generated this.",
+            trajectory_responses=[
+                {"agent_name": "A", "message": "only one agent"},
+            ],
+        )
+
+        # No SSE events should be emitted
+        rmc.sse_manager.send_task_submitted.assert_not_awaited()
+        rmc.sse_manager.send_agent_response.assert_not_awaited()
+        # No DB write
+        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_supervisor_synthesis_zero_agents_skipped(self, rmc):
+        """When supervisor synthesis is provided but 0 agents responded, skip summary."""
+        await rmc._emit_unified_summary(
+            room_id="room-1",
+            user_message_id="msg-1",
+            synthesis_text="Supervisor generated this.",
+            trajectory_responses=[],
+        )
+
+        rmc.sse_manager.send_task_submitted.assert_not_awaited()
+        rmc.sse_manager.send_agent_response.assert_not_awaited()
+        rmc.database_service.upsert_room_agent_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_openai_fallback_with_trajectory(self, rmc):
@@ -236,6 +276,10 @@ class TestEmitUnifiedSummary:
             room_id="room-1",
             user_message_id="msg-abc-123",
             synthesis_text="test",
+            trajectory_responses=[
+                {"agent_name": "A", "message": "text A"},
+                {"agent_name": "B", "message": "text B"},
+            ],
         )
 
         rmc.sse_manager.send_task_submitted.assert_awaited_once()
@@ -254,6 +298,10 @@ class TestEmitUnifiedSummary:
             room_id="room-1",
             user_message_id="msg-1",
             synthesis_text="will fail on save",
+            trajectory_responses=[
+                {"agent_name": "A", "message": "text A"},
+                {"agent_name": "B", "message": "text B"},
+            ],
         )
 
         # Should attempt cleanup
