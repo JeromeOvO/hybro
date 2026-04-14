@@ -92,19 +92,15 @@ function TurnBasedView({ adapter }: TurnBasedViewProps) {
 
 interface LegacyViewProps {
   adapter: TimelineAdapter
-  roomAgentList: { agentId: string; agentName: string }[]
 }
 
-function LegacyView({ adapter, roomAgentList }: LegacyViewProps) {
+function LegacyView({ adapter }: LegacyViewProps) {
   const activeHitlRequests = useActiveHitlRequests()
 
   return (
     <>
       <main className="flex-1 overflow-hidden">
-        <RoomMessages
-          roomAgentList={roomAgentList}
-          onQuote={adapter.quoteState.setQuote}
-        />
+        <RoomMessages onQuote={adapter.quoteState.setQuote} />
       </main>
       <div className="bg-background p-4">
         <div className="max-w-4xl mx-auto">
@@ -148,13 +144,12 @@ function LegacyView({ adapter, roomAgentList }: LegacyViewProps) {
 
 interface RoomPageShellProps {
   adapter: TimelineAdapter
-  roomAgentList: { agentId: string; agentName: string }[]
   turnBasedTimeline: boolean
 }
 
-export function RoomPageShell({ adapter, roomAgentList, turnBasedTimeline }: RoomPageShellProps) {
+export function RoomPageShell({ adapter, turnBasedTimeline }: RoomPageShellProps) {
   if (turnBasedTimeline) {
     return <TurnBasedView adapter={adapter} />
   }
-  return <LegacyView adapter={adapter} roomAgentList={roomAgentList} />
+  return <LegacyView adapter={adapter} />
 }

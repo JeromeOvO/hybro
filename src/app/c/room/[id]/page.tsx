@@ -104,11 +104,7 @@ export default function RoomChatPage() {
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const newUi = params.get('newui')
-    if (newUi === '1') {
-      useRoomUiStore.getState().setTurnBasedTimeline(roomId, true)
-    } else if (newUi === '0') {
-      useRoomUiStore.getState().setTurnBasedTimeline(roomId, false)
-    }
+    useRoomUiStore.getState().setTurnBasedTimeline(roomId, newUi === '1')
   }, [roomId])
 
   // Group management (extracted hook)
@@ -331,21 +327,6 @@ export default function RoomChatPage() {
     }))
   }, [gm.availableAgents])
 
-  // Agent list for V2 timeline placeholder rows.
-  // Only show placeholders for agents in the room's known agent set.
-  // When room_agent_set is empty (new room) or target is all_agents/saved_group,
-  // we don't know which agents will be dispatched, so show NO placeholders.
-  const roomAgentList = useMemo(
-    () => {
-      if (currentRoomAgentIds.length === 0) return []
-      const roomAgentIdSet = new Set(currentRoomAgentIds)
-      return agentList
-        .filter(a => roomAgentIdSet.has(a.id))
-        .map(a => ({ agentId: a.id, agentName: a.name }))
-    },
-    [agentList, currentRoomAgentIds],
-  )
-
   // Get room form data for initialization (memoized to avoid unstable references)
   const roomFormData = useMemo(() => getRoomFormData(), [getRoomFormData])
 
@@ -506,7 +487,6 @@ export default function RoomChatPage() {
 
           <RoomPageShell
             adapter={timelineAdapter}
-            roomAgentList={roomAgentList}
             turnBasedTimeline={turnBasedTimeline}
           />
         </div>
