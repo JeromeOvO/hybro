@@ -12,7 +12,7 @@ import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactRenderer } from '@/components/artifact-renderer'
 import { useExpandCollapseSignals } from './expand-collapse-context'
-import type { ContentSlotView } from '@/stores/turn-event-store/types'
+import type { ContentSlotView, ArtifactData } from '@/stores/turn-event-store/types'
 import type { Agent } from '@/lib/types/agent'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
 
@@ -23,7 +23,12 @@ interface AgentContentBlockProps {
 }
 
 export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }: AgentContentBlockProps) {
-  const { agentId, agentName: rawAgentName, content, artifacts, status, error } = slot
+  const { agentId, agentName: rawAgentName, content, artifacts: rawArtifacts, status, error } = slot
+
+  // Filter out text-only artifacts whose content was already promoted into the
+  // main `content` field (artifact_update SSE handler extracts text from
+  // text-only artifacts into content, but keeps them in the artifacts array).
+  const artifacts = content ? filterPromotedTextArtifacts(rawArtifacts, content) : rawArtifacts
   const isStreaming = status === 'streaming'
   const isFailed = status === 'failed' || status === 'rejected'
 
@@ -186,3 +191,14 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
     </div>
   )
 })
+
+/** Remove text-only artifacts whose text is already contained in the main content. */
+function filterPromotedTextArtifacts(artifacts: ArtifactData[], content: string): ArtifactData[] {
+  if (artifacts.length === 0) return artifacts
+  return artifacts.filter(a => {
+    const isTextOnly = a.parts.length > 0 && a.parts.every(p => p.kind === 'text')
+    if (!isTextOnly) return true
+    const artifactText = a.parts.map(p => p.text || '').join('')
+    return !artifactText || !content.includes(artifactText)
+  })
+}
