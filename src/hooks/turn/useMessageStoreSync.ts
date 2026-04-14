@@ -166,6 +166,53 @@ function pushIncrementalUpdates(
     : 1
 
   for (const agent of agentEntities) {
+    // HITL entities → emit HITL turn events, skip regular slot creation
+    if (agent.hitlRequestId) {
+      const slotTs = new Date(agent.timestamp).getTime() || Date.now()
+      const hitlAlreadyEmitted = existingEvents.some(
+        e => e.type === 'hitl_requested' && (e as TurnEvent & { type: 'hitl_requested'; hitlId: string }).hitlId === agent.hitlRequestId,
+      )
+      if (!hitlAlreadyEmitted) {
+        store.append(turnId, {
+          eventId: `sync_hitl_req_${agent.hitlRequestId}`,
+          turnId,
+          seq: nextSeq++,
+          ts: slotTs,
+          type: 'hitl_requested',
+          hitlId: agent.hitlRequestId,
+          source: 'agent' as const,
+          agentName: agent.senderName || undefined,
+          prompt: agent.hitlPrompt || agent.content || '',
+          promptType: (agent.hitlPromptType || 'text') as 'text' | 'choice' | 'confirmation',
+          choices: agent.hitlChoices ?? undefined,
+          groupId: agent.hitlGroupId,
+          groupTotal: agent.hitlGroupTotal,
+          groupIndex: agent.hitlGroupIndex,
+        } as TurnEvent)
+      }
+      if (agent.hitlResolved && agent.hitlUserAnswer) {
+        store.append(turnId, {
+          eventId: `sync_hitl_ans_${agent.hitlRequestId}`,
+          turnId,
+          seq: nextSeq++,
+          ts: slotTs,
+          type: 'hitl_answered',
+          hitlId: agent.hitlRequestId,
+          answer: agent.hitlUserAnswer,
+        } as TurnEvent)
+      } else if (agent.hitlResolved) {
+        store.append(turnId, {
+          eventId: `sync_hitl_exp_${agent.hitlRequestId}`,
+          turnId,
+          seq: nextSeq++,
+          ts: slotTs,
+          type: 'hitl_expired',
+          hitlId: agent.hitlRequestId,
+        } as TurnEvent)
+      }
+      continue
+    }
+
     const slotId = agent.id
     const slotTs = new Date(agent.timestamp).getTime() || Date.now()
     const slotType = classifySlotType(agent, agentEntities)
@@ -286,6 +333,48 @@ function buildTurnEvents(
 
   // For each agent: slot_opened + slot_snapshot + slot_terminated
   for (const agent of agentEntities) {
+    // HITL entities → emit HITL turn events, skip regular slot creation
+    if (agent.hitlRequestId) {
+      const hitlTs = new Date(agent.timestamp).getTime() || ts
+      events.push({
+        eventId: `sync_hitl_req_${agent.hitlRequestId}`,
+        turnId,
+        seq: ++seq,
+        ts: hitlTs,
+        type: 'hitl_requested',
+        hitlId: agent.hitlRequestId,
+        source: 'agent' as const,
+        agentName: agent.senderName || undefined,
+        prompt: agent.hitlPrompt || agent.content || '',
+        promptType: (agent.hitlPromptType || 'text') as 'text' | 'choice' | 'confirmation',
+        choices: agent.hitlChoices ?? undefined,
+        groupId: agent.hitlGroupId,
+        groupTotal: agent.hitlGroupTotal,
+        groupIndex: agent.hitlGroupIndex,
+      } as TurnEvent)
+      if (agent.hitlResolved && agent.hitlUserAnswer) {
+        events.push({
+          eventId: `sync_hitl_ans_${agent.hitlRequestId}`,
+          turnId,
+          seq: ++seq,
+          ts: hitlTs,
+          type: 'hitl_answered',
+          hitlId: agent.hitlRequestId,
+          answer: agent.hitlUserAnswer,
+        } as TurnEvent)
+      } else if (agent.hitlResolved) {
+        events.push({
+          eventId: `sync_hitl_exp_${agent.hitlRequestId}`,
+          turnId,
+          seq: ++seq,
+          ts: hitlTs,
+          type: 'hitl_expired',
+          hitlId: agent.hitlRequestId,
+        } as TurnEvent)
+      }
+      continue
+    }
+
     const slotTs = new Date(agent.timestamp).getTime() || ts
     const slotId = agent.id
     const slotType = classifySlotType(agent, agentEntities)
@@ -341,6 +430,7 @@ function buildTurnEvents(
   const isEntityTerminal = (a: MessageEntity) =>
     a.taskStatus === 'completed' || a.taskStatus === 'failed'
     || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
+    || (a.hitlRequestId != null && a.hitlResolved)
     || (a.taskStatus == null && (a.content || (a.artifacts && a.artifacts.length > 0))) // synthesis with content/artifacts = done
   const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityTerminal)
   if (allTerminal) {

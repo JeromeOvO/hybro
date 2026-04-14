@@ -255,5 +255,9 @@ export const contentSlotsReducer: ProjectionReducer<ContentSlotView[]> = {
  * Use this when consuming the projection for rendering.
  */
 export function getVisibleSlots(slots: ContentSlotView[]): ContentSlotView[] {
-  return slots.filter(slot => !slot.slotId.startsWith('hitl-pending:'))
+  return slots.filter(slot => {
+    if (slot.slotId.startsWith('hitl-pending:')) return false
+    if (slot.status === 'canceled' || slot.status === 'failed' || slot.status === 'rejected') return false
+    return true
+  })
 }
