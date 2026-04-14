@@ -166,20 +166,24 @@ function pushIncrementalUpdates(
     : 1
 
   for (const agent of agentEntities) {
-    // HITL entities → emit HITL turn events, skip regular slot creation
-    if (agent.hitlRequestId) {
+    // HITL entities → emit HITL turn events, skip regular slot creation.
+    // Detect via hitlRequestId (set by SSE/overlay) OR taskStatus 'input-required'
+    // (always present on DB-hydrated HITL entities even when hitlRequestId is missing).
+    const isHitlEntity = agent.hitlRequestId || agent.taskStatus === 'input-required'
+    if (isHitlEntity) {
+      const hitlId = agent.hitlRequestId || `hitl_db_${agent.id}`
       const slotTs = new Date(agent.timestamp).getTime() || Date.now()
       const hitlAlreadyEmitted = existingEvents.some(
-        e => e.type === 'hitl_requested' && (e as TurnEvent & { type: 'hitl_requested'; hitlId: string }).hitlId === agent.hitlRequestId,
+        e => e.type === 'hitl_requested' && (e as TurnEvent & { type: 'hitl_requested'; hitlId: string }).hitlId === hitlId,
       )
       if (!hitlAlreadyEmitted) {
         store.append(turnId, {
-          eventId: `sync_hitl_req_${agent.hitlRequestId}`,
+          eventId: `sync_hitl_req_${hitlId}`,
           turnId,
           seq: nextSeq++,
           ts: slotTs,
           type: 'hitl_requested',
-          hitlId: agent.hitlRequestId,
+          hitlId,
           source: 'agent' as const,
           agentName: agent.senderName || undefined,
           prompt: agent.hitlPrompt || agent.content || '',
@@ -192,22 +196,22 @@ function pushIncrementalUpdates(
       }
       if (agent.hitlResolved && agent.hitlUserAnswer) {
         store.append(turnId, {
-          eventId: `sync_hitl_ans_${agent.hitlRequestId}`,
+          eventId: `sync_hitl_ans_${hitlId}`,
           turnId,
           seq: nextSeq++,
           ts: slotTs,
           type: 'hitl_answered',
-          hitlId: agent.hitlRequestId,
+          hitlId,
           answer: agent.hitlUserAnswer,
         } as TurnEvent)
       } else if (agent.hitlResolved) {
         store.append(turnId, {
-          eventId: `sync_hitl_exp_${agent.hitlRequestId}`,
+          eventId: `sync_hitl_exp_${hitlId}`,
           turnId,
           seq: nextSeq++,
           ts: slotTs,
           type: 'hitl_expired',
-          hitlId: agent.hitlRequestId,
+          hitlId,
         } as TurnEvent)
       }
       continue
@@ -307,7 +311,7 @@ function classifySlotType(agent: MessageEntity, allAgents: MessageEntity[]): 'ag
 }
 
 /** Convert message entities to deterministic turn events (for new turns only). */
-function buildTurnEvents(
+export function buildTurnEvents(
   turnId: string,
   userEntity: MessageEntity,
   agentEntities: MessageEntity[],
@@ -333,16 +337,19 @@ function buildTurnEvents(
 
   // For each agent: slot_opened + slot_snapshot + slot_terminated
   for (const agent of agentEntities) {
-    // HITL entities → emit HITL turn events, skip regular slot creation
-    if (agent.hitlRequestId) {
+    // HITL entities → emit HITL turn events, skip regular slot creation.
+    // Detect via hitlRequestId (SSE/overlay) OR taskStatus 'input-required' (DB hydration).
+    const isHitlEntity = agent.hitlRequestId || agent.taskStatus === 'input-required'
+    if (isHitlEntity) {
+      const hitlId = agent.hitlRequestId || `hitl_db_${agent.id}`
       const hitlTs = new Date(agent.timestamp).getTime() || ts
       events.push({
-        eventId: `sync_hitl_req_${agent.hitlRequestId}`,
+        eventId: `sync_hitl_req_${hitlId}`,
         turnId,
         seq: ++seq,
         ts: hitlTs,
         type: 'hitl_requested',
-        hitlId: agent.hitlRequestId,
+        hitlId,
         source: 'agent' as const,
         agentName: agent.senderName || undefined,
         prompt: agent.hitlPrompt || agent.content || '',
@@ -354,22 +361,22 @@ function buildTurnEvents(
       } as TurnEvent)
       if (agent.hitlResolved && agent.hitlUserAnswer) {
         events.push({
-          eventId: `sync_hitl_ans_${agent.hitlRequestId}`,
+          eventId: `sync_hitl_ans_${hitlId}`,
           turnId,
           seq: ++seq,
           ts: hitlTs,
           type: 'hitl_answered',
-          hitlId: agent.hitlRequestId,
+          hitlId,
           answer: agent.hitlUserAnswer,
         } as TurnEvent)
       } else if (agent.hitlResolved) {
         events.push({
-          eventId: `sync_hitl_exp_${agent.hitlRequestId}`,
+          eventId: `sync_hitl_exp_${hitlId}`,
           turnId,
           seq: ++seq,
           ts: hitlTs,
           type: 'hitl_expired',
-          hitlId: agent.hitlRequestId,
+          hitlId,
         } as TurnEvent)
       }
       continue
@@ -430,7 +437,7 @@ function buildTurnEvents(
   const isEntityTerminal = (a: MessageEntity) =>
     a.taskStatus === 'completed' || a.taskStatus === 'failed'
     || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
-    || (a.hitlRequestId != null && a.hitlResolved)
+    || ((a.hitlRequestId != null || a.taskStatus === 'input-required') && a.hitlResolved)
     || (a.taskStatus == null && (a.content || (a.artifacts && a.artifacts.length > 0))) // synthesis with content/artifacts = done
   const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityTerminal)
   if (allTerminal) {

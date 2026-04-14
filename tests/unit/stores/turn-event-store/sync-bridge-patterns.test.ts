@@ -11,7 +11,9 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useTurnEventStore } from '@/stores/turn-event-store'
 import { contentSlotsReducer } from '@/stores/turn-event-store/projections/content-slots'
 import { railReducer, replayRail } from '@/stores/turn-event-store/projections/rail'
+import { buildTurnEvents } from '@/hooks/turn/useMessageStoreSync'
 import type { TurnEvent, UserInputData } from '@/stores/turn-event-store/types'
+import type { MessageEntity } from '@/stores/message-store/types'
 
 const userInput: UserInputData = { text: 'hello', attachments: [] }
 
@@ -727,6 +729,166 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       // Verify turn_completed was processed
       const hasTurnCompleted = events.some(e => e.type === 'turn_completed')
       expect(hasTurnCompleted).toBe(true)
+    })
+  })
+
+  describe('DB-hydrated HITL entity detection (no hitlRequestId)', () => {
+    function makeUserEntity(id: string): MessageEntity {
+      return {
+        id,
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'Hello',
+        senderName: 'User',
+        timestamp: '2024-01-01T00:00:00Z',
+        sourceVersion: 1,
+        source: 'db',
+      } as MessageEntity
+    }
+
+    function makeHitlEntity(overrides: Partial<MessageEntity> = {}): MessageEntity {
+      return {
+        id: 'hitl-msg-1',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'What is your budget?',
+        senderName: 'Question & Answer',
+        timestamp: '2024-01-01T00:00:01Z',
+        agentId: 'supervisor_hitl',
+        taskStatus: 'input-required',
+        sourceVersion: 1,
+        source: 'db',
+        relatedMessageId: 'user-msg-1',
+        ...overrides,
+      } as MessageEntity
+    }
+
+    it('detects HITL entity by taskStatus input-required (no hitlRequestId)', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity()
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const hitlReq = events.find(e => e.type === 'hitl_requested')
+      expect(hitlReq).toBeDefined()
+      expect((hitlReq as any).hitlId).toBe('hitl_db_hitl-msg-1')
+      expect((hitlReq as any).prompt).toBe('What is your budget?')
+      expect((hitlReq as any).agentName).toBe('Question & Answer')
+
+      // Must NOT produce slot_opened (it's HITL, not a regular agent)
+      const slotOpened = events.find(e => e.type === 'slot_opened')
+      expect(slotOpened).toBeUndefined()
+    })
+
+    it('detects HITL entity by hitlRequestId even without taskStatus', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        taskStatus: undefined,
+        hitlRequestId: 'real-hitl-id',
+        hitlPrompt: 'Choose a color',
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const hitlReq = events.find(e => e.type === 'hitl_requested')
+      expect(hitlReq).toBeDefined()
+      expect((hitlReq as any).hitlId).toBe('real-hitl-id')
+      expect((hitlReq as any).prompt).toBe('Choose a color')
+    })
+
+    it('emits hitl_answered for resolved DB-hydrated HITL with answer', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: true,
+        hitlUserAnswer: 'My budget is $500',
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const hitlReq = events.find(e => e.type === 'hitl_requested')
+      const hitlAns = events.find(e => e.type === 'hitl_answered')
+      expect(hitlReq).toBeDefined()
+      expect(hitlAns).toBeDefined()
+      expect((hitlAns as any).hitlId).toBe('hitl_db_hitl-msg-1')
+      expect((hitlAns as any).answer).toBe('My budget is $500')
+    })
+
+    it('emits hitl_expired for resolved DB-hydrated HITL without answer', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: true,
+        // no hitlUserAnswer
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const hitlExp = events.find(e => e.type === 'hitl_expired')
+      expect(hitlExp).toBeDefined()
+      expect((hitlExp as any).hitlId).toBe('hitl_db_hitl-msg-1')
+    })
+
+    it('treats resolved DB-hydrated HITL as terminal for turn_completed', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: true,
+        hitlUserAnswer: 'Yes',
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const turnCompleted = events.find(e => e.type === 'turn_completed')
+      expect(turnCompleted).toBeDefined()
+    })
+
+    it('does NOT emit turn_completed for unresolved HITL', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: false,
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      const turnCompleted = events.find(e => e.type === 'turn_completed')
+      expect(turnCompleted).toBeUndefined()
+    })
+
+    it('DB-hydrated resolved HITL events produce correct content-slots projection', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: true,
+        hitlUserAnswer: 'Option B',
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+
+      let view = contentSlotsReducer.init()
+      for (const e of events) {
+        view = contentSlotsReducer.reduce(view, e)
+      }
+
+      // Should have hitl_record slot (not agent slot)
+      expect(view).toHaveLength(1)
+      expect(view[0].slotType).toBe('hitl_record')
+      expect(view[0].hitlPrompt).toBe('What is your budget?')
+      expect(view[0].hitlAnswer).toBe('Option B')
+      expect(view[0].status).toBe('completed')
+    })
+
+    it('DB-hydrated resolved HITL events produce correct rail projection', () => {
+      const user = makeUserEntity('user-msg-1')
+      const hitlAgent = makeHitlEntity({
+        hitlResolved: true,
+        hitlUserAnswer: 'Done',
+      })
+
+      const events = buildTurnEvents('user-msg-1', user, [hitlAgent])
+      const railItems = replayRail(events)
+
+      const hitlItem = railItems.find(r => r.key.includes('hitl'))
+      expect(hitlItem).toBeDefined()
+      // Should NOT have a slot-based rail item (agent)
+      const agentItem = railItems.find(r => r.key === 'slot-hitl-msg-1')
+      expect(agentItem).toBeUndefined()
     })
   })
 })
