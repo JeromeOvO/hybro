@@ -30,6 +30,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
   // text-only artifacts into content, but keeps them in the artifacts array).
   const artifacts = content ? filterPromotedTextArtifacts(rawArtifacts, content) : rawArtifacts
   const isStreaming = status === 'streaming'
+  const isLiveStreaming = isStreaming && !slot.hydrated
   const isFailed = status === 'failed' || status === 'rejected'
 
   const isLongMessage = content.length > COLLAPSE_THRESHOLD
@@ -145,7 +146,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
                 !isExpanded && isLongMessage && 'max-h-[5lh]',
               )}
             >
-              <MarkdownContent content={content} />
+              <MarkdownContent content={content} isStreaming={isLiveStreaming} />
             </div>
             {!isExpanded && isLongMessage && (
               <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />

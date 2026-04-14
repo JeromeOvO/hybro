@@ -102,6 +102,8 @@ export interface ContentSlotView {
   status: SlotStatus
   error?: string
   hasPartialContent?: boolean
+  /** True when content was loaded via slot_snapshot (hydration/DB), false for live slot_delta streaming. */
+  hydrated?: boolean
   // hitl_record specific
   hitlPrompt?: string
   hitlAnswer?: string

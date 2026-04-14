@@ -191,7 +191,8 @@ function pushIncrementalUpdates(
     }
 
     // Push updated content snapshot (versioned eventId for dedup)
-    if (agent.content) {
+    const hasArtifacts = agent.artifacts && agent.artifacts.length > 0
+    if (agent.content || hasArtifacts) {
       store.append(turnId, {
         eventId: `sync_snap_${slotId}_v${agent.sourceVersion}`,
         turnId,
@@ -199,7 +200,7 @@ function pushIncrementalUpdates(
         ts: slotTs,
         type: 'slot_snapshot',
         slotId,
-        content: agent.content,
+        content: agent.content || '',
         artifacts: convertArtifacts(agent.artifacts),
       } as TurnEvent)
     }
@@ -300,7 +301,8 @@ function buildTurnEvents(
       agentName: undefined,
     } as TurnEvent)
 
-    if (agent.content) {
+    const agentHasArtifacts = agent.artifacts && agent.artifacts.length > 0
+    if (agent.content || agentHasArtifacts) {
       events.push({
         eventId: `sync_snap_${slotId}_v${agent.sourceVersion}`,
         turnId,
@@ -308,7 +310,7 @@ function buildTurnEvents(
         ts: slotTs,
         type: 'slot_snapshot',
         slotId,
-        content: agent.content,
+        content: agent.content || '',
         artifacts: convertArtifacts(agent.artifacts),
       } as TurnEvent)
     }
@@ -316,7 +318,7 @@ function buildTurnEvents(
     // Synthesis entities (no taskStatus) with content are implicitly completed
     const isTaskTerminal = agent.taskStatus === 'completed' || agent.taskStatus === 'failed'
       || agent.taskStatus === 'canceled' || agent.taskStatus === 'rejected'
-    const isSynthesisComplete = slotType === 'summary' && agent.content
+    const isSynthesisComplete = slotType === 'summary' && (agent.content || agentHasArtifacts)
     if (isTaskTerminal || isSynthesisComplete) {
       const status = agent.taskStatus === 'rejected' ? 'rejected'
         : agent.taskStatus === 'canceled' ? 'canceled'
@@ -337,7 +339,7 @@ function buildTurnEvents(
   const isEntityTerminal = (a: MessageEntity) =>
     a.taskStatus === 'completed' || a.taskStatus === 'failed'
     || a.taskStatus === 'canceled' || a.taskStatus === 'rejected'
-    || (a.taskStatus == null && a.content) // synthesis with content = done
+    || (a.taskStatus == null && (a.content || (a.artifacts && a.artifacts.length > 0))) // synthesis with content/artifacts = done
   const allTerminal = agentEntities.length > 0 && agentEntities.every(isEntityTerminal)
   if (allTerminal) {
     const lastTs = agentEntities.length > 0
