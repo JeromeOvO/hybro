@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -17,6 +17,66 @@ import type { Agent } from '@/lib/types/agent'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
 
 const COLLAPSE_THRESHOLD = 500
+const TYPEWRITER_CHARS_PER_TICK = 3
+const TYPEWRITER_INTERVAL_MS = 12
+
+function useTypewriter(fullContent: string, slot: ContentSlotView) {
+  const [revealedLen, setRevealedLen] = useState(0)
+  const [isAnimating, setIsAnimating] = useState(false)
+  const prevContentRef = useRef('')
+  const hasAnimatedRef = useRef(false)
+
+  const shouldAnimate = useMemo(() => {
+    if (!fullContent) return false
+    // Only animate live SSE content — skip hydrated (DB/page refresh)
+    if (slot.hydrated) return false
+    // Skip if artifacts are still streaming
+    if (slot.artifacts?.some(a => a.isStreaming)) return false
+    return true
+  }, [fullContent, slot.hydrated, slot.artifacts])
+
+  useEffect(() => {
+    const prev = prevContentRef.current
+    prevContentRef.current = fullContent
+
+    if (!shouldAnimate || !fullContent) {
+      setRevealedLen(fullContent.length)
+      setIsAnimating(false)
+      return
+    }
+
+    if (hasAnimatedRef.current && fullContent === prev) return
+
+    // Content grew or is brand new — animate from where we were
+    const startFrom = fullContent.startsWith(prev) ? prev.length : 0
+    if (startFrom >= fullContent.length) {
+      setRevealedLen(fullContent.length)
+      setIsAnimating(false)
+      return
+    }
+
+    setRevealedLen(startFrom)
+    setIsAnimating(true)
+    hasAnimatedRef.current = true
+  }, [fullContent, shouldAnimate])
+
+  useEffect(() => {
+    if (!isAnimating) return
+    if (revealedLen >= fullContent.length) {
+      setIsAnimating(false)
+      return
+    }
+    const id = setTimeout(() => {
+      setRevealedLen(prev => Math.min(prev + TYPEWRITER_CHARS_PER_TICK, fullContent.length))
+    }, TYPEWRITER_INTERVAL_MS)
+    return () => clearTimeout(id)
+  }, [isAnimating, revealedLen, fullContent])
+
+  return {
+    displayContent: isAnimating ? fullContent.slice(0, revealedLen) : fullContent,
+    isTypewriting: isAnimating,
+  }
+}
 
 interface AgentContentBlockProps {
   slot: ContentSlotView
@@ -30,8 +90,10 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
   // text-only artifacts into content, but keeps them in the artifacts array).
   const artifacts = content ? filterPromotedTextArtifacts(rawArtifacts, content) : rawArtifacts
   const isStreaming = status === 'streaming'
-  const isLiveStreaming = isStreaming && !slot.hydrated
   const isFailed = status === 'failed' || status === 'rejected'
+
+  const { displayContent, isTypewriting } = useTypewriter(content, slot)
+  const isEffectivelyStreaming = isStreaming || isTypewriting
 
   const isLongMessage = content.length > COLLAPSE_THRESHOLD
   const [isExpanded, setIsExpanded] = useState(!isLongMessage)
@@ -146,7 +208,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
                 !isExpanded && isLongMessage && 'max-h-[5lh]',
               )}
             >
-              <MarkdownContent content={content} isStreaming={isLiveStreaming} />
+              <MarkdownContent content={displayContent} isStreaming={isEffectivelyStreaming} />
             </div>
             {!isExpanded && isLongMessage && (
               <div className="absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-card to-transparent pointer-events-none" />
@@ -159,7 +221,7 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
             <div className="h-3 bg-muted rounded w-5/6" />
           </div>
         ) : null}
-        {isLongMessage && !isStreaming && (
+        {isLongMessage && !isEffectivelyStreaming && (
           <button
             ref={toggleRef}
             onClick={handleToggle}
