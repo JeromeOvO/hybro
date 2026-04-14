@@ -64,7 +64,7 @@ export type TurnEvent = TurnEventEnvelope & (
   | { type: 'slot_opened'; slotId: string; slotType: 'agent' | 'summary'; agentId?: string; agentName?: string; mode?: 'supervisor' | 'debate' }
   | { type: 'slot_delta'; slotId: string; textDelta: string }
   | { type: 'artifact_appended'; slotId: string; artifact: ArtifactData }
-  | { type: 'slot_snapshot'; slotId: string; content: string; artifacts: ArtifactData[] }
+  | { type: 'slot_snapshot'; slotId: string; content: string; artifacts: ArtifactData[]; hydrated?: boolean }
   | { type: 'slot_terminated'; slotId: string; status: 'completed' | 'failed' | 'canceled' | 'rejected'; error?: string; hasPartialContent?: boolean }
   | { type: 'hitl_requested'; hitlId: string; source: 'supervisor' | 'agent'; agentName?: string; prompt: string; promptType: 'text' | 'choice' | 'confirmation'; choices?: string[]; groupId?: string; groupTotal?: number; groupIndex?: number }
   | { type: 'hitl_answered'; hitlId: string; answer: string }

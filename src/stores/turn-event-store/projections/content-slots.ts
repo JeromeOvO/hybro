@@ -116,7 +116,7 @@ function handleSlotSnapshot(state: ReducerState, event: TurnEvent & { type: 'slo
     ...slot,
     content: event.content,
     artifacts: event.artifacts,
-    hydrated: true,
+    hydrated: event.hydrated !== false,
   }
 }
 

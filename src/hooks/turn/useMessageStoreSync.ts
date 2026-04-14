@@ -202,6 +202,7 @@ function pushIncrementalUpdates(
         slotId,
         content: agent.content || '',
         artifacts: convertArtifacts(agent.artifacts),
+        hydrated: agent.source !== 'sse',
       } as TurnEvent)
     }
 
@@ -312,6 +313,7 @@ function buildTurnEvents(
         slotId,
         content: agent.content || '',
         artifacts: convertArtifacts(agent.artifacts),
+        hydrated: agent.source !== 'sse',
       } as TurnEvent)
     }
 
