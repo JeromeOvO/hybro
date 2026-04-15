@@ -106,6 +106,7 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
               )}
             >
               {agent.iconUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={agent.iconUrl}
                   alt={agent.agentName}
