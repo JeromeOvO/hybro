@@ -34,6 +34,9 @@ export interface ComposerShellAdapter {
     clearQuote: () => void
   }
   chatMode: any
+  // Prefill support
+  externalValue?: string
+  onExternalValueConsumed?: () => void
 }
 
 interface ComposerShellProps {
@@ -83,6 +86,8 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
       chatMode={adapter.chatMode}
       onChatModeChange={adapter.onChatModeChange}
       topSlot={hitlBar}
+      externalValue={adapter.externalValue}
+      onExternalValueConsumed={adapter.onExternalValueConsumed}
     />
   )
 }
