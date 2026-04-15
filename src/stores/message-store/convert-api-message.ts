@@ -115,6 +115,12 @@ export async function convertApiMessageToIncoming(
     hitlUserAnswer = maybeUserAnswer
   }
 
+  // ── Extract persisted HITL request metadata ─────────────
+  let hitlRequestId: string | undefined
+  let hitlPrompt: string | undefined
+  let hitlPromptType: 'text' | 'choice' | 'confirmation' | undefined
+  let hitlChoices: string[] | null | undefined
+
   // ── Extract persisted HITL group metadata ───────────────
   let hitlGroupId: string | undefined
   let hitlGroupTotal: number | undefined
@@ -124,6 +130,15 @@ export async function convertApiMessageToIncoming(
     if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
     if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
     if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
+
+    const rid = meta.hitl_request_id ?? meta.request_id
+    if (typeof rid === 'string') hitlRequestId = rid
+    const hp = meta.hitl_prompt ?? meta.prompt
+    if (typeof hp === 'string') hitlPrompt = hp
+    const hpt = meta.hitl_prompt_type ?? meta.prompt_type
+    if (typeof hpt === 'string') hitlPromptType = hpt as 'text' | 'choice' | 'confirmation'
+    if (Array.isArray(meta.hitl_choices)) hitlChoices = meta.hitl_choices as string[]
+    else if (Array.isArray(meta.choices)) hitlChoices = meta.choices as string[]
   }
 
   // ── Extract user attachments ────────────────────────────
@@ -213,6 +228,10 @@ export async function convertApiMessageToIncoming(
       ? normalizeTimestampOrNow(apiMessage.message_created_at)
       : undefined,
 
+    hitlRequestId,
+    hitlPrompt,
+    hitlPromptType,
+    hitlChoices,
     hitlUserAnswer,
     hitlGroupId,
     hitlGroupTotal,

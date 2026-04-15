@@ -14,7 +14,7 @@ import { EntityUserBubble, EntityAgentBubble, derivePhase, type QuoteData } from
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
-import { useShallow } from 'zustand/shallow'
+import { useShallow } from 'zustand/react/shallow'
 
 // Empty state component
 function EmptyState() {

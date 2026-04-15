@@ -348,6 +348,122 @@
   --shimmer-highlight: 0.7;
 }
 
+/* Shimmer sweep for small solid elements (dots, icons) */
+.shimmer-dot {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--color-muted-foreground) / 0.35) 0%,
+    hsl(var(--color-muted-foreground) / 0.35) 40%,
+    hsl(var(--color-muted-foreground) / 0.7) 50%,
+    hsl(var(--color-muted-foreground) / 0.35) 60%,
+    hsl(var(--color-muted-foreground) / 0.35) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 5s ease-in-out infinite;
+}
+
+/* Blue/primary shimmer for orchestration rail — uses the theme primary
+   color hue for a branded sweep effect with strong contrast. */
+.shimmer-rail {
+  --shimmer-base: hsl(192 60% 35%);
+  --shimmer-highlight: hsl(192 90% 58%);
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-base) 30%,
+    var(--shimmer-highlight) 50%,
+    var(--shimmer-base) 70%,
+    var(--shimmer-base) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 2.5s ease-in-out infinite;
+}
+
+.dark .shimmer-rail {
+  --shimmer-base: hsl(180 50% 40%);
+  --shimmer-highlight: hsl(180 100% 70%);
+}
+
+/* Yellow "Needs input" shimmer for HITL states */
+.shimmer-text-yellow {
+  background: linear-gradient(
+    90deg,
+    hsl(30, 80%, 30%) 0%,
+    hsl(40, 90%, 50%) 25%,
+    hsl(45, 95%, 65%) 50%,
+    hsl(40, 90%, 50%) 75%,
+    hsl(30, 80%, 30%) 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 2.5s ease-in-out infinite;
+}
+
+/* ── Timeline event animations ── */
+
+@keyframes event-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes dot-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.4);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes breathing-glow {
+  0%, 100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1.0;
+  }
+}
+
+.animate-event-slide-in {
+  animation: event-slide-in 150ms ease-out;
+}
+
+.animate-dot-pulse {
+  animation: dot-pulse 300ms ease-out;
+}
+
+.animate-breathing-glow {
+  animation: breathing-glow 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-event-slide-in {
+    animation: none;
+    opacity: 1;
+  }
+  .animate-dot-pulse {
+    animation: none;
+  }
+  .animate-breathing-glow {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 @layer base {
   * {
     border-color: hsl(var(--color-border));
@@ -638,6 +754,16 @@ body[data-cookie-banner="visible"] {
   body[data-cookie-banner="visible"] {
     padding-bottom: 68px;
   }
+}
+
+/* ── Timeline turn spacing ── */
+.timeline-turn + .timeline-turn {
+  padding-top: 0.5rem;
+}
+
+/* Ensure timeline event rail is visible in dark mode */
+.dark .timeline-rail-line {
+  background-color: hsl(var(--color-border) / 0.4);
 }
 
 } /* end @layer components */

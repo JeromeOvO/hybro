@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update'
+  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update' | 'turn_event'
   room_id: string
   timestamp: string
   data?: {
@@ -64,6 +64,16 @@ export interface SSEMessage {
     }
     append?: boolean
     last_chunk?: boolean
+    // Turn event fields (for turn_event type)
+    turn_event?: {
+      event_id: string
+      turn_id: string
+      seq: number
+      ts: number
+      type: string
+      client_request_id?: string
+      [key: string]: unknown
+    }
   }
 }
 

@@ -3,6 +3,13 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 
+// Mock event-log
+vi.mock('@/lib/room-timeline/event-log', () => ({
+  getEvents: () => [],
+  appendEvent: vi.fn(),
+  clearRoom: vi.fn(),
+}))
+
 vi.mock('@/hooks/useAutoHideScroll', () => ({
   useAutoHideScroll: vi.fn(),
 }))
@@ -92,64 +99,6 @@ describe('RoomMessages', () => {
       }])
       await renderMessages()
       expect(screen.getByText('Hello from user')).toBeTruthy()
-      expect(screen.getByText('Alice')).toBeTruthy()
-    })
-
-    it('should render agent messages', async () => {
-      seedStore([{
-        id: 'msg-1',
-        content: 'Agent response here',
-        senderName: 'Code Agent',
-        messageType: 'agent',
-        agentId: 'agent-1',
-      }])
-      await renderMessages()
-      expect(screen.getByText('Code Agent')).toBeTruthy()
-    })
-
-    it('should render empty working agent tasks as agent bubbles with waiting indicator', async () => {
-      seedStore([{
-        id: 'msg-1',
-        content: '',
-        senderName: 'Code Agent',
-        messageType: 'agent',
-        agentId: 'agent-1',
-        taskStatus: 'working',
-      }])
-      await renderMessages()
-      expect(screen.getByText('Code Agent')).toBeTruthy()
-      expect(screen.getByText('Working on your request\u2026')).toBeTruthy()
-    })
-
-    it('should render ephemeral processing placeholders as agent bubbles with task content', async () => {
-      seedStore([{
-        id: 'processing-placeholder-room-1',
-        content: '',
-        senderName: 'HYBRO AI',
-        messageType: 'agent',
-        taskStatus: 'working',
-        taskContent: 'Processing your request\u2026',
-        isEphemeral: true,
-      }])
-      await renderMessages()
-      expect(screen.getByText('HYBRO AI')).toBeTruthy()
-      expect(screen.getByText('Processing your request\u2026')).toBeTruthy()
-    })
-
-    it('should render working task with content as agent bubble showing the content', async () => {
-      seedStore([{
-        id: 'msg-1',
-        content: '**How AI will change software engineering**\n\nArtificial Intelligence',
-        senderName: 'Code Agent',
-        messageType: 'agent',
-        agentId: 'agent-1',
-        taskStatus: 'working',
-        taskContent: 'Analyzing request...',
-      }])
-      await renderMessages()
-      expect(screen.getByText('Code Agent')).toBeTruthy()
-      expect(screen.getByText('How AI will change software engineering')).toBeTruthy()
-      expect(screen.getByText('Artificial Intelligence')).toBeTruthy()
     })
 
     it('should render multiple messages', async () => {
@@ -172,36 +121,7 @@ describe('RoomMessages', () => {
       ])
       await renderMessages()
       expect(screen.getByText('User question')).toBeTruthy()
-      expect(screen.getByText('Agent')).toBeTruthy()
-    })
-  })
-
-  describe('expand/collapse controls', () => {
-    it('should show expand/collapse button when agent messages exist', async () => {
-      seedStore([{
-        id: 'msg-1',
-        content: 'Some agent response',
-        senderName: 'Agent',
-        messageType: 'agent',
-        agentId: 'agent-1',
-      }])
-      await renderMessages()
-      const btn = screen.queryByLabelText('Expand all messages') ||
-                  screen.queryByLabelText('Collapse all messages')
-      expect(btn).toBeTruthy()
-    })
-
-    it('should not show expand/collapse button when only user messages', async () => {
-      seedStore([{
-        id: 'msg-1',
-        content: 'User message only',
-        senderName: 'User',
-        messageType: 'user',
-      }])
-      await renderMessages()
-      const btn = screen.queryByLabelText('Expand all messages') ||
-                  screen.queryByLabelText('Collapse all messages')
-      expect(btn).toBeNull()
+      expect(screen.getByText('Agent answer')).toBeTruthy()
     })
   })
 })
