@@ -77,6 +77,8 @@ class SupervisorExecutor:
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         room_coordinator_service: RoomCoordinatorService,
+        slot_lifecycle=None,
+        turn_event_appender=None,  # Phase 1c
     ) -> None:
         self.supervisor_service = supervisor_service
         self.room_services = room_services
@@ -88,6 +90,29 @@ class SupervisorExecutor:
         self.agent_dispatcher = agent_dispatcher
         self.agent_message_processor = agent_message_processor
         self.room_coordinator_service = room_coordinator_service
+        self._slot_lifecycle = slot_lifecycle
+        self._turn_appender = turn_event_appender  # Phase 1c
+
+    # ------------------------------------------------------------------
+    # Phase event emission (Phase 1c)
+    # ------------------------------------------------------------------
+
+    async def _emit_phase(
+        self, room_id: str, turn_id: str | None, phase: dict
+    ) -> None:
+        """Emit a phase_changed turn event if appender is available."""
+        if not getattr(self, '_turn_appender', None) or not turn_id:
+            return
+        try:
+            await self._turn_appender.append(
+                room_id, turn_id, "phase_changed",
+                {"phase": phase},
+            )
+        except Exception:
+            logger.debug(
+                "SupervisorExecutor: phase_changed emission failed",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Main loop
@@ -530,9 +555,14 @@ class SupervisorExecutor:
                     # SSE: notify frontend of delegation stage
                     if not (token and token.is_cancelled):
                         try:
+                            agent_names = [t.agent_name for t in action.targets]
                             await self.sse_manager.send_processing_status(
                                 room_id, SSEProcessingStatus.PROCESSING, user_message_id,
                                 details=f"Delegating to {len(action.targets)} agent(s)...",
+                                agents=[
+                                    {"agent_id": t.agent_id, "agent_name": t.agent_name}
+                                    for t in action.targets
+                                ],
                             )
                         except Exception:
                             logger.debug("SSE stage notification failed (delegating)", exc_info=True)
@@ -1052,6 +1082,30 @@ class SupervisorExecutor:
                     target.agent_id, room_id
                 )
                 if not agent:
+                    # --- Emit failed slot (Phase 1b) ---
+                    if getattr(self, '_slot_lifecycle', None) and user_message_id:
+                        try:
+                            failed_slot_id = f"sup-{target.agent_id}-{step_number}"
+                            await self._slot_lifecycle.open_slot(
+                                room_id=room_id,
+                                turn_id=user_message_id,
+                                slot_id=failed_slot_id,
+                                slot_type="agent",
+                                agent_id=target.agent_id,
+                                agent_name=target.agent_name,
+                            )
+                            await self._slot_lifecycle.terminate_slot(
+                                room_id=room_id,
+                                turn_id=user_message_id,
+                                slot_id=failed_slot_id,
+                                status="failed",
+                                error="agent_unavailable",
+                            )
+                        except Exception:
+                            logger.warning(
+                                "SupervisorExecutor: failed slot emission failed",
+                                exc_info=True,
+                            )
                     logger.warning(
                         "dispatch_one: agent %s not found or inactive",
                         target.agent_id,
@@ -1099,6 +1153,24 @@ class SupervisorExecutor:
                     task_content=target.task,
                 )
                 await self.database_service.add_room_agent_message(message)
+
+                # --- Emit slot_opened (Phase 1b) ---
+                if getattr(self, '_slot_lifecycle', None) and message.turn_id:
+                    try:
+                        await self._slot_lifecycle.open_slot(
+                            room_id=room_id,
+                            turn_id=message.turn_id,
+                            slot_id=message.message_id,
+                            slot_type="agent",
+                            agent_id=target.agent_id,
+                            agent_name=target.agent_name,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "SupervisorExecutor: slot_opened emission failed for %s",
+                            message.message_id,
+                            exc_info=True,
+                        )
 
                 logger.info(
                     "supervisor_agent_dispatching",

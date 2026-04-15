@@ -273,7 +273,8 @@ class TestResponseEvent:
             )
             await h.handle(event)
 
-        h._sse.send_agent_response.assert_awaited_once()
+        # send_agent_response removed — _notify() delivers parts via task_update
+        h._sse.send_agent_response.assert_not_awaited()
 
 
 # =============================================================================

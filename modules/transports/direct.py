@@ -83,6 +83,7 @@ class DirectTransport(AgentTransport):
         task_service,
         sse_manager,
         database_service,
+        turn_event_appender=None,
     ) -> None:
         super().__init__(response_handler)
         self.tsm = tsm
@@ -91,6 +92,7 @@ class DirectTransport(AgentTransport):
         self.task_service = task_service
         self.database_service = database_service
         self._s3_service = None
+        self._turn_appender = turn_event_appender
 
     @property
     def s3_service(self):
@@ -843,6 +845,26 @@ class DirectTransport(AgentTransport):
                 last_chunk=False,
             )
 
+            # --- slot_delta turn event (Phase 1b) ---
+            if getattr(self, '_turn_appender', None) and ctx.current_message.turn_id:
+                try:
+                    await self._turn_appender.append(
+                        ctx.room_id,
+                        ctx.current_message.turn_id,
+                        "slot_delta",
+                        {
+                            "slot_id": ctx.current_message.message_id,
+                            "text_delta": content,
+                        },
+                        persist=False,
+                    )
+                except Exception:
+                    logger.debug(
+                        "DirectTransport: slot_delta emission failed for %s",
+                        ctx.current_message.message_id,
+                        exc_info=True,
+                    )
+
     @staticmethod
     def _handle_stream_task_event(result) -> None:
         """Handle a 'task' event during streaming (log only)."""
@@ -1116,15 +1138,10 @@ class DirectTransport(AgentTransport):
             if is_failure_state(final_state):
                 return ProcessingStatus.FAILED, streaming_state.full_response_text
 
-        # Send non-text parts via agent_response for real-time clients
-        if streaming_state.non_text_parts and ctx.send_sse:
-            await self.sse_manager.send_agent_response(
-                ctx.room_id,
-                ctx.current_message.message_id,
-                ctx.current_message.agent_id,
-                streaming_state.full_response_text,
-                parts=streaming_state.non_text_parts,
-            )
+        # Non-text parts are already delivered via task_update SSE (which
+        # carries the parts field).  A separate send_agent_response here
+        # would create a duplicate entity on the frontend with a different
+        # message_id, causing the agent response to render twice.
 
         return ProcessingStatus.SUCCESS, streaming_state.full_response_text
 
