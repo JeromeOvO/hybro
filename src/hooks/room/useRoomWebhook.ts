@@ -9,13 +9,14 @@ import { useRoomReset } from './useRoomReset'
 import { useRoomHydration } from './useRoomHydration'
 import { useProcessingRestore } from './useProcessingRestore'
 import { useRoomSSEConnection } from './useRoomSSEConnection'
-import { useSendMessage } from './useSendMessage'
+import { useSendMessage, type OptimisticTurnInput } from './useSendMessage'
+import { useTurnEventStore } from '@/stores/turn-event-store'
 import { useRoomActions } from './useRoomActions'
 import type { UseRoomWebhookProps } from './types'
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
   // Read per-room flags reactively
-  const { sending, processing, cancelling, updatingRoom, sseEnabled } = useRoomFlags(roomId)
+  const { sending, processing, cancelling, updatingRoom, sseEnabled, turnBasedTimeline } = useRoomFlags(roomId)
 
   // Bind stable action refs to current roomId
   const setRoomSending = useRoomUiStore(s => s.setSending)
@@ -154,10 +155,16 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     setSseConnected, setSseError,
   )
 
+  // Turn-based optimistic: create optimistic turn so TurnList renders immediately
+  const handleOptimisticTurn = useCallback((clientRequestId: string, input: OptimisticTurnInput) => {
+    useTurnEventStore.getState().createOptimisticTurn(clientRequestId, input)
+  }, [])
+
   // Send message
   const { sendUserMessage } = useSendMessage(
     roomId, userId, userName, room, getToken, sending, sseConnectedFromSSE,
     lifecycle, setSending, setCancelling, reconcileWithDb,
+    turnBasedTimeline ? handleOptimisticTurn : undefined,
   )
 
   // Room actions

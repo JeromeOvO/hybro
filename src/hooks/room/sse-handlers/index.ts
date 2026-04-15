@@ -5,7 +5,41 @@ import { useMessageStore } from '@/stores/message-store'
 import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message-store/types'
 import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { appendEvent } from '@/lib/room-timeline/event-log'
+import type { PhasePayload } from '@/stores/turn-event-store/types'
 import type { SSEHandlerDeps } from './types'
+
+/**
+ * Parse backend processing_status details string into a typed PhasePayload.
+ * Backend sends: "Planning next action...", "Delegating to N agent(s)...",
+ * "Evaluating agent results...", "Synthesizing responses..."
+ *
+ * When delegating, the backend also sends an `agents` array with
+ * `{ agent_id, agent_name }` objects so the rail can show actual names.
+ */
+function parseStageDetails(
+  details: string,
+  agents?: Array<{ agent_id: string; agent_name: string }>,
+): PhasePayload | null {
+  if (details.startsWith('Planning')) {
+    return { name: 'planning' }
+  }
+  const delegatingMatch = details.match(/^Delegating to (\d+) agent/)
+  if (delegatingMatch) {
+    const count = parseInt(delegatingMatch[1], 10)
+    const agentNames = agents && agents.length > 0
+      ? agents.map(a => a.agent_name)
+      : [`${count} agent(s)`]
+    return { name: 'delegating', agentNames, count }
+  }
+  if (details.startsWith('Evaluating')) {
+    return { name: 'evaluating' }
+  }
+  if (details.startsWith('Synthesizing')) {
+    return { name: 'synthesizing' }
+  }
+  return null
+}
 
 function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
@@ -67,6 +101,30 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
 
+          // Deduplicate: the backend may send agent content via both
+          // task_update and agent_response. Skip if:
+          // (a) Same message_id already exists with a terminal taskStatus
+          //     (agent_response sets taskStatus: null which would clear it), OR
+          // (b) Different message_id but a task-tracked entity for the same
+          //     agent already exists in this room.
+          const existing = store.entities[messageId]
+          if (existing?.taskStatus && isTerminalState(existing.taskStatus)) {
+            console.log('🔄 Skipping agent_response for', messageId, '— already terminal')
+            break
+          }
+          const agentIdForDedup = sseMessage.data?.agent_id as string | undefined
+          if (agentIdForDedup && !existing) {
+            const hasDuplicate = store.orderedIds.some(id => {
+              const e = store.entities[id]
+              return e && e.agentId === agentIdForDedup && e.roomId === roomId
+                && e.taskStatus != null && !e.isEphemeral
+            })
+            if (hasDuplicate) {
+              console.log('🔄 Skipping duplicate agent_response for', agentIdForDedup, '— task entity exists')
+              break
+            }
+          }
+
           if (sseMessage.data?.content !== undefined || sseMessage.data?.parts) {
             const agentId = sseMessage.data?.agent_id as string | undefined
             const agentName = agentId
@@ -122,6 +180,28 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               lifecycle.setMessageId(sseMessage.data.message_id)
             }
             const stageDetails = sseMessage.data.details as string | undefined
+
+            // Bridge supervisor stage details into phase_changed turn events
+            // so the OrchestrationRail shows real-time Supervisor phases.
+            if (stageDetails) {
+              const turnId = realMessageId || lifecycle.getMessageId()
+              if (turnId) {
+                const { useTurnEventStore } = await import('@/stores/turn-event-store')
+                const sseAgents = sseMessage.data.agents as Array<{ agent_id: string; agent_name: string }> | undefined
+                const phase = parseStageDetails(stageDetails, sseAgents)
+                if (phase) {
+                  useTurnEventStore.getState().append(turnId, {
+                    eventId: `sse_phase_${turnId}_${Date.now()}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: 'phase_changed',
+                    phase,
+                  } as import('@/stores/turn-event-store/types').TurnEvent)
+                }
+              }
+            }
+
             // When details are present (supervisor stage updates), always
             // re-show the placeholder — even after task_submitted dismissed
             // it — so the user sees "Evaluating...", "Synthesizing...", etc.
@@ -145,6 +225,43 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             lifecycle.disarmCancelTimeout()
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
+
+            // Emit turn terminal event — this is the authoritative signal
+            // that the room-level processing is done (not individual task completion).
+            const turnId = sseMessage.data.message_id || lifecycle.getMessageId()
+            if (turnId) {
+              const { useTurnEventStore } = await import('@/stores/turn-event-store')
+              const terminalType: 'turn_completed' | 'turn_failed' | 'turn_canceled' =
+                status === PROCESSING_STATUS.CANCELED ? 'turn_canceled'
+                : status === PROCESSING_STATUS.FAILED ? 'turn_failed'
+                : 'turn_completed'
+              const terminalEvent = terminalType === 'turn_failed'
+                ? {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                    reason: (sseMessage.data.details as string) || 'Processing failed',
+                  }
+                : terminalType === 'turn_completed'
+                ? {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                    durationMs: 0, // will be overridden by hydration
+                  }
+                : {
+                    eventId: `sse_terminal_${turnId}`,
+                    turnId,
+                    seq: Date.now(),
+                    ts: Date.now(),
+                    type: terminalType as const,
+                  }
+              useTurnEventStore.getState().append(turnId, terminalEvent as import('@/stores/turn-event-store/types').TurnEvent)
+            }
 
             if (sseMessage.data.message_id === lifecycle.getMessageId()) {
               lifecycle.setMessageId(null)
@@ -234,6 +351,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }, 'sse')
+
+          appendEvent(roomId, {
+            kind: 'agent_started',
+            timestamp: sseMessage.timestamp,
+            agentId: sseMessage.data.agent_id,
+            agentName: resolvedAgentName ?? 'Agent',
+            label: `${resolvedAgentName ?? 'Agent'} started`,
+          })
         }
         break
 
@@ -292,6 +417,30 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
+
+            // Capture timeline events for terminal states
+            if (status === TASK_STATE.COMPLETED) {
+              appendEvent(roomId, {
+                kind: 'agent_completed',
+                timestamp: sseMessage.timestamp,
+                agentId: sseMessage.data.agent_id,
+                agentName: resolvedAgentName,
+                label: `${resolvedAgentName ?? 'Agent'} completed`,
+              })
+            } else if (
+              status === TASK_STATE.FAILED ||
+              status === TASK_STATE.REJECTED ||
+              status === TASK_STATE.CANCELED
+            ) {
+              appendEvent(roomId, {
+                kind: 'agent_failed',
+                timestamp: sseMessage.timestamp,
+                agentId: sseMessage.data.agent_id,
+                agentName: resolvedAgentName,
+                label: `${resolvedAgentName ?? 'Agent'} failed`,
+                body: sseMessage.data.error,
+              })
+            }
 
             // Cancel confirmation: task_update(canceled) confirms a cancel
             // succeeded — clear cancelling UI immediately.  processing_status
@@ -375,6 +524,15 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             artifacts: merged,
           }, 'sse')
+
+          if (!isAppend) {
+            appendEvent(roomId, {
+              kind: 'artifact_emitted',
+              timestamp: sseMessage.timestamp,
+              agentId: existing?.agentId || sseMessage.data.agent_id,
+              label: `Artifact: ${artifact.name ?? 'output'}`,
+            })
+          }
         }
         break
       }
@@ -428,6 +586,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               relatedMessageId: related_message_id,
             }, 'sse')
             hitlRequestIndex.current.set(request_id, message_id)
+
+            appendEvent(roomId, {
+              kind: 'hitl_requested',
+              timestamp: sseMessage.timestamp,
+              agentId: agent_id,
+              label: 'Input requested',
+              hitlPayload: { prompt: prompt ?? '' },
+            })
           }
         }
         break
@@ -478,9 +644,27 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               }, 'sse')
               if (resolved) {
                 hitlRequestIndex.current.delete(request_id)
+
+                appendEvent(roomId, {
+                  kind: 'hitl_answered',
+                  timestamp: sseMessage.timestamp,
+                  agentId: entity.agentId,
+                  label: 'Input provided',
+                })
               }
             }
           }
+        }
+        break
+      }
+
+      case 'turn_event': {
+        const turnEventData = (sseMessage.data?.turn_event ?? sseMessage.data) as Record<string, unknown> | undefined
+        if (turnEventData?.turn_id && turnEventData?.type) {
+          const { camelCaseEvent } = await import('@/hooks/turn/useSSEToEventLog')
+          const { useTurnEventStore } = await import('@/stores/turn-event-store')
+          const event = camelCaseEvent(turnEventData)
+          useTurnEventStore.getState().append(event.turnId, event)
         }
         break
       }

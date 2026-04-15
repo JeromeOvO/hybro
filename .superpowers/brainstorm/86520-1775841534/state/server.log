@@ -1,0 +1,53 @@
+{"type":"server-started","port":51438,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:51438","screen_dir":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content","state_dir":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/state"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/current-vs-cursor-flow.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/current-vs-cursor-flow.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      等待态：即时反馈\n      发送消息后立即显示 loading/thinking 指示，而不是空白","choice":"a","id":null,"timestamp":1775841607388}
+{"source":"user-event","type":"click","text":"C\n    \n      HITL 状态修复\n      回答后 \"Awaiting input...\" 应更新为完成状态","choice":"c","id":null,"timestamp":1775841616234}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/hitl-card-design.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/hitl-card-design.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      Cursor 风格 — Agent 占位卡片\n      发送后立刻出现每个目标 agent 的占位行，显示 agent 名 + spinner/脉冲点。内容到来后原地填充，无跳变。\n      \n        \n          \n          Excel Generator Agent\n          thinking...\n        \n        \n          \n          Question & Answer\n          thinking...","choice":"a","id":null,"timestamp":1775841934329}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v2.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v2.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v2.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v3.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v3.html"}
+{"source":"user-event","type":"click","text":"B\n    \n      方向对了，需要微调\n      大方向 OK，说说具体哪里需要改","choice":"b","id":null,"timestamp":1775842159623}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v4.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v4.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v5.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v5.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v5.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v6.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v6.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v6.html"}
+{"source":"user-event","type":"click","text":"B\n    \n      还需要微调\n      告诉我哪里还需要改","choice":"b","id":null,"timestamp":1775842601787}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v7.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v7.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/waiting-state-v7.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      确认，继续下一个问题\n      等待态 + HITL 卡片设计确认完毕","choice":"a","id":null,"timestamp":1775842649704}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/summary-and-collapse.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/summary-and-collapse.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/summary-and-collapse.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      去掉 Event Rail\n      展开态只显示 agent results，不需要底层事件细节","choice":"a","id":null,"timestamp":1775842778494}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/full-preview.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/full-preview.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/full-preview-v2.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/full-preview-v2.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/full-preview-v2.html"}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-states.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-states.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-states.html"}
+{"source":"user-event","type":"click","text":"A\n    \n      Supervisor 头部栏\n      在 agent 列表上方显示 Supervisor 图标 + 阶段 shimmer（\"Step 2 of 3 · Dispatching agents\"），完成后变为统计信息（\"3 agents · 12.4s\"）","choice":"a","id":null,"timestamp":1775843363856}
+{"source":"user-event","type":"click","text":"D\n    \n      和普通模式保持一致\n      不做 Supervisor 特殊处理，所有消息（包括 Summary Agent）都按普通 agent 行显示","choice":"d","id":null,"timestamp":1775843369960}
+{"source":"user-event","type":"click","text":"C\n    \n      HITL 不显示为 agent\n      supervisor_hitl 的提问不作为 \"Question & Answer\" agent 行，而是作为独立的提问卡片（问号图标 + 黄色 shimmer），归属到 turn 级别而非某个 agent","choice":"c","id":null,"timestamp":1775843378719}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v2.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v2.html"}
+{"source":"user-event","type":"click","text":"B\n    \n      还需要调整\n      告诉我哪里需要改","choice":"b","id":null,"timestamp":1775843745861}
+{"type":"screen-added","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v3.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v3.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v3.html"}
+{"type":"screen-updated","file":"/Users/caijiangnan/Desktop/Hybro/hybro-frontend/.superpowers/brainstorm/86520-1775841534/content/supervisor-v3.html"}
+{"type":"server-stopped","reason":"idle timeout"}
