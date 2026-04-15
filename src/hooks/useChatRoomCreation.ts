@@ -8,11 +8,14 @@ import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { isBuiltinGroup } from '@/lib/types/agent-group'
 import type { RoomMembershipWriteInput } from '@/lib/types/agent-group'
+import { resolveTemplateAgents } from '@/lib/use-case-templates'
+import type { UseCaseTemplate } from '@/lib/use-case-templates'
 
 interface UseChatRoomCreationProps {
   userId?: string
   userName?: string
   getToken?: () => Promise<string | null>
+  onRequireAuth?: () => void
 }
 
 interface CreateRoomOptions {
@@ -27,7 +30,7 @@ interface CreateRoomOptions {
   membership?: RoomMembershipWriteInput
 }
 
-export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomCreationProps) {
+export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth }: UseChatRoomCreationProps) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [loadingAgents, setLoadingAgents] = useState(false)
@@ -203,11 +206,81 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
       return false
     }
 
-    return createAndNavigate(userMessage, { 
+    return createAndNavigate(userMessage, {
       ...options,
       selectedAgents,
     })
   }, [createAndNavigate])
+
+  // Create room from a use case template
+  const createFromTemplate = useCallback(async (
+    template: UseCaseTemplate,
+    availableAgents: Agent[],
+  ): Promise<boolean> => {
+    if (!userId || !userName) {
+      onRequireAuth?.()
+      return false
+    }
+
+    // Fail-fast agent resolution
+    let resolvedAgents: Agent[]
+    try {
+      resolvedAgents = resolveTemplateAgents(template.agents, availableAgents)
+    } catch {
+      banner.error("Some agents in this template are unavailable")
+      return false
+    }
+
+    setCreating(true)
+    try {
+      // Build legacy room_agent_set
+      const roomAgentSet: Record<string, string> = {}
+      for (const agent of resolvedAgents) {
+        roomAgentSet[agent.agent_id] = agent.agent_card.name
+      }
+
+      const response = await createNewRoom(
+        template.title,
+        userId,
+        userName,
+        getToken,
+        roomAgentSet,
+        { use_supervisor: true },
+        undefined,
+        {
+          membership_seed_input: "manual" as const,
+          room_agent_ids: resolvedAgents.map((a) => a.agent_id),
+        },
+      )
+
+      if (!response.success || !response.room?.room_id) {
+        banner.error("Failed to create room")
+        return false
+      }
+
+      const roomId = response.room.room_id
+
+      // Store prefill handoff (not autosend)
+      useRoomUiStore.getState().setPendingRoomData(roomId, {
+        initialMessage: template.prefillMessage,
+        handoffMode: "prefill",
+      })
+
+      // Notify sidebar
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("rooms:refresh"))
+      }
+
+      router.push(`/room/${roomId}`)
+      return true
+    } catch (error) {
+      console.error("Failed to create room from template:", error)
+      banner.error("Failed to create room")
+      return false
+    } finally {
+      setCreating(false)
+    }
+  }, [userId, userName, getToken, onRequireAuth, router])
 
   return {
     creating,
@@ -217,6 +290,7 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     createRoomWithMessage,
     createAndNavigate,
     createWithAgentsAndNavigate,
+    createFromTemplate,
     loadDefaultAgents,
     getAgentSuggestions,
   }
