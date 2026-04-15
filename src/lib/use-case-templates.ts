@@ -49,6 +49,8 @@ export function resolveTemplateAgents(
   return resolved
 }
 
+// TODO: Replace agentId placeholders with actual production agent IDs.
+// Currently using agent names; the name-fallback ensures they resolve in dev.
 export const useCaseTemplates: UseCaseTemplate[] = [
   {
     id: "youtube-creator-finder",
