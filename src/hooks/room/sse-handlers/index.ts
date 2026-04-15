@@ -187,7 +187,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               const turnId = realMessageId || lifecycle.getMessageId()
               if (turnId) {
                 const { useTurnEventStore } = await import('@/stores/turn-event-store')
-                const sseAgents = sseMessage.data.agents as Array<{ agent_id: string; agent_name: string }> | undefined
+                const sseAgents = (sseMessage.data as Record<string, unknown>).agents as Array<{ agent_id: string; agent_name: string }> | undefined
                 const phase = parseStageDetails(stageDetails, sseAgents)
                 if (phase) {
                   useTurnEventStore.getState().append(turnId, {
@@ -241,8 +241,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                     turnId,
                     seq: Date.now(),
                     ts: Date.now(),
-                    type: terminalType as const,
-                    reason: (sseMessage.data.details as string) || 'Processing failed',
+                    type: 'turn_failed' as const,
+                    reason: ((sseMessage.data as Record<string, unknown>).details as string) || 'Processing failed',
                   }
                 : terminalType === 'turn_completed'
                 ? {
@@ -250,7 +250,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                     turnId,
                     seq: Date.now(),
                     ts: Date.now(),
-                    type: terminalType as const,
+                    type: 'turn_completed' as const,
                     durationMs: 0, // will be overridden by hydration
                   }
                 : {
@@ -258,7 +258,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
                     turnId,
                     seq: Date.now(),
                     ts: Date.now(),
-                    type: terminalType as const,
+                    type: 'turn_canceled' as const,
                   }
               useTurnEventStore.getState().append(turnId, terminalEvent as import('@/stores/turn-event-store/types').TurnEvent)
             }

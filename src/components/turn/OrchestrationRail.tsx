@@ -122,7 +122,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
             <ChevronRight className="h-3 w-3" />
             {terminalItem && (
               <>
-                <RailIconComponent icon={terminalItem.icon} isActive={false} />
+                <RailIconComponent icon={terminalItem.icon} />
                 <span className="text-sm">{terminalItem.label}</span>
               </>
             )}
