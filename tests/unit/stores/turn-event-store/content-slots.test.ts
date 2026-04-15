@@ -308,4 +308,75 @@ describe('getVisibleSlots filtering', () => {
     expect(visible[0].slotId).toBe('slot-2')
     expect(visible[0].status).toBe('completed')
   })
+
+  it('sorts hitl_record slots before agent slots', () => {
+    const slots: ContentSlotView[] = [
+      {
+        slotId: 'agent-slot',
+        slotType: 'agent',
+        content: 'Agent response',
+        artifacts: [],
+        status: 'completed',
+        agentId: 'a1',
+        agentName: 'Excel Agent',
+      },
+      {
+        slotId: 'hitl-record:hitl-1',
+        slotType: 'hitl_record',
+        content: '',
+        artifacts: [],
+        status: 'completed',
+        hitlPrompt: 'What do you need?',
+        hitlAnswer: 'A spreadsheet',
+        agentName: 'Excel Agent',
+      },
+    ]
+
+    const visible = getVisibleSlots(slots)
+    expect(visible).toHaveLength(2)
+    expect(visible[0].slotType).toBe('hitl_record')
+    expect(visible[1].slotType).toBe('agent')
+  })
+
+  it('sorts hitl_record before agent even with journal event order (agent first)', () => {
+    // Simulates journal hydration: agent slot_opened arrives before hitl_requested
+    // so agent is at index 0, hitl_record at index 1. getVisibleSlots must reorder.
+    let view = contentSlotsReducer.init()
+
+    // Agent slot created first (chronological order from journal)
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_opened', seq: 1, slotId: 'agent-1', slotType: 'agent',
+      agentId: 'excel-gen', agentName: 'Excel Generator Agent',
+    }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_snapshot', seq: 2, slotId: 'agent-1',
+      content: 'Here is your file', artifacts: [],
+    }))
+
+    // HITL comes after (chronological: agent started, then asked HITL)
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'hitl_requested', seq: 3,
+      hitlId: 'hitl-1', source: 'agent', agentName: 'Excel Generator Agent',
+      prompt: 'What do you need?', promptType: 'text',
+    }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'hitl_answered', seq: 4, hitlId: 'hitl-1', answer: 'A spreadsheet',
+    }))
+
+    // Agent terminates after HITL resolved
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_terminated', seq: 5, slotId: 'agent-1', status: 'completed',
+    }))
+
+    // Raw view has agent first (from event order)
+    expect(view[0].slotType).toBe('agent')
+    expect(view[1].slotType).toBe('hitl_record')
+
+    // But getVisibleSlots sorts hitl_record before agent
+    const visible = getVisibleSlots(view)
+    expect(visible[0].slotType).toBe('hitl_record')
+    expect(visible[0].hitlAnswer).toBe('A spreadsheet')
+    expect(visible[1].slotType).toBe('agent')
+    expect(visible[1].content).toBe('Here is your file')
+  })
 })

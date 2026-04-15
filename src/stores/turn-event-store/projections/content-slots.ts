@@ -158,17 +158,8 @@ function handleHitlAnswered(state: ReducerState, event: TurnEvent & { type: 'hit
   const pendingSlot = state.slots[pendingIdx]
   if (!pendingSlot) return
 
-  // Remove the pending marker
-  state.slots.splice(pendingIdx, 1)
-  state.slotIndex.delete(pendingSlotId)
-
-  // Rebuild index after splice
-  for (let i = pendingIdx; i < state.slots.length; i++) {
-    const slot = state.slots[i]
-    state.slotIndex.set(slot.slotId, i)
-  }
-
-  // Add the completed record slot
+  // Replace the pending marker with the completed record in-place
+  // so the HITL card keeps its original position in the slot order.
   const recordSlot: ContentSlotView = {
     ...pendingSlot,
     slotId: recordSlotId,
@@ -176,8 +167,9 @@ function handleHitlAnswered(state: ReducerState, event: TurnEvent & { type: 'hit
     hitlAnswer: event.answer,
   }
 
-  state.slotIndex.set(recordSlotId, state.slots.length)
-  state.slots.push(recordSlot)
+  state.slots[pendingIdx] = recordSlot
+  state.slotIndex.delete(pendingSlotId)
+  state.slotIndex.set(recordSlotId, pendingIdx)
 }
 
 function handleTurnTermination(state: ReducerState, finalStatus: SlotStatus): void {
@@ -255,9 +247,17 @@ export const contentSlotsReducer: ProjectionReducer<ContentSlotView[]> = {
  * Use this when consuming the projection for rendering.
  */
 export function getVisibleSlots(slots: ContentSlotView[]): ContentSlotView[] {
-  return slots.filter(slot => {
-    if (slot.slotId.startsWith('hitl-pending:')) return false
-    if (slot.status === 'canceled' || slot.status === 'failed' || slot.status === 'rejected') return false
-    return true
-  })
+  return slots
+    .filter(slot => {
+      if (slot.slotId.startsWith('hitl-pending:')) return false
+      if (slot.status === 'canceled' || slot.status === 'failed' || slot.status === 'rejected') return false
+      return true
+    })
+    .sort((a, b) => {
+      // HITL records render before agent/summary content blocks —
+      // HITL Q&A happens during processing, before the agent's final response.
+      if (a.slotType === 'hitl_record' && b.slotType !== 'hitl_record') return -1
+      if (a.slotType !== 'hitl_record' && b.slotType === 'hitl_record') return 1
+      return 0
+    })
 }
