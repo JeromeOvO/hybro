@@ -100,6 +100,8 @@ class QueueExecutor:
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
         response_handler: AgentResponseHandler,
+        slot_lifecycle=None,
+        turn_event_appender=None,
     ) -> None:
         self.tsm = tsm
         self.sse_manager = sse_manager
@@ -112,6 +114,8 @@ class QueueExecutor:
         self.agent_dispatcher = agent_dispatcher
         self._agent_message_processor = agent_message_processor
         self.response_handler = response_handler
+        self._slot_lifecycle = slot_lifecycle
+        self._turn_event_appender = turn_event_appender
 
     # ------------------------------------------------------------------
     # RAII queue cleanup (A-2)
@@ -226,6 +230,24 @@ class QueueExecutor:
                 if agent is None:
                     queue_result = QueueResult.FAILED
                     break
+
+                # --- Emit slot_opened turn event (Phase 1b) ---
+                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                    try:
+                        await self._slot_lifecycle.open_slot(
+                            room_id=room_id,
+                            turn_id=current_message.turn_id,
+                            slot_id=current_message.message_id,
+                            slot_type="agent",
+                            agent_id=agent.agent_id,
+                            agent_name=getattr(agent.agent_card, 'name', None) if hasattr(agent, 'agent_card') and agent.agent_card else None,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "QueueExecutor: Failed to emit slot_opened for %s",
+                            current_message.message_id,
+                            exc_info=True,
+                        )
 
                 # --- Rate limit check ---
                 if request_user_id:
@@ -434,6 +456,28 @@ class QueueExecutor:
                     user_id=current_message.user_id or "",
                     error=error_text,
                 )
+                # --- Emit failed slot (Phase 1b) ---
+                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                    try:
+                        await self._slot_lifecycle.open_slot(
+                            room_id=room_id,
+                            turn_id=current_message.turn_id,
+                            slot_id=current_message.message_id,
+                            slot_type="agent",
+                            agent_id=current_message.agent_id,
+                        )
+                        await self._slot_lifecycle.terminate_slot(
+                            room_id=room_id,
+                            turn_id=current_message.turn_id,
+                            slot_id=current_message.message_id,
+                            status="failed",
+                            error="agent_unavailable",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "QueueExecutor: Failed to emit agent_unavailable slot for %s",
+                            current_message.message_id, exc_info=True,
+                        )
                 return None
             return agent
 
@@ -458,6 +502,28 @@ class QueueExecutor:
                 user_id=current_message.user_id or "",
                 error="The assigned agent could not be found.",
             )
+            # --- Emit failed slot (Phase 1b) ---
+            if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                try:
+                    await self._slot_lifecycle.open_slot(
+                        room_id=room_id,
+                        turn_id=current_message.turn_id,
+                        slot_id=current_message.message_id,
+                        slot_type="agent",
+                        agent_id=current_message.agent_id,
+                    )
+                    await self._slot_lifecycle.terminate_slot(
+                        room_id=room_id,
+                        turn_id=current_message.turn_id,
+                        slot_id=current_message.message_id,
+                        status="failed",
+                        error="agent_unavailable",
+                    )
+                except Exception:
+                    logger.warning(
+                        "QueueExecutor: Failed to emit agent_unavailable slot for %s",
+                        current_message.message_id, exc_info=True,
+                    )
             return None
 
         if agent.agent_status != AgentStatus.active:
@@ -490,6 +556,28 @@ class QueueExecutor:
                     user_id=current_message.user_id or "",
                     error=error_text,
                 )
+                # --- Emit failed slot (Phase 1b) ---
+                if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
+                    try:
+                        await self._slot_lifecycle.open_slot(
+                            room_id=room_id,
+                            turn_id=current_message.turn_id,
+                            slot_id=current_message.message_id,
+                            slot_type="agent",
+                            agent_id=current_message.agent_id,
+                        )
+                        await self._slot_lifecycle.terminate_slot(
+                            room_id=room_id,
+                            turn_id=current_message.turn_id,
+                            slot_id=current_message.message_id,
+                            status="failed",
+                            error="agent_unavailable",
+                        )
+                    except Exception:
+                        logger.warning(
+                            "QueueExecutor: Failed to emit agent_unavailable slot for %s",
+                            current_message.message_id, exc_info=True,
+                        )
                 return None
             return reassigned
 

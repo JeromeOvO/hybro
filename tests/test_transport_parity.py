@@ -115,8 +115,8 @@ class TestMultiEventSequenceWithPersist:
             message_text="Hello world", artifacts=None,
         )
 
-        # response with parts -> send_agent_response
-        h._sse.send_agent_response.assert_awaited_once()
+        # send_agent_response removed — _notify() delivers parts via task_update
+        h._sse.send_agent_response.assert_not_awaited()
 
         # Terminal response resumes orchestration
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
@@ -144,9 +144,9 @@ class TestMultiEventSequenceSkipPersist:
                 await h.handle(event)
 
         # SSE emissions are identical regardless of skip_persist
-        # Three artifact_update events + one agent_response
+        # Three artifact_update events (send_agent_response removed)
         assert h._sse.send_artifact_update.await_count == 3
-        h._sse.send_agent_response.assert_awaited_once()
+        h._sse.send_agent_response.assert_not_awaited()
 
         # DB writes are skipped
         h._db.update_task_state_on_message.assert_not_awaited()

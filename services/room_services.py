@@ -1255,6 +1255,7 @@ class RoomServices:
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
+        turn_id: str | None = None,
     ) -> RoomAgentMessage:
         """
         Generate a new agent message.
@@ -1285,6 +1286,7 @@ class RoomServices:
             total_steps=total_steps,
             task_content=task_content
             or content,  # Use task_content if provided, else content
+            turn_id=turn_id,
         )
 
     def create_agent_message(
@@ -1297,6 +1299,7 @@ class RoomServices:
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
+        turn_id: str | None = None,
     ) -> RoomAgentMessage:
         """Public wrapper around ``_generate_new_agent_message`` for use by
         ``SupervisorExecutor`` and other external callers that need to create
@@ -1310,6 +1313,7 @@ class RoomServices:
             step_number=step_number,
             total_steps=total_steps,
             task_content=task_content,
+            turn_id=turn_id,
         )
 
     async def _generate_agent_messages_based_on_parsed_result(
@@ -1319,6 +1323,7 @@ class RoomServices:
         room_id: str,
         user_id: str | None = None,
         extend_info: dict | None = None,
+        turn_id: str | None = None,
     ) -> list[RoomAgentMessage]:
         """
         Generate agent messages based on parsed result from LLM.
@@ -1406,6 +1411,7 @@ class RoomServices:
                 extend_info=extend_info,
                 step_number=step_index,
                 total_steps=total_steps,
+                turn_id=turn_id,
             )
 
             # In direct chat the task_content equals the user's original message,

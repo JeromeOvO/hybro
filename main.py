@@ -29,6 +29,7 @@ from api import (
     room_center,
     sse,
     task,
+    turns,
     webhooks,
 )
 from common.auth import get_current_user
@@ -114,6 +115,7 @@ async def lifespan(app: FastAPI):
         await mongodb.create_context_memory_indexes()
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
+        await mongodb.ensure_turn_events_indexes()
 
         if settings.webhook_signing_key:
             await mongodb.create_task_tracking_indexes()
@@ -438,6 +440,12 @@ app.include_router(
     task.router,
     prefix=api_prefix,
     tags=["task"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    turns.router,
+    prefix=api_prefix,
+    tags=["turns"],
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(
