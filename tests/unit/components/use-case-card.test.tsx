@@ -36,7 +36,7 @@ describe("UseCaseCard", () => {
   })
 
   it('does not render tag when tag is null', () => {
-    const noTagTemplate = { ...template, tag: null as const }
+    const noTagTemplate: UseCaseTemplate = { ...template, tag: null }
     const { container } = render(<UseCaseCard template={noTagTemplate} onClick={vi.fn()} />)
     expect(within(container).queryByText("New")).toBeNull()
   })

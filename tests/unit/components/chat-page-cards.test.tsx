@@ -14,6 +14,7 @@ function makeAgent(id: string, name: string): Agent {
     agent_card: {
       name, description: "", url: `https://ex.com/${id}`,
       version: "1.0.0", provider: { organization: "test", url: "https://test.com" },
+      capabilities: {}, protocolVersion: "1.0.0",
       skills: [], defaultInputModes: ["text"], defaultOutputModes: ["text"],
     },
   }
