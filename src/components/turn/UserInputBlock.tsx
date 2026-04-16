@@ -12,28 +12,32 @@ interface UserInputBlockProps {
 
 export const UserInputBlock = React.memo(function UserInputBlock({ data }: UserInputBlockProps) {
   const { user } = useUser()
-  const displayName = user?.username || user?.firstName || 'You'
+  const displayName = user?.firstName || user?.username || 'You'
   const avatarUrl = user?.imageUrl
 
   if (!data.text && data.attachments.length === 0) return null
 
   return (
     <div className="py-3" data-testid="user-input-block">
-      <div className="flex items-center gap-2 mb-2 px-1">
+      {/* Avatar + name — outside the border, top-right */}
+      <div className="flex items-center gap-2 mb-1.5 justify-end px-1">
+        <span className="font-semibold text-[13px] text-foreground">{displayName}</span>
         {avatarUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={avatarUrl}
             alt={displayName}
-            className="w-7 h-7 rounded-md shrink-0 object-cover"
+            className="w-7 h-7 rounded-full object-cover"
           />
         ) : (
-          <div className="flex items-center justify-center w-7 h-7 rounded-md shrink-0 bg-primary/10 border border-primary/20 text-primary text-xs font-medium">
+          <div className="flex items-center justify-center w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-semibold select-none">
             {displayName.slice(0, 2).toUpperCase()}
           </div>
         )}
-        <span className="font-semibold text-base text-foreground">{displayName}</span>
       </div>
-      <div className="pl-10 pr-2">
+
+      {/* Message block — bordered, background, text left-aligned */}
+      <div className="px-4 sm:px-5 py-3 bg-secondary/60 dark:bg-secondary/40 border border-border/30 rounded-md">
         {data.text && (
           <div className="text-[15px] font-normal leading-relaxed text-foreground whitespace-pre-wrap break-words">
             <LinkifiedContent content={data.text} />
