@@ -16,7 +16,8 @@ import type { UseRoomWebhookProps } from './types'
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
   // Read per-room flags reactively
-  const { sending, processing, cancelling, updatingRoom, sseEnabled, turnBasedTimeline } = useRoomFlags(roomId)
+  const { sending, processing, cancelling, updatingRoom, sseEnabled } = useRoomFlags(roomId)
+  const turnBasedTimeline = useRoomUiStore(s => s.globalTurnBasedTimeline)
 
   // Bind stable action refs to current roomId
   const setRoomSending = useRoomUiStore(s => s.setSending)

@@ -41,6 +41,8 @@ interface RoomUiState {
   rooms: Record<RoomId, RoomFlags>
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
+  /** Global user preference: use turn-based timeline for all rooms */
+  globalTurnBasedTimeline: boolean
 
   // Per-room flag setters (roomId, value)
   setSending: (roomId: RoomId, v: boolean) => void
@@ -62,11 +64,19 @@ interface RoomUiState {
   setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+  /** Set global turn-based timeline preference (persisted to localStorage) */
+  setGlobalTurnBasedTimeline: (v: boolean) => void
+}
+
+function readLocalStorageBool(key: string, fallback: boolean): boolean {
+  if (typeof window === 'undefined') return fallback
+  try { return localStorage.getItem(key) === 'true' } catch { return fallback }
 }
 
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
+  globalTurnBasedTimeline: readLocalStorageBool('hybro:turnBasedTimeline', false),
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
   setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
@@ -109,6 +119,10 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       })
     }
     return data
+  },
+  setGlobalTurnBasedTimeline: (v) => {
+    set({ globalTurnBasedTimeline: v })
+    try { localStorage.setItem('hybro:turnBasedTimeline', String(v)) } catch { /* ignore */ }
   },
 }))
 
