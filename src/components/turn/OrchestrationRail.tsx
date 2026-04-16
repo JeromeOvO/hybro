@@ -79,7 +79,7 @@ export const OrchestrationRail = React.memo(function OrchestrationRail({ items, 
   const showProcessingPlaceholder = isProcessing && resolvedItems.length === 0
 
   return (
-    <div className="mt-2 pl-10 pr-2" data-testid="orchestration-rail">
+    <div className="mt-2 pl-1 pr-2" data-testid="orchestration-rail">
       <div className="border-l-2 border-muted pl-3">
         {showProcessingPlaceholder ? (
           <div className="flex items-center gap-1.5 py-0.5 text-foreground/70">

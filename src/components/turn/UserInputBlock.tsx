@@ -19,37 +19,39 @@ export const UserInputBlock = React.memo(function UserInputBlock({ data }: UserI
 
   return (
     <div className="py-3" data-testid="user-input-block">
-      {/* Avatar + name — outside the border, top-right */}
-      <div className="flex items-center gap-2 mb-1.5 justify-end px-1">
-        <span className="font-semibold text-[13px] text-foreground">{displayName}</span>
+      {/* Name + avatar — outside bubble, top-right */}
+      <div className="flex items-center justify-end gap-2 mb-1.5 px-1">
+        <span className="text-xs font-medium text-muted-foreground">{displayName}</span>
         {avatarUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={avatarUrl}
             alt={displayName}
-            className="w-7 h-7 rounded-full object-cover"
+            className="w-6 h-6 rounded-full object-cover"
           />
         ) : (
-          <div className="flex items-center justify-center w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-semibold select-none">
+          <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary/15 text-primary text-[10px] font-semibold select-none">
             {displayName.slice(0, 2).toUpperCase()}
           </div>
         )}
       </div>
 
-      {/* Message block — bordered, background, text left-aligned */}
-      <div className="px-4 sm:px-5 py-3 bg-secondary/60 dark:bg-secondary/40 border border-border/30 rounded-md">
-        {data.text && (
-          <div className="text-[15px] font-normal leading-relaxed text-foreground whitespace-pre-wrap break-words">
-            <LinkifiedContent content={data.text} />
-          </div>
-        )}
-        {data.attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 pt-2">
-            {data.attachments.map((att) => (
-              <UserAttachmentCard key={att.fileId} attachment={att} />
-            ))}
-          </div>
-        )}
+      {/* Bubble — right-aligned, same style as message-bubble */}
+      <div className="flex justify-end w-full">
+        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground">
+          {data.text && (
+            <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+              <LinkifiedContent content={data.text} />
+            </div>
+          )}
+          {data.attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-2">
+              {data.attachments.map((att) => (
+                <UserAttachmentCard key={att.fileId} attachment={att} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
