@@ -36,6 +36,9 @@ export default function RoomChatPage() {
   // Ref to track if initial message has been sent
   const initialMessageSentRef = useRef(false)
 
+  // Prefill state
+  const [prefillValue, setPrefillValue] = useState("")
+
   // Quote state
   const [quote, setQuote] = useState<QuoteData | null>(null)
   const handleQuote = useCallback((data: QuoteData) => setQuote(data), [])
@@ -154,6 +157,14 @@ export default function RoomChatPage() {
       return
     }
 
+    // Prefill mode: inject into input, don't auto-send
+    if (pendingData.handoffMode === "prefill") {
+      setPrefillValue(pendingData.initialMessage)
+      initialMessageSentRef.current = true
+      return
+    }
+
+    // Default (autosend) mode: existing behavior unchanged
     initialMessageSentRef.current = true
 
     const targetGroup = pendingData.targetGroup || (
@@ -361,6 +372,8 @@ export default function RoomChatPage() {
       clearQuote,
     },
     chatMode: effectiveChatMode,
+    externalValue: prefillValue,
+    onExternalValueConsumed: () => setPrefillValue(""),
   }
 
   if (!isLoaded || loading) {

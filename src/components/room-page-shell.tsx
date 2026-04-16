@@ -55,6 +55,10 @@ export interface TimelineAdapter {
 
   // State: chat mode
   chatMode: ChatMode
+
+  // Prefill support
+  externalValue?: string
+  onExternalValueConsumed?: () => void
 }
 
 // ── View switcher ─────────────────────────────────────────────
@@ -133,6 +137,8 @@ function LegacyView({ adapter }: LegacyViewProps) {
               ? <HitlPanel requests={activeHitlRequests} onSubmit={adapter.onRespondToHitl} />
               : undefined
             }
+            externalValue={adapter.externalValue}
+            onExternalValueConsumed={adapter.onExternalValueConsumed}
           />
         </div>
       </div>

@@ -8,6 +8,7 @@ interface PendingRoomData {
   initialMessage: string
   targetGroup?: string
   attachments?: PendingAttachment[]
+  handoffMode?: "autosend" | "prefill"
 }
 
 export interface RoomFlags {

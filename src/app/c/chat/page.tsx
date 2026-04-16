@@ -11,9 +11,6 @@ import {
     AlertCircle,
     RefreshCw,
     Sparkles,
-    Youtube,
-    Palmtree,
-    ImageIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,59 +23,9 @@ import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
 import { getAgent } from "@/lib/api"
 import type { Agent } from "@/lib/types/agent"
-
-interface QuickStartMention {
-    agentName: string
-    textAfter: string
-}
-
-interface QuickStartTemplate {
-    icon: typeof Youtube
-    label: string
-    mentions: QuickStartMention[]
-}
-
-const quickStartTemplates: QuickStartTemplate[] = [
-    {
-        icon: Youtube,
-        label: "Fetch Youtuber Contact Info",
-        mentions: [
-            { agentName: "YouTube Creator Finder Agent", textAfter: " topic: AI agents, " },
-            { agentName: "GPT-5-mini Agent", textAfter: " simplify the result, just name and email" },
-        ],
-    },
-    {
-        icon: Palmtree,
-        label: "Give me a Travel Plan to Hawaii",
-        mentions: [
-            { agentName: "travel planner Agent", textAfter: " give me a plan to Hawaii" },
-        ],
-    },
-    {
-        icon: ImageIcon,
-        label: "Generate an Image of a futuristic city at sunset",
-        mentions: [
-            { agentName: "Image Generator Agent", textAfter: " generate an image of a futuristic city at sunset" },
-        ],
-    },
-]
-
-function buildStoragePrompt(
-    template: QuickStartTemplate,
-    agents: { id: string; name: string }[],
-): string {
-    const nameMap = new Map(agents.map(a => [a.name.toLowerCase(), a]))
-    let result = ""
-    for (const m of template.mentions) {
-        const agent = nameMap.get(m.agentName.toLowerCase())
-        if (agent) {
-            result += `<@${agent.id}|${agent.name}>${m.textAfter}`
-        } else {
-            result += `@${m.agentName}${m.textAfter}`
-        }
-    }
-    return result
-}
+import { UseCaseCard } from "@/components/use-case-card"
+import { useCaseTemplates } from "@/lib/use-case-templates"
+import type { UseCaseTemplate } from "@/lib/use-case-templates"
 
 export default function ChatPage() {
     return (
@@ -96,7 +43,7 @@ function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
     const searchParams = useSearchParams()
-    const [quickStartValue, setQuickStartValue] = useState("")
+    const [promptPrefill, setPromptPrefill] = useState("")
     const [hasError, setHasError] = useState(false)
     const [loadingAgent, setLoadingAgent] = useState(false)
 
@@ -115,7 +62,7 @@ function ChatPageContent() {
 
     useEffect(() => {
         if (promptParam) {
-            setQuickStartValue(promptParam)
+            setPromptPrefill(promptParam)
         }
     }, [promptParam])
 
@@ -162,10 +109,12 @@ function ChatPageContent() {
     const {
         creating,
         createAndNavigate,
+        createFromTemplate,
     } = useChatRoomCreation({
         userId: user?.id,
         userName: user?.firstName || user?.username || 'User',
-        getToken
+        getToken,
+        onRequireAuth: handleRequireAuth,
     })
 
     // Group management (extracted hook)
@@ -232,12 +181,24 @@ function ChatPageContent() {
         }
     }
 
-    const handleQuickStart = (template: QuickStartTemplate) => {
-        setQuickStartValue(buildStoragePrompt(template, agentListForMentions))
+    // Cards disabled only for logged-in users while catalog loads
+    const catalogLoading = !!user && (
+      gm.loadingAgents ||
+      (!gm.loadingAgents && gm.availableAgents.length === 0 && !gm.agentsError)
+    )
+
+    const handleTemplateClick = async (template: UseCaseTemplate) => {
+      try {
+        setHasError(false)
+        await createFromTemplate(template, gm.availableAgents)
+      } catch (error) {
+        console.error("Failed to create room from template:", error)
+        setHasError(true)
+      }
     }
 
-    const handleClearQuickStart = () => {
-        setQuickStartValue("")
+    const handlePromptPrefillConsumed = () => {
+        setPromptPrefill("")
     }
 
     if (!isLoaded) {
@@ -295,9 +256,9 @@ function ChatPageContent() {
     return (
         <div className="flex flex-col h-full bg-background">
             <div className="flex-1 flex items-center justify-center p-4">
-                <div className="w-full max-w-3xl">
+                <div className="w-full flex flex-col items-center">
                     {/* Header */}
-                    <div className="text-center mb-6 md:mb-8">
+                    <div className="w-full max-w-3xl text-center mb-6 md:mb-8">
                         <h1 className="text-3xl md:text-4xl font-bold mb-2">
                             <span
                                 className={cn(
@@ -324,7 +285,7 @@ function ChatPageContent() {
 
                     {/* Creating state */}
                     {(creating || loadingAgent) && (
-                        <div className="flex items-center justify-center mb-6">
+                        <div className="w-full max-w-3xl flex items-center justify-center mb-6">
                             <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                 <span className="text-sm">
@@ -335,7 +296,7 @@ function ChatPageContent() {
                     )}
 
                     {/* Chat Input with Group Selector */}
-                    <div className="mb-6">
+                    <div className="w-full max-w-3xl mb-6">
                         <RoomChatInput
                             onSubmit={handleSubmit}
                             disableSend={creating}
@@ -351,50 +312,62 @@ function ChatPageContent() {
                             onDeleteGroup={gm.handleDeleteGroup}
                             isOverride={gm.isOverride}
                             onClearOverride={gm.handleClearOverride}
-                            externalValue={quickStartValue}
-                            onExternalValueConsumed={handleClearQuickStart}
+                            externalValue={promptPrefill}
+                            onExternalValueConsumed={handlePromptPrefillConsumed}
                             chatMode={localChatMode}
                             onChatModeChange={setLocalChatMode}
                         />
                     </div>
 
-                    {/* Quick start templates */}
-                    <div className="space-y-3">
+                    {/* Use Case Cards */}
+                    <div className="w-full max-w-5xl mx-auto">
                         {/* Separator */}
-                        <div className="flex items-center gap-3 px-4">
+                        <div className="flex items-center gap-3 px-4 mb-6">
                             <div className="flex-1 h-px bg-border/60" />
-                            <span className="text-xs font-medium text-muted-foreground tracking-wide">
-                                Take a try — Click and Send
+                            <span className="text-xs font-medium text-muted-foreground tracking-wide uppercase">
+                                Featured Use Cases
                             </span>
                             <div className="flex-1 h-px bg-border/60" />
                         </div>
 
-                        <div className="flex justify-center gap-2 flex-wrap px-2">
-                            {quickStartTemplates.map((template) => (
+                        {gm.agentsError && gm.availableAgents.length === 0 ? (
+                            <div className="flex flex-col items-center gap-3 py-8">
+                                <p className="text-sm text-muted-foreground">
+                                    Failed to load agents
+                                </p>
                                 <Button
-                                    key={template.label}
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => handleQuickStart(template)}
-                                    className="gap-2 text-primary border-primary/30 hover:bg-primary/10 hover:text-primary whitespace-nowrap"
-                                    disabled={creating}
+                                    onClick={() => gm.loadAvailableAgents?.()}
                                 >
-                                    <template.icon className="h-4 w-4" />
-                                    {template.label}
+                                    <RefreshCw className="mr-2 h-3 w-3" />
+                                    Retry
                                 </Button>
-                            ))}
-                        </div>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-2">
+                                {useCaseTemplates.map((template) => (
+                                    <UseCaseCard
+                                        key={template.id}
+                                        template={template}
+                                        catalog={gm.availableAgents}
+                                        onClick={() => handleTemplateClick(template)}
+                                        disabled={creating || catalogLoading}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </div>
 
-                    {/* Tip */}
-                    <div className="mt-6 md:mt-8 text-center px-2">
-                        <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
-                            <Sparkles className="h-3 w-3" />
-                            {preConfiguredRoom?.selectedAgents.length === 1
-                                ? `Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`
-                                : "Just start typing \u2014 we\u2019ll find the best agents for your task"}
-                        </p>
-                    </div>
+                    {/* Tip — only shown for pre-configured single-agent chat */}
+                    {preConfiguredRoom?.selectedAgents.length === 1 && (
+                        <div className="w-full max-w-3xl mt-6 md:mt-8 text-center px-2">
+                            <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
+                                <Sparkles className="h-3 w-3" />
+                                {`Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`}
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
 

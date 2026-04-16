@@ -46,7 +46,6 @@ export const ConsumerHeader = () => {
             {[
               { href: '/agents', label: 'Explore' },
               { href: '/about', label: 'About' },
-              { href: '/pricing', label: 'Pricing' },
             ].map(link => (
               <Link
                 key={link.href}
