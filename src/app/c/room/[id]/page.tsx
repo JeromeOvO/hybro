@@ -18,7 +18,7 @@ import { RoomDefaultAgentsEditor } from '@/components/room-default-agents-editor
 import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
-import { useRoomUiStore, useRoomFlags } from '@/stores/room-ui-store'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { QuoteData } from '@/components/message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
@@ -98,17 +98,8 @@ export default function RoomChatPage() {
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
   const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
-  // Feature flag: turn-based timeline
-  const roomFlags = useRoomFlags(roomId)
-  const turnBasedTimeline = roomFlags.turnBasedTimeline
-
-  // Detect ?newui=1 URL parameter to activate turn-based timeline
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const newUi = params.get('newui')
-    useRoomUiStore.getState().setTurnBasedTimeline(roomId, newUi === '1')
-  }, [roomId])
+  // Feature flag: turn-based timeline (global user preference)
+  const turnBasedTimeline = useRoomUiStore(s => s.globalTurnBasedTimeline)
 
   // Group management (extracted hook)
   const gm = useGroupManagement({
