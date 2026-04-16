@@ -95,18 +95,18 @@ describe("Chat page — Use Case Cards integration", () => {
   it("renders use case card titles", async () => {
     render(<ChatPage />)
     await waitFor(() => {
-      expect(screen.getByText("YouTube Creator Finder")).toBeDefined()
+      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
       expect(screen.getByText("Travel Planner")).toBeDefined()
-      expect(screen.getByText("Image Generator")).toBeDefined()
+      expect(screen.getByText("Story & Image Creator")).toBeDefined()
     })
   })
 
   it("calls createFromTemplate with catalog on card click", async () => {
     render(<ChatPage />)
     await waitFor(() => {
-      expect(screen.getByText("YouTube Creator Finder")).toBeDefined()
+      expect(screen.getByText("Creator Discovery & Export")).toBeDefined()
     })
-    fireEvent.click(screen.getByText("YouTube Creator Finder").closest("button")!)
+    fireEvent.click(screen.getByText("Creator Discovery & Export").closest("button")!)
     await waitFor(() => {
       expect(mockCreateFromTemplate).toHaveBeenCalledOnce()
       expect(mockCreateFromTemplate.mock.calls[0][1]).toEqual(agents)

@@ -350,6 +350,7 @@ function ChatPageContent() {
                                     <UseCaseCard
                                         key={template.id}
                                         template={template}
+                                        catalog={gm.availableAgents}
                                         onClick={() => handleTemplateClick(template)}
                                         disabled={creating || catalogLoading}
                                     />
@@ -358,15 +359,15 @@ function ChatPageContent() {
                         )}
                     </div>
 
-                    {/* Tip */}
-                    <div className="w-full max-w-3xl mt-6 md:mt-8 text-center px-2">
-                        <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
-                            <Sparkles className="h-3 w-3" />
-                            {preConfiguredRoom?.selectedAgents.length === 1
-                                ? `Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`
-                                : "Just start typing \u2014 we\u2019ll find the best agents for your task"}
-                        </p>
-                    </div>
+                    {/* Tip — only shown for pre-configured single-agent chat */}
+                    {preConfiguredRoom?.selectedAgents.length === 1 && (
+                        <div className="w-full max-w-3xl mt-6 md:mt-8 text-center px-2">
+                            <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
+                                <Sparkles className="h-3 w-3" />
+                                {`Type your message to start chatting with ${preConfiguredRoom.selectedAgents[0].agent_card.name}`}
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
 

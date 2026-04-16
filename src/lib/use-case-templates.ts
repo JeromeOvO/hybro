@@ -1,4 +1,4 @@
-import { Youtube, Palmtree, ImageIcon } from "lucide-react"
+import { Youtube, Palmtree, BookOpen } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 
@@ -11,7 +11,6 @@ export interface UseCaseAgent {
 export interface UseCaseTemplate {
   id: string
   icon: LucideIcon
-  iconGradient: [string, string]
   title: string
   description: string
   agents: UseCaseAgent[]
@@ -53,55 +52,67 @@ export function resolveTemplateAgents(
 // Currently using agent names; the name-fallback ensures they resolve in dev.
 export const useCaseTemplates: UseCaseTemplate[] = [
   {
-    id: "youtube-creator-finder",
+    id: "creator-discovery",
     icon: Youtube,
-    iconGradient: ["#ff0050", "#ff4080"],
-    title: "YouTube Creator Finder",
-    description: "Find YouTuber contact info by topic with multi-agent research",
+    title: "Creator Discovery & Export",
+    description:
+      "Find YouTube & Twitch creators by topic and export contacts to Excel",
     agents: [
       {
-        agentId: "YouTube Creator Finder Agent",
-        agentName: "YouTube Creator Finder Agent",
+        agentId: "YouTube Creator Discovery",
+        agentName: "YouTube Creator Discovery",
       },
       {
-        agentId: "GPT-5-mini Agent",
-        agentName: "GPT-5-mini Agent",
+        agentId: "Twitch Creator Discovery",
+        agentName: "Twitch Creator Discovery",
+      },
+      {
+        agentId: "Excel Generator Agent",
+        agentName: "Excel Generator Agent",
       },
     ],
     prefillMessage:
-      "Find top AI agent YouTubers and their contact info",
+      "Find Some Youtube and Twitch Creators with New York Culture, and give me an excel with names, profile links, contact emails and follower numbers",
     tag: "new",
   },
   {
     id: "travel-planner",
     icon: Palmtree,
-    iconGradient: ["#00c9a7", "#00b4d8"],
     title: "Travel Planner",
     description:
-      "Get a complete travel itinerary with flights, hotels, and activities",
+      "Plan a multi-day trip with weather insights and full itinerary",
     agents: [
       {
-        agentId: "travel planner Agent",
-        agentName: "travel planner Agent",
+        agentId: "Weather Agent",
+        agentName: "Weather Agent",
+      },
+      {
+        agentId: "Travel Planner Agent",
+        agentName: "Travel Planner Agent",
       },
     ],
-    prefillMessage: "Give me a travel plan to Hawaii",
+    prefillMessage:
+      "Generate a travel plan for 7-days travel with 4 people to Hawaii and Also check the weather in Hawaii in the past month",
     tag: "new",
   },
   {
-    id: "image-generator",
-    icon: ImageIcon,
-    iconGradient: ["#f59e0b", "#ef4444"],
-    title: "Image Generator",
-    description: "Generate stunning AI images from natural language prompts",
+    id: "story-and-image",
+    icon: BookOpen,
+    title: "Story & Image Creator",
+    description:
+      "Generate a creative story and an AI image inspired by it",
     agents: [
+      {
+        agentId: "Story Agent",
+        agentName: "Story Agent",
+      },
       {
         agentId: "Image Generator Agent",
         agentName: "Image Generator Agent",
       },
     ],
     prefillMessage:
-      "Generate an image of a futuristic city at sunset",
+      "Give me a short fun story about AI Agents and generate an Image based on the story",
     tag: null,
   },
 ]

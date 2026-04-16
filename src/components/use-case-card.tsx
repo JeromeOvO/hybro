@@ -1,16 +1,31 @@
 "use client"
 
+import { useMemo } from "react"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import type { Agent } from "@/lib/types/agent"
+import { getAgentAvatarUri } from "@/lib/agent-avatar"
 import { cn } from "@/lib/utils"
 
 interface UseCaseCardProps {
   template: UseCaseTemplate
+  catalog: Agent[]
   onClick: () => void
   disabled?: boolean
 }
 
-export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
-  const { icon: Icon, iconGradient, title, description, agents, tag } = template
+export function UseCaseCard({ template, catalog, onClick, disabled }: UseCaseCardProps) {
+  const { icon: Icon, title, description, agents, tag } = template
+
+  // Resolve avatar URLs from the live catalog
+  const resolvedAvatars = useMemo(() => {
+    const idMap = new Map(catalog.map((a) => [a.agent_id, a]))
+    const nameMap = new Map(catalog.map((a) => [a.agent_card.name.toLowerCase(), a]))
+    return agents.map((ta) => {
+      const found = idMap.get(ta.agentId) ?? nameMap.get(ta.agentName.toLowerCase())
+      const iconUrl = found?.agent_card.iconUrl || getAgentAvatarUri(found?.agent_id ?? ta.agentId)
+      return { ...ta, iconUrl }
+    })
+  }, [agents, catalog])
 
   return (
     <button
@@ -18,13 +33,13 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       className={cn(
-        "group relative overflow-hidden rounded-[18px] p-6 text-left",
+        "group relative overflow-hidden rounded-[18px] p-6 text-left cursor-pointer",
         "aspect-[5/3] flex flex-col",
         "bg-gradient-to-br from-[#111122] to-[#0d0d1a]",
         "transition-all duration-250 ease-out",
         "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none",
         "hover:-translate-y-[3px]",
-        "hover:shadow-[0_12px_40px_rgba(0,0,0,0.5),0_0_30px_rgba(0,255,255,0.06)]",
+        "hover:shadow-[0_8px_50px_-10px_rgba(72,209,163,0.2)]",
       )}
     >
       {/* Glassmorphism border */}
@@ -57,7 +72,7 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
       <div
         className="pointer-events-none absolute inset-0 rounded-[18px] opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         style={{
-          background: `radial-gradient(ellipse at 20% 50%, ${iconGradient[0]}10 0%, transparent 70%)`,
+          background: "radial-gradient(ellipse at 20% 50%, hsla(162,65%,38%,0.06) 0%, transparent 70%)",
         }}
       />
 
@@ -70,13 +85,8 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
 
       {/* Top: Icon + Title */}
       <div className="relative z-[1] flex items-center gap-3">
-        <div
-          className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px] shadow-[0_3px_10px_rgba(0,0,0,0.3)]"
-          style={{
-            background: `linear-gradient(135deg, ${iconGradient[0]}, ${iconGradient[1]})`,
-          }}
-        >
-          <Icon className="h-[19px] w-[19px] text-white" />
+        <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-[11px] border border-[hsl(162,65%,58%)]/20 bg-[hsl(162,65%,58%)]/10">
+          <Icon className="h-[19px] w-[19px] text-[hsl(162,65%,58%)]" />
         </div>
         <span className="text-[15px] font-bold leading-tight text-[#f0f0f0]">
           {title}
@@ -97,7 +107,7 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
       {/* Bottom: Agent avatars */}
       <div className="relative z-[1] flex items-center gap-2.5">
         <div className="flex">
-          {agents.map((agent, i) => (
+          {resolvedAvatars.map((agent, i) => (
             <div
               key={agent.agentId}
               className={cn(
@@ -105,21 +115,12 @@ export function UseCaseCard({ template, onClick, disabled }: UseCaseCardProps) {
                 i > 0 && "-ml-2",
               )}
             >
-              {agent.iconUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={agent.iconUrl}
-                  alt={agent.agentName}
-                  className="h-full w-full rounded-full object-cover"
-                />
-              ) : (
-                <span
-                  data-testid="avatar-fallback"
-                  className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-500 text-xs font-bold text-white"
-                >
-                  {agent.agentName.charAt(0).toUpperCase()}
-                </span>
-              )}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={agent.iconUrl}
+                alt={agent.agentName}
+                className="h-full w-full rounded-full object-cover"
+              />
             </div>
           ))}
         </div>
