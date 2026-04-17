@@ -56,6 +56,8 @@ export function useTurnHydration(
         }
       }
 
+      store.markHydrated()
+
       // Inject pending HITL requests into the turn store.
       // Turns may not be populated yet (useMessageStoreSync creates them
       // asynchronously after useRoomHydration loads the message store).

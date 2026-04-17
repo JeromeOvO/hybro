@@ -33,7 +33,7 @@ export function useHubStatus() {
     hubs: query.data?.hubs ?? [],
     isOnline: primaryHub?.is_online ?? false,
     hasHub: primaryHub !== null,
-    isLoading: query.isLoading,
+    isLoading: query.isLoading || !isLoaded,
     isError: query.isError,
     error: query.error,
     invalidate,

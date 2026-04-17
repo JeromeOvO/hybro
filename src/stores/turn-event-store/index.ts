@@ -16,11 +16,13 @@ interface TurnEventStoreState {
   orderedTurnIds: string[]
   turnIdByClientRequestId: Map<string, string>
   composerState: ComposerStateView
+  hydrated: boolean
 
   // Actions
   append(turnId: string, event: TurnEvent): void
   createOptimisticTurn(clientRequestId: string, userInput: UserInputData): void
   removeTurn(turnId: string): void
+  markHydrated(): void
   reset(): void
 }
 
@@ -30,6 +32,7 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
   orderedTurnIds: [],
   turnIdByClientRequestId: new Map(),
   composerState: composerReducer.init(),
+  hydrated: false,
 
   // Actions
   append(turnId: string, event: TurnEvent): void {
@@ -199,12 +202,17 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
     })
   },
 
+  markHydrated(): void {
+    set({ hydrated: true })
+  },
+
   reset(): void {
     set({
       turnLogs: new Map(),
       orderedTurnIds: [],
       turnIdByClientRequestId: new Map(),
       composerState: composerReducer.init(),
+      hydrated: false,
     })
   },
 }))

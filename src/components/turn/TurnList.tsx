@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useRef, useState, useCallback, useMemo } from 'react'
-import { ArrowDown, MessageCirclePlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
+import { ArrowDown, MessageCirclePlus, Loader2, ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
@@ -24,6 +24,17 @@ function EmptyState() {
   )
 }
 
+function LoadingState() {
+  return (
+    <div className="h-full flex items-center justify-center px-4">
+      <div className="text-center space-y-3">
+        <Loader2 className="h-6 w-6 text-muted-foreground/60 mx-auto animate-spin" aria-hidden />
+        <p className="text-sm text-muted-foreground">Loading messages…</p>
+      </div>
+    </div>
+  )
+}
+
 export function TurnList() {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const { messagesEndRef, shouldAutoScroll, handleScroll, scrollToBottom } = useTurnScroll(scrollContainerRef)
@@ -32,6 +43,7 @@ export function TurnList() {
 
   const orderedTurnIds = useTurnEventStore(s => s.orderedTurnIds)
   const turnLogs = useTurnEventStore(s => s.turnLogs)
+  const hydrated = useTurnEventStore(s => s.hydrated)
 
   // Expand / collapse all agent responses
   const [expandSignal, setExpandSignal] = useState(0)
@@ -65,7 +77,9 @@ export function TurnList() {
           className="flex-1 h-full w-full overflow-y-auto"
         >
           <div className="py-3 sm:py-5 min-h-full max-w-4xl mx-auto px-3 sm:px-5">
-            {!hasTurns ? (
+            {!hydrated ? (
+              <LoadingState />
+            ) : !hasTurns ? (
               <EmptyState />
             ) : (
               <>
