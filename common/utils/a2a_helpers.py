@@ -204,6 +204,33 @@ def extract_status_message(task: Task) -> str | None:
     return extract_error_message(task)  # Same extraction logic
 
 
+def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
+    """Remove malformed part dicts before persisting to MongoDB.
+
+    Each A2A Part variant requires its discriminator + payload:
+      - TextPart:  kind='text' + text (str)
+      - FilePart:  kind='file' + file (dict)
+      - DataPart:  kind='data' + data (dict)
+
+    Returns a new list with invalid entries stripped.
+    """
+    cleaned: list[dict] = []
+    for p in parts:
+        root = p.get("root", p)
+        kind = root.get("kind")
+        if kind == "text" and "text" not in root:
+            logger.warning("Dropping malformed TextPart before persist (missing 'text')")
+            continue
+        if kind == "file" and "file" not in root:
+            logger.warning("Dropping malformed FilePart before persist (missing 'file')")
+            continue
+        if kind == "data" and "data" not in root:
+            logger.warning("Dropping malformed DataPart before persist (missing 'data')")
+            continue
+        cleaned.append(p)
+    return cleaned
+
+
 def append_artifact_to_task_dict(
     existing_artifacts: list[dict] | None,
     new_artifact: dict,

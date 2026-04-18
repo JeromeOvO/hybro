@@ -1702,13 +1702,19 @@ class DatabaseService:
             True if updated successfully.
         """
         try:
+            from common.utils.a2a_helpers import sanitize_artifact_parts
             from services.a2a_constants import TERMINAL_STATES
 
             terminal_values = [s.value for s in TERMINAL_STATES]
             artifact_id = artifact.get("artifactId") or artifact.get("artifact_id")
 
+            raw_parts = artifact.get("parts", [])
+            clean_parts = sanitize_artifact_parts(raw_parts)
+            if len(clean_parts) != len(raw_parts):
+                artifact["parts"] = clean_parts
+
             artifact_text = ""
-            for part in artifact.get("parts", []):
+            for part in clean_parts:
                 root = part.get("root", part)
                 if "text" in root:
                     artifact_text += root["text"]
