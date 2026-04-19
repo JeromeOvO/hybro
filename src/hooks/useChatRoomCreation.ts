@@ -260,9 +260,10 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
       const roomId = response.room.room_id
 
-      // Store message for autosend on room load
+      // Store message for prefill on room load
       useRoomUiStore.getState().setPendingRoomData(roomId, {
         initialMessage: template.prefillMessage,
+        handoffMode: "prefill",
       })
 
       // Notify sidebar
