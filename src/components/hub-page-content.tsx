@@ -200,7 +200,16 @@ export function HubPageContent({ apiKeysPath, basePath }: HubPageContentProps) {
         </Card>
 
         {/* Local Agents Section */}
-        {hasHub && (
+        {hubLoading ? (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Local Agents</h2>
+            </div>
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          </div>
+        ) : hasHub && (
           <div>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">

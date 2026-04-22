@@ -7,8 +7,8 @@
  * - Toggle state: allExpanded -> collapse signal -> allCollapsed -> expand signal
  * - Correct aria-labels
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TurnList } from '@/components/turn/TurnList'
 import { useTurnEventStore } from '@/stores/turn-event-store'
@@ -54,12 +54,23 @@ describe('TurnList', () => {
     useTurnEventStore.getState().reset()
   })
 
-  it('shows empty state when there are no turns', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('shows empty state when there are no turns and store is hydrated', () => {
+    useTurnEventStore.getState().markHydrated()
     render(<TurnList />, { wrapper: Wrapper })
     expect(screen.getByText('No messages yet')).toBeDefined()
   })
 
+  it('shows loading state before hydration completes', () => {
+    render(<TurnList />, { wrapper: Wrapper })
+    expect(screen.getByText('Loading messages…')).toBeDefined()
+  })
+
   it('does not show expand/collapse button when there are no turns', () => {
+    useTurnEventStore.getState().markHydrated()
     const { container } = render(<TurnList />, { wrapper: Wrapper })
     expect(q(container, '[aria-label="Collapse all responses"]')).toBeNull()
     expect(q(container, '[aria-label="Expand all responses"]')).toBeNull()
@@ -71,6 +82,7 @@ describe('TurnList', () => {
       eventId: 'e1', turnId: 'turn-1', seq: 1, ts: Date.now(),
       type: 'turn_started', userInput,
     } as TurnEvent)
+    store.markHydrated()
 
     const { container } = render(<TurnList />, { wrapper: Wrapper })
     const btn = q(container, '[aria-label="Collapse all responses"]')
@@ -83,6 +95,7 @@ describe('TurnList', () => {
       eventId: 'e1', turnId: 'turn-1', seq: 1, ts: Date.now(),
       type: 'turn_started', userInput,
     } as TurnEvent)
+    store.markHydrated()
 
     const { container } = render(<TurnList />, { wrapper: Wrapper })
 
@@ -114,6 +127,7 @@ describe('TurnList', () => {
       eventId: 'e2', turnId: 'turn-2', seq: 1, ts: Date.now(),
       type: 'turn_started', userInput,
     } as TurnEvent)
+    store.markHydrated()
 
     const { container } = render(<TurnList />, { wrapper: Wrapper })
     const turns = qa(container, '[data-testid^="turn-mock-"]')

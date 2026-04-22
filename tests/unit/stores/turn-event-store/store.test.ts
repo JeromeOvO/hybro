@@ -144,11 +144,20 @@ describe('TurnEventLogManager store', () => {
   it('reset clears all state', () => {
     const store = useTurnEventStore.getState()
     store.append('turn-1', evt({ type: 'turn_started', seq: 1, eventId: 'e1', userInput }))
+    store.markHydrated()
     store.reset()
 
     const state = useTurnEventStore.getState()
     expect(state.turnLogs.size).toBe(0)
     expect(state.orderedTurnIds).toEqual([])
     expect(state.composerState.mode).toBe('normal')
+    expect(state.hydrated).toBe(false)
+  })
+
+  it('markHydrated sets hydrated to true', () => {
+    const store = useTurnEventStore.getState()
+    expect(store.hydrated).toBe(false)
+    store.markHydrated()
+    expect(useTurnEventStore.getState().hydrated).toBe(true)
   })
 })

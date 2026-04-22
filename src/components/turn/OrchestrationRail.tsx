@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { Check, X, Pause, Info, ChevronRight } from 'lucide-react'
+import { Check, X, Pause, Info, ChevronRight, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { SYSTEM_AGENTS } from '@/lib/system-agents'
@@ -12,7 +12,7 @@ function RailIconComponent({ icon }: { icon: RailIcon }) {
   const size = 'h-3.5 w-3.5'
   switch (icon) {
     case 'spinner':
-      return <span className={cn(size, 'inline-block rounded-full bg-primary')} data-testid="rail-spinner" />
+      return <Loader2 className={cn(size, 'text-primary animate-spin')} data-testid="rail-spinner" />
     case 'check':
       return <Check className={cn(size, 'text-green-500')} />
     case 'x':

@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import Link from 'next/link'
-import { AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { cn } from '@/lib/utils'
@@ -189,9 +189,10 @@ export const AgentContentBlock = React.memo(function AgentContentBlock({ slot }:
         )}
         {isStreaming && (
           <span
-            className="text-xs text-muted-foreground animate-pulse"
+            className="flex items-center gap-1 text-xs text-muted-foreground"
             data-testid="streaming-indicator"
           >
+            <Loader2 className="h-3 w-3 animate-spin" />
             Working
           </span>
         )}
