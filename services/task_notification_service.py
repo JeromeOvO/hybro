@@ -31,6 +31,7 @@ from common.utils.a2a_helpers import (
     extract_error_message,
     extract_status_message,
     extract_text_from_artifacts,
+    task_has_visible_content,
 )
 from common.utils.logger import get_logger
 from services.a2a_constants import is_terminal_state
@@ -180,7 +181,7 @@ async def _notify_task_update_impl(
                 "notify_task_update: extraction result for %s: "
                 "content=%s, text_parts=%d, file_parts=%d, data_parts=%d",
                 message_id,
-                repr(content[:80]) if content else "None",
+                repr(str(content)[:80]) if content else "None",
                 len(extracted.text_parts),
                 len(extracted.file_parts),
                 len(extracted.data_parts),
@@ -207,6 +208,8 @@ async def _notify_task_update_impl(
         elif state == TaskState.canceled:
             if not resolved_error:
                 resolved_error = "Task was canceled"
+            if not status_message:
+                status_message = extract_status_message(task)
 
         elif state == TaskState.input_required:
             requires_input = True
@@ -217,6 +220,13 @@ async def _notify_task_update_impl(
             status_message = (
                 extract_status_message(task) or "Authentication required"
             )
+
+        elif state == TaskState.completed:
+            # Surface diagnostic status messages for silent completions.
+            # This keeps terminal hints visible when an adapter finishes with
+            # no text/non-text payload but provides a status.message reason.
+            if not task_has_visible_content(task):
+                status_message = extract_status_message(task)
 
     # --- Write-side: artifact backfill + message_text backfill ------------
     # Only write back to DB when a backfill actually modifies the message.

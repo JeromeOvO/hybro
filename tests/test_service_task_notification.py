@@ -18,6 +18,7 @@ PATCH_NOTIF = "services.notification_service.notification_service"
 PATCH_SSE = "services.sse_services.sse_manager"
 PATCH_EXTRACT_ERR = "services.task_notification_service.extract_error_message"
 PATCH_EXTRACT_STATUS = "services.task_notification_service.extract_status_message"
+PATCH_HAS_VISIBLE = "services.task_notification_service.task_has_visible_content"
 PATCH_SLEEP = "services.task_notification_service.asyncio.sleep"
 PATCH_EXTRACT_PARTS = "common.utils.a2a_helpers.extract_parts_from_artifacts"
 PATCH_CONVERT_S3 = "common.utils.a2a_helpers.convert_inline_bytes_to_s3"
@@ -251,7 +252,7 @@ class TestNotifyTaskUpdate:
             result = await notify_task_update(**CALL_KWARGS)
 
             assert result is True
-            mock_ep.assert_called_once_with(task.artifacts)
+            assert mock_ep.call_count >= 1
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["content"] == "Hello world"
 
@@ -429,6 +430,38 @@ class TestNotifyTaskUpdate:
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["requires_auth"] is True
             assert call_kw["status_message"] == "Authentication required"
+
+    # --------------------------------------------------------------------- #
+    # 10. completed-without-visible-content forwards status_message hint
+    # --------------------------------------------------------------------- #
+    @pytest.mark.asyncio
+    async def test_completed_without_visible_content_forwards_status_message(self):
+        task = _make_task(TaskState.completed)
+        msg = _make_message(task=task)
+
+        with (
+            patch(PATCH_DB) as db,
+            patch(PATCH_NOTIF) as notif,
+            patch(PATCH_SSE) as sse,
+            patch(PATCH_SLEEP, new_callable=AsyncMock),
+            patch(PATCH_HAS_VISIBLE, return_value=False),
+            patch(PATCH_EXTRACT_STATUS, return_value="No visible output from upstream agent"),
+            patch(PATCH_CONVERT_S3, new_callable=AsyncMock),
+        ):
+            _setup_db_mock(db, msg=msg)
+            _setup_notif_mock(notif)
+            _setup_sse_mock(sse)
+
+            result = await notify_task_update(
+                message_id="msg-1",
+                state=TaskState.completed,
+                room_id="room-1",
+                user_id="user-1",
+            )
+
+            assert result is True
+            call_kw = notif.send_task_update.call_args.kwargs
+            assert call_kw["status_message"] == "No visible output from upstream agent"
 
     # --------------------------------------------------------------------- #
     # 10. send_processing_status only for terminal states

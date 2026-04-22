@@ -358,6 +358,12 @@ class RelayService:
         if not hub_doc or hub_doc["user_id"] != api_key.user_id:
             raise PermissionError("Hub not owned by this API key")
 
+        # Refresh Redis TTL at the start of an authenticated sync so
+        # ``is_hub_alive`` is reliable for the activation pass at the end
+        # (multi-worker: sync may hit a different worker than the SSE loop).
+        if self._streams:
+            await self._streams.record_heartbeat(hub_id)
+
         user_id = api_key.user_id
         gateway_base = settings.gateway_base_url
 
@@ -405,6 +411,7 @@ class RelayService:
                         "source": "hub",
                         "hub_id": hub_id,
                         "local_agent_id": ag.local_agent_id,
+                        "agent_status": "active",
                         **agent_card_update,
                     }},
                 )
@@ -477,30 +484,39 @@ class RelayService:
         # Prune agents that the hub no longer reports.
         if prune_missing:
             synced_ids = [item["agent_id"] for item in synced]
-
-            await self._mongo.agents_collection.update_many(
-                {
-                    "hub_id": hub_id,
-                    "source": "hub",
-                    "agent_id": {"$nin": synced_ids},
-                },
-                {"$set": {"agent_status": "inactive"}},
-            )
-
-            await self._mongo.agents_collection.update_many(
-                {
-                    "hub_id": hub_id,
-                    "source": {"$ne": "hub"},
-                    "agent_id": {"$nin": synced_ids},
-                },
-                {
-                    "$set": {"agent_status": "inactive"},
-                    "$unset": {
-                        "hub_id": "",
-                        "local_agent_id": "",
+            # If the hub sent agents but every card failed validation, synced_ids
+            # is empty: ``$nin: []`` would match *all* hub agents — skip prune.
+            if len(agents) > 0 and not synced_ids:
+                logger.warning(
+                    "Hub %s: skipping prune — %d agent(s) in request but none "
+                    "passed AgentCard validation",
+                    hub_id,
+                    len(agents),
+                )
+            else:
+                await self._mongo.agents_collection.update_many(
+                    {
+                        "hub_id": hub_id,
+                        "source": "hub",
+                        "agent_id": {"$nin": synced_ids},
                     },
-                },
-            )
+                    {"$set": {"agent_status": "inactive"}},
+                )
+
+                await self._mongo.agents_collection.update_many(
+                    {
+                        "hub_id": hub_id,
+                        "source": {"$ne": "hub"},
+                        "agent_id": {"$nin": synced_ids},
+                    },
+                    {
+                        "$set": {"agent_status": "inactive"},
+                        "$unset": {
+                            "hub_id": "",
+                            "local_agent_id": "",
+                        },
+                    },
+                )
 
         logger.info("Hub %s synced %d agents", hub_id, len(synced))
 

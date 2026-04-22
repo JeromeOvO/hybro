@@ -489,6 +489,49 @@ class TestRelayServiceAgentSync:
         assert len(synced) == 1
         assert synced[0]["local_agent_id"] == "good-1"
 
+    @pytest.mark.asyncio
+    async def test_sync_agents_refreshes_redis_heartbeat_when_streams_enabled(self):
+        """Authenticated sync should bump Redis TTL before activation logic."""
+        streams = MagicMock()
+        streams.record_heartbeat = AsyncMock()
+        streams.is_hub_alive = AsyncMock(return_value=True)
+
+        svc = _make_relay_service()
+        svc.set_stream_service(streams)
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Agent A",
+                description="Desc",
+                agent_card=_make_agent_card("Agent A"),
+            ),
+        ]
+        await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        streams.record_heartbeat.assert_awaited()
+        assert streams.record_heartbeat.await_args_list[0].args[0] == "hub-001"
+
+    @pytest.mark.asyncio
+    async def test_sync_all_invalid_agent_cards_skips_prune(self):
+        """Do not prune every hub agent when every card in the batch is invalid."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="bad-1",
+                name="Bad",
+                description="Desc",
+                agent_card={"error": "Unexpected endpoint or method."},
+            ),
+        ]
+        synced = await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        assert synced == []
+        svc._mongo.agents_collection.update_many.assert_not_awaited()
+
 
 # ===========================================================================
 # RelayService — Push to Hub
