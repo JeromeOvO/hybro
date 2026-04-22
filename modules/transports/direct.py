@@ -942,7 +942,7 @@ class DirectTransport(AgentTransport):
                 )
 
         if ctx.send_sse:
-            if a2a_status_message_text and state not in TERMINAL_STATES:
+            if a2a_status_message_text:
                 await self.tsm.notify_task(
                     ctx,
                     state,

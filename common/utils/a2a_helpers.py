@@ -204,6 +204,14 @@ def extract_status_message(task: Task) -> str | None:
     return extract_error_message(task)  # Same extraction logic
 
 
+def task_has_visible_content(task: Task) -> bool:
+    """Return True when task has user-visible output (text or non-text parts)."""
+    if not task.artifacts:
+        return False
+    extracted = extract_parts_from_artifacts(task.artifacts)
+    return bool(extracted.text or extracted.has_non_text)
+
+
 def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
     """Remove malformed part dicts before persisting to MongoDB.
 

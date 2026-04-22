@@ -545,6 +545,10 @@ class A2AService:
                         resp["error"] = error_text
                     elif not task_text:
                         resp["error"] = f"Task {state.value}"
+                elif not task_text:
+                    status_text = self._extract_status_message(result)
+                    if status_text:
+                        resp["message"] = status_text
                 return resp
 
             # Handle interactive states
