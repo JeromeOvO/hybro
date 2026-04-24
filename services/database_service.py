@@ -1710,8 +1710,18 @@ class DatabaseService:
 
             raw_parts = artifact.get("parts", [])
             clean_parts = sanitize_artifact_parts(raw_parts)
-            if len(clean_parts) != len(raw_parts):
-                artifact["parts"] = clean_parts
+            # Always persist sanitized parts — never push raw chunks that omit
+            # required payload fields (e.g. {"kind": "text"} without ``text``).
+            artifact["parts"] = clean_parts
+
+            if append and not clean_parts:
+                logger.warning(
+                    "All artifact parts dropped by sanitizer; skipping append "
+                    "(message_id=%s, artifact_id=%s)",
+                    message_id,
+                    artifact_id,
+                )
+                return False
 
             artifact_text = ""
             for part in clean_parts:
