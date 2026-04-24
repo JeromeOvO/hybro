@@ -33,6 +33,10 @@ class TestSanitizeParts:
         parts = [{"kind": "text"}]
         assert _sanitize_parts(parts) == []
 
+    def test_malformed_text_null_stripped(self):
+        parts = [{"kind": "text", "text": None}]
+        assert _sanitize_parts(parts) == []
+
     def test_malformed_file_part_stripped(self):
         parts = [{"kind": "file"}]
         assert _sanitize_parts(parts) == []

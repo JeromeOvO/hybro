@@ -220,21 +220,34 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
       - FilePart:  kind='file' + file (dict)
       - DataPart:  kind='data' + data (dict)
 
+    ``text`` / ``file`` / ``data`` must be present and non-None; otherwise
+    Pydantic rejects the whole Task on read (e.g. ``{"kind": "text"}`` or
+    ``{"kind": "text", "text": null}``).
+
     Returns a new list with invalid entries stripped.
     """
     cleaned: list[dict] = []
     for p in parts:
+        if not isinstance(p, dict):
+            logger.warning("Dropping non-dict artifact part: %r", p)
+            continue
         root = p.get("root", p)
+        if not isinstance(root, dict):
+            logger.warning("Dropping artifact part with non-dict root: %r", p)
+            continue
         kind = root.get("kind")
-        if kind == "text" and "text" not in root:
-            logger.warning("Dropping malformed TextPart before persist (missing 'text')")
-            continue
-        if kind == "file" and "file" not in root:
-            logger.warning("Dropping malformed FilePart before persist (missing 'file')")
-            continue
-        if kind == "data" and "data" not in root:
-            logger.warning("Dropping malformed DataPart before persist (missing 'data')")
-            continue
+        if kind == "text":
+            if "text" not in root or root.get("text") is None:
+                logger.warning("Dropping malformed TextPart (missing or null 'text')")
+                continue
+        elif kind == "file":
+            if "file" not in root or root.get("file") is None:
+                logger.warning("Dropping malformed FilePart (missing or null 'file')")
+                continue
+        elif kind == "data":
+            if "data" not in root or root.get("data") is None:
+                logger.warning("Dropping malformed DataPart (missing or null 'data')")
+                continue
         cleaned.append(p)
     return cleaned
 

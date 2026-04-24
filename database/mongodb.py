@@ -8,6 +8,7 @@ from a2a.types import AgentCard, Task, TaskState
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
+from common.utils.a2a_helpers import sanitize_artifact_parts as _sanitize_parts
 from common.utils.time import utcnow
 from config.settings import settings
 from models.agent import AGENT_CARD_HUB_NO_OVERWRITE, Agent
@@ -21,37 +22,6 @@ from models.task import BaseTask, MetaTask, TaskSession
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
-
-def _sanitize_parts(parts: list[dict]) -> list[dict]:
-    """Remove malformed part dicts that would fail Pydantic validation.
-
-    A2A Part is a discriminated union of TextPart, FilePart, DataPart.
-    Each variant requires its discriminator field plus a payload field:
-      - TextPart: kind='text' + text (str)
-      - FilePart: kind='file' + file (dict)
-      - DataPart: kind='data' + data (dict)
-
-    Agents occasionally send incomplete parts (e.g. ``{"kind": "text"}``
-    without a ``text`` field).  These poison the entire document on read
-    because Pydantic rejects the whole model.  Strip them out so the rest
-    of the message is still usable.
-    """
-    cleaned: list[dict] = []
-    for p in parts:
-        root = p.get("root", p)
-        kind = root.get("kind")
-        if kind == "text" and "text" not in root:
-            logger.warning("Stripping malformed TextPart (missing 'text' field)")
-            continue
-        if kind == "file" and "file" not in root:
-            logger.warning("Stripping malformed FilePart (missing 'file' field)")
-            continue
-        if kind == "data" and "data" not in root:
-            logger.warning("Stripping malformed DataPart (missing 'data' field)")
-            continue
-        cleaned.append(p)
-    return cleaned
 
 
 def _sanitize_task_dict(task: dict) -> dict:
@@ -110,6 +80,27 @@ def _parse_room_agent_message(raw: dict) -> RoomAgentMessage:
         if task and isinstance(task, dict):
             _sanitize_task_dict(task)
     return _ensure_task_validation(RoomAgentMessage(**raw))
+
+
+def _parse_room_agent_messages_best_effort(raw_messages: list[dict]) -> list[RoomAgentMessage]:
+    """Parse a batch of Mongo ``room_agent_messages`` docs.
+
+    Skips individual rows that still fail validation after sanitization
+    (e.g. legacy corrupt data) so background jobs and list endpoints do not
+    lose the entire result set.
+    """
+    out: list[RoomAgentMessage] = []
+    for raw in raw_messages:
+        mid = raw.get("message_id", "?")
+        try:
+            out.append(_parse_room_agent_message(raw))
+        except Exception as e:
+            logger.error(
+                "Skipping corrupt room_agent_message %s: %s",
+                mid,
+                e,
+            )
+    return out
 
 
 class MongoDB:
@@ -1052,10 +1043,7 @@ class MongoDB:
         """
         cursor = self.room_agent_messages_collection.find({"room_id": room_id})
         results = await cursor.to_list(length=None)
-        return [
-            _parse_room_agent_message(room_agent_message)
-            for room_agent_message in results
-        ]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_room_agent_message_by_message_id(
         self, message_id: str
@@ -1068,7 +1056,15 @@ class MongoDB:
         )
         if not result:
             return None
-        return _parse_room_agent_message(result)
+        try:
+            return _parse_room_agent_message(result)
+        except Exception as e:
+            logger.error(
+                "Corrupt room_agent_message document %s: %s",
+                message_id,
+                e,
+            )
+            return None
 
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
@@ -1080,10 +1076,7 @@ class MongoDB:
             {"related_message_id": related_message_id}
         )
         results = await cursor.to_list(length=None)
-        return [
-            _parse_room_agent_message(room_agent_message)
-            for room_agent_message in results
-        ]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def cancel_descendants(self, message_id: str) -> int:
         """Cancel all agent messages downstream in the related_message_id chain.
@@ -1396,7 +1389,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_expired_task_messages(
         self, max_age_hours: int, non_terminal_states: list[str]
@@ -1415,7 +1408,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_non_tracked_stale_task_messages(
         self, max_age_hours: int, non_terminal_states: list[str]
@@ -1439,7 +1432,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_orphaned_agent_messages(
         self, orphan_threshold_minutes: int
@@ -1476,7 +1469,7 @@ class MongoDB:
             }
         )
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_task_messages_for_room(
         self, room_id: str, limit: int = 50
@@ -1495,7 +1488,7 @@ class MongoDB:
             .limit(limit)
         )
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def get_pending_task_messages_for_user(
         self, user_id: str, non_terminal_states: list[str]
@@ -1513,7 +1506,7 @@ class MongoDB:
             }
         ).sort("task_created_at", -1)
         results = await cursor.to_list(length=None)
-        return [_parse_room_agent_message(msg) for msg in results]
+        return _parse_room_agent_messages_best_effort(results)
 
     async def count_non_terminal_tasks_for_user(
         self, user_id: str, non_terminal_states: list[str]
