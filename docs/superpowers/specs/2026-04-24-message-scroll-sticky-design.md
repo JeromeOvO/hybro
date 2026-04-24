@@ -65,28 +65,53 @@ orderedIds + entities
 | Phase | Trigger | Scroll behavior |
 |-------|---------|-----------------|
 | Hydration in progress | `hydrated === false` | No scrolling |
-| After hydration + initial anchor, `lastUserMessageId` changes | User sent a new message | Force `scrollToBottom` |
-| AI message arrives / streams | `lastUserMessageId` unchanged | Only scroll if `shouldAutoScroll === true` (existing logic, unchanged) |
+| After hydration + initial anchor, `lastUserSendKey` changes | User sent a new message | Force `scrollToBottom` |
+| AI message arrives / streams | `lastUserSendKey` unchanged | Only scroll if `shouldAutoScroll === true`, driven by `contentVersion` |
 
-### Trigger Source
+### Trigger Source — `lastUserSendKey` (not raw message id)
 
-Detect whether `lastUserMessageId` changed after hydration. No new store flags, no composer-to-timeline ref/callback.
+The current send flow uses optimistic insertion: `useSendMessage` first inserts with `tempMessageId`, then calls `replaceMessageId(temp, real)` after POST returns. This means the same user send causes `lastUserMessageId` to change twice (temp insert, then temp→real swap), which would trigger two `scrollToBottom` calls. If the user scrolls up during the HTTP round-trip, the second call would yank them back down.
+
+**Fix:** The comparison key for P1 uses `clientRequestId` (stable across the temp→real swap) instead of the raw message id:
+
+```typescript
+// Derive a stable send key that survives temp→real id replacement
+function getLastUserSendKey(
+  orderedIds: string[],
+  entities: Record<string, MessageEntity>,
+): string | null {
+  for (let i = orderedIds.length - 1; i >= 0; i--) {
+    const entity = entities[orderedIds[i]]
+    if (entity?.messageType === 'user') {
+      return entity.clientRequestId ?? entity.id
+    }
+  }
+  return null
+}
+```
 
 ```typescript
 // Inside useMessageScrollAnchoring
+const lastUserSendKey = getLastUserSendKey(orderedIds, entities)
+
 useEffect(() => {
   if (!hydrated || !didInitialAnchor.current) return
-  if (!lastUserMessageId) return
-  if (lastUserMessageId === prevLastUserMessageId.current) return
+  if (!lastUserSendKey) return
+  if (lastUserSendKey === prevLastUserSendKey.current) return
 
   scrollToBottom({ behavior: 'auto' })
-  prevLastUserMessageId.current = lastUserMessageId
-}, [lastUserMessageId])
+  prevLastUserSendKey.current = lastUserSendKey
+}, [lastUserSendKey])
 ```
+
+P2's DOM anchor still uses the current `entity.id` (which may be temp or real) via `data-message-id`. The `lastUserSendKey` is only for P1's change-detection to avoid double-triggering.
 
 ### AI Content Streaming
 
-The existing `shouldAutoScroll` + near-bottom detection mechanism handles AI streaming. Implementation must ensure the hook exposes or internally connects to `messageCount` / `contentVersion` changes so that streaming AI content triggers the existing scroll-follow logic. This does not change the design — just an implementation wiring note.
+The existing `shouldAutoScroll` + near-bottom detection mechanism handles AI streaming. The hook accepts a `contentVersion` input to detect in-place content updates (streaming AI responses updating the same message entity). Without this, only new message arrivals (changing `orderedIds.length`) would trigger scroll-follow, but streaming content within an existing message would not.
+
+- **Legacy view** passes `useMessageStore.version` as `contentVersion`.
+- **Turn-based view** passes turn event count or render version from the existing turn scroll infrastructure.
 
 ---
 
@@ -115,16 +140,16 @@ useLayoutEffect(() => {
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
-  // All three MUST be set synchronously:
+  // All four MUST be set synchronously:
   didInitialAnchor.current = true
-  prevLastUserMessageId.current = lastUserMsgId ?? null
+  prevLastUserSendKey.current = lastUserSendKey ?? null  // uses stable send key
   setShouldAutoScroll(checkIfNearBottom())
 }, [hydrated, roomId, orderedIds.length, lastUserMessageId])
 ```
 
 ### Key Constraints
 
-- **P2 must initialize `prevLastUserMessageId`** after anchoring. Otherwise P1's effect will see `prevLastUserMessageId === null` on next render and misinterpret it as "user just sent a new message", causing an unwanted `scrollToBottom`.
+- **P2 must initialize `prevLastUserSendKey`** after anchoring. Otherwise P1's effect will see `prevLastUserSendKey === null` on next render and misinterpret it as "user just sent a new message", causing an unwanted `scrollToBottom`.
 - **`setShouldAutoScroll(checkIfNearBottom())`** after initial anchor. If the last user message has long AI replies below it, user is not near bottom — `shouldAutoScroll` must reflect that, otherwise the next AI update will pull the page to the bottom and destroy the P2 position.
 - **Room change** resets `didInitialAnchor.current = false`.
 
@@ -145,37 +170,39 @@ All `querySelector` calls are scoped to `scrollContainerRef.current`, not `docum
 
 ## Shared Hook: `useMessageScrollAnchoring`
 
-P1 and P2 live in the same hook to share refs and guarantee execution order:
+P1 and P2 live in the same hook to share refs and guarantee execution order.
+
+The hook is abstracted over **rendered anchor ids** so it works for both views without coupling to a specific store:
 
 ```typescript
-function useMessageScrollAnchoring({
-  scrollContainerRef,
-  hydrated,
-  roomId,
-  orderedIds,
-  entities,
-}: {
+interface ScrollAnchoringInput {
   scrollContainerRef: RefObject<HTMLDivElement>
   hydrated: boolean
   roomId: string
-  orderedIds: string[]
-  entities: Record<string, MessageEntity>
-}) {
+  // Abstracted: caller provides the relevant ids and lookup
+  renderedAnchorIds: string[]       // Legacy: orderedIds; TurnList: orderedTurnIds
+  getEntityForAnchor: (id: string) => { messageType: string; clientRequestId?: string } | undefined
+  contentVersion: number            // Legacy: useMessageStore.version; TurnList: turn event/render version
+}
+
+function useMessageScrollAnchoring(input: ScrollAnchoringInput) {
   // Internal state:
   // - didInitialAnchor: RefObject<boolean>
-  // - prevLastUserMessageId: RefObject<string | null>
+  // - prevLastUserSendKey: RefObject<string | null>
   // - shouldAutoScroll: state + setter
-  // - derived: lastUserMessageId = findLastUserMessageId(orderedIds, entities)
+  // - derived: lastUserSendKey via getLastUserSendKey(renderedAnchorIds, getEntityForAnchor)
+  // - derived: lastUserMessageId via findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
 
-  // P2: useLayoutEffect — initial anchor
-  // P1: useEffect — subsequent user sends
+  // P2: useLayoutEffect — initial anchor (uses lastUserMessageId for DOM query)
+  // P1: useEffect — subsequent user sends (uses lastUserSendKey for change detection)
+  // AI streaming: useEffect on contentVersion — scrollToBottom if shouldAutoScroll
   // Reset: roomId change resets didInitialAnchor
 }
 ```
 
-**Legacy view** (`room-messages.tsx`): imports and calls `useMessageScrollAnchoring`.
+**Legacy view** (`room-messages.tsx`): passes `orderedIds`, `id => entities[id]`, `useMessageStore.version`.
 
-**Turn-based view** (`useTurnScroll.ts`): adds equivalent P1 + P2 semantics. Can either import the same hook (if scroll container ref is compatible) or replicate the logic inline with the same contract.
+**Turn-based view** (`useTurnScroll.ts`): passes `orderedTurnIds`, a lookup that maps `turnId` to message-like shape (since `turnId === userMessageId`), and turn event/render version. P2's `useLayoutEffect` dependency includes `renderedAnchorIds.length` so it retries when TurnList DOM renders after turn store hydration.
 
 ---
 
@@ -288,12 +315,37 @@ Resolution:
 | `src/components/turn/OrchestraTurn.tsx` | Add sticky wrapper with `data-message-id` around `UserInputBlock`. |
 | `src/hooks/turn/useTurnScroll.ts` | Add P1 + P2 equivalent logic (lastUserMessageId detection, initial anchor). |
 | `src/lib/room-timeline/message-groups.test.ts` | **New.** Tests for grouping function. |
+| `src/hooks/useMessageScrollAnchoring.test.ts` | **New.** Tests for scroll anchoring behavior. |
 
 **Not changed:**
 - `useMessageStore` — no structural or API changes
 - `useTurnEventStore` — no structural changes, no new call sites; TurnList existing dependency used for compatibility only
 - `useMessageStoreSync` bridge — not touched
 - Backend — zero changes
+
+---
+
+## Test Plan
+
+### `message-groups.test.ts` — Grouping function
+
+- System prefix (first messages are non-user) → `userMsgId: null` group
+- Consecutive user messages → each becomes its own group
+- Normal user → agent grouping
+- `agent.relatedMessageId` pointing at older user message (groups by timeline order)
+- Empty input → empty array
+
+### `useMessageScrollAnchoring.test.ts` — Scroll behavior
+
+- **P2 initial anchor does not trigger P1 bottom scroll.** After hydration + initial anchor, `prevLastUserSendKey` is initialized, so P1 effect does not fire.
+- **temp→real id swap does not cause double scroll.** Simulate: insert user message with `tempId` + `clientRequestId=X`, then replace id to `realId` while keeping `clientRequestId=X`. Assert `scrollToBottom` is called exactly once (on temp insert), not twice (the swap does not change `lastUserSendKey`).
+- **AI streaming only follows when near bottom.** Simulate: `contentVersion` increments while `shouldAutoScroll === false`. Assert no `scrollToBottom`. Then set `shouldAutoScroll === true`, increment again, assert `scrollToBottom` fires.
+- **Room switch resets anchor state.** Change `roomId`, verify `didInitialAnchor` resets and P2 re-executes for the new room.
+
+### `OrchestraTurn` / render tests
+
+- TurnList sticky wrapper renders `data-message-id` attribute matching `turnLog.turnId`.
+- Legacy sticky wrapper renders `data-message-id` attribute matching `group.userMsgId`.
 
 ---
 
@@ -304,5 +356,7 @@ Resolution:
 | Sticky user message overlaps with expand/collapse controls | High if not addressed | Relocate controls as specified above |
 | Very long sticky user message blocks too much viewport | Low (most user messages are short) | Monitor; add clamp in follow-up if needed |
 | `groupMessagesByUserTurn` diverges from `build-turns.ts` causing inconsistency | Medium | Comment documents divergence; tests cover edge cases; long-term both views migrate to message-derived TurnViewModel |
-| `useLayoutEffect` for P2 fires before message DOM is rendered | Low | Guard on `el` existence; effect re-runs on dependency changes |
-| P1 false positive: `lastUserMessageId` changes due to message deletion/reorder, not user send | Low | Acceptable — scrolling to bottom on the rare deletion case is not harmful |
+| `useLayoutEffect` for P2 fires before message DOM is rendered | Low | Guard on `el` existence; effect re-runs on `renderedAnchorIds.length` changes |
+| P1 false positive: `lastUserSendKey` changes due to message deletion/reorder, not user send | Low | Acceptable — scrolling to bottom on the rare deletion case is not harmful |
+| `clientRequestId` missing on hydrated messages (loaded from DB, not sent in this session) | Low | `getLastUserSendKey` falls back to `entity.id` when `clientRequestId` is undefined — only active-session sends need the stable key |
+| TurnList DOM not yet rendered when P2 fires (turn store hydrates after message store) | Medium | P2 depends on `renderedAnchorIds.length`; TurnList passes `orderedTurnIds` so effect retries when turns arrive |
