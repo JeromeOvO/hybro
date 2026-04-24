@@ -92,7 +92,7 @@ function getLastUserSendKey(
 
 ```typescript
 // Inside useMessageScrollAnchoring
-const lastUserSendKey = getLastUserSendKey(orderedIds, entities)
+const lastUserSendKey = getLastUserSendKey(renderedAnchorIds, getEntityForAnchor)
 
 useEffect(() => {
   if (!hydrated || !didInitialAnchor.current) return
@@ -101,6 +101,13 @@ useEffect(() => {
 
   scrollToBottom({ behavior: 'auto' })
   prevLastUserSendKey.current = lastUserSendKey
+
+  // User just sent a message and we scrolled to bottom.
+  // Set shouldAutoScroll = true so subsequent AI streaming follows.
+  // Without this, if user was browsing history before sending,
+  // shouldAutoScroll would still be false and AI responses would
+  // not trigger scroll-follow despite the user now being at bottom.
+  setShouldAutoScroll(true)
 }, [lastUserSendKey])
 ```
 
@@ -117,19 +124,29 @@ The existing `shouldAutoScroll` + near-bottom detection mechanism handles AI str
 
 ## P2: Initial Anchor on Refresh / Navigation
 
-### Trigger Conditions (all must be true)
+### Trigger Conditions
 
 - `hydrated === true`
-- `renderedAnchorIds.length > 0`
 - `didInitialAnchor.current === false` (not yet executed for this room)
 
-If no user message exists (pure system/AI room), mark `didInitialAnchor = true` without scrolling. Otherwise the room stays in perpetual "not anchored" state and P1 never activates.
+Two sub-cases:
+
+1. **`renderedAnchorIds.length > 0`** — normal room with messages. Find last user message, scroll if found.
+2. **`renderedAnchorIds.length === 0`** — empty room (new room, no messages yet). Mark initial anchor complete immediately so P1 is ready for the first user send.
 
 ### Execution
 
 ```typescript
 useLayoutEffect(() => {
-  if (!hydrated || renderedAnchorIds.length === 0 || didInitialAnchor.current) return
+  if (!hydrated || didInitialAnchor.current) return
+
+  // Empty room: mark anchor complete, P1 will handle future sends
+  if (renderedAnchorIds.length === 0) {
+    didInitialAnchor.current = true
+    prevLastUserSendKey.current = null
+    setShouldAutoScroll(true)
+    return
+  }
 
   const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
 
@@ -141,9 +158,10 @@ useLayoutEffect(() => {
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
-  // All three MUST be set synchronously — including when no user message exists:
+  // All three MUST be set synchronously — including when no user message exists
+  // (pure system/AI room with messages but no user messages):
   didInitialAnchor.current = true
-  prevLastUserSendKey.current = lastUserSendKey ?? null  // uses stable send key
+  prevLastUserSendKey.current = lastUserSendKey ?? null
   setShouldAutoScroll(checkIfNearBottom())
 }, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey])
 ```
@@ -222,6 +240,30 @@ getEntityForAnchor: (turnId: string) => {
 This avoids assuming all `turnId`s equal `userMessageId` — during optimistic sends, the turn is keyed by `clientRequestId` (see `useTurnEventStore.createOptimisticTurn`). The `clientRequestId` from `turn_started` event is the stable key that survives both the optimistic and real phases.
 
 **`roomId` source for TurnList:** `useTurnScroll` reads `roomId` from `useMessageStore(s => s.roomId)`. This avoids adding a new prop to `TurnList` — the message store already tracks the current room.
+
+**`contentVersion` source for TurnList:** The current `useTurnEventStore.append()` updates the store-level `turnLogs` Map for new turns, but in-flight slot/content events on an existing turn only mutate the `TurnEventLog` instance internally — Zustand's top-level state does not change, so `orderedTurnIds.length` stays constant. This means streaming AI content within an existing turn produces no version signal the hook can react to.
+
+`useTurnScroll` must maintain a local `contentVersion` counter by subscribing to the active turn's `TurnEventLog`:
+
+```typescript
+// Inside useTurnScroll
+const [contentVersion, setContentVersion] = useState(0)
+
+useEffect(() => {
+  const activeTurnId = orderedTurnIds[orderedTurnIds.length - 1]
+  if (!activeTurnId) return
+
+  const turnLog = turnEventStore.turnLogs.get(activeTurnId)
+  if (!turnLog) return
+
+  const unsubscribe = turnLog.subscribe(() => {
+    setContentVersion(v => v + 1)
+  })
+  return unsubscribe
+}, [orderedTurnIds[orderedTurnIds.length - 1]])
+```
+
+This targets only the latest turn's event log — no global subscription, minimal re-renders. The local `contentVersion` is passed into `useMessageScrollAnchoring` as the `contentVersion` input.
 
 P2's `useLayoutEffect` dependency includes `renderedAnchorIds.length` so it retries when TurnList DOM renders after turn store hydration.
 
@@ -363,6 +405,7 @@ Resolution:
 - **AI streaming only follows when near bottom.** Simulate: `contentVersion` increments while `shouldAutoScroll === false`. Assert no `scrollToBottom`. Then set `shouldAutoScroll === true`, increment again, assert `scrollToBottom` fires.
 - **Room switch resets anchor state.** Change `roomId`, verify `didInitialAnchor` resets and P2 re-executes for the new room.
 - **No user messages in room.** Room with only system/AI messages: P2 marks `didInitialAnchor = true` without scrolling, P1 activates normally for future user sends.
+- **Empty room first send triggers P1.** Hydrate with empty `renderedAnchorIds`, verify `didInitialAnchor = true` immediately. Then simulate first user message arriving: `lastUserSendKey` changes from `null`, P1 fires `scrollToBottom` + `setShouldAutoScroll(true)`.
 
 ### `OrchestraTurn` / render tests
 
