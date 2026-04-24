@@ -120,17 +120,18 @@ The existing `shouldAutoScroll` + near-bottom detection mechanism handles AI str
 ### Trigger Conditions (all must be true)
 
 - `hydrated === true`
-- `orderedIds.length > 0`
-- `lastUserMessageId` exists
+- `renderedAnchorIds.length > 0`
 - `didInitialAnchor.current === false` (not yet executed for this room)
+
+If no user message exists (pure system/AI room), mark `didInitialAnchor = true` without scrolling. Otherwise the room stays in perpetual "not anchored" state and P1 never activates.
 
 ### Execution
 
 ```typescript
 useLayoutEffect(() => {
-  if (!hydrated || orderedIds.length === 0 || didInitialAnchor.current) return
+  if (!hydrated || renderedAnchorIds.length === 0 || didInitialAnchor.current) return
 
-  const lastUserMsgId = findLastUserMessageId(orderedIds, entities)
+  const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
 
   if (lastUserMsgId) {
     const el = scrollContainerRef.current?.querySelector(
@@ -140,11 +141,11 @@ useLayoutEffect(() => {
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
-  // All four MUST be set synchronously:
+  // All three MUST be set synchronously — including when no user message exists:
   didInitialAnchor.current = true
   prevLastUserSendKey.current = lastUserSendKey ?? null  // uses stable send key
   setShouldAutoScroll(checkIfNearBottom())
-}, [hydrated, roomId, orderedIds.length, lastUserMessageId])
+}, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey])
 ```
 
 ### Key Constraints
@@ -202,7 +203,27 @@ function useMessageScrollAnchoring(input: ScrollAnchoringInput) {
 
 **Legacy view** (`room-messages.tsx`): passes `orderedIds`, `id => entities[id]`, `useMessageStore.version`.
 
-**Turn-based view** (`useTurnScroll.ts`): passes `orderedTurnIds`, a lookup that maps `turnId` to message-like shape (since `turnId === userMessageId`), and turn event/render version. P2's `useLayoutEffect` dependency includes `renderedAnchorIds.length` so it retries when TurnList DOM renders after turn store hydration.
+**Turn-based view** (`useTurnScroll.ts`): passes `orderedTurnIds` as `renderedAnchorIds`, turn event/render version as `contentVersion`, and a `getEntityForAnchor` lookup that derives the required shape from turn data:
+
+```typescript
+// TurnList's getEntityForAnchor — derives from turn log, not message store
+// Does NOT assume turnId === userMessageId (optimistic turns use clientRequestId as turnId)
+getEntityForAnchor: (turnId: string) => {
+  const turnLog = turnEventStore.turnLogs.get(turnId)
+  if (!turnLog) return undefined
+  const startEvent = turnLog.getEvents().find(e => e.type === 'turn_started')
+  return {
+    messageType: 'user',  // every turn is rooted in a user action
+    clientRequestId: startEvent?.clientRequestId ?? turnId,
+  }
+}
+```
+
+This avoids assuming all `turnId`s equal `userMessageId` — during optimistic sends, the turn is keyed by `clientRequestId` (see `useTurnEventStore.createOptimisticTurn`). The `clientRequestId` from `turn_started` event is the stable key that survives both the optimistic and real phases.
+
+**`roomId` source for TurnList:** `useTurnScroll` reads `roomId` from `useMessageStore(s => s.roomId)`. This avoids adding a new prop to `TurnList` — the message store already tracks the current room.
+
+P2's `useLayoutEffect` dependency includes `renderedAnchorIds.length` so it retries when TurnList DOM renders after turn store hydration.
 
 ---
 
@@ -341,6 +362,7 @@ Resolution:
 - **temp→real id swap does not cause double scroll.** Simulate: insert user message with `tempId` + `clientRequestId=X`, then replace id to `realId` while keeping `clientRequestId=X`. Assert `scrollToBottom` is called exactly once (on temp insert), not twice (the swap does not change `lastUserSendKey`).
 - **AI streaming only follows when near bottom.** Simulate: `contentVersion` increments while `shouldAutoScroll === false`. Assert no `scrollToBottom`. Then set `shouldAutoScroll === true`, increment again, assert `scrollToBottom` fires.
 - **Room switch resets anchor state.** Change `roomId`, verify `didInitialAnchor` resets and P2 re-executes for the new room.
+- **No user messages in room.** Room with only system/AI messages: P2 marks `didInitialAnchor = true` without scrolling, P1 activates normally for future user sends.
 
 ### `OrchestraTurn` / render tests
 
