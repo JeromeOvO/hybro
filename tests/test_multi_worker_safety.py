@@ -158,7 +158,6 @@ def _patch_infrastructure_noop(monkeypatch):
     monkeypatch.setattr("main.mongodb.create_context_memory_indexes", AsyncMock())
     monkeypatch.setattr("main.mongodb.ensure_agent_indexes", AsyncMock())
     monkeypatch.setattr("main.mongodb.create_capability_issue_indexes", AsyncMock())
-    monkeypatch.setattr("main.mongodb.ensure_turn_events_indexes", AsyncMock())
     monkeypatch.setattr("main.mongodb.close_database_connection", AsyncMock())
     monkeypatch.setattr("main.pinecone_db.connect", Mock())
 

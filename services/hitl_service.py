@@ -89,7 +89,6 @@ class HITLService:
         self._db_service = None
         self._sse_manager = None
         self._a2a_service = None
-        self._turn_appender = None  # Phase 1c
 
     @property
     def database_service(self):
@@ -111,30 +110,6 @@ class HITLService:
             from services.a2a_service import a2a_service
             self._a2a_service = a2a_service
         return self._a2a_service
-
-    # ------------------------------------------------------------------
-    # Turn event emission (Phase 1c)
-    # ------------------------------------------------------------------
-
-    async def _emit_hitl_turn_event(
-        self,
-        room_id: str,
-        turn_id: str | None,
-        event_type: str,
-        payload: dict,
-    ) -> None:
-        """Emit a HITL lifecycle turn event if appender available and turn_id set."""
-        appender = getattr(self, '_turn_appender', None)
-        if not appender or not turn_id:
-            return
-        try:
-            await appender.append(room_id, turn_id, event_type, payload)
-        except Exception:
-            logger.debug(
-                "HITLService: turn event emission failed for %s",
-                event_type,
-                exc_info=True,
-            )
 
     # ------------------------------------------------------------------
     # Create HITL request
@@ -244,23 +219,6 @@ class HITLService:
             request=request,
         )
 
-        # Phase 1c: emit hitl_requested turn event
-        await self._emit_hitl_turn_event(
-            room_id=room_id,
-            turn_id=user_message_id,
-            event_type="hitl_requested",
-            payload={
-                "hitl_id": request.request_id,
-                "source": source,
-                "agent_name": agent_name,
-                "prompt": prompt,
-                "prompt_type": prompt_type.value if hasattr(prompt_type, 'value') else str(prompt_type),
-                "choices": choices,
-                "group_id": group_id,
-                "group_total": group_total,
-                "group_index": group_index,
-            },
-        )
 
         logger.info(
             "hitl_request_created",
@@ -441,16 +399,6 @@ class HITLService:
                     request=request,
                     error=str(exc),
                 )
-                # Phase 1c: emit hitl_error turn event
-                await self._emit_hitl_turn_event(
-                    room_id=room_id,
-                    turn_id=request.user_message_id,
-                    event_type="hitl_error",
-                    payload={
-                        "hitl_id": request.request_id,
-                        "error": str(exc),
-                    },
-                )
                 raise HTTPException(
                     502,
                     f"Failed to deliver response to {request.source}: {exc}",
@@ -499,16 +447,6 @@ class HITLService:
             request=request,
         )
 
-        # Phase 1c: emit hitl_answered turn event
-        await self._emit_hitl_turn_event(
-            room_id=room_id,
-            turn_id=request.user_message_id,
-            event_type="hitl_answered",
-            payload={
-                "hitl_id": request.request_id,
-                "answer": user_input,
-            },
-        )
 
         # Persist user's answer on the agent message for DB hydration
         if request.display_message_id:
@@ -760,14 +698,6 @@ class HITLService:
             room_id=request.room_id,
             event_type=HITLEventType.INPUT_CANCELED,
             request=request,
-        )
-
-        # Phase 1c: emit hitl_canceled turn event
-        await self._emit_hitl_turn_event(
-            room_id=request.room_id,
-            turn_id=request.user_message_id,
-            event_type="hitl_canceled",
-            payload={"hitl_id": request.request_id},
         )
 
         logger.info(

@@ -133,6 +133,7 @@ class RoomMessageCenter:
             agent_message_processor=self.agent_message_processor,
             room_coordinator_service=self.room_coordinator_service,
         )
+        self._turn_event_appender = None
 
         # Per-room asyncio locks to serialise processing within the same room.
         # Prevents concurrent supervisor runs / queue executions that would
@@ -145,39 +146,15 @@ class RoomMessageCenter:
         # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
         self._redis: RedisService | None = None
-        # --- Turn event infrastructure (Phase 1b) ---
-        # Initialized to None here; wired up in set_redis_service()
-        # once Redis is available at startup.
-        self._turn_event_appender = None
-        self.slot_lifecycle = None
+        # Turn-event infrastructure is retired; keep placeholders to
+        # preserve defensive getattr/None checks in legacy code paths.
 
     # -- Redis wiring (called from main.py at startup) ---------------------
 
     def set_redis_service(self, redis_service: RedisService | None) -> None:
         self._redis = redis_service
-        # --- Turn event infrastructure (Phase 1b) ---
-        if redis_service is not None:
-            from services.turn_event_service import TurnEventAppender, TurnSeqCounter
-            from services.slot_lifecycle import SlotLifecycleManager
-
-            seq_counter = TurnSeqCounter(redis_service)
-            self._turn_event_appender = TurnEventAppender(
-                sse_manager=self.sse_manager,
-                db_service=self.database_service,
-                seq_counter=seq_counter,
-                redis=redis_service,
-                dual_write_mode=True,
-            )
-            self.slot_lifecycle = SlotLifecycleManager(
-                self._turn_event_appender, redis_service
-            )
-            # Update references on sub-components
-            self.agent_response_handler._slot_lifecycle = self.slot_lifecycle
-            self.direct_transport._turn_appender = self._turn_event_appender
-            self.queue_executor._slot_lifecycle = self.slot_lifecycle
-            self.queue_executor._turn_event_appender = self._turn_event_appender
-            self.supervisor_executor._slot_lifecycle = self.slot_lifecycle
-            self.supervisor_executor._turn_appender = self._turn_event_appender
+        # Turn-event dual-write wiring removed. Runtime now uses
+        # message/task SSE as the single source of truth.
 
     # -- Distributed room lock ---------------------------------------------
 
@@ -482,6 +459,29 @@ class RoomMessageCenter:
         user_message = await self.database_service.get_room_user_message_by_message_id(
             room_user_message_id
         )
+        if user_message and self._turn_event_appender:
+            try:
+                already_started = await self.database_service.turn_exists(
+                    room_id, room_user_message_id
+                )
+                if not already_started:
+                    message_content = user_message.message_content
+                    attachments = message_content.attachments or []
+                    await self._turn_event_appender.start_turn(
+                        room_id=room_id,
+                        turn_id=room_user_message_id,
+                        user_input={
+                            "text": message_content.message_text or "",
+                            "attachment_count": len(attachments),
+                        },
+                        client_request_id=request.client_request_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to start turn journal for room=%s turn=%s",
+                    room_id,
+                    room_user_message_id,
+                )
         user_id = (
             (user_message.user_id if user_message else None) or request.user_id
         )
@@ -738,6 +738,7 @@ class RoomMessageCenter:
                         state=state,
                         room_id=room_id,
                         user_id=msg.user_id or "",
+                        send_processing_status=True,
                     )
                 except Exception:
                     logger.exception(
@@ -757,6 +758,7 @@ class RoomMessageCenter:
                     state=TaskState.failed,
                     room_id=room_id,
                     user_id=msg.user_id or "",
+                    send_processing_status=True,
                 )
             except Exception:
                 logger.exception(
@@ -2155,25 +2157,6 @@ class RoomMessageCenter:
                 task_content="Summarizing agent responses…",
             )
 
-            # 2.5 Emit slot_opened for summary (Phase 1b)
-            summary_turn_id = user_message_id
-            if getattr(self, 'slot_lifecycle', None):
-                try:
-                    summary_mode = "debate" if is_debate else "supervisor"
-                    await self.slot_lifecycle.open_slot(
-                        room_id=room_id,
-                        turn_id=summary_turn_id,
-                        slot_id=summary_message_id,
-                        slot_type="summary",
-                        mode=summary_mode,
-                    )
-                except Exception:
-                    logger.warning(
-                        "RoomMessageCenter: summary slot_opened failed for %s",
-                        summary_message_id,
-                        exc_info=True,
-                    )
-
             # 3. Build and persist
             from a2a.types import Message, Role, Task, TaskState as A2ATaskState, TaskStatus, TextPart
             from common.utils.time import utcnow
@@ -2231,23 +2214,6 @@ class RoomMessageCenter:
                 related_message_id=user_message_id,
             )
 
-            # 4.5 Emit slot_terminated for summary (Phase 1b)
-            if getattr(self, 'slot_lifecycle', None):
-                try:
-                    await self.slot_lifecycle.terminate_slot(
-                        room_id=room_id,
-                        turn_id=summary_turn_id,
-                        slot_id=summary_message_id,
-                        status="completed",
-                        content=content,
-                    )
-                except Exception:
-                    logger.warning(
-                        "RoomMessageCenter: summary slot_terminated failed for %s",
-                        summary_message_id,
-                        exc_info=True,
-                    )
-
         except Exception as exc:
             logger.error(
                 "RoomMessageCenter: _emit_unified_summary failed for room %s "
@@ -2263,18 +2229,6 @@ class RoomMessageCenter:
                 )
             except Exception:
                 pass
-            if getattr(self, 'slot_lifecycle', None):
-                try:
-                    await self.slot_lifecycle.terminate_slot(
-                        room_id=room_id,
-                        turn_id=user_message_id,
-                        slot_id=summary_message_id,
-                        status="failed",
-                        error=str(exc),
-                    )
-                except Exception:
-                    pass
-
     # ------------------------------------------------------------------
     # Monitoring
     # ------------------------------------------------------------------

@@ -118,6 +118,7 @@ class OrchestrationRequest(BaseModel):
     room_related_message_id: str | None = None
     user_id: str | None = None
     is_recovery: bool = False
+    client_request_id: str | None = None
 
 
 class DebatationCenterRequest(BaseModel):
