@@ -154,7 +154,16 @@ function cleanupOrphanOptimisticTurns(
   store: ReturnType<typeof useTurnEventStore.getState>,
   realUserIds: Set<string>,
 ) {
-  const { findByClientRequestId } = useMessageStore.getState()
+  const findByClientRequestId = (clientRequestId: string) => {
+    const msgStore = useMessageStore.getState()
+    for (const id of msgStore.orderedIds) {
+      const entity = msgStore.entities[id]
+      if (entity?.messageType === 'user' && entity.clientRequestId === clientRequestId) {
+        return entity
+      }
+    }
+    return undefined
+  }
 
   for (const turnId of store.orderedTurnIds) {
     if (realUserIds.has(turnId)) continue // real turn, skip

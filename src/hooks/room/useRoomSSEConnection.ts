@@ -43,16 +43,24 @@ export function useRoomSSEConnection(
   // Track SSE disconnections during active processing.
   // If SSE drops while agents are working, we may have missed events and need
   // to reconcile with DB after processing completes.
-  // On reconnect, restore any pending HITL requests.
+  // On reconnect, restore any pending HITL requests and reconcile messages.
   const prevSseConnectedRef = useRef(false)
+  const hasBeenConnectedRef = useRef(false)
   useEffect(() => {
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       lifecycle.markSseDisconnection()
     }
 
+    const justReconnected = sseConnected && !prevSseConnectedRef.current && roomId
+    const isReconnection = justReconnected && hasBeenConnectedRef.current
+
+    if (sseConnected) {
+      hasBeenConnectedRef.current = true
+    }
+
     // HITL reconnect catch-up: restore pending HITL requests after SSE reconnects
-    if (sseConnected && !prevSseConnectedRef.current && roomId) {
+    if (justReconnected) {
       fetchPendingHitlRequests(roomId, getToken)
         .then(async (res) => {
           if (res.requests?.length) {
@@ -67,11 +75,16 @@ export function useRoomSSEConnection(
         })
     }
 
+    // Any reconnection after a gap may have missed messages. Reconcile
+    // unconditionally so the UI is fresh, regardless of processing state.
+    if (isReconnection) {
+      console.log('🔄 SSE reconnected after gap — reconciling with DB')
+      reconcileWithDb(roomId)
+    }
+
     // Safety-net: if SSE reconnected after a gap during processing, the
     // terminal processing_status SSE may have been the event that was lost.
-    // Schedule a deferred check against the room's persisted state. If the
-    // backend already cleared processing_message_id (it writes to DB before
-    // broadcasting), we know the terminal event was lost and can recover.
+    // Schedule a deferred check against the room's persisted state.
     let safetyTimer: ReturnType<typeof setTimeout> | null = null
     if (sseConnected && processing && lifecycle.hadSseDisconnection()) {
       safetyTimer = setTimeout(async () => {

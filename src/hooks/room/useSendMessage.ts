@@ -5,14 +5,10 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
-import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
-
-export interface OptimisticTurnInput {
-  text: string
-  attachments: Array<{ fileId: string; fileUrl?: string; mimeType: string; fileName: string; sizeBytes: number }>
-}
+import { clearPendingSseForClientRequest } from './sse-handlers/pending-turn-buffer'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 
 export function useSendMessage(
   roomId: string,
@@ -26,7 +22,7 @@ export function useSendMessage(
   setSending: (v: boolean) => void,
   setCancelling: (v: boolean) => void,
   reconcileWithDb: (roomId: string) => Promise<void>,
-  onOptimisticTurn?: (clientRequestId: string, input: OptimisticTurnInput) => void,
+  onPostMessageIdResolved?: (clientRequestId: string, messageId: string) => Promise<void>,
 ) {
   const sendUserMessage = useCallback(async (
     userInput: string,
@@ -39,36 +35,22 @@ export function useSendMessage(
       return false
     }
 
-    // Generate temporary message ID for optimistic update
-    const tempMessageId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     const clientRequestId = crypto.randomUUID()
     const currentTime = new Date().toISOString()
+    useRoomUiStore.getState().setPendingTurnSkeleton(roomId, {
+      text: userInput,
+      attachments: pendingAttachments,
+    })
 
     // Reset placeholder dismissed flag so SSE processing_status events
     // can manage the placeholder lifecycle. The flag will be set to true
     // when SSE dismisses the placeholder (task_submitted or terminal status).
     lifecycle.resetPlaceholder()
 
-    // Step 0: Immediately add user message + placeholder to normalized store
+    // Step 0: Add processing placeholder immediately.
+    // The user message itself is inserted only after POST returns real message_id.
     const processingPlaceholderId = lifecycle.placeholderId(roomId)
     const msgStoreSend = useMessageStore.getState()
-    msgStoreSend.upsertMessage({
-      id: tempMessageId,
-      roomId,
-      messageType: 'user',
-      content: userInput,
-      senderName: userName,
-      userId,
-      timestamp: currentTime,
-      clientRequestId,
-      attachments: pendingAttachments?.map(att => ({
-        fileId: att.id,
-        fileUrl: att.previewUrl || undefined,
-        mimeType: att.file.type,
-        fileName: att.file.name,
-        sizeBytes: att.file.size,
-      })),
-    }, 'optimistic')
     msgStoreSend.upsertMessage({
       id: processingPlaceholderId,
       roomId,
@@ -80,20 +62,6 @@ export function useSendMessage(
       timestamp: new Date(Date.now() + 1).toISOString(),
       isEphemeral: true,
     }, 'optimistic')
-
-    // Turn-based timeline: create optimistic turn so TurnList shows it immediately
-    if (onOptimisticTurn) {
-      onOptimisticTurn(clientRequestId, {
-        text: userInput,
-        attachments: pendingAttachments?.map(att => ({
-          fileId: att.id,
-          fileUrl: att.previewUrl || undefined,
-          mimeType: att.file.type,
-          fileName: att.file.name,
-          sizeBytes: att.file.size,
-        })) ?? [],
-      })
-    }
 
     try {
       setSending(true)  // Show spinner during message creation & parsing
@@ -141,15 +109,10 @@ export function useSendMessage(
       if (!messageId) {
         console.error('SendMessage returned no message_id; treating as failure')
 
-        // Rollback optimistic messages
+        // Rollback placeholder only (user message isn't inserted pre-POST)
         const msgStoreNoId = useMessageStore.getState()
-        msgStoreNoId.removeMessage(tempMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
-
-        // Rollback optimistic turn from turn-event-store
-        if (onOptimisticTurn) {
-          useTurnEventStore.getState().removeTurn(clientRequestId)
-        }
+        clearPendingSseForClientRequest(clientRequestId)
 
         banner.error('Message sent but server returned no ID. Please try again.')
 
@@ -166,13 +129,14 @@ export function useSendMessage(
         lifecycle.setProcessing(false)
         lifecycle.setMessageId(null)
         lifecycle.setSendGuard(false)
+        useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
 
         return false
       }
 
-      // Step 2: Atomic swap temp ID → real ID in normalized store
+      // Step 2: Insert the real user message directly with stable messageId
       const msgStoreSwap = useMessageStore.getState()
-      msgStoreSwap.replaceMessageId(tempMessageId, messageId, {
+      msgStoreSwap.upsertMessage({
         id: messageId,
         roomId,
         messageType: 'user',
@@ -191,7 +155,12 @@ export function useSendMessage(
             sizeBytes: uploaded?.sizeBytes || att.file.size,
           }
         }),
-      })
+      }, 'optimistic')
+
+      useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
+      if (onPostMessageIdResolved) {
+        await onPostMessageIdResolved(clientRequestId, messageId)
+      }
 
       // Blob preview URLs are no longer needed now that server URLs are in
       // the store.  Revoke them to free browser blob memory.
@@ -235,13 +204,8 @@ export function useSendMessage(
 
       // Targeted rollback: remove only the specific optimistic messages (Gap 5)
       const msgStoreErr = useMessageStore.getState()
-      msgStoreErr.removeMessage(tempMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
-
-      // Rollback optimistic turn from turn-event-store
-      if (onOptimisticTurn) {
-        useTurnEventStore.getState().removeTurn(clientRequestId)
-      }
+      clearPendingSseForClientRequest(clientRequestId)
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 
@@ -265,6 +229,7 @@ export function useSendMessage(
 
       lifecycle.setProcessing(false)
       lifecycle.setMessageId(null)
+      useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
 
       return false
     } finally {
@@ -274,7 +239,7 @@ export function useSendMessage(
       // to prevent a race window where the user could double-send between
       // lifecycle.setProcessing(true) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onOptimisticTurn])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onPostMessageIdResolved])
 
   return { sendUserMessage }
 }

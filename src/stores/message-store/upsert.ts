@@ -2,6 +2,47 @@ import { isTerminalState } from '@/lib/types/sse'
 import { resolveDisplayType } from './resolve-display-type'
 import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData } from './types'
 
+/** Extra chars on the persisted body beyond the stream → treat DB as completion source. */
+const DB_RECONCILE_MATERIAL_LENGTH_DELTA = 24
+
+/**
+ * When reconciling from DB after live SSE streaming, the persisted body may
+ * differ from what the user already saw (normalization, whitespace, etc.).
+ * Prefer keeping the visible SSE text unless DB is clearly extending it
+ * (append-only), which matches the task_update single-write upgrade rule.
+ *
+ * If the DB body is materially longer than SSE without a shared prefix, the
+ * stream was likely truncated while persistence has the full reply — prefer DB.
+ */
+function resolveDbReconcileAgentContent(
+  existing: MessageEntity,
+  incoming: IncomingMessage,
+): string | undefined {
+  if (existing.messageType !== 'agent') return incoming.content
+  if (existing.source !== 'sse') return incoming.content
+  if (incoming.content === undefined) return incoming.content
+
+  const rawPrev = existing.content ?? ''
+  const rawNext = incoming.content ?? ''
+  const prevTrim = rawPrev.trim()
+  const nextTrim = rawNext.trim()
+  if (prevTrim.length === 0) return incoming.content
+  if (nextTrim === prevTrim) return incoming.content
+
+  const rawDelta = rawNext.length - rawPrev.length
+  const trimDelta = nextTrim.length - prevTrim.length
+  if (
+    rawDelta >= DB_RECONCILE_MATERIAL_LENGTH_DELTA ||
+    trimDelta >= DB_RECONCILE_MATERIAL_LENGTH_DELTA
+  ) {
+    return incoming.content
+  }
+
+  if (rawNext.length > rawPrev.length && rawNext.startsWith(rawPrev)) return incoming.content
+  if (nextTrim.length > prevTrim.length && nextTrim.startsWith(prevTrim)) return incoming.content
+  return existing.content
+}
+
 /**
  * Core upsert logic, extracted so it can be used by both single and batch writes.
  * Returns null if the update was rejected or is a no-op.
@@ -38,11 +79,15 @@ export function applyUpsert(
     }
 
     // ── Rule 2: SSE wins over DB for non-terminal ──
+    // Block DB from overwriting live SSE state, UNLESS the DB carries a
+    // terminal status upgrade (SSE may have missed the terminal event
+    // due to a disconnection).
     if (
       existing.source === 'sse' &&
       source === 'db' &&
       existing.taskStatus &&
-      !isTerminalState(existing.taskStatus)
+      !isTerminalState(existing.taskStatus) &&
+      !(incoming.taskStatus && isTerminalState(incoming.taskStatus))
     ) {
       return null
     }
@@ -59,7 +104,13 @@ export function applyUpsert(
   // Merge first so displayType is computed from the *final* field values,
   // not the raw incoming (which may omit taskStatus, causing a false
   // agent-bubble resolution when the existing entity has input-required).
-  const merged = mergeIncoming(existing, incoming)
+  let merged = mergeIncoming(existing, incoming)
+  if (source === 'db' && existing) {
+    const preserved = resolveDbReconcileAgentContent(existing, incoming)
+    if (preserved !== undefined && preserved !== merged.content) {
+      merged = { ...merged, content: preserved }
+    }
+  }
 
   const displayType = resolveDisplayType({
     messageType: merged.messageType,

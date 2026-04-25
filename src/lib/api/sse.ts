@@ -7,13 +7,15 @@ const API_BASE_URL = getApiUrl('sse')
 // Re-export SSEMessage for convenience
 export type { SSEMessage }
 
+export type SSECloseReason = 'manual' | 'permanent-failure'
+
 export interface SSEConnectionOptions {
   roomId: string
   getToken?: () => Promise<string | null>
   onMessage?: (message: SSEMessage) => void
   onError?: (error: Event) => void
   onOpen?: (event: Event) => void
-  onClose?: (event: Event) => void
+  onClose?: (reason: SSECloseReason) => void
 }
 
 // Connection state constants (mirrors EventSource.readyState values)
@@ -32,8 +34,10 @@ export class SSEConnection {
   private roomId: string
   private options: SSEConnectionOptions
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 5
-  private reconnectDelay = 1000
+  private maxReconnectAttempts = 15
+  private baseReconnectDelay = 1000
+  private maxReconnectDelay = 30_000
+  private readTimeoutMs = 90_000 // 3x the backend's 30s heartbeat interval
   private isManualClose = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private connectCancelled = false
@@ -123,13 +127,21 @@ export class SSEConnection {
 
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        // Race reader.read() against a timeout so silently-stalled connections
+        // (proxy dropped TCP without FIN/RST) are detected. Backend sends a
+        // heartbeat every 30s; 90s without any data means the stream is dead.
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('SSE read timeout')), this.readTimeoutMs)
+          ),
+        ])
 
-        if (done) {
+        if (result.done) {
           break
         }
 
-        buffer += decoder.decode(value, { stream: true })
+        buffer += decoder.decode(result.value, { stream: true })
         const { messages, remainder } = this.processSSEBuffer(buffer)
         buffer = remainder
 
@@ -137,7 +149,6 @@ export class SSEConnection {
           try {
             const message: SSEMessage = JSON.parse(data)
 
-            // Handle heartbeat messages silently
             if (message.type === 'heartbeat') {
               continue
             }
@@ -149,20 +160,18 @@ export class SSEConnection {
         }
       }
     } catch (error) {
-      // AbortError is expected during disconnect — don't treat as a connection error
       if (error instanceof DOMException && error.name === 'AbortError') {
         return
       }
-      // Other read errors fall through to finally block
+      // Read timeout or other stream errors fall through to finally block
     } finally {
       this.connectionState = CLOSED
 
       if (!this.isManualClose && !this.connectCancelled) {
-        // Stream ended unexpectedly (server closed or network error) — attempt reconnect
         this.options.onError?.(new Event('error'))
         this.attemptReconnect()
       } else {
-        this.options.onClose?.(new Event('close'))
+        this.options.onClose?.('manual')
       }
     }
   }
@@ -203,8 +212,12 @@ export class SSEConnection {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
 
-      // Linear backoff: delay = base * attempt (1s, 2s, 3s, 4s, 5s)
-      const delay = this.reconnectDelay * this.reconnectAttempts
+      // Exponential backoff with jitter: min(base * 2^attempt + jitter, max)
+      const exponential = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
+      const jitter = Math.random() * 1000
+      const delay = Math.min(exponential + jitter, this.maxReconnectDelay)
+
+      console.log(`🔄 SSE reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`)
 
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer)
@@ -215,9 +228,9 @@ export class SSEConnection {
         }
       }, delay)
     } else {
-      // Notify consumer that reconnection failed permanently
+      console.error(`❌ SSE reconnection failed after ${this.maxReconnectAttempts} attempts`)
       this.options.onError?.(new Event('error'))
-      this.options.onClose?.(new Event('close'))
+      this.options.onClose?.('permanent-failure')
       reject?.(new Error('Max reconnection attempts reached'))
     }
   }
