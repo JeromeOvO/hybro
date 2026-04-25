@@ -254,6 +254,80 @@ describe('useRoomWebhook SSE message handling', () => {
     })
   })
 
+  it('does not rewrite content on non-terminal task_update once content exists', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'task-no-rewrite-non-terminal',
+          status: 'working',
+          content: 'First visible answer chunk.',
+          agent_name: 'Agent',
+          task_content: 'Planning...',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'task-no-rewrite-non-terminal',
+          status: 'working',
+          content: 'Rewritten draft that should not replace visible content.',
+          agent_name: 'Agent',
+          task_content: 'Evaluating...',
+          step_number: 2,
+          total_steps: 4,
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-no-rewrite-non-terminal']
+    expect(entity.content).toBe('First visible answer chunk.')
+    expect(entity.taskStatus).toBe('working')
+    expect(entity.taskContent).toBe('Evaluating...')
+    expect(entity.stepNumber).toBe(2)
+    expect(entity.totalSteps).toBe(4)
+  })
+
+  it('does not rewrite content on terminal task_update once content exists', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'task-no-rewrite-terminal',
+          status: 'working',
+          content: 'Locked answer body.',
+          agent_name: 'Agent',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          message_id: 'task-no-rewrite-terminal',
+          status: 'completed',
+          content: 'Final rewritten variant that should be dropped.',
+          agent_name: 'Agent',
+          status_message: 'Completed',
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-no-rewrite-terminal']
+    expect(entity.content).toBe('Locked answer body.')
+    expect(entity.taskStatus).toBe('completed')
+    expect(entity.taskStatusMessage).toBe('Completed')
+    expect(entity.isEphemeral).toBe(false)
+  })
+
   it('should render completed task with parts but no content as agent-bubble', async () => {
     await mountHook()
 

@@ -72,6 +72,36 @@ function partsToArtifacts(
   return mergeArtifacts(existing?.artifacts, inline, false)
 }
 
+function resolveSingleWriteContent(
+  existing: MessageEntity | undefined,
+  incomingContent: string,
+  status: TaskState,
+): { content: string; droppedRewrite: boolean } {
+  const existingContent = existing?.content ?? ''
+  const trimmedIncoming = incomingContent.trim()
+
+  // Single-write invariant: task_update can create the first visible answer,
+  // but never rewrite it later (including terminal updates).
+  if (existingContent.trim().length === 0) {
+    return {
+      content: trimmedIncoming.length > 0 ? incomingContent : existingContent,
+      droppedRewrite: false,
+    }
+  }
+
+  if (trimmedIncoming.length > 0 && incomingContent !== existingContent) {
+    console.warn(
+      '🔒 Dropping task_update content rewrite for',
+      existing?.id,
+      'status=',
+      status,
+    )
+    return { content: existingContent, droppedRewrite: true }
+  }
+
+  return { content: existingContent, droppedRewrite: false }
+}
+
 export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { roomId, lifecycle, getAgentName, getAgentSource,
           reconcileWithDb, hitlRequestIndex, setCancelling } = deps
@@ -112,6 +142,35 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             console.log('🔄 Skipping agent_response for', messageId, '— already terminal')
             break
           }
+          // Streamed artifact updates can already populate content/artifacts
+          // for this exact message. If agent_response repeats the same payload,
+          // skip to avoid rendering a duplicate final response.
+          if (existing) {
+            const incomingContent = (sseMessage.data.content ?? '').trim()
+            const existingContent = (existing.content ?? '').trim()
+            const hasExistingRenderable = existingContent.length > 0
+              || (existing.artifacts?.length ?? 0) > 0
+            const looksDuplicateContent = incomingContent.length === 0
+              || incomingContent === existingContent
+              // Skip only when incoming is empty/equal/older-shorter.
+              // If incoming is longer than existing, allow it through so
+              // terminal payloads can repair partial streamed text.
+              || (incomingContent.length > 0 && existingContent.startsWith(incomingContent))
+            const isAppendOnlyUpgrade = incomingContent.length > existingContent.length
+              && incomingContent.startsWith(existingContent)
+            const isDivergentRewrite = existingContent.length > 0
+              && incomingContent.length > 0
+              && !looksDuplicateContent
+              && !isAppendOnlyUpgrade
+            // Reading-stability-first:
+            // - skip duplicate/older payloads
+            // - skip divergent rewrites (different leading text)
+            // - allow only append-only upgrades
+            if (hasExistingRenderable && (looksDuplicateContent || isDivergentRewrite)) {
+              console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
+              break
+            }
+          }
           const agentIdForDedup = sseMessage.data?.agent_id as string | undefined
           if (agentIdForDedup && !existing) {
             const hasDuplicate = store.orderedIds.some(id => {
@@ -138,6 +197,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               messageId,
               existing,
             )
+            const preserveInFlightTaskStatus = !!(
+              existing?.taskStatus &&
+              !isTerminalState(existing.taskStatus)
+            )
 
             store.upsertMessage({
               id: messageId,
@@ -148,7 +211,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               agentId,
               agentSource: agentId ? getAgentSource(agentId) : undefined,
               timestamp: msgTimestamp,
-              taskStatus: null,
+              // Keep non-terminal taskStatus authoritative until task_update
+              // explicitly transitions it. Clearing here caused "working"
+              // indicators to disappear while processing was still active.
+              ...(preserveInFlightTaskStatus ? {} : { taskStatus: null }),
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
@@ -400,6 +466,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
 
           const existing = store.entities[messageId]
+          const { content: resolvedContent } = resolveSingleWriteContent(existing, content, status)
           const artifacts = partsToArtifacts(
             sseMessage.data.parts as Record<string, unknown>[] | undefined,
             messageId,
@@ -412,7 +479,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
             store.upsertMessage({
               ...baseMsg,
-              content,
+              content: resolvedContent,
               isEphemeral: false,
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
@@ -468,7 +535,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           } else {
             store.upsertMessage({
               ...baseMsg,
-              content,
+              content: resolvedContent,
               ...taskFields,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')

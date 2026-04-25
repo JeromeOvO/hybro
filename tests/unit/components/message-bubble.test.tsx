@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EntityUserBubble, EntityAgentBubble, derivePhase } from '@/components/message-bubble'
 import type { MessageEntity } from '@/stores/message-store'
@@ -117,6 +117,45 @@ describe('EntityAgentBubble', () => {
     const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
     const link = container.querySelector('a[href="/c/agents/agent-1"]')
     expect(link).toBeTruthy()
+  })
+
+  it('shows task spinner beside hub/cloud when task is in progress', () => {
+    const entity = makeEntity({
+      messageType: 'agent',
+      senderName: 'Coding Agent',
+      agentId: 'agent-1',
+      content: 'Partial',
+      agentSource: 'hub',
+      taskStatus: 'working',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+    expect(within(container).getByLabelText('Task in progress')).toBeTruthy()
+  })
+
+  it('hides task spinner beside hub/cloud when task is terminal', () => {
+    const entity = makeEntity({
+      messageType: 'agent',
+      senderName: 'Coding Agent',
+      agentId: 'agent-1',
+      content: 'Done',
+      agentSource: 'cloud',
+      taskStatus: 'completed',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+    expect(within(container).queryByLabelText('Task in progress')).toBeNull()
+  })
+
+  it('hides task spinner during interactive task state', () => {
+    const entity = makeEntity({
+      messageType: 'agent',
+      senderName: 'Coding Agent',
+      agentId: 'agent-1',
+      content: 'Need input',
+      agentSource: 'hub',
+      taskStatus: 'input-required',
+    })
+    const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
+    expect(within(container).queryByLabelText('Task in progress')).toBeNull()
   })
 
 })
@@ -431,13 +470,14 @@ describe('EntityAgentBubble phase rendering', () => {
     expect(container.textContent).toContain('Alice')
   })
 
-  it('renders emerald badge for complete-empty phase', () => {
+  it('renders amber minimal state for complete-empty phase', () => {
     const entity = makeEntity({
       messageType: 'agent', agentId: 'a1', senderName: 'Bot',
       content: '', taskStatus: 'completed',
     })
     const { container } = renderWithQueryClient(<EntityAgentBubble entity={entity} />)
-    expect(container.querySelector('.border-emerald-200')).toBeTruthy()
-    expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1)
+    expect(container.querySelector('.text-amber-700')).toBeTruthy()
+    const badges = within(container).getAllByText('No visible output')
+    expect(badges.length).toBeGreaterThanOrEqual(1)
   })
 })

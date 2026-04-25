@@ -104,11 +104,11 @@ const PHASE_STYLES: Partial<Record<AgentPhase, PhaseStyleEntry>> = {
     },
   },
   'complete-empty': {
-    border: 'border-emerald-200 dark:border-emerald-500/20',
-    bg: 'bg-emerald-50 dark:bg-emerald-500/12',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    icon: CheckCircle,
-    badge: 'Completed',
+    border: 'border-amber-200 dark:border-amber-500/20',
+    bg: 'bg-amber-50 dark:bg-amber-500/12',
+    text: 'text-amber-700 dark:text-amber-400',
+    icon: AlertCircle,
+    badge: 'No visible output',
   },
 }
 
@@ -646,6 +646,13 @@ function AgentMessageBubbleInner({
   const hasCompletionContent = (phase === 'streaming' || phase === 'complete' || isTypewriting) && (!!displayContent || parsedJsonContent !== null)
   const splitBubbles = hasResolvedHitl && hasCompletionContent && phase !== 'interactive'
 
+  /** Spinner beside hub/cloud badge while the task is in-flight (auto-clears on terminal update). */
+  const showAgentSourceTaskSpinner =
+    !!entity.agentSource &&
+    !!entity.taskStatus &&
+    !isTerminalState(entity.taskStatus) &&
+    !isInteractiveState(entity.taskStatus)
+
   const renderHeader = (headerPhaseStyle: typeof phaseStyle) => (
     <div className="flex items-center justify-between mb-2">
       <div className="flex items-center gap-2">
@@ -682,18 +689,26 @@ function AgentMessageBubbleInner({
           </span>
         )}
         {entity.agentSource && (
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {entity.agentSource === 'hub'
-                  ? <House className={cn("h-3 w-3 shrink-0", phaseTextColor)} />
-                  : <Cloud className={cn("h-3 w-3 shrink-0", phaseTextColor)} />}
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={4}>
-                {entity.agentSource === 'hub' ? 'Local agent' : 'Cloud agent'}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <span className="inline-flex items-center gap-1 shrink-0" aria-live="polite">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {entity.agentSource === 'hub'
+                    ? <House className={cn("h-3 w-3 shrink-0", phaseTextColor)} />
+                    : <Cloud className={cn("h-3 w-3 shrink-0", phaseTextColor)} />}
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>
+                  {entity.agentSource === 'hub' ? 'Local agent' : 'Cloud agent'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {showAgentSourceTaskSpinner && (
+              <Loader2
+                className="h-3 w-3 shrink-0 animate-spin text-muted-foreground"
+                aria-label="Task in progress"
+              />
+            )}
+          </span>
         )}
       </div>
       <div className="flex items-center gap-2">
@@ -954,14 +969,21 @@ function AgentMessageBubbleInner({
 
         {/* ── COMPLETE-EMPTY phase: minimal badge ── */}
         {phase === 'complete-empty' && (
-          <div className="flex items-center gap-2 py-1 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle className="h-3.5 w-3.5" />
-            <span>Completed</span>
-            {entity.taskCreatedAt && (
-              <span className="flex items-center gap-0.5 opacity-60">
-                <Clock className="h-3 w-3" />
-                {formatElapsedTime(elapsedSeconds(entity.taskCreatedAt))}
-              </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 py-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span>{phaseStyle?.badge ?? 'No visible output'}</span>
+              {entity.taskCreatedAt && (
+                <span className="flex items-center gap-0.5 opacity-60">
+                  <Clock className="h-3 w-3" />
+                  {formatElapsedTime(elapsedSeconds(entity.taskCreatedAt))}
+                </span>
+              )}
+            </div>
+            {entity.taskStatusMessage && (
+              <p className="text-xs text-amber-700/90 dark:text-amber-300/90">
+                {entity.taskStatusMessage}
+              </p>
             )}
           </div>
         )}

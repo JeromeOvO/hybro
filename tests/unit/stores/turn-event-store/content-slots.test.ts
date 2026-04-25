@@ -55,17 +55,31 @@ describe('contentSlotsReducer', () => {
     expect(view[0].artifacts[0].artifactId).toBe('art-1')
   })
 
-  it('slot_snapshot replaces content and artifacts', () => {
+  it('slot_snapshot applies append-only content updates and artifacts', () => {
     let view = contentSlotsReducer.init()
     view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
     view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 2, slotId: 'msg-1', textDelta: 'partial' }))
     view = contentSlotsReducer.reduce(view, evt({
       type: 'slot_snapshot', seq: 3, slotId: 'msg-1',
-      content: 'Final full content',
+      content: 'partial + final content',
       artifacts: [{ artifactId: 'art-1', name: 'result', parts: [] }],
     }))
-    expect(view[0].content).toBe('Final full content')
+    expect(view[0].content).toBe('partial + final content')
     expect(view[0].artifacts).toHaveLength(1)
+  })
+
+  it('slot_snapshot ignores divergent rewrite after visible content exists', () => {
+    let view = contentSlotsReducer.init()
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_opened', seq: 1, slotId: 'msg-1', slotType: 'agent', agentName: 'A' }))
+    view = contentSlotsReducer.reduce(view, evt({ type: 'slot_delta', seq: 2, slotId: 'msg-1', textDelta: 'partial' }))
+    view = contentSlotsReducer.reduce(view, evt({
+      type: 'slot_snapshot', seq: 3, slotId: 'msg-1',
+      content: 'totally different final text',
+      artifacts: [{ artifactId: 'art-2', name: 'result-2', parts: [] }],
+    }))
+    expect(view[0].content).toBe('partial')
+    expect(view[0].artifacts).toHaveLength(1)
+    expect(view[0].artifacts[0].artifactId).toBe('art-2')
   })
 
   it('slot_terminated changes status', () => {

@@ -81,7 +81,7 @@ describe('contentSlotsReducer — hydrated flag', () => {
     expect(view[0].content).toBe('streaming token')
   })
 
-  it('slot_snapshot after slot_delta overwrites hydrated to true', () => {
+  it('slot_snapshot after slot_delta sets hydrated to true with append-only content', () => {
     let view = contentSlotsReducer.init()
     view = contentSlotsReducer.reduce(view, evt({
       type: 'slot_opened', seq: 1, slotId: 's1', slotType: 'agent', agentId: 'a1',
@@ -95,13 +95,13 @@ describe('contentSlotsReducer — hydrated flag', () => {
     // Then snapshot arrives (e.g. sync bridge reconciliation)
     view = contentSlotsReducer.reduce(view, evt({
       type: 'slot_snapshot', seq: 3, slotId: 's1',
-      content: 'Full content from DB', artifacts: [],
+      content: 'partial + full content from DB', artifacts: [],
     }))
     expect(view[0].hydrated).toBe(true)
-    expect(view[0].content).toBe('Full content from DB')
+    expect(view[0].content).toBe('partial + full content from DB')
   })
 
-  it('SSE snapshot (hydrated: false) followed by DB snapshot (hydrated: true) updates to true', () => {
+  it('SSE snapshot (hydrated: false) followed by divergent DB snapshot keeps visible content', () => {
     let view = contentSlotsReducer.init()
     view = contentSlotsReducer.reduce(view, evt({
       type: 'slot_opened', seq: 1, slotId: 's1', slotType: 'agent', agentId: 'a1',
@@ -121,6 +121,7 @@ describe('contentSlotsReducer — hydrated flag', () => {
       hydrated: true,
     }))
     expect(view[0].hydrated).toBe(true)
+    expect(view[0].content).toBe('SSE content')
   })
 
   it('slot_snapshot on terminated slot is ignored (hydrated not changed)', () => {
