@@ -4,7 +4,7 @@ import React from 'react'
 import { useUser } from '@clerk/nextjs'
 import type { UserInputData } from '@/stores/turn-event-store/types'
 import { UserAttachmentCard } from '@/components/message-bubble'
-import { LinkifiedContent } from '@/components/markdown-content'
+import { LinkifiedContent, copySelectionWithMentions } from '@/components/markdown-content'
 
 interface UserInputBlockProps {
   data: UserInputData
@@ -14,6 +14,13 @@ export const UserInputBlock = React.memo(function UserInputBlock({ data }: UserI
   const { user } = useUser()
   const displayName = user?.firstName || user?.username || 'You'
   const avatarUrl = user?.imageUrl
+  const bubbleRef = React.useRef<HTMLDivElement>(null)
+
+  const handleCopy = React.useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const container = bubbleRef.current
+    if (!container) return
+    copySelectionWithMentions(e, container)
+  }, [])
 
   if (!data.text && data.attachments.length === 0) return null
 
@@ -38,9 +45,13 @@ export const UserInputBlock = React.memo(function UserInputBlock({ data }: UserI
 
       {/* Bubble — right-aligned, same style as message-bubble */}
       <div className="flex justify-end w-full">
-        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground">
+        <div
+          ref={bubbleRef}
+          onCopy={handleCopy}
+          className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground"
+        >
           {data.text && (
-            <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+            <div className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
               <LinkifiedContent content={data.text} />
             </div>
           )}

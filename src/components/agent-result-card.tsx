@@ -69,7 +69,10 @@ interface AgentResultCardProps {
 
 export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
   const isStreaming = result.status === 'working' && result.content.length > 0
-  const isEmpty = result.content.trim().length === 0 && result.status === 'completed'
+  const isEmpty =
+    result.content.trim().length === 0 &&
+    result.status === 'completed' &&
+    result.artifacts.length === 0
   const isFailed = result.status === 'failed'
   const isWorking = result.status === 'working'
   const isAwaitingInput = result.status === 'awaiting_input'
@@ -113,7 +116,7 @@ export function AgentResultCard({ result, onQuote }: AgentResultCardProps) {
       <div className="pl-10 pr-2">
         {isEmpty ? (
           <p className="text-[13px] text-muted-foreground/60 italic mt-1">
-            No response content
+            {result.taskStatusMessage || 'Completed without a visible response'}
           </p>
         ) : isFailed ? (
           <p className="text-[14px] text-destructive/80 mt-1">{result.content || 'An error occurred'}</p>

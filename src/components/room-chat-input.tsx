@@ -28,6 +28,7 @@ const _parsed = parseInt(process.env.NEXT_PUBLIC_MAX_MESSAGE_LENGTH || '10000', 
 export const MAX_MESSAGE_LENGTH = Number.isNaN(_parsed) || _parsed < 1 ? 10000 : _parsed
 const COUNTER_VISIBLE_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.95)
 const WARNING_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.99)
+const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
 
 interface Agent {
   id: string
@@ -270,7 +271,7 @@ export function RoomChatInput({
       const id = match[1]
       const name = match[2]
       parts.push(
-        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false">@${escapeHtml(name)}</span>`
+        `<span class="room-mention" data-id="${escapeHtml(id)}" data-name="${escapeHtml(name)}" contenteditable="false" style="user-select:text;-webkit-user-select:text;">@${escapeHtml(name)}</span>`
       )
 
       lastIndex = match.index + match[0].length
@@ -353,6 +354,40 @@ export function RoomChatInput({
 
     editorRef.current.childNodes.forEach(traverse)
     return storage
+  }
+
+  // Serialize DOM nodes into plain text + storage mention format.
+  const serializeNodes = (nodes: NodeListOf<ChildNode> | ChildNode[]) => {
+    let plain = ''
+    let storage = ''
+
+    const traverse = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || ''
+        plain += text
+        storage += text
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+
+      const element = node as HTMLElement
+      if (element.classList.contains('room-mention')) {
+        const id = element.dataset.id || ''
+        const name = element.dataset.name || ''
+        plain += `@${name}`
+        storage += `<@${id}|${name}>`
+        return
+      }
+      if (element.tagName === 'BR') {
+        plain += '\n'
+        storage += '\n'
+        return
+      }
+      element.childNodes.forEach(traverse)
+    }
+
+    Array.from(nodes).forEach(traverse)
+    return { plain, storage }
   }
 
   // Get cursor position in text
@@ -497,7 +532,8 @@ export function RoomChatInput({
     }
 
     e.preventDefault()
-    const text = e.clipboardData.getData('text/plain')
+    const mentionStorageText = e.clipboardData.getData(MENTION_CLIPBOARD_MIME)
+    const text = mentionStorageText || e.clipboardData.getData('text/plain')
     if (!editorRef.current) return
 
     // Enforce message size limit on paste
@@ -525,27 +561,37 @@ export function RoomChatInput({
 
     const range = selection.getRangeAt(0)
 
-    // Split by newlines and insert text nodes with <br> elements between them
-    const lines = textToInsert.split('\n')
     let lastNode: Node | null = null
-
-    lines.forEach((line, index) => {
-      if (index > 0) {
-        // Insert a <br> for each newline
-        const br = document.createElement('br')
-        range.insertNode(br)
-        range.setStartAfter(br)
-        range.collapse(true)
-        lastNode = br
+    if (mentionStorageText) {
+      const template = document.createElement('template')
+      template.innerHTML = convertToDisplayHTML(textToInsert)
+      const fragment = template.content
+      const insertedNodes = Array.from(fragment.childNodes)
+      range.insertNode(fragment)
+      if (insertedNodes.length > 0) {
+        lastNode = insertedNodes[insertedNodes.length - 1]
       }
-      if (line.length > 0) {
-        const textNode = document.createTextNode(line)
-        range.insertNode(textNode)
-        range.setStartAfter(textNode)
-        range.collapse(true)
-        lastNode = textNode
-      }
-    })
+    } else {
+      // Split by newlines and insert text nodes with <br> elements between them
+      const lines = textToInsert.split('\n')
+      lines.forEach((line, index) => {
+        if (index > 0) {
+          // Insert a <br> for each newline
+          const br = document.createElement('br')
+          range.insertNode(br)
+          range.setStartAfter(br)
+          range.collapse(true)
+          lastNode = br
+        }
+        if (line.length > 0) {
+          const textNode = document.createTextNode(line)
+          range.insertNode(textNode)
+          range.setStartAfter(textNode)
+          range.collapse(true)
+          lastNode = textNode
+        }
+      })
+    }
 
     // Move cursor to after the last inserted node
     if (lastNode) {
@@ -561,6 +607,38 @@ export function RoomChatInput({
     if (editorRef.current) {
       editorRef.current.scrollTop = editorRef.current.scrollHeight
     }
+  }
+
+  const handleCopy = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (!editorRef.current) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+    const range = selection.getRangeAt(0)
+    if (!editorRef.current.contains(range.commonAncestorContainer)) return
+
+    const fragment = range.cloneContents()
+    const { plain, storage } = serializeNodes(fragment.childNodes)
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', plain)
+    e.clipboardData.setData(MENTION_CLIPBOARD_MIME, storage)
+  }
+
+  const handleCut = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (!editorRef.current) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+    const range = selection.getRangeAt(0)
+    if (!editorRef.current.contains(range.commonAncestorContainer)) return
+
+    const fragment = range.cloneContents()
+    const { plain, storage } = serializeNodes(fragment.childNodes)
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', plain)
+    e.clipboardData.setData(MENTION_CLIPBOARD_MIME, storage)
+    selection.deleteFromDocument()
+    handleInput()
   }
   const insertMention = (agent: Agent) => {
     if (!editorRef.current) return
@@ -957,6 +1035,8 @@ export function RoomChatInput({
               contentEditable={!disabled}
               onInput={handleInput}
               onPaste={handlePaste}
+              onCopy={handleCopy}
+              onCut={handleCut}
               onKeyDown={handleKeyDown}
               className={cn(
                 "w-full overflow-y-auto resize-none transition-[max-height] duration-200 ease-out",
@@ -1136,6 +1216,7 @@ export function RoomChatInput({
                       onClick={handleSubmit}
                       disabled={!isReadyToSend}
                       size="icon"
+                      aria-label="Send message"
                       data-testid="send-button"
                       className={cn(
                         "h-8 w-8 rounded-full p-0",

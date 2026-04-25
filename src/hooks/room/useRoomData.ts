@@ -78,7 +78,7 @@ export function useRoomData(
     return extendInfo.use_supervisor || false
   }, [room])
 
-  const loading = roomQuery.isFetching || roomQuery.isLoading
+  const loading = roomQuery.isLoading
 
   const getAgentList = useCallback(() => {
     if (!room?.room_agent_set) return []

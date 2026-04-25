@@ -12,10 +12,11 @@ function sortPriority(
   result: AgentResultViewModel,
   summarySourceId: string | undefined,
 ): number {
+  const hasVisibleBody = result.content.trim().length > 0 || result.artifacts.length > 0
   // 0: summary source agent (highest priority)
   if (summarySourceId && result.agentId === summarySourceId) return 0
   // 1: completed with content
-  if (result.status === 'completed' && result.content.trim().length > 0) return 1
+  if (result.status === 'completed' && hasVisibleBody) return 1
   // 2: working (streaming or thinking)
   if (result.status === 'working') return 2
   // 3: awaiting input
@@ -23,7 +24,7 @@ function sortPriority(
   // 4: failed
   if (result.status === 'failed') return 4
   // 5: completed but empty
-  if (result.status === 'completed' && result.content.trim().length === 0) return 5
+  if (result.status === 'completed' && !hasVisibleBody) return 5
   return 6
 }
 

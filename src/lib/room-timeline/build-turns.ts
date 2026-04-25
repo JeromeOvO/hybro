@@ -294,6 +294,7 @@ function buildAgentResult(
     status,
     content: entity.content,
     artifacts: entity.artifacts ?? [],
+    taskStatusMessage: entity.taskStatusMessage,
     hitlHistory: hitlHistory.length > 0 ? hitlHistory : undefined,
     isSummaryAgent: isSummarySystemAgent(entity.agentId),
     hitlResolved,
@@ -375,9 +376,19 @@ function deduplicateAgentResults(results: AgentResultViewModel[]): AgentResultVi
     }
 
     if (winner !== existing) {
+      const mergedWinner = {
+        ...winner,
+        // Preserve status hints regardless of which duplicate wins.
+        taskStatusMessage: winner.taskStatusMessage || existing.taskStatusMessage || r.taskStatusMessage,
+      }
       const idx = output.indexOf(existing)
-      if (idx >= 0) output[idx] = winner
-      seen.set(r.agentId, winner)
+      if (idx >= 0) output[idx] = mergedWinner
+      seen.set(r.agentId, mergedWinner)
+    } else if (!existing.taskStatusMessage && r.taskStatusMessage) {
+      const enriched = { ...existing, taskStatusMessage: r.taskStatusMessage }
+      const idx = output.indexOf(existing)
+      if (idx >= 0) output[idx] = enriched
+      seen.set(r.agentId, enriched)
     }
   }
 

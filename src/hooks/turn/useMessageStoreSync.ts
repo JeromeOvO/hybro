@@ -23,6 +23,18 @@ import { isSystemAgent } from '@/lib/system-agents'
 export function useMessageStoreSync() {
   const processedRef = useRef(new Map<string, number>()) // turnId → fingerprint
 
+  // Clear bridge cache when turn store resets so re-hydration can rebuild turns
+  useEffect(() => {
+    let prevHydrated = useTurnEventStore.getState().hydrated
+    const unsub = useTurnEventStore.subscribe((s) => {
+      if (prevHydrated && !s.hydrated) {
+        processedRef.current.clear()
+      }
+      prevHydrated = s.hydrated
+    })
+    return unsub
+  }, [])
+
   useEffect(() => {
     const unsub = useMessageStore.subscribe(
       (s) => s.version,
@@ -127,29 +139,49 @@ export function useMessageStoreSync() {
   }, [])
 }
 
-/** Remove optimistic turns whose real counterpart now exists in the store. */
+/** Remove optimistic turns whose real counterpart now exists in the store.
+ *
+ * An "orphan" optimistic turn is any turn whose turnId is not a real user
+ * message id (i.e. it is keyed by clientRequestId or a tempMessageId) but
+ * whose clientRequestId now maps to a different, real turn. This can happen
+ * when turn_event SSEs (e.g. slot_opened) create a turn at realMessageId
+ * before the bridge's merge gets a chance to run, leaving the optimistic
+ * turn stranded with accumulated events. We intentionally do NOT require
+ * events.length === 1 — the optimistic turn may have accumulated slot_opened /
+ * slot_snapshot events pushed by the bridge before the ID swap happened.
+ */
 function cleanupOrphanOptimisticTurns(
   store: ReturnType<typeof useTurnEventStore.getState>,
   realUserIds: Set<string>,
 ) {
-  // Optimistic turns use clientRequestId as turnId
-  // Check each turnId — if it's NOT a real user message ID and has only a turn_started event,
-  // and the real turn already exists, remove the orphan
+  const { findByClientRequestId } = useMessageStore.getState()
+
   for (const turnId of store.orderedTurnIds) {
     if (realUserIds.has(turnId)) continue // real turn, skip
     const log = store.turnLogs.get(turnId)
     if (!log) continue
     const events = log.getEvents()
-    // Optimistic turns have exactly 1 event (turn_started) with a clientRequestId
-    if (events.length === 1 && events[0].type === 'turn_started') {
-      const ev = events[0] as TurnEvent & { type: 'turn_started'; clientRequestId?: string }
-      if (ev.clientRequestId) {
-        // This is an optimistic turn — check if real turn exists
-        // Real turnId would be a user message_id in the message store
-        // We can't know the exact mapping, but if the user message exists in
-        // the store (realUserIds), the optimistic one is orphaned
-        store.removeTurn(turnId)
-      }
+    const first = events[0]
+    if (first?.type !== 'turn_started') continue
+    const clientRequestId = (first as TurnEvent & { type: 'turn_started'; clientRequestId?: string }).clientRequestId
+    if (!clientRequestId) continue
+
+    // Prefer the authoritative mapping: if clientRequestId now maps to a
+    // different real turn that exists in the store, this one is orphaned.
+    const mappedTurnId = store.turnIdByClientRequestId.get(clientRequestId)
+    if (mappedTurnId && mappedTurnId !== turnId && store.turnLogs.has(mappedTurnId)) {
+      store.removeTurn(turnId)
+      continue
+    }
+
+    // Fallback for legacy paths where turnIdByClientRequestId is stale:
+    // only remove when we can correlate this optimistic turn's clientRequestId
+    // to a real user message and that real turn already exists in the turn store.
+    if (events.length === 1) {
+      const realUser = findByClientRequestId(clientRequestId)
+      if (!realUser || realUser.id === turnId) continue
+      if (!store.turnLogs.has(realUser.id)) continue
+      store.removeTurn(turnId)
     }
   }
 }

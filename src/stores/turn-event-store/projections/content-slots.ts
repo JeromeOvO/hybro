@@ -112,9 +112,25 @@ function handleSlotSnapshot(state: ReducerState, event: TurnEvent & { type: 'slo
   const slot = state.slots[idx]
   if (!slot || isSlotTerminal(slot.status)) return
 
+  const existingContent = slot.content ?? ''
+  const incomingContent = event.content ?? ''
+  const hasVisibleExisting = existingContent.trim().length > 0
+  const hasVisibleIncoming = incomingContent.trim().length > 0
+
+  // Single-write/append-only policy for block UI:
+  // - First visible content wins.
+  // - Later snapshots may extend content only when append-only.
+  // - Divergent rewrites are ignored to avoid end-of-stream text swap.
+  const shouldApplyIncomingContent =
+    !hasVisibleExisting
+      ? hasVisibleIncoming
+      : !hasVisibleIncoming
+        ? false
+        : incomingContent === existingContent || incomingContent.startsWith(existingContent)
+
   state.slots[idx] = {
     ...slot,
-    content: event.content,
+    content: shouldApplyIncomingContent ? incomingContent : existingContent,
     artifacts: event.artifacts,
     hydrated: event.hydrated !== false,
   }

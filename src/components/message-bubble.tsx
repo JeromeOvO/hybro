@@ -20,6 +20,8 @@ import type { LucideIcon } from 'lucide-react'
 import { getFileIcon } from '@/lib/file-icon-utils'
 import type { Agent } from '@/lib/types/agent'
 
+const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
+
 // ---------------------------------------------------------------------------
 // Phase derivation — single source of truth for agent bubble presentation
 // ---------------------------------------------------------------------------
@@ -104,11 +106,11 @@ const PHASE_STYLES: Partial<Record<AgentPhase, PhaseStyleEntry>> = {
     },
   },
   'complete-empty': {
-    border: 'border-emerald-200 dark:border-emerald-500/20',
-    bg: 'bg-emerald-50 dark:bg-emerald-500/12',
-    text: 'text-emerald-600 dark:text-emerald-400',
-    icon: CheckCircle,
-    badge: 'Completed',
+    border: 'border-amber-200 dark:border-amber-500/20',
+    bg: 'bg-amber-50 dark:bg-amber-500/12',
+    text: 'text-amber-700 dark:text-amber-400',
+    icon: AlertCircle,
+    badge: 'No visible output',
   },
 }
 
@@ -272,11 +274,74 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const isLongMessage = displayContent.length > 500
   const [isExpanded, setIsExpanded] = useState(false)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+  const bubbleRef = useRef<HTMLDivElement>(null)
   const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
+
+  const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const container = bubbleRef.current
+    if (!container) return
+
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+    const range = selection.getRangeAt(0)
+    if (!container.contains(range.commonAncestorContainer)) return
+
+    const fragment = range.cloneContents()
+    let plainText = ''
+
+    const visit = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || ''
+        plainText += text
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+      const element = node as HTMLElement
+
+      if (element.tagName === 'BR') {
+        plainText += '\n'
+        return
+      }
+
+      element.childNodes.forEach(visit)
+    }
+
+    fragment.childNodes.forEach(visit)
+    let mentionStorageText = plainText
+
+    const mentionLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.room-mention'))
+      .filter((link) => {
+        try {
+          return range.intersectsNode(link)
+        } catch {
+          return false
+        }
+      })
+
+    mentionLinks.forEach((link) => {
+      const href = link.getAttribute('href') || ''
+      const match = href.match(/\/c\/agents\/([^/?#]+)/)
+      const agentId = match?.[1]
+      const mentionText = (link.textContent || '').trim()
+      const agentName = mentionText.startsWith('@') ? mentionText.slice(1) : mentionText
+      if (!agentId || !mentionText) return
+      const token = `<@${agentId}|${agentName}>`
+      mentionStorageText = mentionStorageText.replace(mentionText, token)
+    })
+
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', plainText)
+    e.clipboardData.setData(MENTION_CLIPBOARD_MIME, mentionStorageText)
+  }, [])
 
   return (
     <div className="flex justify-end w-full">
-        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble">
+        <div
+          ref={bubbleRef}
+          onCopy={handleCopy}
+          className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble select-text"
+        >
         <div className="flex items-center justify-between gap-4 mb-2">
           <span className="text-xs font-medium opacity-90">
             {message.sender_name}
@@ -646,6 +711,13 @@ function AgentMessageBubbleInner({
   const hasCompletionContent = (phase === 'streaming' || phase === 'complete' || isTypewriting) && (!!displayContent || parsedJsonContent !== null)
   const splitBubbles = hasResolvedHitl && hasCompletionContent && phase !== 'interactive'
 
+  /** Spinner beside hub/cloud badge while the task is in-flight (auto-clears on terminal update). */
+  const showAgentSourceTaskSpinner =
+    !!entity.agentSource &&
+    !!entity.taskStatus &&
+    !isTerminalState(entity.taskStatus) &&
+    !isInteractiveState(entity.taskStatus)
+
   const renderHeader = (headerPhaseStyle: typeof phaseStyle) => (
     <div className="flex items-center justify-between mb-2">
       <div className="flex items-center gap-2">
@@ -682,18 +754,26 @@ function AgentMessageBubbleInner({
           </span>
         )}
         {entity.agentSource && (
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {entity.agentSource === 'hub'
-                  ? <House className={cn("h-3 w-3 shrink-0", phaseTextColor)} />
-                  : <Cloud className={cn("h-3 w-3 shrink-0", phaseTextColor)} />}
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={4}>
-                {entity.agentSource === 'hub' ? 'Local agent' : 'Cloud agent'}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <span className="inline-flex items-center gap-1 shrink-0" aria-live="polite">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {entity.agentSource === 'hub'
+                    ? <House className={cn("h-3 w-3 shrink-0", phaseTextColor)} />
+                    : <Cloud className={cn("h-3 w-3 shrink-0", phaseTextColor)} />}
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={4}>
+                  {entity.agentSource === 'hub' ? 'Local agent' : 'Cloud agent'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {showAgentSourceTaskSpinner && (
+              <Loader2
+                className="h-3 w-3 shrink-0 animate-spin text-muted-foreground"
+                aria-label="Task in progress"
+              />
+            )}
+          </span>
         )}
       </div>
       <div className="flex items-center gap-2">
@@ -954,14 +1034,21 @@ function AgentMessageBubbleInner({
 
         {/* ── COMPLETE-EMPTY phase: minimal badge ── */}
         {phase === 'complete-empty' && (
-          <div className="flex items-center gap-2 py-1 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle className="h-3.5 w-3.5" />
-            <span>Completed</span>
-            {entity.taskCreatedAt && (
-              <span className="flex items-center gap-0.5 opacity-60">
-                <Clock className="h-3 w-3" />
-                {formatElapsedTime(elapsedSeconds(entity.taskCreatedAt))}
-              </span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 py-1 text-xs text-amber-700 dark:text-amber-400">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span>{phaseStyle?.badge ?? 'No visible output'}</span>
+              {entity.taskCreatedAt && (
+                <span className="flex items-center gap-0.5 opacity-60">
+                  <Clock className="h-3 w-3" />
+                  {formatElapsedTime(elapsedSeconds(entity.taskCreatedAt))}
+                </span>
+              )}
+            </div>
+            {entity.taskStatusMessage && (
+              <p className="text-xs text-amber-700/90 dark:text-amber-300/90">
+                {entity.taskStatusMessage}
+              </p>
             )}
           </div>
         )}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { RoomChatInput, MAX_MESSAGE_LENGTH } from '@/components/room-chat-input'
 
 vi.mock('@/components/group-selector', () => ({
@@ -210,6 +210,96 @@ describe('RoomChatInput', () => {
 
       expect(createSpy).toHaveBeenCalledTimes(10)
       createSpy.mockRestore()
+    })
+  })
+
+  describe('mention clipboard behavior', () => {
+    const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
+
+    function selectEditorContents(editor: HTMLElement) {
+      const range = document.createRange()
+      range.selectNodeContents(editor)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }
+
+    function createClipboardData({
+      plainText = '',
+      mentionText = '',
+    }: {
+      plainText?: string
+      mentionText?: string
+    } = {}) {
+      const setData = vi.fn()
+      const getData = vi.fn((type: string) => {
+        if (type === MENTION_CLIPBOARD_MIME) return mentionText
+        if (type === 'text/plain') return plainText
+        return ''
+      })
+      return { setData, getData, items: [] as DataTransferItem[] }
+    }
+
+    function pasteMention(editor: HTMLElement, storageText: string, plainText: string) {
+      editor.focus()
+      const clipboardData = createClipboardData({
+        plainText,
+        mentionText: storageText,
+      })
+      fireEvent.paste(editor, { clipboardData })
+    }
+
+    it('copies selected mention text as plain + mention MIME formats', async () => {
+      const { container } = renderInput()
+
+      const editor = container.querySelector('[data-testid="chat-input"]') as HTMLElement
+      pasteMention(editor, 'Hello <@a-1|Alpha Agent>', 'Hello @Alpha Agent')
+      expect(editor.innerHTML).toContain('room-mention')
+      selectEditorContents(editor)
+
+      const clipboardData = createClipboardData()
+      fireEvent.copy(editor, { clipboardData })
+
+      expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', 'Hello @Alpha Agent')
+      expect(clipboardData.setData).toHaveBeenCalledWith(MENTION_CLIPBOARD_MIME, 'Hello <@a-1|Alpha Agent>')
+    })
+
+    it('cuts selected mention text, writes clipboard formats, and removes content', async () => {
+      const { container } = renderInput()
+
+      const editor = container.querySelector('[data-testid="chat-input"]') as HTMLElement
+      pasteMention(editor, '<@a-2|Beta Agent> world', '@Beta Agent world')
+      expect(editor.innerHTML).toContain('room-mention')
+      selectEditorContents(editor)
+
+      const clipboardData = createClipboardData()
+      fireEvent.cut(editor, { clipboardData })
+
+      expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', '@Beta Agent world')
+      expect(clipboardData.setData).toHaveBeenCalledWith(MENTION_CLIPBOARD_MIME, '<@a-2|Beta Agent> world')
+      expect(editor.textContent?.trim()).toBe('')
+    })
+
+    it('pastes custom mention MIME and submits storage format with mention IDs', async () => {
+      const onSubmit = vi.fn()
+      const { container } = renderInput({ onSubmit })
+
+      const editor = container.querySelector('[data-testid="chat-input"]') as HTMLElement
+      editor.focus()
+
+      const clipboardData = createClipboardData({
+        plainText: '@Alpha Agent',
+        mentionText: '<@a-1|Alpha Agent>',
+      })
+      fireEvent.paste(editor, { clipboardData })
+
+      await waitFor(() => {
+        const sendBtn = screen.getByTestId('send-button')
+        expect(sendBtn.hasAttribute('disabled')).toBe(false)
+      })
+
+      fireEvent.click(screen.getByTestId('send-button'))
+      expect(onSubmit).toHaveBeenCalledWith('<@a-1|Alpha Agent>', undefined, undefined, undefined)
     })
   })
 })

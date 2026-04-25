@@ -264,13 +264,9 @@ describe('AgentContentBlock — typewriter effect', () => {
 
     render(<AgentContentBlock slot={slot} />)
 
-    // hydrated is undefined → shouldAnimate checks `slot.hydrated` which is falsy
-    // BUT the typewriter only fires for non-hydrated (hydrated === false explicitly or undefined/falsy)
-    // Since hydrated is falsy, it will try to animate. This is fine for the slot_delta case
-    // because slot_delta content arrives incrementally during streaming status.
     const md = screen.getByTestId('markdown-content')
-    // Allow either behavior — the key invariant is that hydrated:true never animates
-    expect(md).toBeTruthy()
+    expect(md.getAttribute('data-streaming')).toBe('false')
+    expect(md.textContent).toBe('Hello World')
   })
 
   it('slot with streaming artifacts skips typewriter', () => {
