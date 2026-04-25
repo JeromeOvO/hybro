@@ -1,5 +1,5 @@
 // tests/e2e/room-timeline.spec.ts
-import { test, expect } from '@playwright/test'
+import { test, expect } from './fixtures/auth'
 
 test.describe('Room Timeline', () => {
   test.beforeEach(async ({ page }) => {
@@ -7,7 +7,8 @@ test.describe('Room Timeline', () => {
     // If auth fixture exists, use it; otherwise skip auth-dependent tests
   })
 
-  test('send message creates a turn', async ({ page }) => {
+  test('send message creates a turn', async ({ clerkAuth, page }) => {
+    void clerkAuth
     // This test verifies the turn-based rendering after sending a message
     await page.goto('/c/chat')
 
@@ -26,7 +27,8 @@ test.describe('Room Timeline', () => {
     await expect(page.getByText('Hello from E2E test')).toBeVisible({ timeout: 10000 })
   })
 
-  test('multiple agents are grouped in a single turn', async ({ page }) => {
+  test('multiple agents are grouped in a single turn', async ({ clerkAuth, page }) => {
+    void clerkAuth
     // This test requires a room with multiple agent responses
     // Navigate to an existing room with messages (or create via API)
     // For now, verify the structural elements exist
@@ -54,7 +56,8 @@ test.describe('Room Timeline', () => {
     }
   })
 
-  test('collapse and expand a completed turn', async ({ page }) => {
+  test('collapse and expand a completed turn', async ({ clerkAuth, page }) => {
+    void clerkAuth
     // Navigate to a room with at least 2 completed turns
     // This test is structural — verifies the collapse/expand interaction
     await page.goto('/c/chat')

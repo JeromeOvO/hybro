@@ -94,7 +94,7 @@ describe('AgentResultCard', () => {
     expect(container.querySelector('.shimmer-text')).toBeTruthy()
   })
 
-  it('shows "No response content" for empty completed result', () => {
+  it('shows empty-state copy for empty completed result', () => {
     render(
       <AgentResultCard
         result={makeResult({
@@ -104,7 +104,7 @@ describe('AgentResultCard', () => {
       />,
     )
 
-    expect(screen.getByText('No response content')).toBeTruthy()
+    expect(screen.getByText('Completed without a visible response')).toBeTruthy()
   })
 
   it('truncates long content', () => {

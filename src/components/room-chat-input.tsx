@@ -1136,6 +1136,7 @@ export function RoomChatInput({
                       onClick={handleSubmit}
                       disabled={!isReadyToSend}
                       size="icon"
+                      aria-label="Send message"
                       data-testid="send-button"
                       className={cn(
                         "h-8 w-8 rounded-full p-0",
