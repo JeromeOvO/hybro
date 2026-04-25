@@ -37,7 +37,7 @@ function LoadingState() {
 
 export function TurnList() {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const { messagesEndRef, shouldAutoScroll, handleScroll, scrollToBottom } = useTurnScroll(scrollContainerRef)
+  const { shouldAutoScroll, handleScroll, scrollToBottom } = useTurnScroll(scrollContainerRef)
 
   useAutoHideScroll(scrollContainerRef)
 
@@ -83,21 +83,6 @@ export function TurnList() {
               <EmptyState />
             ) : (
               <>
-                <div className="sticky top-0 z-10 flex justify-end mb-1 bg-background/80 backdrop-blur-sm">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleToggleAll}
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    aria-label={allExpanded ? 'Collapse all responses' : 'Expand all responses'}
-                  >
-                    {allExpanded ? (
-                      <ChevronsDownUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronsUpDown className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
                 <div className="space-y-0">
                   {orderedTurnIds.map(turnId => {
                     const log = turnLogs.get(turnId)
@@ -105,9 +90,9 @@ export function TurnList() {
                     return <OrchestraTurn key={turnId} turnLog={log} />
                   })}
                 </div>
+                <div className="h-4" />
               </>
             )}
-            <div ref={messagesEndRef} className="h-4" />
           </div>
         </div>
         <Button
@@ -125,6 +110,21 @@ export function TurnList() {
         >
           <ArrowDown className="h-4 w-4" />
         </Button>
+        {hasTurns && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleToggleAll}
+            className="absolute top-2 right-2 z-20 h-7 w-7 text-muted-foreground hover:text-foreground bg-muted/60 backdrop-blur-sm rounded-full shadow-sm hover:shadow-md"
+            aria-label={allExpanded ? 'Collapse all responses' : 'Expand all responses'}
+          >
+            {allExpanded ? (
+              <ChevronsDownUp className="h-4 w-4" />
+            ) : (
+              <ChevronsUpDown className="h-4 w-4" />
+            )}
+          </Button>
+        )}
       </div>
     </ExpandCollapseContext.Provider>
   )

@@ -1,44 +1,53 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useTurnEventStore } from '@/stores/turn-event-store'
+import { useMessageStore } from '@/stores/message-store'
+import { useMessageScrollAnchoring } from '@/hooks/useMessageScrollAnchoring'
 
 export function useTurnScroll(scrollContainerRef: React.RefObject<HTMLDivElement | null>) {
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const prevTurnCountRef = useRef(0)
-
   const orderedTurnIds = useTurnEventStore(s => s.orderedTurnIds)
+  const turnLogs = useTurnEventStore(s => s.turnLogs)
+  const hydrated = useTurnEventStore(s => s.hydrated)
+  const roomId = useMessageStore(s => s.roomId) ?? ''
 
-  const scrollToBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
-    }
-  }, [scrollContainerRef])
+  const [contentVersion, setContentVersion] = useState(0)
 
-  const checkIfNearBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (!container) return false
-    const threshold = 100
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-  }, [scrollContainerRef])
-
-  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    if (event.currentTarget.dataset.programmaticScroll === 'true') {
-      event.currentTarget.dataset.programmaticScroll = 'false'
-      return
-    }
-    setShouldAutoScroll(checkIfNearBottom())
-  }, [checkIfNearBottom])
+  const activeTurnId = orderedTurnIds[orderedTurnIds.length - 1]
 
   useEffect(() => {
-    if (orderedTurnIds.length > prevTurnCountRef.current && shouldAutoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-    }
-    prevTurnCountRef.current = orderedTurnIds.length
-  }, [orderedTurnIds.length, shouldAutoScroll])
+    if (!activeTurnId) return
+
+    const turnLog = turnLogs.get(activeTurnId)
+    if (!turnLog) return
+
+    const unsubscribe = turnLog.subscribe(() => {
+      setContentVersion(v => v + 1)
+    })
+    return unsubscribe
+  }, [activeTurnId, turnLogs])
+
+  const getEntityForAnchor = useCallback(
+    (turnId: string) => {
+      const turnLog = turnLogs.get(turnId)
+      if (!turnLog) return undefined
+      const startEvent = turnLog.getEvents().find(e => e.type === 'turn_started')
+      return {
+        messageType: 'user' as const,
+        clientRequestId: startEvent?.clientRequestId ?? turnId,
+      }
+    },
+    [turnLogs],
+  )
+
+  const { shouldAutoScroll, handleScroll, scrollToBottom } = useMessageScrollAnchoring({
+    scrollContainerRef,
+    hydrated,
+    roomId,
+    renderedAnchorIds: orderedTurnIds,
+    getEntityForAnchor,
+    contentVersion,
+  })
 
   return {
-    messagesEndRef,
     shouldAutoScroll,
     handleScroll,
     scrollToBottom,

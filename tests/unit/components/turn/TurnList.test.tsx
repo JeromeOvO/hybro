@@ -27,7 +27,6 @@ vi.mock('@/hooks/useAutoHideScroll', () => ({
 
 vi.mock('@/hooks/turn/useTurnScroll', () => ({
   useTurnScroll: () => ({
-    messagesEndRef: { current: null },
     shouldAutoScroll: true,
     handleScroll: () => {},
     scrollToBottom: () => {},
@@ -132,5 +131,22 @@ describe('TurnList', () => {
     const { container } = render(<TurnList />, { wrapper: Wrapper })
     const turns = qa(container, '[data-testid^="turn-mock-"]')
     expect(turns).toHaveLength(2)
+  })
+
+  it('expand/collapse button is not sticky (uses absolute positioning)', () => {
+    const store = useTurnEventStore.getState()
+    store.append('turn-1', {
+      eventId: 'e1', turnId: 'turn-1', seq: 1, ts: Date.now(),
+      type: 'turn_started', userInput,
+    } as TurnEvent)
+    store.markHydrated()
+
+    const { container } = render(<TurnList />, { wrapper: Wrapper })
+    const btn = q(container, '[aria-label="Collapse all responses"]')
+    expect(btn).not.toBeNull()
+
+    // The button's parent should NOT have 'sticky' class
+    const stickyParent = btn?.closest('.sticky')
+    expect(stickyParent).toBeNull()
   })
 })
