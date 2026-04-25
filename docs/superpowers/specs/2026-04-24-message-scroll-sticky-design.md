@@ -138,58 +138,62 @@ Two sub-cases:
 
 ```typescript
 useLayoutEffect(() => {
-  if (!hydrated || didInitialAnchor.current) return
+  let rafId: number | null = null
+  let canceled = false
+
+  const cleanup = () => {
+    canceled = true
+    if (rafId !== null) cancelAnimationFrame(rafId)
+  }
+
+  if (!hydrated || didInitialAnchor.current) return cleanup
 
   // Empty room: mark anchor complete, P1 will handle future sends
   if (renderedAnchorIds.length === 0) {
     didInitialAnchor.current = true
     prevLastUserSendKey.current = null
     setShouldAutoScroll(true)
-    return
+    return cleanup
   }
 
   const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
+
+  const completeAnchor = () => {
+    didInitialAnchor.current = true
+    prevLastUserSendKey.current = lastUserSendKey ?? null
+    setShouldAutoScroll(checkIfNearBottom())
+  }
 
   if (lastUserMsgId) {
     const el = scrollContainerRef.current?.querySelector(
       `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
     )
     if (!el) {
-      // DOM not rendered yet. requestAnimationFrame gives the browser
-      // one paint cycle to flush pending renders (e.g. TurnList's
-      // UserInputBlock arriving via TurnEventLog after the turn log
-      // already exists). If still missing after rAF, contentVersion
-      // in the dependency array will re-trigger this effect when the
-      // component actually renders.
-      const capturedRoomId = roomId
+      // DOM not rendered yet. rAF gives one paint cycle for pending
+      // renders (e.g. TurnList UserInputBlock arriving via TurnEventLog
+      // after turn log exists). If still missing, contentVersion dep
+      // will re-trigger this effect when the component renders.
       rafId = requestAnimationFrame(() => {
-        if (didInitialAnchor.current) return
-        if (capturedRoomId !== roomId) return  // room changed, stale callback
+        if (canceled || didInitialAnchor.current) return
         const retryEl = scrollContainerRef.current?.querySelector(
           `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
         )
-        if (!retryEl) return  // still not rendered; contentVersion dep will retry
+        if (!retryEl) return  // contentVersion dep will retry
         retryEl.scrollIntoView({ block: 'start', behavior: 'auto' })
-        didInitialAnchor.current = true
-        prevLastUserSendKey.current = lastUserSendKey ?? null
-        setShouldAutoScroll(checkIfNearBottom())
+        completeAnchor()
       })
-      return // effect cleanup below cancels rafId on unmount/re-run
+      return cleanup
     }
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
-  // All three MUST be set synchronously — including when no user message exists
-  // (pure system/AI room with messages but no user messages):
-  didInitialAnchor.current = true
-  prevLastUserSendKey.current = lastUserSendKey ?? null
-  setShouldAutoScroll(checkIfNearBottom())
-  // Effect cleanup: cancel pending rAF on re-run, room switch, or unmount
-  return () => { if (rafId) cancelAnimationFrame(rafId) }
+  // Covers: messages exist but no user messages (pure system/AI room)
+  completeAnchor()
+  return cleanup
 }, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey, contentVersion])
 ```
 
-`rafId` is a `let` variable scoped inside the effect body, captured by the cleanup closure. Double defense: the callback also checks `capturedRoomId !== roomId` in case cancel races with execution.
+Every code path returns the same `cleanup` function. The `canceled` flag is the primary guard against stale rAF callbacks (room switch, unmount, effect re-run); `cancelAnimationFrame` is the belt-and-suspenders backup. No closure-self-comparison — `canceled` is set by the cleanup, which React guarantees to call before the next effect run.
 
 ### Key Constraints
 
