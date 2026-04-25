@@ -161,8 +161,10 @@ useLayoutEffect(() => {
       // already exists). If still missing after rAF, contentVersion
       // in the dependency array will re-trigger this effect when the
       // component actually renders.
-      requestAnimationFrame(() => {
-        if (didInitialAnchor.current) return  // already handled
+      const capturedRoomId = roomId
+      rafId = requestAnimationFrame(() => {
+        if (didInitialAnchor.current) return
+        if (capturedRoomId !== roomId) return  // room changed, stale callback
         const retryEl = scrollContainerRef.current?.querySelector(
           `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
         )
@@ -172,7 +174,7 @@ useLayoutEffect(() => {
         prevLastUserSendKey.current = lastUserSendKey ?? null
         setShouldAutoScroll(checkIfNearBottom())
       })
-      return
+      return // effect cleanup below cancels rafId on unmount/re-run
     }
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
@@ -182,8 +184,12 @@ useLayoutEffect(() => {
   didInitialAnchor.current = true
   prevLastUserSendKey.current = lastUserSendKey ?? null
   setShouldAutoScroll(checkIfNearBottom())
+  // Effect cleanup: cancel pending rAF on re-run, room switch, or unmount
+  return () => { if (rafId) cancelAnimationFrame(rafId) }
 }, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey, contentVersion])
 ```
+
+`rafId` is a `let` variable scoped inside the effect body, captured by the cleanup closure. Double defense: the callback also checks `capturedRoomId !== roomId` in case cancel races with execution.
 
 ### Key Constraints
 
