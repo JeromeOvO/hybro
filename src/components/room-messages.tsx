@@ -1,9 +1,9 @@
 'use client'
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
-import { 
+import {
   ArrowDown,
-  ChevronsDownUp, 
+  ChevronsDownUp,
   ChevronsUpDown,
   MessageCirclePlus,
 } from 'lucide-react'
@@ -12,7 +12,9 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EntityUserBubble, EntityAgentBubble, derivePhase, type QuoteData } from './message-bubble'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
-import { useOrderedIds, useMessage, useMessageCount, useMessagesHydrated } from '@/hooks/useRoomMessages'
+import { useMessageScrollAnchoring } from '@/hooks/useMessageScrollAnchoring'
+import { groupMessagesByUserTurn } from '@/lib/room-timeline/message-groups'
+import { useOrderedIds, useMessage, useMessagesHydrated } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -104,12 +106,34 @@ interface RoomMessagesProps {
 export function RoomMessages({ onQuote }: RoomMessagesProps) {
   const orderedIds = useOrderedIds()
   const hydrated = useMessagesHydrated()
-  const messageCount = useMessageCount()
 
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
-  const prevCountRef = useRef(messageCount)
+  const roomId = useMessageStore(s => s.roomId) ?? ''
+  const version = useMessageStore(s => s.version)
+  const entities = useMessageStore(s => s.entities)
+
+  const getEntityForAnchor = useCallback(
+    (id: string) => {
+      const e = entities[id]
+      if (!e) return undefined
+      return { messageType: e.messageType, clientRequestId: e.clientRequestId }
+    },
+    [entities],
+  )
+
+  const { shouldAutoScroll, handleScroll, scrollToBottom } = useMessageScrollAnchoring({
+    scrollContainerRef,
+    hydrated,
+    roomId,
+    renderedAnchorIds: orderedIds,
+    getEntityForAnchor,
+    contentVersion: version,
+  })
+
+  const groups = useMemo(
+    () => groupMessagesByUserTurn(orderedIds, entities),
+    [orderedIds, entities],
+  )
 
   // Auto-hide scrollbar when not scrolling
   useAutoHideScroll(scrollContainerRef)
@@ -173,55 +197,6 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
     setUserExpandedIds(new Set(allAgentIds))
   }, [allAgentIds])
 
-  const scrollToBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
-    }
-  }, [])
-
-  // Track if user is near bottom of scroll
-  const checkIfNearBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (!container) return false
-    
-    const threshold = 100
-    const isNearBottom = 
-      container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-    return isNearBottom
-  }, [])
-
-  // Handle scroll to detect if user manually scrolls
-  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    // Ignore scroll events we triggered ourselves (e.g., anchoring show less)
-    if (event.currentTarget.dataset.programmaticScroll === 'true') {
-      event.currentTarget.dataset.programmaticScroll = 'false'
-      return
-    }
-
-    const isNearBottom = checkIfNearBottom()
-    setShouldAutoScroll(isNearBottom)
-  }, [checkIfNearBottom])
-
-  // Auto scroll when new messages arrive (count-based, not reference-based)
-  useEffect(() => {
-    if (messageCount > prevCountRef.current) {
-      const store = useMessageStore.getState()
-      const lastId = store.orderedIds[store.orderedIds.length - 1]
-      const lastEntity = lastId ? store.entities[lastId] : null
-
-      if (lastEntity?.source === 'optimistic' && lastEntity.messageType === 'user') {
-        // User just sent a message -> always scroll to bottom
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-      } else if (shouldAutoScroll) {
-        // Agent message arrived while user is near bottom -> scroll
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-      }
-    }
-
-    prevCountRef.current = messageCount
-  }, [messageCount, shouldAutoScroll])
-
   if (!hydrated) {
     return <LoadingState />
   }
@@ -240,9 +215,9 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
             <EmptyState />
           ) : (
             <>
-              {/* Floating expand/collapse pill */}
+              {/* Floating expand/collapse pill — absolute so it doesn't affect sticky user headers */}
               {allAgentIds.length > 0 && (
-                <div className="sticky top-2 z-10 flex justify-end pointer-events-none">
+                <div className="absolute top-2 right-2 z-20 pointer-events-none">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -266,23 +241,43 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
                 </div>
               )}
 
-              {/* Messages Display - Timeline view */}
+              {/* Messages Display - Timeline view with sticky user message headers */}
               <div className="space-y-4">
-                {orderedIds.map(id => (
-                  <MemoizedMessage
-                    key={id}
-                    id={id}
-                    isLatestAgent={id === lastAgentMessageId}
-                    collapseSignal={collapseSignal}
-                    autoCollapseVersion={autoCollapseVersion}
-                    isUserExpanded={userExpandedIds.has(id)}
-                    onUserToggle={handleUserToggle}
-                    onQuote={onQuote}
-                  />
+                {groups.map(group => (
+                  <div key={group.userMsgId ?? 'system-prefix'}>
+                    {group.userMsgId && (
+                      <div
+                        className="sticky top-0 z-10 bg-background shadow-[0_1px_3px_0_rgb(0_0_0/0.05)]"
+                        data-message-id={group.userMsgId}
+                      >
+                        <MemoizedMessage
+                          id={group.userMsgId}
+                          isLatestAgent={false}
+                          collapseSignal={collapseSignal}
+                          autoCollapseVersion={autoCollapseVersion}
+                          isUserExpanded={userExpandedIds.has(group.userMsgId)}
+                          onUserToggle={handleUserToggle}
+                          onQuote={onQuote}
+                        />
+                      </div>
+                    )}
+                    {group.childMsgIds.map(id => (
+                      <MemoizedMessage
+                        key={id}
+                        id={id}
+                        isLatestAgent={id === lastAgentMessageId}
+                        collapseSignal={collapseSignal}
+                        autoCollapseVersion={autoCollapseVersion}
+                        isUserExpanded={userExpandedIds.has(id)}
+                        onUserToggle={handleUserToggle}
+                        onQuote={onQuote}
+                      />
+                    ))}
+                  </div>
                 ))}
               </div>
-            
-              <div ref={messagesEndRef} className="h-4" />
+
+              <div className="h-4" />
             </>
           )}
         </div>

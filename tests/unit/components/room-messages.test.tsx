@@ -14,8 +14,9 @@ vi.mock('@/hooks/useAutoHideScroll', () => ({
   useAutoHideScroll: vi.fn(),
 }))
 
-// jsdom doesn't implement scrollIntoView
+// jsdom doesn't implement scrollIntoView / scrollTo
 Element.prototype.scrollIntoView = vi.fn()
+HTMLElement.prototype.scrollTo = vi.fn()
 
 function seedStore(messages: Array<{
   id: string
@@ -122,6 +123,41 @@ describe('RoomMessages', () => {
       await renderMessages()
       expect(screen.getByText('User question')).toBeTruthy()
       expect(screen.getByText('Agent answer')).toBeTruthy()
+    })
+  })
+
+  describe('sticky user message wrappers', () => {
+    it('renders user messages inside a sticky wrapper with data-message-id', async () => {
+      seedStore([
+        { id: 'u1', content: 'Hello', senderName: 'Alice', messageType: 'user' },
+        { id: 'a1', content: 'World', senderName: 'Bot', messageType: 'agent', agentId: 'agent-1' },
+      ])
+      const { container } = await renderMessages()
+      const stickyWrapper = container.querySelector('[data-message-id="u1"]')
+      expect(stickyWrapper).not.toBeNull()
+      expect(stickyWrapper?.classList.contains('sticky')).toBe(true)
+    })
+
+    it('does NOT render sticky wrapper for system-prefix messages', async () => {
+      seedStore([
+        { id: 'a0', content: 'System welcome', senderName: 'Bot', messageType: 'agent', agentId: 'agent-1' },
+        { id: 'u1', content: 'Hello', senderName: 'Alice', messageType: 'user' },
+      ])
+      const { container } = await renderMessages()
+      expect(container.querySelector('[data-message-id="a0"]')).toBeNull()
+      expect(container.querySelector('[data-message-id="u1"]')).not.toBeNull()
+    })
+
+    it('expand/collapse control does not use sticky positioning', async () => {
+      seedStore([
+        { id: 'u1', content: 'Hello', senderName: 'Alice', messageType: 'user' },
+        { id: 'a1', content: 'World', senderName: 'Bot', messageType: 'agent', agentId: 'agent-1' },
+      ])
+      const { container } = await renderMessages()
+      const expandBtn = container.querySelector('[aria-label*="Collapse"]')
+        ?? container.querySelector('[aria-label*="Expand"]')
+      const parent = expandBtn?.closest('[class*="absolute"]')
+      expect(parent).not.toBeNull()
     })
   })
 })
