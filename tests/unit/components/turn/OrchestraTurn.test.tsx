@@ -65,4 +65,19 @@ describe('OrchestraTurn', () => {
     render(<OrchestraTurn turnLog={log} />, { wrapper: Wrapper })
     expect(screen.getByText('Completed (1.5s)')).toBeDefined()
   })
+
+  it('renders sticky wrapper with data-message-id around UserInputBlock', () => {
+    const log = new TurnEventLog('turn-1')
+    log.append({
+      eventId: 'e1', turnId: 'turn-1', seq: 1, ts: 1000,
+      type: 'turn_started', userInput,
+    })
+
+    render(<OrchestraTurn turnLog={log} />, { wrapper: Wrapper })
+
+    const stickyWrapper = document.querySelector('[data-message-id="turn-1"]')
+    expect(stickyWrapper).not.toBeNull()
+    expect(stickyWrapper?.classList.contains('sticky')).toBe(true)
+    expect(stickyWrapper?.textContent).toContain('What is AI?')
+  })
 })

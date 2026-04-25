@@ -26,7 +26,14 @@ export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog }: Orch
 
   return (
     <div data-testid="orchestra-turn">
-      {userInput && <UserInputBlock data={userInput} />}
+      {userInput && (
+        <div
+          data-message-id={turnLog.turnId}
+          className="sticky top-0 z-10 bg-background shadow-[0_1px_3px_0_rgb(0_0_0/0.05)]"
+        >
+          <UserInputBlock data={userInput} />
+        </div>
+      )}
       {showRail && <OrchestrationRail items={railItems} isProcessing={composerState.isProcessing} />}
       {contentSlots.map(slot => (
         <ContentSlotRenderer key={slot.slotId} slot={slot} />
