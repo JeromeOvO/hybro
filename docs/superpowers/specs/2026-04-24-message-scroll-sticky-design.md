@@ -154,7 +154,26 @@ useLayoutEffect(() => {
     const el = scrollContainerRef.current?.querySelector(
       `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
     )
-    if (!el) return  // DOM not rendered yet, wait for next layout effect
+    if (!el) {
+      // DOM not rendered yet. requestAnimationFrame gives the browser
+      // one paint cycle to flush pending renders (e.g. TurnList's
+      // UserInputBlock arriving via TurnEventLog after the turn log
+      // already exists). If still missing after rAF, contentVersion
+      // in the dependency array will re-trigger this effect when the
+      // component actually renders.
+      requestAnimationFrame(() => {
+        if (didInitialAnchor.current) return  // already handled
+        const retryEl = scrollContainerRef.current?.querySelector(
+          `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+        )
+        if (!retryEl) return  // still not rendered; contentVersion dep will retry
+        retryEl.scrollIntoView({ block: 'start', behavior: 'auto' })
+        didInitialAnchor.current = true
+        prevLastUserSendKey.current = lastUserSendKey ?? null
+        setShouldAutoScroll(checkIfNearBottom())
+      })
+      return
+    }
     el.scrollIntoView({ block: 'start', behavior: 'auto' })
   }
 
@@ -163,7 +182,7 @@ useLayoutEffect(() => {
   didInitialAnchor.current = true
   prevLastUserSendKey.current = lastUserSendKey ?? null
   setShouldAutoScroll(checkIfNearBottom())
-}, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey])
+}, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey, contentVersion])
 ```
 
 ### Key Constraints
@@ -406,6 +425,7 @@ Resolution:
 - **Room switch resets anchor state.** Change `roomId`, verify `didInitialAnchor` resets and P2 re-executes for the new room.
 - **No user messages in room.** Room with only system/AI messages: P2 marks `didInitialAnchor = true` without scrolling, P1 activates normally for future user sends.
 - **Empty room first send triggers P1.** Hydrate with empty `renderedAnchorIds`, verify `didInitialAnchor = true` immediately. Then simulate first user message arriving: `lastUserSendKey` changes from `null`, P1 fires `scrollToBottom` + `setShouldAutoScroll(true)`.
+- **Delayed DOM render retries P2.** Anchor id exists in `renderedAnchorIds` but sticky wrapper DOM not yet rendered (simulating TurnList where `turn_started` event arrives after turn log creation). Verify: first `useLayoutEffect` call triggers `requestAnimationFrame` retry; if DOM still absent, `contentVersion` increment re-triggers the effect and completes anchoring.
 
 ### `OrchestraTurn` / render tests
 
