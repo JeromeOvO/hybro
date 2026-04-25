@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentContentBlock } from '@/components/turn/AgentContentBlock'
 import type { ContentSlotView } from '@/stores/turn-event-store/types'
@@ -20,10 +20,13 @@ vi.mock('@/lib/agent-colors', () => ({
   getAgentInitials: (name: string) => name.slice(0, 2).toUpperCase(),
 }))
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 function Wrapper({ children }: { children: React.ReactNode }) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
+
+// Prevent pending React scheduler work from leaking across files.
+afterEach(cleanup)
 
 function makeSlot(overrides: Partial<ContentSlotView> = {}): ContentSlotView {
   return {

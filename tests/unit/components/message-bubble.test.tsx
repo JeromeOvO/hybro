@@ -52,6 +52,33 @@ describe('EntityUserBubble', () => {
     const { container } = render(<EntityUserBubble entity={entity} />)
     expect(container.querySelector('.message-bubble')).toBeTruthy()
   })
+
+  it('copies mention links with mention token MIME', () => {
+    const entity = makeEntity({ content: 'Hi <@agent-123|Planner>' })
+    render(<EntityUserBubble entity={entity} />)
+
+    const mentionLink = screen.getByRole('link', { name: '@Planner' })
+    const bubble = mentionLink.closest('.message-bubble') as HTMLElement
+    expect(bubble).toBeTruthy()
+
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(mentionLink)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+
+    const clipboardData = {
+      setData: vi.fn(),
+      getData: vi.fn(() => ''),
+      types: [],
+    }
+
+    fireEvent.copy(bubble, { clipboardData })
+
+    expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', '@Planner')
+    expect(clipboardData.setData).toHaveBeenCalledWith('application/x-hybro-mentions', '<@agent-123|Planner>')
+    selection?.removeAllRanges()
+  })
 })
 
 describe('EntityAgentBubble', () => {

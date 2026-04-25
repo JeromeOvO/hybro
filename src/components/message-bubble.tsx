@@ -20,6 +20,8 @@ import type { LucideIcon } from 'lucide-react'
 import { getFileIcon } from '@/lib/file-icon-utils'
 import type { Agent } from '@/lib/types/agent'
 
+const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
+
 // ---------------------------------------------------------------------------
 // Phase derivation — single source of truth for agent bubble presentation
 // ---------------------------------------------------------------------------
@@ -272,11 +274,74 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const isLongMessage = displayContent.length > 500
   const [isExpanded, setIsExpanded] = useState(false)
   const toggleButtonRef = useRef<HTMLButtonElement>(null)
+  const bubbleRef = useRef<HTMLDivElement>(null)
   const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
+
+  const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const container = bubbleRef.current
+    if (!container) return
+
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+    const range = selection.getRangeAt(0)
+    if (!container.contains(range.commonAncestorContainer)) return
+
+    const fragment = range.cloneContents()
+    let plainText = ''
+
+    const visit = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || ''
+        plainText += text
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+      const element = node as HTMLElement
+
+      if (element.tagName === 'BR') {
+        plainText += '\n'
+        return
+      }
+
+      element.childNodes.forEach(visit)
+    }
+
+    fragment.childNodes.forEach(visit)
+    let mentionStorageText = plainText
+
+    const mentionLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.room-mention'))
+      .filter((link) => {
+        try {
+          return range.intersectsNode(link)
+        } catch {
+          return false
+        }
+      })
+
+    mentionLinks.forEach((link) => {
+      const href = link.getAttribute('href') || ''
+      const match = href.match(/\/c\/agents\/([^/?#]+)/)
+      const agentId = match?.[1]
+      const mentionText = (link.textContent || '').trim()
+      const agentName = mentionText.startsWith('@') ? mentionText.slice(1) : mentionText
+      if (!agentId || !mentionText) return
+      const token = `<@${agentId}|${agentName}>`
+      mentionStorageText = mentionStorageText.replace(mentionText, token)
+    })
+
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', plainText)
+    e.clipboardData.setData(MENTION_CLIPBOARD_MIME, mentionStorageText)
+  }, [])
 
   return (
     <div className="flex justify-end w-full">
-        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble">
+        <div
+          ref={bubbleRef}
+          onCopy={handleCopy}
+          className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble select-text"
+        >
         <div className="flex items-center justify-between gap-4 mb-2">
           <span className="text-xs font-medium opacity-90">
             {message.sender_name}
