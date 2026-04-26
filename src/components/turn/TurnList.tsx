@@ -9,6 +9,7 @@ import { useTurnEventStore } from '@/stores/turn-event-store'
 import { useTurnScroll } from '@/hooks/turn/useTurnScroll'
 import { ExpandCollapseContext } from './expand-collapse-context'
 import { OrchestraTurn } from './OrchestraTurn'
+import { ScrollRangeSpacer } from '@/components/scroll-range-spacer'
 
 function EmptyState() {
   return (
@@ -76,21 +77,49 @@ export function TurnList() {
           onScroll={handleScroll}
           className="flex-1 h-full w-full overflow-y-auto"
         >
-          <div className="py-3 sm:py-5 min-h-full max-w-4xl mx-auto px-3 sm:px-5">
+          <div className="py-3 sm:py-5 min-h-full max-w-4xl mx-auto px-3 sm:px-5 relative">
             {!hydrated ? (
               <LoadingState />
             ) : !hasTurns ? (
               <EmptyState />
             ) : (
               <>
+                <div className="sticky top-2 z-20 flex justify-end pointer-events-none" style={{ height: 0 }}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleToggleAll}
+                    className="pointer-events-auto h-7 w-7 text-muted-foreground hover:text-foreground bg-muted/60 backdrop-blur-sm rounded-full shadow-sm hover:shadow-md mr-2"
+                    aria-label={allExpanded ? 'Collapse all responses' : 'Expand all responses'}
+                  >
+                    {allExpanded ? (
+                      <ChevronsDownUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronsUpDown className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
                 <div className="space-y-0">
-                  {orderedTurnIds.map(turnId => {
+                  {orderedTurnIds.map((turnId, idx) => {
                     const log = turnLogs.get(turnId)
                     if (!log) return null
-                    return <OrchestraTurn key={turnId} turnLog={log} />
+                    const isLast = idx === orderedTurnIds.length - 1
+                    return (
+                      <OrchestraTurn
+                        key={turnId}
+                        turnLog={log}
+                        footerSlot={
+                          isLast ? (
+                            <>
+                              <div data-content-end style={{ height: 0 }} />
+                              <ScrollRangeSpacer scrollContainerRef={scrollContainerRef} />
+                            </>
+                          ) : undefined
+                        }
+                      />
+                    )
                   })}
                 </div>
-                <div className="h-4" />
               </>
             )}
           </div>
@@ -110,21 +139,6 @@ export function TurnList() {
         >
           <ArrowDown className="h-4 w-4" />
         </Button>
-        {hasTurns && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleToggleAll}
-            className="absolute top-2 right-2 z-20 h-7 w-7 text-muted-foreground hover:text-foreground bg-muted/60 backdrop-blur-sm rounded-full shadow-sm hover:shadow-md"
-            aria-label={allExpanded ? 'Collapse all responses' : 'Expand all responses'}
-          >
-            {allExpanded ? (
-              <ChevronsDownUp className="h-4 w-4" />
-            ) : (
-              <ChevronsUpDown className="h-4 w-4" />
-            )}
-          </Button>
-        )}
       </div>
     </ExpandCollapseContext.Provider>
   )

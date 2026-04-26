@@ -12,9 +12,10 @@ import { OrchestrationRail } from './OrchestrationRail'
 
 interface OrchestraTurnProps {
   turnLog: TurnEventLog
+  footerSlot?: React.ReactNode
 }
 
-export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog }: OrchestraTurnProps) {
+export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog, footerSlot }: OrchestraTurnProps) {
   const rawSlots = useTurnProjection(turnLog, contentSlotsReducer)
   const contentSlots = getVisibleSlots(rawSlots)
   const railItems = useTurnProjection(turnLog, railReducer)
@@ -29,15 +30,20 @@ export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog }: Orch
       {userInput && (
         <div
           data-message-id={turnLog.turnId}
-          className="sticky top-0 z-10 bg-background shadow-[0_1px_3px_0_rgb(0_0_0/0.05)]"
+          className="sticky top-0 z-10 bg-background pb-1 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.05)]"
         >
           <UserInputBlock data={userInput} />
         </div>
       )}
-      {showRail && <OrchestrationRail items={railItems} isProcessing={composerState.isProcessing} />}
+      {showRail && (
+        <div className="pt-1">
+          <OrchestrationRail items={railItems} isProcessing={composerState.isProcessing} />
+        </div>
+      )}
       {contentSlots.map(slot => (
         <ContentSlotRenderer key={slot.slotId} slot={slot} />
       ))}
+      {footerSlot}
     </div>
   )
 })

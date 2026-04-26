@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { EntityUserBubble, EntityAgentBubble, derivePhase, type QuoteData } from './message-bubble'
+import { ScrollRangeSpacer } from './scroll-range-spacer'
 import { useAutoHideScroll } from '@/hooks/useAutoHideScroll'
 import { useMessageScrollAnchoring } from '@/hooks/useMessageScrollAnchoring'
 import { groupMessagesByUserTurn } from '@/lib/room-timeline/message-groups'
@@ -85,7 +86,6 @@ const MemoizedMessage = React.memo(function MemoizedMessage({
       return (
         <EntityAgentBubble
           entity={entity}
-          defaultExpanded={isLatestAgent}
           collapseSignal={collapseSignal}
           autoCollapseVersion={autoCollapseVersion}
           isLatestAgent={isLatestAgent}
@@ -210,21 +210,20 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
         onScroll={handleScroll}
         className="flex-1 h-full w-full overflow-y-auto"
       >
-        <div className="py-4 min-h-full max-w-4xl mx-auto">
+        <div className="py-4 min-h-full max-w-4xl mx-auto relative">
           {orderedIds.length === 0 ? (
             <EmptyState />
           ) : (
             <>
-              {/* Floating expand/collapse pill — absolute so it doesn't affect sticky user headers */}
               {allAgentIds.length > 0 && (
-                <div className="absolute top-2 right-2 z-20 pointer-events-none">
+                <div className="sticky top-2 z-20 flex justify-end pointer-events-none mb-0" style={{ height: 0 }}>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={allExpanded ? collapseAll : expandAll}
-                        className="h-8 w-8 p-0 pointer-events-auto rounded-full bg-muted/60 backdrop-blur-sm shadow-sm hover:bg-muted hover:shadow-md transition-all"
+                        className="h-8 w-8 p-0 pointer-events-auto rounded-full bg-muted/60 backdrop-blur-sm shadow-sm hover:bg-muted hover:shadow-md transition-all mr-2"
                         aria-label={allExpanded ? 'Collapse all messages' : 'Expand all messages'}
                       >
                         {allExpanded ? (
@@ -243,11 +242,11 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
 
               {/* Messages Display - Timeline view with sticky user message headers */}
               <div className="space-y-4">
-                {groups.map(group => (
-                  <div key={group.userMsgId ?? 'system-prefix'}>
+                {groups.map((group, groupIdx) => (
+                  <div key={group.userMsgId ?? 'system-prefix'} className="space-y-3">
                     {group.userMsgId && (
                       <div
-                        className="sticky top-0 z-10 bg-background shadow-[0_1px_3px_0_rgb(0_0_0/0.05)]"
+                        className="sticky top-0 z-10 bg-background pb-1 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.05)]"
                         data-message-id={group.userMsgId}
                       >
                         <MemoizedMessage
@@ -273,11 +272,15 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
                         onQuote={onQuote}
                       />
                     ))}
+                    {groupIdx === groups.length - 1 && (
+                      <div className="!mt-0">
+                        <div data-content-end style={{ height: 0 }} />
+                        <ScrollRangeSpacer scrollContainerRef={scrollContainerRef} />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-
-              <div className="h-4" />
             </>
           )}
         </div>
