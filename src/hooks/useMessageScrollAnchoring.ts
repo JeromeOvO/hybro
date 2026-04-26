@@ -104,6 +104,8 @@ export function useMessageScrollAnchoring({
   const reflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppressScrollUntilRef = useRef(0)
   const pendingRafRef = useRef<number | null>(null)
+  const userInteractedRef = useRef(false)
+  const interactionCleanupRef = useRef<(() => void) | null>(null)
   const latestLastUserSendKeyRef = useRef(lastUserSendKey)
   const latestGetEntityRef = useRef(getEntityForAnchor)
   const latestAnchorIdsRef = useRef(renderedAnchorIds)
@@ -119,6 +121,18 @@ export function useMessageScrollAnchoring({
   function killSettlingObserver() {
     if (reflowRoRef.current) { reflowRoRef.current.disconnect(); reflowRoRef.current = null }
     if (reflowTimerRef.current) { clearTimeout(reflowTimerRef.current); reflowTimerRef.current = null }
+    if (interactionCleanupRef.current) { interactionCleanupRef.current(); interactionCleanupRef.current = null }
+    userInteractedRef.current = false
+  }
+
+  function startInteractionListeners(container: HTMLElement) {
+    const onInteract = () => { userInteractedRef.current = true }
+    container.addEventListener('wheel', onInteract, { passive: true })
+    container.addEventListener('touchstart', onInteract, { passive: true })
+    interactionCleanupRef.current = () => {
+      container.removeEventListener('wheel', onInteract)
+      container.removeEventListener('touchstart', onInteract)
+    }
   }
 
   function markProgrammaticScroll() {
@@ -197,6 +211,8 @@ export function useMessageScrollAnchoring({
       if (typeof ResizeObserver !== 'undefined') {
         const anchorContainer = scrollContainerRef.current
         if (!anchorContainer) { transitionTo('manual'); return }
+
+        startInteractionListeners(anchorContainer)
 
         const ro = new ResizeObserver(() => {
           if (modeRef.current !== 'initial-settling') return
@@ -296,30 +312,48 @@ export function useMessageScrollAnchoring({
     // 5. Find last user message DOM element (use latest refs)
     const lastUserMsgId = findLastUserMessageId(latestAnchorIdsRef.current, latestGetEntityRef.current)
 
-    if (lastUserMsgId) {
-      const el = container.querySelector(
-        `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+    const scrollToUser = (c: HTMLElement, msgId: string): boolean => {
+      const el = c.querySelector(
+        `[data-message-id="${escapeCssIdent(msgId)}"]`
       ) as HTMLElement | null
-
       if (el) {
-        // 6. Element found
         markProgrammaticScroll()
-        scrollElementToContainerTop(container, el)
-      } else {
-        // 7. Element not found: fallback
-        markProgrammaticScroll()
-        scrollToContentEnd(container)
+        scrollElementToContainerTop(c, el)
+        return true
       }
+      return false
+    }
+
+    const finish = () => {
+      transitionTo('user-anchor')
+      prevLastUserSendKey.current = lastUserSendKey
+    }
+
+    if (lastUserMsgId && scrollToUser(container, lastUserMsgId)) {
+      finish()
+    } else if (lastUserMsgId) {
+      // DOM not ready yet — rAF retry (max 3 frames), then fallback
+      let retries = 0
+      const tryScroll = () => {
+        retries++
+        const c = scrollContainerRef.current
+        if (!c) { finish(); return }
+        if (scrollToUser(c, lastUserMsgId)) { finish(); return }
+        if (retries < 3) {
+          requestAnimationFrame(tryScroll)
+        } else {
+          markProgrammaticScroll()
+          scrollToContentEnd(c)
+          finish()
+        }
+      }
+      requestAnimationFrame(tryScroll)
+      prevLastUserSendKey.current = lastUserSendKey
     } else {
       markProgrammaticScroll()
       scrollToContentEnd(container)
+      finish()
     }
-
-    // 8. Transition to user-anchor
-    transitionTo('user-anchor')
-
-    // 9. Update send key
-    prevLastUserSendKey.current = lastUserSendKey
   }, [lastUserSendKey, hydrated, scrollContainerRef, renderedAnchorIds, getEntityForAnchor])
 
   // ---------------------------------------------------------------------------
@@ -351,7 +385,14 @@ export function useMessageScrollAnchoring({
     if (!container) return
 
     const mode = modeRef.current
-    if (mode === 'initial-anchor' || mode === 'initial-settling') {
+
+    if (mode === 'initial-anchor') {
+      transitionTo('manual')
+      return
+    }
+
+    if (mode === 'initial-settling') {
+      if (!userInteractedRef.current) return
       transitionTo('manual')
       return
     }

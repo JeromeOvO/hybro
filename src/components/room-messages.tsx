@@ -273,10 +273,10 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
                       />
                     ))}
                     {groupIdx === groups.length - 1 && (
-                      <div className="!mt-0">
-                        <div data-content-end style={{ height: 0 }} />
+                      <>
+                        <div data-content-end className="!mt-0" style={{ height: 0 }} />
                         <ScrollRangeSpacer scrollContainerRef={scrollContainerRef} />
-                      </div>
+                      </>
                     )}
                   </div>
                 ))}

@@ -474,6 +474,9 @@ describe('useMessageScrollAnchoring', () => {
     // Advance time past suppression window
     vi.spyOn(performance, 'now').mockReturnValue(500)
 
+    // Simulate genuine user interaction (wheel event on container)
+    container.dispatchEvent(new Event('wheel'))
+
     // User scrolls during initial-settling
     result.current.handleScroll()
 
