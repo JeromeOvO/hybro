@@ -15,6 +15,17 @@ export interface ScrollAnchoringInput {
   contentVersion: number
 }
 
+type ScrollMode =
+  | 'initial-anchor'
+  | 'initial-settling'
+  | 'user-anchor'
+  | 'bottom-follow'
+  | 'manual'
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
 function getLastUserSendKey(
   anchorIds: string[],
   getEntity: (id: string) => AnchorEntity | undefined,
@@ -41,6 +52,39 @@ function findLastUserMessageId(
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Coordinate helpers (rect-based, no offsetTop)
+// ---------------------------------------------------------------------------
+
+function scrollElementToContainerTop(container: HTMLElement, el: HTMLElement) {
+  const offset = el.getBoundingClientRect().top - container.getBoundingClientRect().top
+  container.scrollTo({ top: Math.max(0, container.scrollTop + offset), behavior: 'auto' })
+}
+
+function scrollToContentEnd(container: HTMLElement) {
+  const contentEnd = container.querySelector('[data-content-end]') as HTMLElement | null
+  if (contentEnd) {
+    const offset = contentEnd.getBoundingClientRect().top - container.getBoundingClientRect().top
+    const target = container.scrollTop + offset - container.clientHeight
+    container.scrollTo({ top: Math.max(0, target), behavior: 'auto' })
+  } else {
+    container.scrollTo({ top: Math.max(0, container.scrollHeight - container.clientHeight), behavior: 'auto' })
+  }
+}
+
+function isNearContentEnd(container: HTMLElement): boolean {
+  const contentEnd = container.querySelector('[data-content-end]') as HTMLElement | null
+  if (!contentEnd) {
+    return container.scrollHeight - container.scrollTop - container.clientHeight < 100
+  }
+  const offset = contentEnd.getBoundingClientRect().top - container.getBoundingClientRect().top
+  return Math.abs(offset - container.clientHeight) < 100
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
 export function useMessageScrollAnchoring({
   scrollContainerRef,
   hydrated,
@@ -49,121 +93,299 @@ export function useMessageScrollAnchoring({
   getEntityForAnchor,
   contentVersion,
 }: ScrollAnchoringInput) {
-  const didInitialAnchor = useRef(false)
-  const prevLastUserSendKey = useRef<string | null>(null)
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
-
   const lastUserSendKey = getLastUserSendKey(renderedAnchorIds, getEntityForAnchor)
 
-  const checkIfNearBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (!container) return false
-    const threshold = 100
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold
-  }, [scrollContainerRef])
-
-  const scrollToBottom = useCallback(() => {
-    const container = scrollContainerRef.current
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
-    }
-  }, [scrollContainerRef])
-
-  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    if (event.currentTarget.dataset.programmaticScroll === 'true') {
-      event.currentTarget.dataset.programmaticScroll = 'false'
-      return
-    }
-    setShouldAutoScroll(checkIfNearBottom())
-  }, [checkIfNearBottom])
-
-  // P2: Initial anchor on hydration
-  // Room reset is handled synchronously at the top of this effect
-  // (not in a separate useEffect) to avoid timing issues —
-  // useLayoutEffect runs before useEffect, so a separate reset
-  // useEffect would fire AFTER P2 already saw stale didInitialAnchor=true.
+  // --- Refs ---
+  const modeRef = useRef<ScrollMode>('initial-anchor')
+  const initialPassDoneRef = useRef(false)
+  const prevLastUserSendKey = useRef<string | null>(null)
   const prevRoomIdRef = useRef(roomId)
+  const reflowRoRef = useRef<ResizeObserver | null>(null)
+  const reflowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suppressScrollUntilRef = useRef(0)
+  const pendingRafRef = useRef<number | null>(null)
+  const latestLastUserSendKeyRef = useRef(lastUserSendKey)
+  const latestGetEntityRef = useRef(getEntityForAnchor)
+  const latestAnchorIdsRef = useRef(renderedAnchorIds)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+
+  // Sync latest refs every render (before effects)
+  latestLastUserSendKeyRef.current = lastUserSendKey
+  latestGetEntityRef.current = getEntityForAnchor
+  latestAnchorIdsRef.current = renderedAnchorIds
+
+  // --- Internal helpers ---
+
+  function killSettlingObserver() {
+    if (reflowRoRef.current) { reflowRoRef.current.disconnect(); reflowRoRef.current = null }
+    if (reflowTimerRef.current) { clearTimeout(reflowTimerRef.current); reflowTimerRef.current = null }
+  }
+
+  function markProgrammaticScroll() {
+    suppressScrollUntilRef.current = performance.now() + 150
+  }
+
+  function updateButtonVisibility() {
+    const container = scrollContainerRef.current
+    const mode = modeRef.current
+    const shouldShow = (mode === 'manual' || mode === 'user-anchor')
+      && container != null
+      && !isNearContentEnd(container)
+    setShowScrollButton(shouldShow)
+  }
+
+  function transitionTo(next: ScrollMode) {
+    if (next !== 'initial-settling') killSettlingObserver()
+    modeRef.current = next
+    updateButtonVisibility()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Effect 1 (useLayoutEffect) — Room reset + Initial Anchor
+  // ---------------------------------------------------------------------------
   useLayoutEffect(() => {
-    let rafId: number | null = null
-    let canceled = false
-
     const cleanup = () => {
-      canceled = true
-      if (rafId !== null) cancelAnimationFrame(rafId)
+      if (pendingRafRef.current !== null) {
+        cancelAnimationFrame(pendingRafRef.current)
+        pendingRafRef.current = null
+      }
     }
 
-    // Synchronous room reset — must happen before the anchor check below
+    // 1. Room switch detection (synchronous)
     if (prevRoomIdRef.current !== roomId) {
-      prevRoomIdRef.current = roomId
-      didInitialAnchor.current = false
+      killSettlingObserver()
+      modeRef.current = 'initial-anchor'
+      initialPassDoneRef.current = false
       prevLastUserSendKey.current = null
-      setShouldAutoScroll(true)
+      prevRoomIdRef.current = roomId
     }
 
-    if (!hydrated || didInitialAnchor.current) return cleanup
+    // 2. Guard: not in initial-anchor mode
+    if (modeRef.current !== 'initial-anchor') return cleanup
 
+    // 3. Guard: not hydrated
+    if (!hydrated) return cleanup
+
+    // 4-5. Empty room handling
     if (renderedAnchorIds.length === 0) {
-      didInitialAnchor.current = true
-      prevLastUserSendKey.current = null
-      setShouldAutoScroll(true)
+      if (!initialPassDoneRef.current) {
+        initialPassDoneRef.current = true
+      }
       return cleanup
     }
 
+    // 6. Find last user message
     const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
 
-    const completeAnchor = () => {
-      didInitialAnchor.current = true
-      prevLastUserSendKey.current = lastUserSendKey ?? null
-      setShouldAutoScroll(checkIfNearBottom())
+    // 7. AI-only room (no user messages)
+    if (lastUserMsgId === null) {
+      prevLastUserSendKey.current = null
+      initialPassDoneRef.current = true
+      transitionTo('manual')
+      return cleanup
     }
-
-    if (lastUserMsgId) {
-      const el = scrollContainerRef.current?.querySelector(
-        `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
-      )
-      if (!el) {
-        rafId = requestAnimationFrame(() => {
-          if (canceled || didInitialAnchor.current) return
-          const retryEl = scrollContainerRef.current?.querySelector(
-            `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
-          )
-          if (!retryEl) return
-          retryEl.scrollIntoView({ block: 'start', behavior: 'auto' })
-          completeAnchor()
-        })
-        return cleanup
-      }
-      el.scrollIntoView({ block: 'start', behavior: 'auto' })
-    }
-
-    completeAnchor()
-    return cleanup
-  }, [hydrated, roomId, renderedAnchorIds.length, lastUserSendKey, contentVersion, getEntityForAnchor, scrollContainerRef, checkIfNearBottom])
-
-  // P1: Force scroll on new user send
-  useEffect(() => {
-    if (!hydrated || !didInitialAnchor.current) return
-    if (!lastUserSendKey) return
-    if (lastUserSendKey === prevLastUserSendKey.current) return
-
-    scrollToBottom()
-    prevLastUserSendKey.current = lastUserSendKey
-    setShouldAutoScroll(true)
-  }, [lastUserSendKey, hydrated, scrollToBottom])
-
-  // AI streaming: scroll follow on contentVersion change
-  useEffect(() => {
-    if (!hydrated || !didInitialAnchor.current) return
-    if (!shouldAutoScroll) return
 
     const container = scrollContainerRef.current
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
+    if (!container) return cleanup
+
+    // Helper to complete initial anchoring and set up settling observer
+    const completeInitialAnchor = () => {
+      prevLastUserSendKey.current = latestLastUserSendKeyRef.current
+      initialPassDoneRef.current = true
+      transitionTo('initial-settling')
+
+      if (typeof ResizeObserver !== 'undefined') {
+        const anchorContainer = scrollContainerRef.current
+        if (!anchorContainer) { transitionTo('manual'); return }
+
+        const ro = new ResizeObserver(() => {
+          if (modeRef.current !== 'initial-settling') return
+          const c = scrollContainerRef.current
+          if (!c) return
+          const currentAnchorIds = latestAnchorIdsRef.current
+          const currentGetEntity = latestGetEntityRef.current
+          const msgId = findLastUserMessageId(currentAnchorIds, currentGetEntity)
+          if (!msgId) return
+          const el = c.querySelector(
+            `[data-message-id="${escapeCssIdent(msgId)}"]`
+          ) as HTMLElement | null
+          if (!el) return
+          markProgrammaticScroll()
+          scrollElementToContainerTop(c, el)
+        })
+
+        const inner = anchorContainer.firstElementChild
+        if (inner) ro.observe(inner)
+
+        reflowRoRef.current = ro
+        reflowTimerRef.current = setTimeout(() => {
+          transitionTo('manual')
+        }, 3000)
+      } else {
+        transitionTo('manual')
+      }
     }
-  }, [contentVersion, hydrated, shouldAutoScroll, scrollContainerRef])
+
+    // 8. Query DOM for user message element
+    const el = container.querySelector(
+      `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+    ) as HTMLElement | null
+
+    // 9. Element found: scroll and complete
+    if (el) {
+      markProgrammaticScroll()
+      scrollElementToContainerTop(container, el)
+      completeInitialAnchor()
+      return cleanup
+    }
+
+    // 10. Element NOT found: rAF retry loop (max 5 frames)
+    let retryCount = 0
+    const maxRetries = 5
+
+    const tryFind = () => {
+      pendingRafRef.current = null
+      retryCount++
+      if (modeRef.current !== 'initial-anchor') return
+
+      const c = scrollContainerRef.current
+      if (!c) return
+
+      const retryEl = c.querySelector(
+        `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+      ) as HTMLElement | null
+
+      if (retryEl) {
+        markProgrammaticScroll()
+        scrollElementToContainerTop(c, retryEl)
+        completeInitialAnchor()
+        return
+      }
+
+      if (retryCount < maxRetries) {
+        pendingRafRef.current = requestAnimationFrame(tryFind)
+      } else {
+        initialPassDoneRef.current = true
+        transitionTo('manual')
+      }
+    }
+
+    pendingRafRef.current = requestAnimationFrame(tryFind)
+    return cleanup
+  }, [hydrated, roomId, renderedAnchorIds.length, scrollContainerRef])
+
+  // ---------------------------------------------------------------------------
+  // Effect 2 (useEffect) — User Send (P1)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // 1. Guard: not hydrated
+    if (!hydrated) return
+
+    // 2. Guard: P2 not done yet
+    if (modeRef.current === 'initial-anchor' && !initialPassDoneRef.current) return
+
+    // 3. Guard: dedup (handles temp→real id swap)
+    if (lastUserSendKey === prevLastUserSendKey.current) return
+
+    // 4. Guard: no user send key
+    if (!lastUserSendKey) return
+
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    // 5. Find last user message DOM element
+    const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
+
+    if (lastUserMsgId) {
+      const el = container.querySelector(
+        `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+      ) as HTMLElement | null
+
+      if (el) {
+        // 6. Element found
+        markProgrammaticScroll()
+        scrollElementToContainerTop(container, el)
+      } else {
+        // 7. Element not found: fallback
+        markProgrammaticScroll()
+        scrollToContentEnd(container)
+      }
+    } else {
+      markProgrammaticScroll()
+      scrollToContentEnd(container)
+    }
+
+    // 8. Transition to user-anchor
+    transitionTo('user-anchor')
+
+    // 9. Update send key
+    prevLastUserSendKey.current = lastUserSendKey
+  }, [lastUserSendKey, hydrated, scrollContainerRef, renderedAnchorIds, getEntityForAnchor])
+
+  // ---------------------------------------------------------------------------
+  // Effect 3 (useEffect) — Streaming + Button visibility
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // 1. Guard: not hydrated
+    if (!hydrated) return
+
+    // 2. Bottom-follow: auto-scroll on content changes
+    if (modeRef.current === 'bottom-follow') {
+      const container = scrollContainerRef.current
+      if (container) {
+        markProgrammaticScroll()
+        scrollToContentEnd(container)
+      }
+    }
+
+    // 3. Always update button visibility
+    updateButtonVisibility()
+  }, [contentVersion, hydrated, scrollContainerRef])
+
+  // ---------------------------------------------------------------------------
+  // handleScroll — time-based suppression, no event arg needed
+  // ---------------------------------------------------------------------------
+  const handleScroll = useCallback(() => {
+    if (performance.now() < suppressScrollUntilRef.current) return
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    const mode = modeRef.current
+    if (mode === 'initial-anchor' || mode === 'initial-settling') {
+      transitionTo('manual')
+      return
+    }
+
+    if (isNearContentEnd(container)) {
+      transitionTo('bottom-follow')
+    } else {
+      transitionTo('manual')
+    }
+  }, [scrollContainerRef])
+
+  // ---------------------------------------------------------------------------
+  // scrollToBottom
+  // ---------------------------------------------------------------------------
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    markProgrammaticScroll()
+    scrollToContentEnd(container)
+    transitionTo('bottom-follow')
+  }, [scrollContainerRef])
+
+  // ---------------------------------------------------------------------------
+  // Unmount cleanup
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    return () => {
+      killSettlingObserver()
+      if (pendingRafRef.current !== null) cancelAnimationFrame(pendingRafRef.current)
+    }
+  }, [])
 
   return {
-    shouldAutoScroll,
+    shouldAutoScroll: !showScrollButton,
     handleScroll,
     scrollToBottom,
   }

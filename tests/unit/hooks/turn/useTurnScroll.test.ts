@@ -21,7 +21,16 @@ function makeContainer() {
   Object.defineProperty(container, 'scrollTop', { value: 900, configurable: true })
   Object.defineProperty(container, 'clientHeight', { value: 100, configurable: true })
   container.scrollTo = vi.fn()
-  container.querySelector = vi.fn().mockReturnValue({ scrollIntoView: vi.fn() })
+  container.querySelector = vi.fn().mockImplementation((selector: string) => {
+    if (selector === '[data-scroll-spacer]') return null
+    if (selector === '[data-content-end]') return null
+    return {
+      scrollIntoView: vi.fn(),
+      offsetTop: 1000,
+      getBoundingClientRect: () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) }),
+    }
+  })
+  container.getBoundingClientRect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) })
   return container
 }
 
@@ -37,7 +46,7 @@ describe('useTurnScroll', () => {
     vi.restoreAllMocks()
   })
 
-  it('increments contentVersion when active turn log emits events', async () => {
+  it('stays in user-anchor mode after new send — streaming does not auto-scroll', async () => {
     const { useTurnScroll } = await import('@/hooks/turn/useTurnScroll')
 
     const store = useTurnEventStore.getState()
@@ -49,7 +58,7 @@ describe('useTurnScroll', () => {
 
     const container = makeContainer()
     const ref = { current: container }
-    renderHook(() => useTurnScroll(ref))
+    const { result } = renderHook(() => useTurnScroll(ref))
 
     const scrollCallsBefore = (container.scrollTo as ReturnType<typeof vi.fn>).mock.calls.length
 
@@ -62,10 +71,13 @@ describe('useTurnScroll', () => {
       } as TurnEvent)
     })
 
-    // shouldAutoScroll is true (near bottom), so the streaming event
-    // should trigger a scroll via contentVersion increment
+    // After P1 (user-anchor mode), streaming events should NOT trigger auto-scroll.
+    // The mode-based guard in Effect 3 prevents scrolling — only 'bottom-follow' scrolls.
     const scrollCallsAfter = (container.scrollTo as ReturnType<typeof vi.fn>).mock.calls.length
-    expect(scrollCallsAfter).toBeGreaterThan(scrollCallsBefore)
+    expect(scrollCallsAfter).toBe(scrollCallsBefore)
+    // shouldAutoScroll reflects scroll-button visibility (true = button hidden).
+    // Near the bottom in user-anchor, the button is hidden since user can already see content.
+    expect(result.current.shouldAutoScroll).toBe(true)
   })
 
   it('does not double-scroll when optimistic turn merges to real turn (same clientRequestId)', async () => {
