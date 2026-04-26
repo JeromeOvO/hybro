@@ -300,6 +300,73 @@ describe('useMessageStore - Edge Cases', () => {
     })
   })
 
+  describe('optimistic id replacement', () => {
+    it('replaces optimistic id with real id and rewires relatedMessageId links', () => {
+      const store = useMessageStore.getState()
+
+      store.upsertMessage(
+        createMessage({
+          id: 'cr:req-1',
+          content: 'hello',
+          clientRequestId: 'req-1',
+          messageType: 'user',
+        }),
+        'optimistic'
+      )
+      store.upsertMessage(
+        createTaskMessage(TASK_STATE.WORKING, {
+          id: 'agent-1',
+          relatedMessageId: 'cr:req-1',
+        }),
+        'sse'
+      )
+
+      const beforeVersion = useMessageStore.getState().version
+      store.replaceMessageId('cr:req-1', 'msg-real-1')
+
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:req-1']).toBeUndefined()
+      expect(state.entities['msg-real-1']).toBeDefined()
+      expect(state.entities['msg-real-1'].clientRequestId).toBe('req-1')
+      expect(state.entities['agent-1'].relatedMessageId).toBe('msg-real-1')
+      expect(state.orderedIds).toContain('msg-real-1')
+      expect(state.orderedIds).not.toContain('cr:req-1')
+      expect(state.version).toBeGreaterThan(beforeVersion)
+    })
+
+    it('merges when real id already exists and keeps clientRequestId correlation', () => {
+      const store = useMessageStore.getState()
+
+      store.upsertMessage(
+        createMessage({
+          id: 'cr:req-2',
+          content: 'optimistic user',
+          clientRequestId: 'req-2',
+          messageType: 'user',
+        }),
+        'optimistic'
+      )
+      store.upsertMessage(
+        createMessage({
+          id: 'msg-real-2',
+          content: 'real user',
+          messageType: 'user',
+          // Simulate SSE entity created before alias reconciliation, no clientRequestId.
+          clientRequestId: undefined,
+        }),
+        'sse'
+      )
+
+      store.replaceMessageId('cr:req-2', 'msg-real-2')
+
+      const state = useMessageStore.getState()
+      expect(state.entities['cr:req-2']).toBeUndefined()
+      expect(state.entities['msg-real-2']).toBeDefined()
+      expect(state.entities['msg-real-2'].clientRequestId).toBe('req-2')
+      expect(state.orderedIds.filter(id => id === 'msg-real-2')).toHaveLength(1)
+    })
+  })
+
   describe('hydration', () => {
     it('should track hydration state', () => {
       const store = useMessageStore.getState()

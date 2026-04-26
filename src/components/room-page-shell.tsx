@@ -77,8 +77,8 @@ interface TurnBasedViewProps {
 }
 
 function TurnBasedView({ adapter }: TurnBasedViewProps) {
-  useTurnHydration(adapter.roomId, adapter.getToken)
   useMessageStoreSync()
+  useTurnHydration(adapter.roomId, adapter.getToken)
 
   return (
     <>

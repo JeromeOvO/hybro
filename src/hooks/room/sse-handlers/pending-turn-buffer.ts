@@ -70,7 +70,7 @@ export function enqueuePendingSseEvent(clientRequestId: string, event: SSEMessag
 
 export function flushPendingSseEvents(
   clientRequestId: string,
-  dispatch: (event: SSEMessage, forcedTurnId?: string) => Promise<void>,
+  dispatch: (event: SSEMessage, forcedMessageId?: string) => Promise<void>,
   messageId: string,
 ): Promise<void> {
   resolveClientRequestMessageId(clientRequestId, messageId)

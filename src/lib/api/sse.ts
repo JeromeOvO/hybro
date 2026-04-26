@@ -212,10 +212,10 @@ export class SSEConnection {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
 
-      // Exponential backoff with jitter: min(base * 2^attempt + jitter, max)
+      // Deterministic exponential backoff keeps reconnect behavior testable
+      // and avoids timing races with fake timers in unit tests.
       const exponential = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
-      const jitter = Math.random() * 1000
-      const delay = Math.min(exponential + jitter, this.maxReconnectDelay)
+      const delay = Math.min(exponential, this.maxReconnectDelay)
 
       console.log(`🔄 SSE reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`)
 

@@ -84,9 +84,36 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { roomId, lifecycle, getAgentName, getAgentSource,
           reconcileWithDb, hitlRequestIndex, setCancelling } = deps
 
-  return async (sseMessage: SSEMessage, forcedTurnId?: string) => {
+  return async (sseMessage: SSEMessage, forcedMessageId?: string) => {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
+
+    const resolveCorrelation = (): {
+      clientReqId?: string
+      shouldBuffer: boolean
+      shouldDrop: boolean
+    } => {
+      const clientReqId = sseMessage.data?.client_request_id as string | undefined
+      if (clientReqId) {
+        const shouldBuffer = !forcedMessageId && !getResolvedMessageId(clientReqId)
+        return { clientReqId, shouldBuffer, shouldDrop: false }
+      }
+
+      // Backward/partial-compat path:
+      // If server omitted client_request_id but we already have an active
+      // lifecycle message or are replaying buffered events after HTTP resolved
+      // message_id, process unbuffered instead of dropping.
+      if (forcedMessageId || lifecycle.getMessageId()) {
+        console.warn(
+          'Proceeding with uncorrelated SSE event without client_request_id:',
+          sseMessage.type,
+        )
+        return { shouldBuffer: false, shouldDrop: false }
+      }
+
+      console.warn('Dropping turn-correlated SSE event without client_request_id:', sseMessage.type)
+      return { shouldBuffer: false, shouldDrop: true }
+    }
 
     switch (sseMessage.type) {
       case 'user_message':
@@ -100,6 +127,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: sseMessage.data.user_id || 'User',
             userId: sseMessage.data.user_id,
             timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+            clientRequestId: sseMessage.data.client_request_id || undefined,
           }, 'sse')
         }
         break
@@ -203,21 +231,17 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         console.log('⚙️ Processing status update:', sseMessage.data?.status)
         if (sseMessage.data?.status) {
           const status = sseMessage.data.status
-          const clientReqId = sseMessage.data.client_request_id as string | undefined
-          const resolvedTurnId = forcedTurnId
-            || (clientReqId ? getResolvedMessageId(clientReqId) : undefined)
-            || sseMessage.data.message_id
-            || lifecycle.getMessageId()
-
-          if (!forcedTurnId && clientReqId && !getResolvedMessageId(clientReqId)) {
-            enqueuePendingSseEvent(clientReqId, sseMessage)
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
             break
           }
 
           if (status === PROCESSING_STATUS.PROCESSING) {
             const realMessageId = sseMessage.data.message_id
-            if (clientReqId && realMessageId) {
-              resolveClientRequestMessageId(clientReqId, realMessageId)
+            if (correlation.clientReqId && realMessageId) {
+              resolveClientRequestMessageId(correlation.clientReqId, realMessageId)
             }
 
             lifecycle.setProcessing(true)
@@ -320,6 +344,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'task_submitted':
         console.log('📋 Task submitted via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+            break
+          }
+        }
         store.removeMessage(lifecycle.placeholderId(roomId))
         lifecycle.dismissPlaceholder()
 
@@ -360,6 +392,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'task_update':
         console.log('📋 Task update via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+            break
+          }
+        }
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
           const status = sseMessage.data.status as TaskState
@@ -474,6 +514,13 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         break
 
       case 'artifact_update': {
+        const correlation = resolveCorrelation()
+        if (correlation.shouldDrop) break
+        if (correlation.shouldBuffer && correlation.clientReqId) {
+          enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+          break
+        }
+
         if (!lifecycle.isPlaceholderDismissed()) {
           store.removeMessage(lifecycle.placeholderId(roomId))
           lifecycle.dismissPlaceholder()
@@ -553,6 +600,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'hitl_input_requested': {
         console.log('🔔 HITL input requested via SSE:', sseMessage.data)
+        {
+          const clientReqId = sseMessage.data?.client_request_id as string | undefined
+          if (!forcedMessageId && clientReqId && !getResolvedMessageId(clientReqId)) {
+            enqueuePendingSseEvent(clientReqId, sseMessage)
+            break
+          }
+          if (!clientReqId) {
+            console.warn('Proceeding with HITL request without client_request_id')
+          }
+        }
         if (sseMessage.data) {
           const { request_id, message_id, prompt, prompt_type, choices,
                   agent_name, agent_id, step_number, total_steps, expires_at,
@@ -615,6 +672,13 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'hitl_status_update': {
         console.log('🔔 HITL status update via SSE:', sseMessage.data)
+        {
+          const clientReqId = sseMessage.data?.client_request_id as string | undefined
+          if (!forcedMessageId && clientReqId && !getResolvedMessageId(clientReqId)) {
+            enqueuePendingSseEvent(clientReqId, sseMessage)
+            break
+          }
+        }
         if (sseMessage.data) {
           const { request_id, status: hitlStatus, error_message } = sseMessage.data
           if (request_id) {

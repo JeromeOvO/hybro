@@ -21,6 +21,8 @@ async function connectAndOpen(options: Partial<SSEConnectionOptions> = {}) {
 }
 
 describe('SSEConnection', () => {
+  let mathRandomSpy: ReturnType<typeof vi.spyOn> | undefined
+
   beforeAll(() => {
     // Disable MSW so our fetch mock has full control
     server.close()
@@ -37,9 +39,12 @@ describe('SSEConnection', () => {
     vi.useFakeTimers()
     MockSSEStream.clearInstances()
     mockFetch.mockClear()
+    // Keep reconnect delays deterministic in fake-timer tests.
+    mathRandomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
   })
 
   afterEach(() => {
+    mathRandomSpy?.mockRestore()
     vi.useRealTimers()
   })
 

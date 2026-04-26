@@ -25,7 +25,7 @@ describe('useMessageStoreSync optimistic cleanup', () => {
     useTurnEventStore.getState().reset()
   })
 
-  it('keeps a fresh optimistic turn when no correlated real user message exists', () => {
+  it('prunes optimistic turn ids that are not canonical room turns', () => {
     renderHook(() => useMessageStoreSync())
 
     act(() => {
@@ -37,16 +37,19 @@ describe('useMessageStoreSync optimistic cleanup', () => {
         senderName: 'User',
         timestamp: new Date().toISOString(),
       }, 'db')
-      useTurnEventStore.getState().createOptimisticTurn('cr-new')
+      useTurnEventStore.getState().createOptimisticTurn('cr-new', {
+        text: 'pending',
+        attachments: [],
+      })
       useMessageStore.getState().nudgeSyncBridge()
     })
 
     const store = useTurnEventStore.getState()
-    expect(store.turnLogs.has('cr-new')).toBe(true)
-    expect(store.orderedTurnIds).toContain('cr-new')
+    expect(store.turnLogs.has('cr-new')).toBe(false)
+    expect(store.orderedTurnIds).not.toContain('cr-new')
   })
 
-  it('removes an optimistic turn when correlated real turn is present', () => {
+  it('prefers the optimistic turn when correlated real turn is present', () => {
     renderHook(() => useMessageStoreSync())
 
     const optimisticId = 'cr-123'
@@ -82,8 +85,40 @@ describe('useMessageStoreSync optimistic cleanup', () => {
     })
 
     const store = useTurnEventStore.getState()
-    expect(store.turnLogs.has(optimisticId)).toBe(false)
-    expect(store.turnLogs.has(realTurnId)).toBe(true)
-    expect(store.orderedTurnIds).not.toContain(optimisticId)
+    expect(store.turnLogs.has(optimisticId)).toBe(true)
+    expect(store.turnLogs.has(realTurnId)).toBe(false)
+    expect(store.orderedTurnIds).toContain(optimisticId)
+    expect(store.orderedTurnIds).not.toContain(realTurnId)
+  })
+
+  it('does not create a turn for unlinked agent entities', () => {
+    renderHook(() => useMessageStoreSync())
+
+    act(() => {
+      useMessageStore.getState().upsertMessage({
+        id: 'u-1',
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'first',
+        senderName: 'User',
+        timestamp: new Date().toISOString(),
+      }, 'db')
+
+      useMessageStore.getState().upsertMessage({
+        id: 'agent-unlinked',
+        roomId: 'room-1',
+        messageType: 'agent',
+        content: 'unlinked response',
+        senderName: 'Agent',
+        timestamp: new Date().toISOString(),
+        // no relatedMessageId on purpose
+      }, 'sse')
+
+      useMessageStore.getState().nudgeSyncBridge()
+    })
+
+    const store = useTurnEventStore.getState()
+    const turnLog = store.turnLogs.get('u-1')
+    expect(turnLog).toBeUndefined()
   })
 })

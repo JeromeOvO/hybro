@@ -28,6 +28,7 @@ interface MessageStoreState {
   // ── Write operations ─────────────────────────────────────
   upsertMessage: (msg: IncomingMessage, source: MessageSource) => void
   upsertMany: (msgs: IncomingMessage[], source: MessageSource) => void
+  replaceMessageId: (oldId: string, newId: string) => void
   removeMessage: (id: string) => void
   cancelAllNonTerminal: (roomId: string) => void
   nudgeSyncBridge: () => void
@@ -94,6 +95,57 @@ export const useMessageStore = create<MessageStoreState>()(
         }
       })
     },
+
+    replaceMessageId: (oldId, newId) => set((state) => {
+      if (!oldId || !newId || oldId === newId) return state
+      const oldEntity = state.entities[oldId]
+      if (!oldEntity) return state
+
+      const newEntity = state.entities[newId]
+      const mergedEntity = newEntity
+        ? {
+            ...oldEntity,
+            ...newEntity,
+            id: newId,
+            // Preserve optimistic correlation metadata if the newer entity
+            // was created from SSE and omitted it.
+            clientRequestId: newEntity.clientRequestId ?? oldEntity.clientRequestId,
+            sourceVersion: Math.max(newEntity.sourceVersion, oldEntity.sourceVersion) + 1,
+            updatedAt: Date.now(),
+          }
+        : {
+            ...oldEntity,
+            id: newId,
+            sourceVersion: oldEntity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+
+      const entities = { ...state.entities }
+      delete entities[oldId]
+      entities[newId] = mergedEntity
+
+      // Rewire related-message links pointing at the optimistic id.
+      for (const [id, entity] of Object.entries(entities)) {
+        if (entity.relatedMessageId === oldId) {
+          entities[id] = {
+            ...entity,
+            relatedMessageId: newId,
+            sourceVersion: entity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+        }
+      }
+
+      const orderedIds = state.orderedIds
+        .map(id => (id === oldId ? newId : id))
+        .filter((id, idx, arr) => arr.indexOf(id) === idx)
+
+      return {
+        entities,
+        orderedIds,
+        version: state.version + 1,
+      }
+    }),
 
     removeMessage: (id) => set((state) => {
       if (!state.entities[id]) return state
