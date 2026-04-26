@@ -177,6 +177,7 @@ function mergeIncoming(
       clientRequestId: incoming.clientRequestId,
       artifacts: incoming.artifacts,
       attachments: incoming.attachments,
+      turnTerminalStatus: incoming.turnTerminalStatus,
     }
   }
 
@@ -216,6 +217,7 @@ function mergeIncoming(
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
+    turnTerminalStatus: incoming.turnTerminalStatus !== undefined ? incoming.turnTerminalStatus : existing.turnTerminalStatus,
   }
 }
 
@@ -274,7 +276,8 @@ export function isNoOpUpdate(
     existing.clientRequestId   === coalesce(incoming.clientRequestId, existing.clientRequestId) &&
     existing.isEphemeral       === (incoming.isEphemeral ?? existing.isEphemeral) &&
     existing.artifacts         === coalesce(incoming.artifacts, existing.artifacts) &&
-    existing.attachments       === coalesce(incoming.attachments, existing.attachments)
+    existing.attachments       === coalesce(incoming.attachments, existing.attachments) &&
+    existing.turnTerminalStatus === coalesce(incoming.turnTerminalStatus, existing.turnTerminalStatus)
   )
 }
 

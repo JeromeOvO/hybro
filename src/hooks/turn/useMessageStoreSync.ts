@@ -116,7 +116,7 @@ export function useMessageStoreSync() {
 
         if (existingLog) {
           // Turn already exists — only push incremental updates
-          pushIncrementalUpdates(store, turnId, existingLog, turnAgents)
+          pushIncrementalUpdates(store, turnId, existingLog, turnAgents, userEntity)
         } else {
           // Brand new turn — create from scratch
           const events = buildTurnEvents(turnId, userEntity, turnAgents)
@@ -173,6 +173,7 @@ function pushIncrementalUpdates(
   turnId: string,
   existingLog: ReturnType<typeof useTurnEventStore.getState>['turnLogs'] extends Map<string, infer V> ? V : never,
   agentEntities: MessageEntity[],
+  userEntity: MessageEntity,
 ) {
   const existingEvents = existingLog.getEvents()
   let nextSeq = existingEvents.length > 0
@@ -293,13 +294,33 @@ function pushIncrementalUpdates(
     }
   }
 
-  // NOTE: Do NOT emit turn_completed here. Individual agent terminal
-  // status does not mean the room-level processing is done (e.g. Supervisor
-  // may continue evaluating/planning after an agent completes). The
-  // authoritative signal is the processing_status terminal SSE event —
-  // that handler emits turn_completed/turn_failed/turn_canceled.
-  // buildTurnEvents() still emits turn_completed for historical data
-  // loaded via hydration, where the processing is already finished.
+  // Derive turn-level terminal event from the room-level signal stamped on
+  // the user entity by the processing_status SSE handler.
+  //
+  // Individual agent slot_terminated events do NOT imply the room is done —
+  // the supervisor may continue after one agent completes. Only the
+  // processing_status terminal event (proxied here via turnTerminalStatus on
+  // the user entity) is the authoritative room-level completion signal.
+  //
+  // buildTurnEvents() still emits turn_completed for historical/hydrated turns
+  // using the allTerminal heuristic, since those are already complete at load time.
+  const turnAlreadyTerminal = existingEvents.some(
+    e => e.type === 'turn_completed' || e.type === 'turn_failed' || e.type === 'turn_canceled',
+  )
+  if (!turnAlreadyTerminal && userEntity.turnTerminalStatus) {
+    const type =
+      userEntity.turnTerminalStatus === 'failed'   ? 'turn_failed'   :
+      userEntity.turnTerminalStatus === 'canceled' ? 'turn_canceled' : 'turn_completed'
+    store.append(turnId, {
+      eventId: `sync_terminal_${turnId}`,
+      turnId,
+      seq: nextSeq++,
+      ts: Date.now(),
+      type,
+      durationMs: 0,
+      ...(type === 'turn_failed' ? { reason: 'processing_failed', code: 'error' } : {}),
+    } as TurnEvent)
+  }
 }
 
 /** Simple numeric fingerprint based on entity versions + count. */

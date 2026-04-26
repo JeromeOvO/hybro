@@ -282,6 +282,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               }, 'optimistic')
             }
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
+            // Capture the user message ID BEFORE clearing lifecycle state below.
+            // lifecycle.getMessageId() is nulled in this block so we must save it first.
+            const terminalUserMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
+
             lifecycle.setProcessing(false)
             setCancelling(false)
             lifecycle.disarmCancelTimeout()
@@ -315,6 +319,27 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               }
             }
             lifecycle.setCancelTimedOut(false)
+
+            // Stamp the user entity with the room-level terminal status so the
+            // useMessageStoreSync bridge can derive turn_completed/failed/canceled.
+            // The turn store is derived-only — we must not write to it directly.
+            if (terminalUserMsgId) {
+              const existingUserMsg = store.entities[terminalUserMsgId]
+              if (existingUserMsg && !existingUserMsg.turnTerminalStatus) {
+                const terminalStatus =
+                  status === PROCESSING_STATUS.CANCELED ? 'canceled' :
+                  status === PROCESSING_STATUS.FAILED   ? 'failed'   : 'completed'
+                store.upsertMessage({
+                  id: terminalUserMsgId,
+                  roomId,
+                  messageType: existingUserMsg.messageType,
+                  content: existingUserMsg.content,
+                  senderName: existingUserMsg.senderName,
+                  timestamp: existingUserMsg.timestamp,
+                  turnTerminalStatus: terminalStatus,
+                }, 'sse')
+              }
+            }
 
             if (lifecycle.hadSseDisconnection()) {
               console.log('🔄 SSE had disconnection during processing — reconciling with DB')

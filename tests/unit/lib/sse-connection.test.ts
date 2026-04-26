@@ -215,6 +215,37 @@ describe('SSEConnection', () => {
       expect(MockSSEStream.getFetchCallCount()).toBe(countBeforeDisconnect)
       expect(connection.isConnected()).toBe(false)
     })
+
+    it('should keep first reconnect deterministic when jitter is enabled', async () => {
+      const { instance } = await connectAndOpen({
+        reconnectJitterMs: 1000,
+        randomFn: () => 1,
+      })
+      const initialCount = MockSSEStream.getFetchCallCount()
+
+      instance.simulateClose()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(MockSSEStream.getFetchCallCount()).toBeGreaterThan(initialCount)
+    })
+
+    it('should apply jitter when deterministic first reconnect is disabled', async () => {
+      const { instance } = await connectAndOpen({
+        reconnectJitterMs: 1000,
+        randomFn: () => 1,
+        deterministicFirstReconnect: false,
+      })
+      const initialCount = MockSSEStream.getFetchCallCount()
+
+      // First reconnect: 1000ms base + 1000ms jitter
+      instance.simulateClose()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(MockSSEStream.getFetchCallCount()).toBe(initialCount)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(MockSSEStream.getFetchCallCount()).toBeGreaterThan(initialCount)
+    })
   })
 
   describe('disconnect', () => {

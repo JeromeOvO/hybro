@@ -16,6 +16,9 @@ export interface SSEConnectionOptions {
   onError?: (error: Event) => void
   onOpen?: (event: Event) => void
   onClose?: (reason: SSECloseReason) => void
+  reconnectJitterMs?: number
+  randomFn?: () => number
+  deterministicFirstReconnect?: boolean
 }
 
 // Connection state constants (mirrors EventSource.readyState values)
@@ -37,6 +40,9 @@ export class SSEConnection {
   private maxReconnectAttempts = 15
   private baseReconnectDelay = 1000
   private maxReconnectDelay = 30_000
+  private reconnectJitterMs = 0
+  private randomFn: () => number = Math.random
+  private deterministicFirstReconnect = true
   private readTimeoutMs = 90_000 // 3x the backend's 30s heartbeat interval
   private isManualClose = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -45,6 +51,9 @@ export class SSEConnection {
   constructor(options: SSEConnectionOptions) {
     this.roomId = options.roomId
     this.options = options
+    this.reconnectJitterMs = Math.max(0, options.reconnectJitterMs ?? 0)
+    this.randomFn = options.randomFn ?? Math.random
+    this.deterministicFirstReconnect = options.deterministicFirstReconnect ?? true
   }
 
   async connect(): Promise<void> {
@@ -212,10 +221,16 @@ export class SSEConnection {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++
 
-      // Deterministic exponential backoff keeps reconnect behavior testable
-      // and avoids timing races with fake timers in unit tests.
+      // Keep exponential backoff deterministic by default. Jitter is opt-in
+      // and can be injected for production thundering-herd mitigation.
       const exponential = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
-      const delay = Math.min(exponential, this.maxReconnectDelay)
+      const jitterCap = (this.deterministicFirstReconnect && this.reconnectAttempts === 1)
+        ? 0
+        : this.reconnectJitterMs
+      const jitter = jitterCap > 0
+        ? Math.floor(Math.max(0, this.randomFn()) * jitterCap)
+        : 0
+      const delay = Math.min(exponential + jitter, this.maxReconnectDelay)
 
       console.log(`🔄 SSE reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`)
 
