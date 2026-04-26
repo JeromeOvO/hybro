@@ -52,34 +52,36 @@ export function useSendMessage(
     // Step 0: Immediately add user message + placeholder to normalized store
     const processingPlaceholderId = lifecycle.placeholderId(roomId)
     const msgStoreSend = useMessageStore.getState()
-    msgStoreSend.upsertMessage({
-      id: tempMessageId,
-      roomId,
-      messageType: 'user',
-      content: userInput,
-      senderName: userName,
-      userId,
-      timestamp: currentTime,
-      clientRequestId,
-      attachments: pendingAttachments?.map(att => ({
-        fileId: att.id,
-        fileUrl: att.previewUrl || undefined,
-        mimeType: att.file.type,
-        fileName: att.file.name,
-        sizeBytes: att.file.size,
-      })),
-    }, 'optimistic')
-    msgStoreSend.upsertMessage({
-      id: processingPlaceholderId,
-      roomId,
-      messageType: 'agent',
-      content: '',
-      senderName: 'HYBRO AI',
-      taskStatus: TASK_STATE.WORKING,
-      taskContent: 'Processing your request\u2026',
-      timestamp: new Date(Date.now() + 1).toISOString(),
-      isEphemeral: true,
-    }, 'optimistic')
+    msgStoreSend.upsertMany([
+      {
+        id: tempMessageId,
+        roomId,
+        messageType: 'user',
+        content: userInput,
+        senderName: userName,
+        userId,
+        timestamp: currentTime,
+        clientRequestId,
+        attachments: pendingAttachments?.map(att => ({
+          fileId: att.id,
+          fileUrl: att.previewUrl || undefined,
+          mimeType: att.file.type,
+          fileName: att.file.name,
+          sizeBytes: att.file.size,
+        })),
+      },
+      {
+        id: processingPlaceholderId,
+        roomId,
+        messageType: 'agent',
+        content: '',
+        senderName: 'HYBRO AI',
+        taskStatus: TASK_STATE.WORKING,
+        taskContent: 'Processing your request\u2026',
+        timestamp: new Date(Date.now() + 1).toISOString(),
+        isEphemeral: true,
+      },
+    ], 'optimistic')
 
     // Turn-based timeline: create optimistic turn so TurnList shows it immediately
     if (onOptimisticTurn) {

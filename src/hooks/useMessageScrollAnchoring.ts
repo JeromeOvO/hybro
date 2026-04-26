@@ -91,7 +91,7 @@ function isNearContentEnd(container: HTMLElement): boolean {
     return container.scrollHeight - container.scrollTop - container.clientHeight < 100
   }
   const offset = contentEnd.getBoundingClientRect().top - container.getBoundingClientRect().top
-  return Math.abs(offset - container.clientHeight) < 100
+  return offset - container.clientHeight <= 100
 }
 
 // ---------------------------------------------------------------------------
