@@ -56,7 +56,20 @@ function findLastUserMessageId(
 // Coordinate helpers (rect-based, no offsetTop)
 // ---------------------------------------------------------------------------
 
+function ensureTailScrollRange(container: HTMLElement, anchorEl: HTMLElement) {
+  const spacer = container.querySelector('[data-scroll-spacer]') as HTMLElement | null
+  const contentEnd = container.querySelector('[data-content-end]') as HTMLElement | null
+  if (!spacer || !contentEnd) return
+
+  const anchorTop = anchorEl.getBoundingClientRect().top
+  const endTop = contentEnd.getBoundingClientRect().top
+  const heightFromAnchorToEnd = endTop - anchorTop
+
+  spacer.style.height = `${Math.max(0, container.clientHeight - heightFromAnchorToEnd)}px`
+}
+
 function scrollElementToContainerTop(container: HTMLElement, el: HTMLElement) {
+  ensureTailScrollRange(container, el)
   const offset = el.getBoundingClientRect().top - container.getBoundingClientRect().top
   container.scrollTo({ top: Math.max(0, container.scrollTop + offset), behavior: 'auto' })
 }
