@@ -51,7 +51,6 @@ vi.mock('@/hooks/useAutoHideScroll', () => ({
 
 vi.mock('@/hooks/turn/useTurnScroll', () => ({
   useTurnScroll: () => ({
-    messagesEndRef: { current: null },
     shouldAutoScroll: true,
     handleScroll: () => {},
     scrollToBottom: () => {},
@@ -100,6 +99,7 @@ function setupTurnWithLongContent() {
     eventId: 'e5', turnId: 'turn-1', seq: 5, ts: Date.now(),
     type: 'turn_completed', durationMs: 1000,
   } as TurnEvent)
+  store.markHydrated()
 }
 
 describe('Expand/Collapse integration (TurnList -> Context -> AgentContentBlock)', () => {
@@ -211,6 +211,7 @@ describe('Expand/Collapse integration (TurnList -> Context -> AgentContentBlock)
       eventId: 'e8', turnId: 'turn-1', seq: 8, ts: Date.now(),
       type: 'turn_completed', durationMs: 2000,
     } as TurnEvent)
+    store.markHydrated()
 
     const { container } = render(<TurnList />, { wrapper: Wrapper })
 

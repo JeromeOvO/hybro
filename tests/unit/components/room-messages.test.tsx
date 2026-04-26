@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
+import type { TaskState } from '@/lib/types/sse'
 
 // Mock event-log
 vi.mock('@/lib/room-timeline/event-log', () => ({
@@ -25,7 +26,7 @@ function seedStore(messages: Array<{
   messageType: 'user' | 'agent'
   timestamp?: string
   agentId?: string
-  taskStatus?: string
+  taskStatus?: TaskState
   taskStatusMessage?: string | null
   taskContent?: string
   isEphemeral?: boolean
@@ -148,7 +149,7 @@ describe('RoomMessages', () => {
       expect(container.querySelector('[data-message-id="u1"]')).not.toBeNull()
     })
 
-    it('expand/collapse control does not use sticky positioning', async () => {
+    it('expand/collapse control does not share sticky top-0 with user headers', async () => {
       seedStore([
         { id: 'u1', content: 'Hello', senderName: 'Alice', messageType: 'user' },
         { id: 'a1', content: 'World', senderName: 'Bot', messageType: 'agent', agentId: 'agent-1' },
@@ -156,8 +157,9 @@ describe('RoomMessages', () => {
       const { container } = await renderMessages()
       const expandBtn = container.querySelector('[aria-label*="Collapse"]')
         ?? container.querySelector('[aria-label*="Expand"]')
-      const parent = expandBtn?.closest('[class*="absolute"]')
-      expect(parent).not.toBeNull()
+      const stickyParent = expandBtn?.closest('.sticky')
+      expect(stickyParent).not.toBeNull()
+      expect(stickyParent?.classList.contains('top-0')).toBe(false)
     })
   })
 })

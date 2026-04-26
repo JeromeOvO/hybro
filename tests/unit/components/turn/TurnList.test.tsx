@@ -133,7 +133,7 @@ describe('TurnList', () => {
     expect(turns).toHaveLength(2)
   })
 
-  it('expand/collapse button is not sticky (uses absolute positioning)', () => {
+  it('expand/collapse button does not share sticky top-0 with user message headers', () => {
     const store = useTurnEventStore.getState()
     store.append('turn-1', {
       eventId: 'e1', turnId: 'turn-1', seq: 1, ts: Date.now(),
@@ -145,8 +145,8 @@ describe('TurnList', () => {
     const btn = q(container, '[aria-label="Collapse all responses"]')
     expect(btn).not.toBeNull()
 
-    // The button's parent should NOT have 'sticky' class
+    // The button's sticky parent should use top-2, not top-0 (which is for user message headers)
     const stickyParent = btn?.closest('.sticky')
-    expect(stickyParent).toBeNull()
+    expect(stickyParent?.classList.contains('top-0')).toBe(false)
   })
 })

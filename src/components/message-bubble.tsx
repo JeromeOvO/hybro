@@ -275,16 +275,8 @@ function UserMessageBubbleInner({ message }: { message: BubbleMessage }) {
   const estimatedLines = isLongMessage ? Math.max(5, Math.ceil(displayContent.length / 80)) : 0
 
   return (
-    <div className="flex justify-end w-full">
-        <div className="max-w-[80%] rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble">
-        <div className="flex items-center justify-between gap-4 mb-2">
-          <span className="text-xs font-medium opacity-90">
-            {message.sender_name}
-          </span>
-          <span className="text-xs opacity-70">
-            {formatTimestamp(message.timestamp)}
-          </span>
-        </div>
+    <div className="w-full">
+        <div className="rounded-xl p-4 shadow-sm bg-secondary text-secondary-foreground message-bubble">
         <div className="relative">
           <div
             className={cn(
