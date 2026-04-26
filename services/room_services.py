@@ -1863,6 +1863,9 @@ class RoomServices:
             )
 
         user_message = request.message
+        if user_message is not None:
+            # Breaking cutover invariant: canonical turn key is always present.
+            user_message.client_request_id = request.client_request_id
 
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
@@ -3450,6 +3453,7 @@ class RoomServices:
                     room_message = RoomMessage(
                         room_id=user_msg.room_id,
                         message_id=user_msg.message_id,
+                        client_request_id=user_msg.client_request_id,
                         message_type="user",
                         message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
@@ -3528,6 +3532,7 @@ class RoomServices:
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
                         message_id=agent_msg.message_id,
+                        client_request_id=agent_msg.client_request_id,
                         message_type="agent",
                         message_content=MessageContent(
                             message_text=agent_content,

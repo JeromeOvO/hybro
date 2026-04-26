@@ -216,6 +216,15 @@ async def create_and_parse_user_message(
     request_data = await request.json()
     room_id = request_data.get("room_id")
     message = request_data.get("message")
+    client_request_id = request_data.get("client_request_id")
+    if not isinstance(client_request_id, str) or not client_request_id.strip():
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="client_request_id is required",
+            status_code=400,
+        )
 
     # Verify user owns the room
     await verify_room_ownership(room_id, user)
@@ -230,6 +239,7 @@ async def create_and_parse_user_message(
         message=message,
         attachments=attachments,
         inline_file_ids=inline_file_ids,
+        client_request_id=client_request_id,
     )
     room_center_response = await room_center.create_and_parse_user_message(
         room_center_request
@@ -275,6 +285,14 @@ async def send_message(
     room_id = request_data.get("room_id")
     message = request_data.get("message")
     client_request_id = request_data.get("client_request_id")
+    if not isinstance(client_request_id, str) or not client_request_id.strip():
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="client_request_id is required",
+            status_code=400,
+        )
 
     # Canonical field takes precedence; legacy target_group is fallback only.
     message_target_mode = request_data.get("message_target_mode")

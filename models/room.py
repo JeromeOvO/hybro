@@ -101,6 +101,9 @@ class RoomMessage(Message):
     message_type: str  # "user" or "agent"
     user_id: str | None = None
     agent_id: str | None = None
+    # Canonical frontend correlation key for turn identity.
+    # For legacy rows this is backfilled to message_id via migration.
+    client_request_id: str | None = None
     related_message_id: str | None = None
     message_content: MessageContent
     # Step tracking from task decomposition (1-indexed) - included for agent messages
