@@ -174,8 +174,8 @@ export function useMessageScrollAnchoring({
       return cleanup
     }
 
-    // 6. Find last user message
-    const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
+    // 6. Find last user message (use latest refs for callback closures)
+    const lastUserMsgId = findLastUserMessageId(latestAnchorIdsRef.current, latestGetEntityRef.current)
 
     // 7. AI-only room (no user messages)
     if (lastUserMsgId === null) {
@@ -293,8 +293,8 @@ export function useMessageScrollAnchoring({
     const container = scrollContainerRef.current
     if (!container) return
 
-    // 5. Find last user message DOM element
-    const lastUserMsgId = findLastUserMessageId(renderedAnchorIds, getEntityForAnchor)
+    // 5. Find last user message DOM element (use latest refs)
+    const lastUserMsgId = findLastUserMessageId(latestAnchorIdsRef.current, latestGetEntityRef.current)
 
     if (lastUserMsgId) {
       const el = container.querySelector(
