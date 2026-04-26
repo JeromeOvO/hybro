@@ -304,69 +304,51 @@ export function useMessageScrollAnchoring({
   }, [hydrated, roomId, renderedAnchorIds.length, scrollContainerRef])
 
   // ---------------------------------------------------------------------------
-  // Effect 2 (useEffect) — User Send (P1)
+  // Effect 2 (useLayoutEffect) — User Send (P1), pre-paint to avoid flash
   // ---------------------------------------------------------------------------
-  useEffect(() => {
-    // 1. Guard: not hydrated
+  useLayoutEffect(() => {
     if (!hydrated) return
-
-    // 2. Guard: P2 not done yet
     if (modeRef.current === 'initial-anchor' && !initialPassDoneRef.current) return
-
-    // 3. Guard: dedup (handles temp→real id swap)
     if (lastUserSendKey === prevLastUserSendKey.current) return
-
-    // 4. Guard: no user send key
     if (!lastUserSendKey) return
 
     const container = scrollContainerRef.current
     if (!container) return
 
-    // 5. Find last user message DOM element (use latest refs)
     const lastUserMsgId = findLastUserMessageId(latestAnchorIdsRef.current, latestGetEntityRef.current)
+    if (!lastUserMsgId) return
 
-    const scrollToUser = (c: HTMLElement, msgId: string): boolean => {
-      const el = c.querySelector(
-        `[data-message-id="${escapeCssIdent(msgId)}"]`
-      ) as HTMLElement | null
-      if (el) {
-        markProgrammaticScroll()
-        scrollElementToContainerTop(c, el)
-        return true
-      }
-      return false
-    }
+    const el = container.querySelector(
+      `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+    ) as HTMLElement | null
 
-    const finish = () => {
+    if (el) {
+      markProgrammaticScroll()
+      scrollElementToContainerTop(container, el)
       transitionTo('user-anchor')
       prevLastUserSendKey.current = lastUserSendKey
+      return
     }
 
-    if (lastUserMsgId && scrollToUser(container, lastUserMsgId)) {
-      finish()
-    } else if (lastUserMsgId) {
-      // DOM not ready yet — rAF retry (max 3 frames), then fallback
-      let retries = 0
-      const tryScroll = () => {
-        retries++
-        const c = scrollContainerRef.current
-        if (!c) { finish(); return }
-        if (scrollToUser(c, lastUserMsgId)) { finish(); return }
-        if (retries < 3) {
-          requestAnimationFrame(tryScroll)
-        } else {
-          markProgrammaticScroll()
-          scrollToContentEnd(c)
-          finish()
-        }
+    // DOM committed but element not found (rare) — rAF retry, don't mark as handled
+    let retries = 0
+    const tryScroll = () => {
+      retries++
+      const c = scrollContainerRef.current
+      if (!c || modeRef.current === 'initial-anchor') return
+      const retryEl = c.querySelector(
+        `[data-message-id="${escapeCssIdent(lastUserMsgId)}"]`
+      ) as HTMLElement | null
+      if (retryEl) {
+        markProgrammaticScroll()
+        scrollElementToContainerTop(c, retryEl)
+        transitionTo('user-anchor')
+        prevLastUserSendKey.current = lastUserSendKey
+        return
       }
-      requestAnimationFrame(tryScroll)
-      prevLastUserSendKey.current = lastUserSendKey
-    } else {
-      markProgrammaticScroll()
-      scrollToContentEnd(container)
-      finish()
+      if (retries < 5) requestAnimationFrame(tryScroll)
     }
+    requestAnimationFrame(tryScroll)
   }, [lastUserSendKey, hydrated, scrollContainerRef, renderedAnchorIds, getEntityForAnchor])
 
   // ---------------------------------------------------------------------------
