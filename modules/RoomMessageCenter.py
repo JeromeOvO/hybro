@@ -2085,8 +2085,17 @@ class RoomMessageCenter:
         - Deterministic message_id ensures at most one summary per turn.
         """
         summary_message_id = f"summary-{user_message_id}"
+        summary_client_request_id: str | None = None
 
         try:
+            user_message = await self.database_service.get_room_user_message_by_message_id(
+                user_message_id
+            )
+            user_id = user_message.user_id if user_message else None
+            summary_client_request_id = (
+                user_message.client_request_id if user_message else None
+            )
+
             # 1. Determine content — check agent count BEFORE emitting placeholder
             if synthesis_text is not None and synthesis_text.strip():
                 # When the supervisor synthesized from fewer than 2 agent
@@ -2155,6 +2164,7 @@ class RoomMessageCenter:
                 status="working",
                 related_message_id=user_message_id,
                 task_content="Summarizing agent responses…",
+                client_request_id=summary_client_request_id,
             )
 
             # 3. Build and persist
@@ -2181,17 +2191,13 @@ class RoomMessageCenter:
                 history=[summary_a2a_message],
             )
 
-            user_message = await self.database_service.get_room_user_message_by_message_id(
-                user_message_id
-            )
-            user_id = user_message.user_id if user_message else None
-
             summary_agent_message = RoomAgentMessage(
                 room_id=room_id,
                 message_id=summary_message_id,
                 agent_id=CoordinatorAgentId.SUMMARY,
                 related_message_id=user_message_id,
                 user_id=user_id,
+                client_request_id=summary_client_request_id,
                 message_content=MessageContent(message_task=summary_task),
                 message_created_at=utcnow(),
                 extend_info={
@@ -2212,6 +2218,7 @@ class RoomMessageCenter:
                 CoordinatorAgentId.SUMMARY,
                 content,
                 related_message_id=user_message_id,
+                client_request_id=summary_client_request_id,
             )
 
         except Exception as exc:
@@ -2226,6 +2233,7 @@ class RoomMessageCenter:
                     message_id=summary_message_id,
                     status="failed",
                     agent_id=CoordinatorAgentId.SUMMARY,
+                    client_request_id=summary_client_request_id,
                 )
             except Exception:
                 pass

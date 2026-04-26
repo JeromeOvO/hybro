@@ -847,6 +847,9 @@ class SupervisorExecutor:
                             user_id=request_user_id,
                             step_number=step_number + 1,
                             task_content=q.prompt,
+                            client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                                user_message_id
+                            ),
                         )
                         await self.database_service.add_room_agent_message(
                             hitl_agent_message
@@ -1128,6 +1131,9 @@ class SupervisorExecutor:
                     step_number=step_number,
                     total_steps=None,
                     task_content=target.task,
+                    client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                        user_message_id
+                    ),
                 )
                 await self.database_service.add_room_agent_message(message)
 

@@ -44,6 +44,7 @@ class AgentEvent:
     error_text: str | None = None
     related_message_id: str | None = None
     user_id: str | None = None
+    client_request_id: str | None = None
 
     # Artifact streaming flags (A2A spec)
     append: bool = False

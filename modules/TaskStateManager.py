@@ -99,6 +99,7 @@ class TaskStateManager:
             created_at=ctx.created_at,
             step_number=ctx.step_number,
             total_steps=ctx.total_steps,
+            client_request_id=ctx.current_message.client_request_id,
             **kwargs,
         )
 

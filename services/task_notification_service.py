@@ -16,6 +16,7 @@ safe no-op.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import uuid
 from typing import TYPE_CHECKING
 
@@ -306,6 +307,16 @@ async def _notify_task_update_impl(
         created_at = room_agent_message.task_created_at.isoformat()
 
     task_content = room_agent_message.task_content
+    client_request_id = room_agent_message.client_request_id
+    if not client_request_id:
+        resolver = getattr(db, "resolve_client_request_id_for_agent_message", None)
+        if callable(resolver):
+            resolved = resolver(room_agent_message)
+            client_request_id = (
+                await resolved if inspect.isawaitable(resolved) else resolved
+            )
+    if not isinstance(client_request_id, str) or not client_request_id:
+        client_request_id = None
 
     # --- Send the SSE -----------------------------------------------------
     # Convert any inline base64 file bytes to S3 URIs before broadcasting
@@ -331,12 +342,18 @@ async def _notify_task_update_impl(
         total_steps=room_agent_message.total_steps,
         task_content=task_content,
         parts=parts,
+        client_request_id=client_request_id,
     )
 
     logger.info("Sent SSE notification for task %s state %s", message_id, state)
 
     if send_processing_status and is_terminal_state(state):
-        await sse.send_processing_status(room_id, state, message_id)
+        if client_request_id:
+            await sse.send_processing_status(
+                room_id, state, message_id, client_request_id=client_request_id
+            )
+        else:
+            await sse.send_processing_status(room_id, state, message_id)
 
     return True
 

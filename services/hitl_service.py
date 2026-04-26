@@ -12,6 +12,7 @@ See docs/HITL_DESIGN.md §6 for full design details.
 
 from __future__ import annotations
 
+import inspect
 import re
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -815,6 +816,20 @@ class HITLService:
             ),
             "source": request.source,
         }
+        get_user_message = getattr(
+            self.database_service, "get_room_user_message_by_message_id", None
+        )
+        user_message = None
+        if callable(get_user_message):
+            maybe_user_message = get_user_message(request.user_message_id)
+            user_message = (
+                await maybe_user_message
+                if inspect.isawaitable(maybe_user_message)
+                else maybe_user_message
+            )
+        client_request_id = user_message.client_request_id if user_message else None
+        if client_request_id:
+            data["client_request_id"] = client_request_id
 
         if event_type == HITLEventType.INPUT_REQUESTED:
             message_type = "hitl_input_requested"

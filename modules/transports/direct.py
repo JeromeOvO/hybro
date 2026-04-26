@@ -140,6 +140,7 @@ class DirectTransport(AgentTransport):
             state=state.value if hasattr(state, 'value') else str(state),
             related_message_id=msg.related_message_id,
             user_id=msg.user_id or "",
+            client_request_id=msg.client_request_id,
             parts=parts,
             skip_persist=True,
         ))
@@ -487,6 +488,7 @@ class DirectTransport(AgentTransport):
                 step_number=step_number,
                 total_steps=total_steps,
                 task_content=task_content,
+                client_request_id=current_message.client_request_id,
             )
             return task_info
         except Exception as exc:
@@ -841,6 +843,7 @@ class DirectTransport(AgentTransport):
                 artifact_dict,
                 append=True,
                 last_chunk=False,
+                client_request_id=ctx.current_message.client_request_id,
             )
 
     @staticmethod
@@ -982,6 +985,7 @@ class DirectTransport(AgentTransport):
                 message_id=ctx.current_message.message_id,
                 room_id=ctx.room_id,
                 agent_id=ctx.current_message.agent_id or "",
+                client_request_id=ctx.current_message.client_request_id,
                 artifacts=[artifact_dict],
                 append=append,
                 last_chunk=last_chunk,
@@ -1007,6 +1011,7 @@ class DirectTransport(AgentTransport):
                 {"artifact_id": f"{ctx.current_message.message_id}-stream", "parts": []},
                 append=True,
                 last_chunk=True,
+                client_request_id=ctx.current_message.client_request_id,
             )
 
         logger.info(
@@ -1273,6 +1278,7 @@ class DirectTransport(AgentTransport):
                 status=TaskState.working,
                 step_number=step_number,
                 total_steps=total_steps,
+                client_request_id=current_message.client_request_id,
             )
 
         message_id = current_message.message_id
@@ -1490,6 +1496,7 @@ class DirectTransport(AgentTransport):
                     step_number=step_number,
                     total_steps=total_steps,
                     parts=non_text_parts if non_text_parts else None,
+                    client_request_id=current_message.client_request_id,
                 )
 
             # P1: Non-completed terminal states are dispatch failures so
@@ -1658,5 +1665,6 @@ class DirectTransport(AgentTransport):
                 agent_id=current_message.agent_id,
                 step_number=step_number,
                 total_steps=total_steps,
+                client_request_id=current_message.client_request_id,
             )
         return True, final_content, None

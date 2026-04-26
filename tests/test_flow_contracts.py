@@ -149,6 +149,7 @@ class TestRoomLifecycleFlow:
                         "room_id": room_id,
                         "message": user_msg.model_dump(),
                         "target_group": "room_team",
+                        "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
                     })
                     bg = MagicMock()
                     send_resp = await send_message(req3, bg, flow_user)
@@ -203,6 +204,7 @@ class TestRoomLifecycleFlow:
             req.json = AsyncMock(return_value={
                 "room_id": "guarded-room",
                 "message": {"message_text": "x"},
+                "client_request_id": "c7c9a000-0000-4000-8000-000000000004",
             })
             with pytest.raises(HTTPException) as exc:
                 await send_message(req, MagicMock(), other_user)
