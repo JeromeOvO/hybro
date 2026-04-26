@@ -13,6 +13,18 @@ import {
   resolveClientRequestMessageId,
 } from './pending-turn-buffer'
 
+const ENABLE_UNCORRELATED_SSE_COMPAT_FALLBACK =
+  process.env.NEXT_PUBLIC_SSE_CORRELATION_COMPAT === '1'
+
+const TURN_CORRELATED_EVENT_TYPES = new Set<SSEMessage['type']>([
+  'processing_status',
+  'task_submitted',
+  'task_update',
+  'artifact_update',
+  'hitl_input_requested',
+  'hitl_status_update',
+])
+
 function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
   messageId: string,
@@ -84,7 +96,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
   const { roomId, lifecycle, getAgentName, getAgentSource,
           reconcileWithDb, hitlRequestIndex, setCancelling } = deps
 
-  return async (sseMessage: SSEMessage, forcedMessageId?: string) => {
+  return async (sseMessage: SSEMessage) => {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
 
@@ -93,19 +105,20 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
       shouldBuffer: boolean
       shouldDrop: boolean
     } => {
+      if (!TURN_CORRELATED_EVENT_TYPES.has(sseMessage.type)) {
+        return { shouldBuffer: false, shouldDrop: false }
+      }
+
       const clientReqId = sseMessage.data?.client_request_id as string | undefined
       if (clientReqId) {
-        const shouldBuffer = !forcedMessageId && !getResolvedMessageId(clientReqId)
+        const shouldBuffer = !getResolvedMessageId(clientReqId)
         return { clientReqId, shouldBuffer, shouldDrop: false }
       }
 
-      // Backward/partial-compat path:
-      // If server omitted client_request_id but we already have an active
-      // lifecycle message or are replaying buffered events after HTTP resolved
-      // message_id, process unbuffered instead of dropping.
-      if (forcedMessageId || lifecycle.getMessageId()) {
+      // Temporary rollout gate for backend drift. Keep disabled by default.
+      if (ENABLE_UNCORRELATED_SSE_COMPAT_FALLBACK && lifecycle.getMessageId()) {
         console.warn(
-          'Proceeding with uncorrelated SSE event without client_request_id:',
+          '[compat] Proceeding with uncorrelated SSE event without client_request_id:',
           sseMessage.type,
         )
         return { shouldBuffer: false, shouldDrop: false }
@@ -218,6 +231,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               senderName: agentName,
               agentId,
               agentSource: agentId ? getAgentSource(agentId) : undefined,
+              clientRequestId: existing?.clientRequestId || sseMessage.data?.client_request_id,
               timestamp: msgTimestamp,
               ...(preserveTaskStatus ? {} : { taskStatus: null }),
               isEphemeral: false,
@@ -376,6 +390,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             stepNumber: sseMessage.data.step_number,
             totalSteps: sseMessage.data.total_steps,
             relatedMessageId: sseMessage.data.related_message_id,
+            clientRequestId: sseMessage.data.client_request_id,
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }, 'sse')
@@ -432,6 +447,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
             agentSource: getAgentSource(sseMessage.data.agent_id),
+            clientRequestId: sseMessage.data.client_request_id,
             timestamp: new Date().toISOString(),
           }
 
@@ -582,6 +598,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: existing?.senderName || 'Agent',
             agentId: existing?.agentId || sseMessage.data.agent_id,
             agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),
+            clientRequestId: existing?.clientRequestId || sseMessage.data.client_request_id,
             timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             artifacts: merged,
           }, 'sse')
@@ -601,13 +618,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
       case 'hitl_input_requested': {
         console.log('🔔 HITL input requested via SSE:', sseMessage.data)
         {
-          const clientReqId = sseMessage.data?.client_request_id as string | undefined
-          if (!forcedMessageId && clientReqId && !getResolvedMessageId(clientReqId)) {
-            enqueuePendingSseEvent(clientReqId, sseMessage)
-            break
-          }
-          if (!clientReqId) {
-            console.warn('Proceeding with HITL request without client_request_id')
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.clientReqId && sseMessage.data?.message_id) {
+            // HITL request provides stable message_id immediately; resolve
+            // correlation eagerly so follow-up status updates can apply.
+            resolveClientRequestMessageId(correlation.clientReqId, sseMessage.data.message_id)
           }
         }
         if (sseMessage.data) {
@@ -655,6 +671,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               stepNumber: step_number,
               totalSteps: total_steps,
               relatedMessageId: related_message_id,
+              clientRequestId: sseMessage.data.client_request_id,
             }, 'sse')
             hitlRequestIndex.current.set(request_id, message_id)
 
@@ -673,11 +690,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
       case 'hitl_status_update': {
         console.log('🔔 HITL status update via SSE:', sseMessage.data)
         {
-          const clientReqId = sseMessage.data?.client_request_id as string | undefined
-          if (!forcedMessageId && clientReqId && !getResolvedMessageId(clientReqId)) {
-            enqueuePendingSseEvent(clientReqId, sseMessage)
-            break
-          }
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
         }
         if (sseMessage.data) {
           const { request_id, status: hitlStatus, error_message } = sseMessage.data

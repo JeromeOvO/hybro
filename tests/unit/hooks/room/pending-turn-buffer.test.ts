@@ -23,22 +23,22 @@ describe('pending-turn-buffer', () => {
     clearPendingSseForClientRequest('req-rollback')
   })
 
-  it('flushes buffered events in arrival order with forced messageId', async () => {
+  it('flushes buffered events in arrival order', async () => {
     enqueuePendingSseEvent('req-order', mkEvent('task_submitted', { n: 1 }))
     enqueuePendingSseEvent('req-order', mkEvent('task_update', { n: 2 }))
     enqueuePendingSseEvent('req-order', mkEvent('artifact_update', { n: 3 }))
 
-    const calls: Array<{ type: string; forcedTurnId?: string }> = []
-    const dispatch = vi.fn(async (event: SSEMessage, forcedTurnId?: string) => {
-      calls.push({ type: event.type, forcedTurnId })
+    const calls: Array<{ type: string }> = []
+    const dispatch = vi.fn(async (event: SSEMessage) => {
+      calls.push({ type: event.type })
     })
 
     await flushPendingSseEvents('req-order', dispatch, 'msg-real-order')
 
     expect(calls).toEqual([
-      { type: 'task_submitted', forcedTurnId: 'msg-real-order' },
-      { type: 'task_update', forcedTurnId: 'msg-real-order' },
-      { type: 'artifact_update', forcedTurnId: 'msg-real-order' },
+      { type: 'task_submitted' },
+      { type: 'task_update' },
+      { type: 'artifact_update' },
     ])
     expect(getResolvedMessageId('req-order')).toBe('msg-real-order')
   })

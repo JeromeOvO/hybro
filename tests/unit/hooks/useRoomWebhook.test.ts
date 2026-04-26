@@ -214,6 +214,20 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(flags().processing).toBe(false)
   })
 
+  it('drops processing_status without client_request_id', async () => {
+    useRoomUiStore.getState().setProcessing('room-1', false)
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: { status: 'processing', message_id: 'msg-uncorrelated-processing' },
+      }))
+    })
+
+    expect(flags().processing).toBe(false)
+  })
+
   it('buffers task_submitted when correlation is unresolved', async () => {
     await mountHook()
 
@@ -394,7 +408,7 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(useMessageStore.getState().entities['task-parts-only']).toBeUndefined()
   })
 
-  it('processes uncorrelated task_update when lifecycle already has active message id', async () => {
+  it('drops uncorrelated task_update even when lifecycle already has active message id', async () => {
     const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
     await mountHook()
 
@@ -416,7 +430,7 @@ describe('useRoomWebhook SSE message handling', () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
-          // intentionally omit client_request_id to validate fallback behavior
+          // intentionally omit client_request_id to validate strict behavior
           message_id: 'task-active-lifecycle',
           status: 'working',
           content: 'Should still apply with active lifecycle context',
@@ -426,8 +440,7 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     const entity = useMessageStore.getState().entities['task-active-lifecycle']
-    expect(entity).toBeDefined()
-    expect(entity.content).toBe('Should still apply with active lifecycle context')
+    expect(entity).toBeUndefined()
   })
 
   it('should handle error SSE message', async () => {

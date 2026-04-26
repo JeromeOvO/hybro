@@ -70,7 +70,7 @@ export function enqueuePendingSseEvent(clientRequestId: string, event: SSEMessag
 
 export function flushPendingSseEvents(
   clientRequestId: string,
-  dispatch: (event: SSEMessage, forcedMessageId?: string) => Promise<void>,
+  dispatch: (event: SSEMessage) => Promise<void>,
   messageId: string,
 ): Promise<void> {
   resolveClientRequestMessageId(clientRequestId, messageId)
@@ -80,7 +80,7 @@ export function flushPendingSseEvents(
   }
   pendingByClientRequestId.delete(clientRequestId)
   return pending.events.reduce<Promise<void>>(
-    (p, event) => p.then(() => dispatch(event, messageId)),
+    (p, event) => p.then(() => dispatch(event)),
     Promise.resolve(),
   )
 }

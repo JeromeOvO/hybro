@@ -52,8 +52,9 @@ export function useMessageStoreSync() {
         else if (entity.messageType === 'agent') agentEntities.push(entity)
       }
 
-      // Canonical cutover: turn identity is clientRequestId only.
-      // Keep a separate message-id index for relatedMessageId traversal.
+      // Canonical routing: prefer direct clientRequestId on agent entities.
+      // Keep relatedMessageId traversal as a bounded compatibility fallback
+      // for legacy rows that may not carry clientRequestId yet.
       const agentsByTurn = new Map<string, MessageEntity[]>()
       const userByMessageId = new Map<string, MessageEntity>()
       const userMessageIds = new Set<string>()
@@ -66,6 +67,13 @@ export function useMessageStoreSync() {
       const unlinked: MessageEntity[] = []
 
       for (const agent of agentEntities) {
+        if (agent.clientRequestId) {
+          const list = agentsByTurn.get(agent.clientRequestId) ?? []
+          list.push(agent)
+          agentsByTurn.set(agent.clientRequestId, list)
+          continue
+        }
+
         const relId = agent.relatedMessageId
         if (!relId) { unlinked.push(agent); continue }
 
