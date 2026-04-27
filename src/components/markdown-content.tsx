@@ -208,7 +208,10 @@ function makeComponents(isStreaming: boolean) {
   },
   code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
     const match = /language-(\w+)/.exec(className || '')
-    const isInline = !match
+    // Fenced blocks without a language tag have no className, but they always
+    // contain newlines. Inline backticks never do. Use this to distinguish them
+    // so that unlabelled ``` blocks still get <pre> treatment.
+    const isInline = !match && !extractText(children).includes('\n')
     if (isInline) {
       return (
         <code
@@ -219,7 +222,7 @@ function makeComponents(isStreaming: boolean) {
         </code>
       )
     }
-    const isJson = match[1] === 'json'
+    const isJson = match?.[1] === 'json'
     if (isJson && !isStreaming) {
       const text = extractText(children)
       const lineCount = text.split('\n').filter((l, i, a) => i < a.length - 1 || l.trim()).length
