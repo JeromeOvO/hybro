@@ -455,3 +455,64 @@ class TestEmitHitlEvent:
         call_args = mock_hitl_sse_manager.broadcast_to_room.call_args
         data = call_args[0][2]
         assert data["error_message"] == "Something went wrong"
+
+    @pytest.mark.asyncio
+    async def test_resolves_client_request_id_from_message_id_when_user_row_missing(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        """SSE payload should include client_request_id via DB resolver on message_id."""
+        mock_hitl_db_service.get_room_user_message_by_message_id = AsyncMock(
+            return_value=None
+        )
+        mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-resolved-via-message-id"
+        )
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+
+        req = sample_hitl_request.model_copy(
+            update={"display_message_id": "test-agent-msg-001"}
+        )
+
+        await hitl_service._emit_hitl_event(
+            room_id=req.room_id,
+            event_type=HITLEventType.INPUT_REQUESTED,
+            request=req,
+        )
+
+        data = mock_hitl_sse_manager.broadcast_to_room.call_args[0][2]
+        assert data["message_id"] == "test-agent-msg-001"
+        assert data["client_request_id"] == "cr-resolved-via-message-id"
+        mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_called_once_with(
+            "test-agent-msg-001"
+        )
+
+    @pytest.mark.asyncio
+    async def test_prefers_user_message_client_request_id_over_resolver(
+        self, hitl_service, mock_hitl_db_service, mock_hitl_sse_manager, sample_hitl_request
+    ):
+        """When user row already has client_request_id, do not replace with resolver."""
+        user_row = MagicMock()
+        user_row.client_request_id = "cr-from-user-row"
+        mock_hitl_db_service.get_room_user_message_by_message_id = AsyncMock(
+            return_value=user_row
+        )
+        mock_hitl_db_service.resolve_client_request_id_for_message_id = AsyncMock(
+            return_value="cr-from-resolver"
+        )
+        hitl_service._db_service = mock_hitl_db_service
+        hitl_service._sse_manager = mock_hitl_sse_manager
+
+        req = sample_hitl_request.model_copy(
+            update={"display_message_id": "test-agent-msg-001"}
+        )
+
+        await hitl_service._emit_hitl_event(
+            room_id=req.room_id,
+            event_type=HITLEventType.INPUT_REQUESTED,
+            request=req,
+        )
+
+        data = mock_hitl_sse_manager.broadcast_to_room.call_args[0][2]
+        assert data["client_request_id"] == "cr-from-user-row"
+        mock_hitl_db_service.resolve_client_request_id_for_message_id.assert_not_called()

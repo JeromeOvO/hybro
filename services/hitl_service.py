@@ -830,6 +830,25 @@ class HITLService:
         client_request_id = user_message.client_request_id if user_message else None
         if client_request_id:
             data["client_request_id"] = client_request_id
+        else:
+            # Match SSEManager turn-correlation: resolve from display/continuation/agent
+            # message_id when the user row lacks client_request_id (strict frontend).
+            mid = data.get("message_id")
+            if isinstance(mid, str) and mid.strip():
+                resolve_fn = getattr(
+                    self.database_service,
+                    "resolve_client_request_id_for_message_id",
+                    None,
+                )
+                if callable(resolve_fn):
+                    maybe_resolved = resolve_fn(mid.strip())
+                    resolved = (
+                        await maybe_resolved
+                        if inspect.isawaitable(maybe_resolved)
+                        else maybe_resolved
+                    )
+                    if isinstance(resolved, str) and resolved.strip():
+                        data["client_request_id"] = resolved.strip()
 
         if event_type == HITLEventType.INPUT_REQUESTED:
             message_type = "hitl_input_requested"
