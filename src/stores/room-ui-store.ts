@@ -11,6 +11,11 @@ interface PendingRoomData {
   handoffMode?: "autosend" | "prefill"
 }
 
+export interface PendingTurnSkeleton {
+  text: string
+  attachments?: PendingAttachment[]
+}
+
 export interface RoomFlags {
   sending: boolean
   processing: boolean
@@ -41,6 +46,7 @@ interface RoomUiState {
   rooms: Record<RoomId, RoomFlags>
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
+  pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
   /** Global user preference: use turn-based timeline for all rooms */
   globalTurnBasedTimeline: boolean
 
@@ -64,6 +70,7 @@ interface RoomUiState {
   setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+  setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
   /** Set global turn-based timeline preference (persisted to localStorage) */
   setGlobalTurnBasedTimeline: (v: boolean) => void
 }
@@ -76,6 +83,7 @@ function readLocalStorageBool(key: string, fallback: boolean): boolean {
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
+  pendingTurnSkeletons: {},
   globalTurnBasedTimeline: readLocalStorageBool('hybro:turnBasedTimeline', false),
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
@@ -100,6 +108,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     set({
       rooms: {},
       pendingRoomData: {},
+      pendingTurnSkeletons: {},
     }),
 
   setPendingRoomData: (roomId, data) =>
@@ -120,6 +129,13 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     }
     return data
   },
+  setPendingTurnSkeleton: (roomId, value) =>
+    set((state) => {
+      const copy = { ...state.pendingTurnSkeletons }
+      if (!value) delete copy[roomId]
+      else copy[roomId] = value
+      return { pendingTurnSkeletons: copy }
+    }),
   setGlobalTurnBasedTimeline: (v) => {
     set({ globalTurnBasedTimeline: v })
     try { localStorage.setItem('hybro:turnBasedTimeline', String(v)) } catch { /* ignore */ }

@@ -8,6 +8,30 @@
 > positions. Do not block on a line-number mismatch; trust the
 > symbol name.
 
+## Current Repo Status (2026-04-25 implementation check)
+
+Core implementation for this plan is now landed in `hybro-frontend` and
+`multi-agents-backend`.
+
+- **Stable turn IDs are live.** Frontend send flow no longer uses
+  `tempMessageId`/ID replacement for turn timeline writes.
+- **Single writer is live.** Direct SSE path is the active writer into
+  `useTurnEventStore`; `useMessageStoreSync` is reduced to a one-shot hydration
+  fallback helper (`hydrateTurnStoreFromMessages(...)`).
+- **Backend Commit 0 is landed.** `RoomMessageCenter` now calls
+  `TurnEventAppender.start_turn()` with an explicit `turn_exists(...)` guard.
+- **Pre-POST SSE buffering is live.** Early `turn_event`/`processing_status`
+  messages are buffered by `clientRequestId` and replayed after POST resolves
+  the real `messageId`.
+- **Skeleton row behavior is live.** While POST is in-flight, turn timeline
+  renders a transient pending user row (plus processing rail) instead of
+  falling through to empty-state.
+- **Flag strategy deviation (intentional):** the intermediate
+  `turnEventStoreWriter` ternary sub-flag from this migration plan was not
+  introduced; implementation moved directly to the end-state writer model.
+- **Integration-adjacent repos:** `hybro-hub` and `a2a-adapter` remain
+  non-owning for room `turn_event` journaling architecture.
+
 ## Problem Statement
 
 The chat UI occasionally renders the agent's response twice; a refresh fixes it.
@@ -945,6 +969,15 @@ Every hit needs a decision: delete, keep (with justification), or adapt.
 7. No test is `.skip`'d or `.todo`'d to pass the suite; removed tests
    are actually deleted.
 
+### Implementation status (2026-04-25)
+
+- Criteria 1-5: **met** in current codebase state.
+- Criterion 6: **partially validated** (manual sends/refresh paths verified in
+  local testing; perform the full matrix in staging before removing
+  `turnBasedTimeline` guardrails).
+- Criterion 7: **met** for touched suites in this refactor; keep standard CI
+  gate as final enforcement.
+
 ## Estimated Effort
 
 - **Commit 0 (backend):** ~0.5 day implementation + ≥24h staging
@@ -1182,9 +1215,11 @@ Every hit needs a decision: delete, keep (with justification), or adapt.
 
 All open questions (#1-#8) are now resolved. Commit 0's implementation
 text (lines 604-610) must be updated to make idempotency explicit
-(`turn_exists` guard) before the C0.1 code lands — that refinement,
-plus the trivial `database_service.turn_exists(room_id, turn_id)`
-helper, are the only remaining prerequisites for Commit 0 merge.
+(`turn_exists` guard) before the C0.1 code lands. Note:
+`database_service.turn_exists(room_id, turn_id)` already exists in
+`multi-agents-backend/services/database_service.py`; the remaining
+prerequisites are wiring the production `start_turn()` call site and
+landing the associated end-to-end/regression coverage.
 
 The plan is implementation-ready end-to-end. Optional future work
 tracked outside this refactor:

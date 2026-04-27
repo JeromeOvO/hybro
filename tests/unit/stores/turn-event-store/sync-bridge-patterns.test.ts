@@ -32,8 +32,8 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
     useTurnEventStore.getState().reset()
   })
 
-  describe('clientRequestId optimistic merge', () => {
-    it('merges optimistic turn when turn_started carries matching clientRequestId', () => {
+  describe('clientRequestId canonical turn identity', () => {
+    it('keeps canonical clientRequestId turn even when non-canonical turn id appears', () => {
       const store = useTurnEventStore.getState()
 
       // Step 1: Create optimistic turn (simulates what useSendMessage does)
@@ -52,44 +52,40 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       }))
 
       const state = useTurnEventStore.getState()
-      expect(state.orderedTurnIds).not.toContain('req-abc')
+      expect(state.orderedTurnIds).toContain('req-abc')
       expect(state.orderedTurnIds).toContain('real-turn-id')
       expect(state.turnLogs.has('real-turn-id')).toBe(true)
-      expect(state.turnLogs.has('req-abc')).toBe(false)
+      expect(state.turnLogs.has('req-abc')).toBe(true)
     })
 
-    it('chains merge through tempMessageId → realMessageId via preserved clientRequestId', () => {
+    it('does not remap canonical turn key across temp/real ids', () => {
       const store = useTurnEventStore.getState()
 
       // Step 1: User sends message → optimistic turn
       store.createOptimisticTurn('req-abc', { text: 'hello', attachments: [] })
       expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['req-abc'])
 
-      // Step 2: Sync bridge first run → merge optimistic into tempMessageId
+      // Step 2: Sync bridge first run adds a non-canonical id but keeps canonical id
       store.append('temp-msg-123', evt({
         type: 'turn_started', seq: 1, eventId: 'sync-1',
         turnId: 'temp-msg-123', userInput, clientRequestId: 'req-abc',
       }))
 
       let state = useTurnEventStore.getState()
-      expect(state.orderedTurnIds).toEqual(['temp-msg-123'])
-      expect(state.turnLogs.has('req-abc')).toBe(false)
-      // clientRequestId mapping updated (not deleted) to point to tempMessageId
+      expect(state.orderedTurnIds).toEqual(['req-abc', 'temp-msg-123'])
+      expect(state.turnLogs.has('req-abc')).toBe(true)
       expect(state.turnIdByClientRequestId.get('req-abc')).toBe('temp-msg-123')
 
-      // Step 3: Message store swaps temp → real ID. Sync bridge fires again
-      // with realMessageId. The second merge should chain through.
+      // Step 3: Message store swaps temp → real ID. Sync bridge adds real id.
       store.append('real-msg-456', evt({
         type: 'turn_started', seq: 1, eventId: 'sync-2',
         turnId: 'real-msg-456', userInput, clientRequestId: 'req-abc',
       }))
 
       state = useTurnEventStore.getState()
-      // Only the real turn should remain — no duplicates
-      expect(state.orderedTurnIds).toEqual(['real-msg-456'])
-      expect(state.turnLogs.has('temp-msg-123')).toBe(false)
+      expect(state.orderedTurnIds).toEqual(['req-abc', 'temp-msg-123', 'real-msg-456'])
+      expect(state.turnLogs.has('temp-msg-123')).toBe(true)
       expect(state.turnLogs.has('real-msg-456')).toBe(true)
-      // clientRequestId mapping updated to real ID
       expect(state.turnIdByClientRequestId.get('req-abc')).toBe('real-msg-456')
     })
 
@@ -115,7 +111,7 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       expect(state.orderedTurnIds).toHaveLength(2)
     })
 
-    it('preserves turn ordering after optimistic merge', () => {
+    it('preserves turn ordering when canonical + non-canonical ids coexist', () => {
       const store = useTurnEventStore.getState()
 
       // Pre-existing turn
@@ -134,10 +130,10 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
         clientRequestId: 'req-xyz',
       }))
 
-      expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['turn-0', 'turn-1'])
+      expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['turn-0', 'req-xyz', 'turn-1'])
     })
 
-    it('transfers optimistic events to real turn log during merge', () => {
+    it('keeps optimistic events on canonical turn log', () => {
       const store = useTurnEventStore.getState()
 
       store.createOptimisticTurn('req-abc', { text: 'hello', attachments: [] })
@@ -146,17 +142,19 @@ describe('Sync bridge patterns (useMessageStoreSync behavior)', () => {
       const optimisticLog = useTurnEventStore.getState().turnLogs.get('req-abc')
       expect(optimisticLog!.getEvents()).toHaveLength(1)
 
-      // Merge with real turn
+      // Add non-canonical turn id
       store.append('real-id', evt({
         type: 'turn_started', seq: 1, eventId: 'e-real', turnId: 'real-id',
         userInput: { text: 'hello', attachments: [] },
         clientRequestId: 'req-abc',
       }))
 
-      // Real log should have the event
+      // Real log should have its own event; canonical keeps original event.
       const realLog = useTurnEventStore.getState().turnLogs.get('real-id')
       expect(realLog!.getEvents()).toHaveLength(1)
       expect(realLog!.getEvents()[0].eventId).toBe('e-real')
+      const canonicalLog = useTurnEventStore.getState().turnLogs.get('req-abc')
+      expect(canonicalLog!.getEvents()).toHaveLength(1)
     })
   })
 

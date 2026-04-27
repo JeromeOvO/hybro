@@ -86,6 +86,12 @@ export interface MessageEntity {
 
   // ── User attachments ──────────────────────────────────────
   attachments?: AttachmentData[]
+
+  // ── Turn terminal signal ──────────────────────────────────
+  // Written by the processing_status SSE handler onto the user entity so
+  // useMessageStoreSync can derive turn_completed/failed/canceled without
+  // the turn store receiving direct writes (derived-only constraint).
+  turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
 }
 
 /**
@@ -130,4 +136,5 @@ export interface IncomingMessage {
   isEphemeral?: boolean
   artifacts?: ArtifactData[]
   attachments?: AttachmentData[]
+  turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
 }

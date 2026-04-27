@@ -28,9 +28,8 @@ interface MessageStoreState {
   // ── Write operations ─────────────────────────────────────
   upsertMessage: (msg: IncomingMessage, source: MessageSource) => void
   upsertMany: (msgs: IncomingMessage[], source: MessageSource) => void
+  replaceMessageId: (oldId: string, newId: string) => void
   removeMessage: (id: string) => void
-  replaceMessageId: (oldId: string, newId: string, updates?: Partial<IncomingMessage>) => void
-  findByClientRequestId: (clientRequestId: string) => MessageEntity | undefined
   cancelAllNonTerminal: (roomId: string) => void
   nudgeSyncBridge: () => void
   setRoom: (roomId: string) => void
@@ -97,6 +96,57 @@ export const useMessageStore = create<MessageStoreState>()(
       })
     },
 
+    replaceMessageId: (oldId, newId) => set((state) => {
+      if (!oldId || !newId || oldId === newId) return state
+      const oldEntity = state.entities[oldId]
+      if (!oldEntity) return state
+
+      const newEntity = state.entities[newId]
+      const mergedEntity = newEntity
+        ? {
+            ...oldEntity,
+            ...newEntity,
+            id: newId,
+            // Preserve optimistic correlation metadata if the newer entity
+            // was created from SSE and omitted it.
+            clientRequestId: newEntity.clientRequestId ?? oldEntity.clientRequestId,
+            sourceVersion: Math.max(newEntity.sourceVersion, oldEntity.sourceVersion) + 1,
+            updatedAt: Date.now(),
+          }
+        : {
+            ...oldEntity,
+            id: newId,
+            sourceVersion: oldEntity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+
+      const entities = { ...state.entities }
+      delete entities[oldId]
+      entities[newId] = mergedEntity
+
+      // Rewire related-message links pointing at the optimistic id.
+      for (const [id, entity] of Object.entries(entities)) {
+        if (entity.relatedMessageId === oldId) {
+          entities[id] = {
+            ...entity,
+            relatedMessageId: newId,
+            sourceVersion: entity.sourceVersion + 1,
+            updatedAt: Date.now(),
+          }
+        }
+      }
+
+      const orderedIds = state.orderedIds
+        .map(id => (id === oldId ? newId : id))
+        .filter((id, idx, arr) => arr.indexOf(id) === idx)
+
+      return {
+        entities,
+        orderedIds,
+        version: state.version + 1,
+      }
+    }),
+
     removeMessage: (id) => set((state) => {
       if (!state.entities[id]) return state
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -107,79 +157,6 @@ export const useMessageStore = create<MessageStoreState>()(
         version: state.version + 1,
       }
     }),
-
-    replaceMessageId: (oldId, newId, updates) => set((state) => {
-      const old = state.entities[oldId]
-      const existingReal = state.entities[newId]
-
-      // Case D: neither exists — true no-op
-      if (!old && !existingReal) return state
-
-      // Extract entity-compatible fields from updates
-      const patch: Partial<MessageEntity> = updates
-        ? {
-            content: updates.content,
-            senderName: updates.senderName,
-            userId: updates.userId,
-            clientRequestId: updates.clientRequestId,
-            attachments: updates.attachments,
-            timestamp: updates.timestamp,
-          }
-        : {}
-      // Remove undefined keys so spread doesn't overwrite with undefined
-      for (const k of Object.keys(patch) as (keyof typeof patch)[]) {
-        if (patch[k] === undefined) delete patch[k]
-      }
-
-      // Start from entities minus the old entry (if it exists)
-      const rest = { ...state.entities }
-      if (old) delete rest[oldId]
-
-      let merged: MessageEntity
-      if (old && existingReal) {
-        // Case B: SSE already created the real entity while temp still exists
-        merged = {
-          ...existingReal,
-          ...patch,
-          id: newId,
-          content: patch.content ?? old.content ?? existingReal.content,
-          attachments: patch.attachments ?? old.attachments ?? existingReal.attachments,
-          clientRequestId: patch.clientRequestId ?? old.clientRequestId ?? existingReal.clientRequestId,
-          sourceVersion: existingReal.sourceVersion + 1,
-          updatedAt: Date.now(),
-        }
-      } else if (old) {
-        // Case A: Normal swap — real entity doesn't exist yet
-        merged = {
-          ...old,
-          ...patch,
-          id: newId,
-          sourceVersion: old.sourceVersion + 1,
-          updatedAt: Date.now(),
-        }
-      } else {
-        // Case C: temp already gone (SSE handler swapped first), but real exists
-        merged = {
-          ...existingReal!,
-          ...patch,
-          id: newId,
-          sourceVersion: existingReal!.sourceVersion + 1,
-          updatedAt: Date.now(),
-        }
-      }
-
-      rest[newId] = merged
-      return {
-        entities: rest,
-        orderedIds: buildSortedIds(rest),
-        version: state.version + 1,
-      }
-    }),
-
-    findByClientRequestId: (clientRequestId: string): MessageEntity | undefined => {
-      const ents = get().entities
-      return Object.values(ents).find(e => e.clientRequestId === clientRequestId)
-    },
 
     /**
      * Batch-cancel all non-terminal tasks in a room.

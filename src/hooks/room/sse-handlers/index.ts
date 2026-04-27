@@ -6,40 +6,24 @@ import type { ArtifactPart, ArtifactData, MessageEntity } from '@/stores/message
 import { mergeArtifacts, extractTextFromArtifacts } from '@/stores/message-store/upsert'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
-import type { PhasePayload } from '@/stores/turn-event-store/types'
 import type { SSEHandlerDeps } from './types'
+import {
+  enqueuePendingSseEvent,
+  getResolvedMessageId,
+  resolveClientRequestMessageId,
+} from './pending-turn-buffer'
 
-/**
- * Parse backend processing_status details string into a typed PhasePayload.
- * Backend sends: "Planning next action...", "Delegating to N agent(s)...",
- * "Evaluating agent results...", "Synthesizing responses..."
- *
- * When delegating, the backend also sends an `agents` array with
- * `{ agent_id, agent_name }` objects so the rail can show actual names.
- */
-function parseStageDetails(
-  details: string,
-  agents?: Array<{ agent_id: string; agent_name: string }>,
-): PhasePayload | null {
-  if (details.startsWith('Planning')) {
-    return { name: 'planning' }
-  }
-  const delegatingMatch = details.match(/^Delegating to (\d+) agent/)
-  if (delegatingMatch) {
-    const count = parseInt(delegatingMatch[1], 10)
-    const agentNames = agents && agents.length > 0
-      ? agents.map(a => a.agent_name)
-      : [`${count} agent(s)`]
-    return { name: 'delegating', agentNames, count }
-  }
-  if (details.startsWith('Evaluating')) {
-    return { name: 'evaluating' }
-  }
-  if (details.startsWith('Synthesizing')) {
-    return { name: 'synthesizing' }
-  }
-  return null
-}
+const ENABLE_UNCORRELATED_SSE_COMPAT_FALLBACK =
+  process.env.NEXT_PUBLIC_SSE_CORRELATION_COMPAT === '1'
+
+const TURN_CORRELATED_EVENT_TYPES = new Set<SSEMessage['type']>([
+  'processing_status',
+  'task_submitted',
+  'task_update',
+  'artifact_update',
+  'hitl_input_requested',
+  'hitl_status_update',
+])
 
 function partsToArtifacts(
   rawParts: Record<string, unknown>[] | undefined,
@@ -70,6 +54,12 @@ function partsToArtifacts(
     parts: nonTextParts,
   }
   return mergeArtifacts(existing?.artifacts, inline, false)
+}
+
+function isNonInformativeTextChunk(text: string | undefined): boolean {
+  if (!text) return true
+  const t = text.trim()
+  return t === '' || t === '.' || t === '...' || t === '…'
 }
 
 function resolveSingleWriteContent(
@@ -110,6 +100,34 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
     console.log('🔔 Room webhook received SSE message:', sseMessage)
     const store = useMessageStore.getState()
 
+    const resolveCorrelation = (): {
+      clientReqId?: string
+      shouldBuffer: boolean
+      shouldDrop: boolean
+    } => {
+      if (!TURN_CORRELATED_EVENT_TYPES.has(sseMessage.type)) {
+        return { shouldBuffer: false, shouldDrop: false }
+      }
+
+      const clientReqId = sseMessage.data?.client_request_id as string | undefined
+      if (clientReqId) {
+        const shouldBuffer = !getResolvedMessageId(clientReqId)
+        return { clientReqId, shouldBuffer, shouldDrop: false }
+      }
+
+      // Temporary rollout gate for backend drift. Keep disabled by default.
+      if (ENABLE_UNCORRELATED_SSE_COMPAT_FALLBACK && lifecycle.getMessageId()) {
+        console.warn(
+          '[compat] Proceeding with uncorrelated SSE event without client_request_id:',
+          sseMessage.type,
+        )
+        return { shouldBuffer: false, shouldDrop: false }
+      }
+
+      console.warn('Dropping turn-correlated SSE event without client_request_id:', sseMessage.type)
+      return { shouldBuffer: false, shouldDrop: true }
+    }
+
     switch (sseMessage.type) {
       case 'user_message':
         console.log('📨 User message received via SSE')
@@ -122,6 +140,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: sseMessage.data.user_id || 'User',
             userId: sseMessage.data.user_id,
             timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+            clientRequestId: sseMessage.data.client_request_id || undefined,
           }, 'sse')
         }
         break
@@ -132,14 +151,16 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           const messageId = sseMessage.data.message_id
 
           // Deduplicate: the backend may send agent content via both
-          // task_update and agent_response. Skip if:
-          // (a) Same message_id already exists with a terminal taskStatus
-          //     (agent_response sets taskStatus: null which would clear it), OR
-          // (b) Different message_id but a task-tracked entity for the same
-          //     agent already exists in this room.
+          // task_update and agent_response. Skip if the entity is already
+          // terminal AND has renderable content. If the entity is terminal
+          // but has no content, allow agent_response through — task_update
+          // can arrive before agent_response with empty content, and we
+          // must not permanently block the actual answer.
           const existing = store.entities[messageId]
-          if (existing?.taskStatus && isTerminalState(existing.taskStatus)) {
-            console.log('🔄 Skipping agent_response for', messageId, '— already terminal')
+          const existingHasContent = (existing?.content ?? '').trim().length > 0
+            || (existing?.artifacts?.length ?? 0) > 0
+          if (existing?.taskStatus && isTerminalState(existing.taskStatus) && existingHasContent) {
+            console.log('🔄 Skipping agent_response for', messageId, '— already terminal with content')
             break
           }
           // Streamed artifact updates can already populate content/artifacts
@@ -197,10 +218,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               messageId,
               existing,
             )
-            const preserveInFlightTaskStatus = !!(
-              existing?.taskStatus &&
-              !isTerminalState(existing.taskStatus)
-            )
+            // Preserve taskStatus when: (a) non-terminal (task_update owns
+            // the transition), or (b) already terminal (agent_response is
+            // backfilling content for a task_update that arrived first).
+            const preserveTaskStatus = !!(existing?.taskStatus)
 
             store.upsertMessage({
               id: messageId,
@@ -210,11 +231,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               senderName: agentName,
               agentId,
               agentSource: agentId ? getAgentSource(agentId) : undefined,
+              clientRequestId: existing?.clientRequestId || sseMessage.data?.client_request_id,
               timestamp: msgTimestamp,
-              // Keep non-terminal taskStatus authoritative until task_update
-              // explicitly transitions it. Clearing here caused "working"
-              // indicators to disappear while processing was still active.
-              ...(preserveInFlightTaskStatus ? {} : { taskStatus: null }),
+              ...(preserveTaskStatus ? {} : { taskStatus: null }),
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
@@ -226,19 +245,17 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         console.log('⚙️ Processing status update:', sseMessage.data?.status)
         if (sseMessage.data?.status) {
           const status = sseMessage.data.status
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+            break
+          }
 
           if (status === PROCESSING_STATUS.PROCESSING) {
-            // Correlate via client_request_id: swap temp→real atomically.
-            // Only processing_status PROCESSING carries client_request_id —
-            // if the backend ever sends a user_message SSE event before this,
-            // correlation would need to be added there too.
-            const clientReqId = sseMessage.data.client_request_id
             const realMessageId = sseMessage.data.message_id
-            if (clientReqId && realMessageId) {
-              const pending = store.findByClientRequestId(clientReqId)
-              if (pending && pending.id !== realMessageId && pending.id.startsWith('temp-')) {
-                store.replaceMessageId(pending.id, realMessageId)
-              }
+            if (correlation.clientReqId && realMessageId) {
+              resolveClientRequestMessageId(correlation.clientReqId, realMessageId)
             }
 
             lifecycle.setProcessing(true)
@@ -246,27 +263,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               lifecycle.setMessageId(sseMessage.data.message_id)
             }
             const stageDetails = sseMessage.data.details as string | undefined
-
-            // Bridge supervisor stage details into phase_changed turn events
-            // so the OrchestrationRail shows real-time Supervisor phases.
-            if (stageDetails) {
-              const turnId = realMessageId || lifecycle.getMessageId()
-              if (turnId) {
-                const { useTurnEventStore } = await import('@/stores/turn-event-store')
-                const sseAgents = (sseMessage.data as Record<string, unknown>).agents as Array<{ agent_id: string; agent_name: string }> | undefined
-                const phase = parseStageDetails(stageDetails, sseAgents)
-                if (phase) {
-                  useTurnEventStore.getState().append(turnId, {
-                    eventId: `sse_phase_${turnId}_${Date.now()}`,
-                    turnId,
-                    seq: Date.now(),
-                    ts: Date.now(),
-                    type: 'phase_changed',
-                    phase,
-                  } as import('@/stores/turn-event-store/types').TurnEvent)
-                }
-              }
-            }
 
             // When details are present (supervisor stage updates), always
             // re-show the placeholder — even after task_submitted dismissed
@@ -286,48 +282,15 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               }, 'optimistic')
             }
           } else if (isProcessingDone(status as ProcessingStatus) || status === PROCESSING_STATUS.RATE_LIMITED) {
+            // Capture the user message ID BEFORE clearing lifecycle state below.
+            // lifecycle.getMessageId() is nulled in this block so we must save it first.
+            const terminalUserMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
+
             lifecycle.setProcessing(false)
             setCancelling(false)
             lifecycle.disarmCancelTimeout()
             store.removeMessage(lifecycle.placeholderId(roomId))
             lifecycle.dismissPlaceholder()
-
-            // Emit turn terminal event — this is the authoritative signal
-            // that the room-level processing is done (not individual task completion).
-            const turnId = sseMessage.data.message_id || lifecycle.getMessageId()
-            if (turnId) {
-              const { useTurnEventStore } = await import('@/stores/turn-event-store')
-              const terminalType: 'turn_completed' | 'turn_failed' | 'turn_canceled' =
-                status === PROCESSING_STATUS.CANCELED ? 'turn_canceled'
-                : status === PROCESSING_STATUS.FAILED ? 'turn_failed'
-                : 'turn_completed'
-              const terminalEvent = terminalType === 'turn_failed'
-                ? {
-                    eventId: `sse_terminal_${turnId}`,
-                    turnId,
-                    seq: Date.now(),
-                    ts: Date.now(),
-                    type: 'turn_failed' as const,
-                    reason: ((sseMessage.data as Record<string, unknown>).details as string) || 'Processing failed',
-                  }
-                : terminalType === 'turn_completed'
-                ? {
-                    eventId: `sse_terminal_${turnId}`,
-                    turnId,
-                    seq: Date.now(),
-                    ts: Date.now(),
-                    type: 'turn_completed' as const,
-                    durationMs: 0, // will be overridden by hydration
-                  }
-                : {
-                    eventId: `sse_terminal_${turnId}`,
-                    turnId,
-                    seq: Date.now(),
-                    ts: Date.now(),
-                    type: 'turn_canceled' as const,
-                  }
-              useTurnEventStore.getState().append(turnId, terminalEvent as import('@/stores/turn-event-store/types').TurnEvent)
-            }
 
             if (sseMessage.data.message_id === lifecycle.getMessageId()) {
               lifecycle.setMessageId(null)
@@ -357,12 +320,42 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             }
             lifecycle.setCancelTimedOut(false)
 
+            // Stamp the user entity with the room-level terminal status so the
+            // useMessageStoreSync bridge can derive turn_completed/failed/canceled.
+            // The turn store is derived-only — we must not write to it directly.
+            if (terminalUserMsgId) {
+              const existingUserMsg = store.entities[terminalUserMsgId]
+              if (existingUserMsg && !existingUserMsg.turnTerminalStatus) {
+                const terminalStatus =
+                  status === PROCESSING_STATUS.CANCELED ? 'canceled' :
+                  status === PROCESSING_STATUS.FAILED   ? 'failed'   : 'completed'
+                store.upsertMessage({
+                  id: terminalUserMsgId,
+                  roomId,
+                  messageType: existingUserMsg.messageType,
+                  content: existingUserMsg.content,
+                  senderName: existingUserMsg.senderName,
+                  timestamp: existingUserMsg.timestamp,
+                  turnTerminalStatus: terminalStatus,
+                }, 'sse')
+              }
+            }
+
             if (lifecycle.hadSseDisconnection()) {
               console.log('🔄 SSE had disconnection during processing — reconciling with DB')
               setTimeout(() => {
                 reconcileWithDb(roomId)
               }, 1500)
               lifecycle.clearSseDisconnection()
+            } else {
+              // Even without an explicit disconnect, terminal SSE can arrive
+              // before some task/turn updates (or those updates can be dropped
+              // in degraded dual-write paths). A lightweight reconcile here
+              // keeps live UI aligned with persisted truth without waiting
+              // for a manual refresh.
+              setTimeout(() => {
+                reconcileWithDb(roomId)
+              }, 150)
             }
           }
         }
@@ -390,6 +383,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'task_submitted':
         console.log('📋 Task submitted via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+            break
+          }
+        }
         store.removeMessage(lifecycle.placeholderId(roomId))
         lifecycle.dismissPlaceholder()
 
@@ -414,6 +415,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             stepNumber: sseMessage.data.step_number,
             totalSteps: sseMessage.data.total_steps,
             relatedMessageId: sseMessage.data.related_message_id,
+            clientRequestId: sseMessage.data.client_request_id,
             timestamp: normalizeTimestampOrNow(taskTimestamp),
             taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
           }, 'sse')
@@ -430,6 +432,14 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'task_update':
         console.log('📋 Task update via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.shouldBuffer && correlation.clientReqId) {
+            enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+            break
+          }
+        }
         if (sseMessage.data?.message_id) {
           const messageId = sseMessage.data.message_id
           const status = sseMessage.data.status as TaskState
@@ -462,6 +472,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: resolvedAgentName || 'Agent',
             agentId: sseMessage.data.agent_id,
             agentSource: getAgentSource(sseMessage.data.agent_id),
+            clientRequestId: sseMessage.data.client_request_id,
             timestamp: new Date().toISOString(),
           }
 
@@ -544,6 +555,13 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         break
 
       case 'artifact_update': {
+        const correlation = resolveCorrelation()
+        if (correlation.shouldDrop) break
+        if (correlation.shouldBuffer && correlation.clientReqId) {
+          enqueuePendingSseEvent(correlation.clientReqId, sseMessage)
+          break
+        }
+
         if (!lifecycle.isPlaceholderDismissed()) {
           store.removeMessage(lifecycle.placeholderId(roomId))
           lifecycle.dismissPlaceholder()
@@ -571,14 +589,31 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             }),
             isStreaming: isAppend ? !last_chunk : false,
           }
-          const merged = mergeArtifacts(existing?.artifacts, artifactData, isAppend)
+          const parts = artifactData.parts
+          const textOnlyParts = parts.filter(p => p.kind === 'text')
+          const allTextOnly = parts.length > 0 && textOnlyParts.length === parts.length
+          const joinedText = textOnlyParts
+            .map(p => p.text ?? '')
+            .join('')
+            .trim()
+          const shouldDropArtifact =
+            allTextOnly &&
+            isNonInformativeTextChunk(joinedText)
+
+          const merged = shouldDropArtifact
+            ? (existing?.artifacts ?? [])
+            : mergeArtifacts(existing?.artifacts, artifactData, isAppend)
 
           // Promote text from text-only artifacts into content so the
           // bubble renders it inline instead of as a separate artifact card.
           const existingContent = existing?.content || ''
           const promotedText = extractTextFromArtifacts(merged)
-          const content = promotedText.length > existingContent.length
-            ? promotedText : existingContent
+          const safePromotedText = isNonInformativeTextChunk(promotedText)
+            ? ''
+            : promotedText
+          const content = safePromotedText.length > existingContent.length
+            ? safePromotedText
+            : existingContent
 
           store.upsertMessage({
             id: message_id,
@@ -588,11 +623,12 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             senderName: existing?.senderName || 'Agent',
             agentId: existing?.agentId || sseMessage.data.agent_id,
             agentSource: existing?.agentSource || getAgentSource(sseMessage.data.agent_id),
+            clientRequestId: existing?.clientRequestId || sseMessage.data.client_request_id,
             timestamp: existing?.timestamp || normalizeTimestampOrNow(sseMessage.timestamp),
             artifacts: merged,
           }, 'sse')
 
-          if (!isAppend) {
+          if (!isAppend && !shouldDropArtifact) {
             appendEvent(roomId, {
               kind: 'artifact_emitted',
               timestamp: sseMessage.timestamp,
@@ -606,6 +642,15 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'hitl_input_requested': {
         console.log('🔔 HITL input requested via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+          if (correlation.clientReqId && sseMessage.data?.message_id) {
+            // HITL request provides stable message_id immediately; resolve
+            // correlation eagerly so follow-up status updates can apply.
+            resolveClientRequestMessageId(correlation.clientReqId, sseMessage.data.message_id)
+          }
+        }
         if (sseMessage.data) {
           const { request_id, message_id, prompt, prompt_type, choices,
                   agent_name, agent_id, step_number, total_steps, expires_at,
@@ -651,6 +696,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               stepNumber: step_number,
               totalSteps: total_steps,
               relatedMessageId: related_message_id,
+              clientRequestId: sseMessage.data.client_request_id,
             }, 'sse')
             hitlRequestIndex.current.set(request_id, message_id)
 
@@ -668,6 +714,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
 
       case 'hitl_status_update': {
         console.log('🔔 HITL status update via SSE:', sseMessage.data)
+        {
+          const correlation = resolveCorrelation()
+          if (correlation.shouldDrop) break
+        }
         if (sseMessage.data) {
           const { request_id, status: hitlStatus, error_message } = sseMessage.data
           if (request_id) {
@@ -726,13 +776,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
       }
 
       case 'turn_event': {
-        const turnEventData = (sseMessage.data?.turn_event ?? sseMessage.data) as Record<string, unknown> | undefined
-        if (turnEventData?.turn_id && turnEventData?.type) {
-          const { camelCaseEvent } = await import('@/hooks/turn/useSSEToEventLog')
-          const { useTurnEventStore } = await import('@/stores/turn-event-store')
-          const event = camelCaseEvent(turnEventData)
-          useTurnEventStore.getState().append(event.turnId, event)
-        }
+        // Strict single-writer mode for block UI:
+        // turn-event-store is derived from normalized message-store only.
+        // Ignore direct turn_event writes to prevent dual-source divergence.
+        console.log('ℹ️ Ignoring turn_event SSE in single-writer mode')
         break
       }
 

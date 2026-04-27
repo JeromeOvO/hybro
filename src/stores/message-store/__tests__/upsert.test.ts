@@ -109,7 +109,7 @@ describe('applyUpsert', () => {
   })
 
   describe('Rule 2: SSE wins over DB for non-terminal states', () => {
-    it('rejects DB update when SSE entity is in working state', () => {
+    it('rejects DB update when SSE entity is in working state and DB is also non-terminal', () => {
       const entities = {
         'msg-1': makeEntity({ source: 'sse', taskStatus: 'working', displayType: 'agent-bubble' }),
       }
@@ -121,7 +121,24 @@ describe('applyUpsert', () => {
       expect(result).toBeNull()
     })
 
-    it('allows DB update when SSE entity has terminal state', () => {
+    it('allows DB terminal upgrade when SSE entity is stuck at non-terminal', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          source: 'sse', taskStatus: 'working', content: '',
+          displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'completed', content: 'Final answer from DB' }),
+        'db',
+      )
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].taskStatus).toBe('completed')
+      expect(result!.entities['msg-1'].content).toBe('Final answer from DB')
+    })
+
+    it('allows DB update when SSE entity has terminal state but preserves divergent SSE body', () => {
       const entities = {
         'msg-1': makeEntity({
           source: 'sse', taskStatus: 'completed',
@@ -134,7 +151,42 @@ describe('applyUpsert', () => {
         'db',
       )
       expect(result).not.toBeNull()
-      expect(result!.entities['msg-1'].content).toBe('DB content (canonical)')
+      expect(result!.entities['msg-1'].content).toBe('SSE content')
+      expect(result!.entities['msg-1'].taskStatus).toBe('completed')
+    })
+
+    it('allows DB to append-only extend SSE agent body on reconcile', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          source: 'sse', taskStatus: 'completed',
+          content: 'Hello', displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'completed', content: 'Hello world' }),
+        'db',
+      )
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].content).toBe('Hello world')
+    })
+
+    it('prefers DB body when materially longer than SSE (truncated stream)', () => {
+      const longDb = `${'x'.repeat(60)} full ending`
+      const entities = {
+        'msg-1': makeEntity({
+          source: 'sse', taskStatus: 'completed',
+          content: 'short partial',
+          displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities, ['msg-1'],
+        makeIncoming({ taskStatus: 'completed', content: longDb }),
+        'db',
+      )
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].content).toBe(longDb)
     })
 
     it('allows SSE update when entity was from DB with non-terminal state', () => {
@@ -221,7 +273,11 @@ describe('applyUpsert', () => {
 
     it('accepts update that changes content', () => {
       const entities = {
-        'msg-1': makeEntity({ content: 'Hello', displayType: 'agent-bubble' }),
+        'msg-1': makeEntity({
+          content: 'Hello',
+          displayType: 'agent-bubble',
+          source: 'db',
+        }),
       }
       const result = applyUpsert(
         entities, ['msg-1'],

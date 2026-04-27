@@ -87,6 +87,7 @@ describe('useRoomWebhook SSE message handling', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
     useRoomUiStore.getState().resetAll()
+    useRoomUiStore.getState().setGlobalTurnBasedTimeline(true)
   })
 
   afterEach(() => {
@@ -132,6 +133,27 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.messageType).toBe('user')
   })
 
+  it('should preserve clientRequestId on user_message when provided', async () => {
+    await mountHook()
+    expect(capturedOnMessage).toBeDefined()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'user_message',
+        data: {
+          message_id: 'msg-u2',
+          content: 'Hello with correlation',
+          user_id: 'user-99',
+          client_request_id: 'req-user-msg-1',
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['msg-u2']
+    expect(entity).toBeDefined()
+    expect(entity.clientRequestId).toBe('req-user-msg-1')
+  })
+
   it('should handle agent_response by finalizing streaming and writing to store', async () => {
     await mountHook()
 
@@ -164,20 +186,20 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(useMessageStore.getState().orderedIds.length).toBe(countBefore)
   })
 
-  it('should handle processing_status "processing" by setting processing flag', async () => {
+  it('ignores processing_status "processing" without resolvable correlation', async () => {
     await mountHook()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'processing', message_id: 'msg-1' },
+        data: { status: 'processing', message_id: 'msg-1', client_request_id: 'req-missing-processing' },
       }))
     })
 
-    expect(flags().processing).toBe(true)
+    expect(flags().processing).toBe(false)
   })
 
-  it('should handle processing_status "completed" by clearing processing flag', async () => {
+  it('ignores processing_status "completed" without resolvable correlation', async () => {
     useRoomUiStore.getState().setProcessing('room-1', true)
 
     await mountHook()
@@ -185,21 +207,35 @@ describe('useRoomWebhook SSE message handling', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed' },
+        data: { status: 'completed', client_request_id: 'req-missing-completed' },
       }))
     })
 
     expect(flags().processing).toBe(false)
-    expect(flags().cancelling).toBe(false)
   })
 
-  it('should handle task_submitted by writing task entity to store', async () => {
+  it('drops processing_status without client_request_id', async () => {
+    useRoomUiStore.getState().setProcessing('room-1', false)
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: { status: 'processing', message_id: 'msg-uncorrelated-processing' },
+      }))
+    })
+
+    expect(flags().processing).toBe(false)
+  })
+
+  it('buffers task_submitted when correlation is unresolved', async () => {
     await mountHook()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_submitted',
         data: {
+          client_request_id: 'req-missing-task-submitted',
           message_id: 'task-1',
           task_id: 't-1',
           agent_name: 'Code Agent',
@@ -212,23 +248,36 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const entity = useMessageStore.getState().entities['task-1']
-    expect(entity).toBeDefined()
-    expect(entity.senderName).toBe('Code Agent')
-    expect(entity.taskStatus).toBe('working')
-    expect(entity.taskContent).toBe('Analyzing code...')
-    expect(entity.stepNumber).toBe(1)
-    expect(entity.totalSteps).toBe(3)
+    expect(useMessageStore.getState().entities['task-1']).toBeUndefined()
   })
 
-  it('should handle task_update with terminal state', async () => {
+  it('buffers task_submitted with unresolved client_request_id instead of writing immediately', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_submitted',
+        data: {
+          client_request_id: 'req-buffer-task-submitted',
+          message_id: 'task-buffered-1',
+          task_id: 't-buffered-1',
+          agent_name: 'Buffered Agent',
+          status: 'working',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['task-buffered-1']).toBeUndefined()
+  })
+
+  it('buffers task_update with terminal state when correlation is unresolved', async () => {
     await mountHook()
 
     // First submit a task
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_submitted',
-        data: { message_id: 'task-2', agent_name: 'Agent', status: 'working' },
+        data: { client_request_id: 'req-missing-task-update', message_id: 'task-2', agent_name: 'Agent', status: 'working' },
       }))
     })
 
@@ -237,6 +286,7 @@ describe('useRoomWebhook SSE message handling', () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-missing-task-update',
           message_id: 'task-2',
           status: 'completed',
           content: 'Done! Here is the result.',
@@ -245,22 +295,36 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    // Typewriter callback fires after setInterval ticks; wait for it to land
-    await waitFor(() => {
-      const entity = useMessageStore.getState().entities['task-2']
-      expect(entity.taskStatus).toBe('completed')
-      expect(entity.content).toBe('Done! Here is the result.')
-      expect(entity.isEphemeral).toBe(false)
-    })
+    expect(useMessageStore.getState().entities['task-2']).toBeUndefined()
   })
 
-  it('does not rewrite content on non-terminal task_update once content exists', async () => {
+  it('buffers task_update with unresolved client_request_id instead of writing immediately', async () => {
     await mountHook()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-buffer-task-update',
+          message_id: 'task-buffered-2',
+          status: 'working',
+          content: 'Should be buffered',
+          agent_name: 'Buffered Agent',
+        },
+      }))
+    })
+
+    expect(useMessageStore.getState().entities['task-buffered-2']).toBeUndefined()
+  })
+
+  it('buffers non-terminal task_update when correlation is unresolved', async () => {
+    await mountHook()
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          client_request_id: 'req-missing-no-rewrite-non-terminal',
           message_id: 'task-no-rewrite-non-terminal',
           status: 'working',
           content: 'First visible answer chunk.',
@@ -274,6 +338,7 @@ describe('useRoomWebhook SSE message handling', () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-missing-no-rewrite-non-terminal',
           message_id: 'task-no-rewrite-non-terminal',
           status: 'working',
           content: 'Rewritten draft that should not replace visible content.',
@@ -285,21 +350,17 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const entity = useMessageStore.getState().entities['task-no-rewrite-non-terminal']
-    expect(entity.content).toBe('First visible answer chunk.')
-    expect(entity.taskStatus).toBe('working')
-    expect(entity.taskContent).toBe('Evaluating...')
-    expect(entity.stepNumber).toBe(2)
-    expect(entity.totalSteps).toBe(4)
+    expect(useMessageStore.getState().entities['task-no-rewrite-non-terminal']).toBeUndefined()
   })
 
-  it('does not rewrite content on terminal task_update once content exists', async () => {
+  it('buffers terminal task_update when correlation is unresolved', async () => {
     await mountHook()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-missing-no-rewrite-terminal',
           message_id: 'task-no-rewrite-terminal',
           status: 'working',
           content: 'Locked answer body.',
@@ -312,6 +373,7 @@ describe('useRoomWebhook SSE message handling', () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-missing-no-rewrite-terminal',
           message_id: 'task-no-rewrite-terminal',
           status: 'completed',
           content: 'Final rewritten variant that should be dropped.',
@@ -321,20 +383,17 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const entity = useMessageStore.getState().entities['task-no-rewrite-terminal']
-    expect(entity.content).toBe('Locked answer body.')
-    expect(entity.taskStatus).toBe('completed')
-    expect(entity.taskStatusMessage).toBe('Completed')
-    expect(entity.isEphemeral).toBe(false)
+    expect(useMessageStore.getState().entities['task-no-rewrite-terminal']).toBeUndefined()
   })
 
-  it('should render completed task with parts but no content as agent-bubble', async () => {
+  it('buffers completed task with parts when correlation is unresolved', async () => {
     await mountHook()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'task_update',
         data: {
+          client_request_id: 'req-missing-parts-only',
           message_id: 'task-parts-only',
           status: 'completed',
           content: '',
@@ -346,12 +405,42 @@ describe('useRoomWebhook SSE message handling', () => {
       }))
     })
 
-    const entity = useMessageStore.getState().entities['task-parts-only']
-    expect(entity).toBeTruthy()
-    expect(entity.taskStatus).toBe('completed')
-    expect(entity.displayType).toBe('agent-bubble')
-    expect(entity.artifacts).toBeDefined()
-    expect(entity.artifacts!.length).toBeGreaterThan(0)
+    expect(useMessageStore.getState().entities['task-parts-only']).toBeUndefined()
+  })
+
+  it('drops uncorrelated task_update even when lifecycle already has active message id', async () => {
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    await mountHook()
+
+    // Resolve correlation so processing_status can set lifecycle message id.
+    resolveClientRequestMessageId('req-active-lifecycle', 'msg-active-lifecycle')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'processing_status',
+        data: {
+          status: 'processing',
+          message_id: 'msg-active-lifecycle',
+          client_request_id: 'req-active-lifecycle',
+        },
+      }))
+    })
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          // intentionally omit client_request_id to validate strict behavior
+          message_id: 'task-active-lifecycle',
+          status: 'working',
+          content: 'Should still apply with active lifecycle context',
+          agent_name: 'Fallback Agent',
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-active-lifecycle']
+    expect(entity).toBeUndefined()
   })
 
   it('should handle error SSE message', async () => {

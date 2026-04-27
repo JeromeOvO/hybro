@@ -104,32 +104,54 @@ export function useRoomHydration(
     }
   }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
 
-  const reconcileWithDb = useCallback(async (targetRoomId: string) => {
-    try {
-      const response = await inquiryRoomMessagesByRoomId(targetRoomId, getToken)
-      if (!response.success || !response.message_list) return
+  const reconcileInflightRef = useRef<string | null>(null)
 
-      const incomingMessages = await Promise.all(
-        response.message_list.map(msg =>
-          convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
-        )
+  const reconcileOnce = useCallback(async (targetRoomId: string): Promise<number> => {
+    const response = await inquiryRoomMessagesByRoomId(targetRoomId, getToken)
+    if (!response.success || !response.message_list) return 0
+
+    const incomingMessages = await Promise.all(
+      response.message_list.map(msg =>
+        convertApiMessageToIncoming(msg, { userId, userName, getAgentName, getAgentSource })
       )
-      const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
-      const filtered = filterHydrationMessages(withStaleDetection)
+    )
+    const withStaleDetection = detectAndMarkStaleTasks(incomingMessages)
+    const filtered = filterHydrationMessages(withStaleDetection)
 
-      const store = useMessageStore.getState()
-      if (store.roomId === targetRoomId) {
-        store.upsertMany(filtered, 'db')
-        store.markDbSynced()
+    const store = useMessageStore.getState()
+    if (store.roomId === targetRoomId) {
+      store.upsertMany(filtered, 'db')
+      store.markDbSynced()
+    }
+    return filtered.length
+  }, [getToken, userId, userName, getAgentName, getAgentSource])
+
+  const reconcileWithDb = useCallback(async (targetRoomId: string) => {
+    if (reconcileInflightRef.current === targetRoomId) return
+    reconcileInflightRef.current = targetRoomId
+    try {
+      const count = await reconcileOnce(targetRoomId)
+
+      // If the API returned zero messages the backend may not have persisted
+      // yet.  Do a single retry after a short delay to cover write-latency.
+      if (count === 0) {
+        await new Promise(r => setTimeout(r, 2000))
+        if (reconcileInflightRef.current !== targetRoomId) return
+        await reconcileOnce(targetRoomId)
       }
     } catch (error) {
       console.error('[NormalizedStore] Reconciliation failed:', error)
+    } finally {
+      if (reconcileInflightRef.current === targetRoomId) {
+        reconcileInflightRef.current = null
+      }
     }
-  }, [getToken, userId, userName, getAgentName, getAgentSource])
+  }, [reconcileOnce])
 
-  // Reset hydration gate on room switch
+  // Reset hydration gate + inflight reconcile on room switch
   useEffect(() => {
     hydrationStartedRef.current = null
+    reconcileInflightRef.current = null
   }, [roomId])
 
   // Hydrate from DB once room data is available.

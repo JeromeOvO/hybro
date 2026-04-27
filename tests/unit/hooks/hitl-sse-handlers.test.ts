@@ -57,11 +57,20 @@ vi.mock('@/components/ui/banner', () => ({
 }))
 
 function makeSSEMessage(overrides: Partial<SSEMessage>): SSEMessage {
+  const type = overrides.type ?? 'heartbeat'
+  const data = { ...(overrides.data as Record<string, unknown> | undefined) }
+  if (
+    (type === 'hitl_input_requested' || type === 'hitl_status_update') &&
+    data.client_request_id == null
+  ) {
+    data.client_request_id = 'req-hitl-test-default'
+  }
   return {
-    type: 'heartbeat',
+    type,
     room_id: 'room-1',
     timestamp: new Date().toISOString(),
     ...overrides,
+    data: Object.keys(data).length > 0 ? data : overrides.data,
   }
 }
 

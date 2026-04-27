@@ -201,6 +201,7 @@ export async function convertApiMessageToIncoming(
   // ── Build IncomingMessage ────────────────────────────────────
   return {
     id: apiMessage.message_id,
+    clientRequestId: apiMessage.client_request_id ?? undefined,
     roomId: apiMessage.room_id,
     messageType: apiMessage.message_type as 'user' | 'agent',
     content,

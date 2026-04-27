@@ -256,6 +256,7 @@ export interface OrchestrationResponse {
 export interface RoomAgentMessage {
   room_id: string;
   message_id: string;
+  client_request_id?: string | null;
   message_created_at?: string;
   message_type?: string;
   user_id?: string | null;
@@ -333,6 +334,7 @@ export interface RoomCenterRoomMessageResponse {
 export interface RoomMessage {
   room_id: string;
   message_id: string;
+  client_request_id?: string | null;
   message_created_at?: string;
   message_type: string;
   user_id?: string | null;
@@ -383,6 +385,7 @@ export interface RoomCenterUserMessageResponse {
 export interface RoomUserMessage {
   room_id: string;
   message_id: string;
+  client_request_id?: string | null;
   message_created_at?: string;
   message_type?: string;
   user_id?: string | null;

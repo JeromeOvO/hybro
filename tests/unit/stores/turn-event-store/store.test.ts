@@ -44,7 +44,7 @@ describe('TurnEventLogManager store', () => {
     expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['turn-1', 'turn-2'])
   })
 
-  it('optimistic merge: clientRequestId replaces optimistic turnId', () => {
+  it('keeps canonical clientRequestId turn alongside non-canonical ids', () => {
     const store = useTurnEventStore.getState()
     store.createOptimisticTurn('opt-abc', { text: 'hi', attachments: [] })
 
@@ -56,10 +56,10 @@ describe('TurnEventLogManager store', () => {
     }))
 
     const state = useTurnEventStore.getState()
-    expect(state.orderedTurnIds).not.toContain('opt-abc')
+    expect(state.orderedTurnIds).toContain('opt-abc')
     expect(state.orderedTurnIds).toContain('real-123')
     expect(state.turnLogs.has('real-123')).toBe(true)
-    expect(state.turnLogs.has('opt-abc')).toBe(false)
+    expect(state.turnLogs.has('opt-abc')).toBe(true)
   })
 
   it('composerState updates on hitl_requested', () => {
@@ -83,8 +83,7 @@ describe('TurnEventLogManager store', () => {
     expect(useTurnEventStore.getState().composerState.isProcessing).toBe(false)
   })
 
-  it('optimistic merge deduplicates orderedTurnIds when real turnId already present', () => {
-    // Reproduces the race: slot_opened turn_event adds real turnId before merge
+  it('retains canonical and non-canonical turn ids without remap', () => {
     const store = useTurnEventStore.getState()
 
     // Step 1: Optimistic turn created with clientRequestId
@@ -99,16 +98,15 @@ describe('TurnEventLogManager store', () => {
     // Now orderedTurnIds has both: [opt-abc, real-123]
     expect(useTurnEventStore.getState().orderedTurnIds).toEqual(['opt-abc', 'real-123'])
 
-    // Step 3: Sync bridge fires turn_started with clientRequestId → merge
+    // Step 3: additional turn_started does not rewrite canonical id
     store.append('real-123', evt({
       type: 'turn_started', seq: 1, eventId: 'merge-e1', turnId: 'real-123',
       userInput, clientRequestId: 'opt-abc',
     }))
 
-    // After merge, orderedTurnIds must have exactly one 'real-123', not two
     const state = useTurnEventStore.getState()
-    expect(state.orderedTurnIds).toEqual(['real-123'])
-    expect(state.turnLogs.has('opt-abc')).toBe(false)
+    expect(state.orderedTurnIds).toEqual(['opt-abc', 'real-123'])
+    expect(state.turnLogs.has('opt-abc')).toBe(true)
     expect(state.turnLogs.has('real-123')).toBe(true)
   })
 
@@ -139,6 +137,42 @@ describe('TurnEventLogManager store', () => {
     // Should NOT have ['turn-1', 'turn-1']
     expect(state.orderedTurnIds).toEqual(['turn-1'])
     expect(state.turnLogs.has('turn-1')).toBe(true)
+  })
+
+  it('createOptimisticTurn is idempotent for same clientRequestId', () => {
+    const store = useTurnEventStore.getState()
+
+    store.createOptimisticTurn('req-idem', { text: 'hello', attachments: [] })
+    store.createOptimisticTurn('req-idem', { text: 'hello again', attachments: [] })
+
+    const state = useTurnEventStore.getState()
+    expect(state.orderedTurnIds).toEqual(['req-idem'])
+    expect(state.turnLogs.has('req-idem')).toBe(true)
+    expect(state.turnIdByClientRequestId.get('req-idem')).toBe('req-idem')
+    expect(state.turnLogs.get('req-idem')!.getEvents()).toHaveLength(1)
+  })
+
+  it('createOptimisticTurn remains idempotent on canonical turn id', () => {
+    const store = useTurnEventStore.getState()
+
+    store.createOptimisticTurn('req-abc', { text: 'hello', attachments: [] })
+    store.append('real-1', evt({
+      type: 'turn_started',
+      seq: 1,
+      eventId: 'real-start',
+      turnId: 'real-1',
+      userInput,
+      clientRequestId: 'req-abc',
+    }))
+
+    // Repeated send-anchor call with same request id should no-op now.
+    store.createOptimisticTurn('req-abc', { text: 'hello', attachments: [] })
+
+    const state = useTurnEventStore.getState()
+    expect(state.orderedTurnIds).toEqual(['req-abc', 'real-1'])
+    expect(state.turnLogs.has('real-1')).toBe(true)
+    expect(state.turnLogs.has('req-abc')).toBe(true)
+    expect(state.turnIdByClientRequestId.get('req-abc')).toBe('real-1')
   })
 
   it('reset clears all state', () => {
