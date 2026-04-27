@@ -48,27 +48,6 @@ class WorkflowCenter:
         self.sse_manager = sse_manager
         self.agent_resolver = agent_resolver_service
 
-    # ------------------------------------------------------------------
-    # Phase event emission (Phase 1c)
-    # ------------------------------------------------------------------
-
-    async def _emit_workflow_phase(
-        self, room_id: str, turn_id: str | None, phase: dict
-    ) -> None:
-        """Emit a phase_changed turn event for workflow steps."""
-        if not getattr(self, '_turn_appender', None) or not turn_id:
-            return
-        try:
-            await self._turn_appender.append(
-                room_id, turn_id, "phase_changed",
-                {"phase": phase},
-            )
-        except Exception:
-            logger.debug(
-                "WorkflowCenter: phase_changed emission failed",
-                exc_info=True,
-            )
-
     def _success_response(self, task_id: str, **kwargs) -> OrchestrationResponse:
         """Shorthand for a successful OrchestrationResponse."""
         return OrchestrationResponse(

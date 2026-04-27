@@ -78,7 +78,6 @@ class SupervisorExecutor:
         agent_message_processor: AgentMessageProcessor,
         room_coordinator_service: RoomCoordinatorService,
         slot_lifecycle=None,
-        turn_event_appender=None,  # Phase 1c
     ) -> None:
         self.supervisor_service = supervisor_service
         self.room_services = room_services
@@ -91,28 +90,6 @@ class SupervisorExecutor:
         self.agent_message_processor = agent_message_processor
         self.room_coordinator_service = room_coordinator_service
         self._slot_lifecycle = slot_lifecycle
-        self._turn_appender = turn_event_appender  # Phase 1c
-
-    # ------------------------------------------------------------------
-    # Phase event emission (Phase 1c)
-    # ------------------------------------------------------------------
-
-    async def _emit_phase(
-        self, room_id: str, turn_id: str | None, phase: dict
-    ) -> None:
-        """Emit a phase_changed turn event if appender is available."""
-        if not getattr(self, '_turn_appender', None) or not turn_id:
-            return
-        try:
-            await self._turn_appender.append(
-                room_id, turn_id, "phase_changed",
-                {"phase": phase},
-            )
-        except Exception:
-            logger.debug(
-                "SupervisorExecutor: phase_changed emission failed",
-                exc_info=True,
-            )
 
     # ------------------------------------------------------------------
     # Main loop
@@ -870,6 +847,9 @@ class SupervisorExecutor:
                             user_id=request_user_id,
                             step_number=step_number + 1,
                             task_content=q.prompt,
+                            client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                                user_message_id
+                            ),
                         )
                         await self.database_service.add_room_agent_message(
                             hitl_agent_message
@@ -1151,6 +1131,9 @@ class SupervisorExecutor:
                     step_number=step_number,
                     total_steps=None,
                     task_content=target.task,
+                    client_request_id=await self.database_service.resolve_client_request_id_for_message_id(
+                        user_message_id
+                    ),
                 )
                 await self.database_service.add_room_agent_message(message)
 

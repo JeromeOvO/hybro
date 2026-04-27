@@ -1256,6 +1256,7 @@ class RoomServices:
         total_steps: int | None = None,
         task_content: str | None = None,
         turn_id: str | None = None,
+        client_request_id: str | None = None,
     ) -> RoomAgentMessage:
         """
         Generate a new agent message.
@@ -1287,6 +1288,7 @@ class RoomServices:
             task_content=task_content
             or content,  # Use task_content if provided, else content
             turn_id=turn_id,
+            client_request_id=client_request_id,
         )
 
     def create_agent_message(
@@ -1300,6 +1302,7 @@ class RoomServices:
         total_steps: int | None = None,
         task_content: str | None = None,
         turn_id: str | None = None,
+        client_request_id: str | None = None,
     ) -> RoomAgentMessage:
         """Public wrapper around ``_generate_new_agent_message`` for use by
         ``SupervisorExecutor`` and other external callers that need to create
@@ -1314,6 +1317,7 @@ class RoomServices:
             total_steps=total_steps,
             task_content=task_content,
             turn_id=turn_id,
+            client_request_id=client_request_id,
         )
 
     async def _generate_agent_messages_based_on_parsed_result(
@@ -1324,6 +1328,7 @@ class RoomServices:
         user_id: str | None = None,
         extend_info: dict | None = None,
         turn_id: str | None = None,
+        client_request_id: str | None = None,
     ) -> list[RoomAgentMessage]:
         """
         Generate agent messages based on parsed result from LLM.
@@ -1412,6 +1417,7 @@ class RoomServices:
                 step_number=step_index,
                 total_steps=total_steps,
                 turn_id=turn_id,
+                client_request_id=client_request_id,
             )
 
             # In direct chat the task_content equals the user's original message,
@@ -1825,6 +1831,7 @@ class RoomServices:
             room_id,
             user_id=user_id,
             extend_info=extend_info,
+            client_request_id=request.client_request_id,
         )
 
         return ParseResult(success=True) if agent_messages else ParseResult(success=False)
@@ -1863,6 +1870,9 @@ class RoomServices:
             )
 
         user_message = request.message
+        if user_message is not None:
+            # Breaking cutover invariant: canonical turn key is always present.
+            user_message.client_request_id = request.client_request_id
 
         # Resolve attachments from both sources before persistence
         att_err = await self._resolve_and_apply_attachments(request, user_message)
@@ -2492,6 +2502,7 @@ class RoomServices:
                 "reason": "no_agents_found",
                 "target_group": target_group,
             },
+            client_request_id=user_message.client_request_id,
         )
 
         added = await self.database_service.add_room_agent_message(
@@ -2657,6 +2668,7 @@ class RoomServices:
                             related_message_id=previous_message_id,
                             agent_id=task_info["agent_id"],
                             user_id=message.user_id,
+                            client_request_id=message.client_request_id,
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
@@ -2681,6 +2693,7 @@ class RoomServices:
                             related_message_id=message.message_id,
                             agent_id=task_info["agent_id"],
                             user_id=message.user_id,
+                            client_request_id=message.client_request_id,
                             message_content=MessageContent(
                                 message_task=task_info["task"]
                             ),
@@ -3450,6 +3463,7 @@ class RoomServices:
                     room_message = RoomMessage(
                         room_id=user_msg.room_id,
                         message_id=user_msg.message_id,
+                        client_request_id=user_msg.client_request_id,
                         message_type="user",
                         message_content=user_msg.message_content,
                         message_created_at=user_msg.message_created_at,
@@ -3528,6 +3542,7 @@ class RoomServices:
                     room_message = RoomMessage(
                         room_id=agent_msg.room_id,
                         message_id=agent_msg.message_id,
+                        client_request_id=agent_msg.client_request_id,
                         message_type="agent",
                         message_content=MessageContent(
                             message_text=agent_content,

@@ -987,6 +987,60 @@ class DatabaseService:
             )
             return []
 
+    async def resolve_client_request_id_for_agent_message(
+        self, room_agent_message: RoomAgentMessage, max_hops: int = 12
+    ) -> str | None:
+        """Resolve canonical client_request_id for an agent message.
+
+        Resolution order:
+        1) message.client_request_id (already persisted)
+        2) walk related_message_id chain until a user message is found
+        3) fallback to turn_id user message
+        """
+        if room_agent_message.client_request_id:
+            return room_agent_message.client_request_id
+
+        visited: set[str] = set()
+        cursor = room_agent_message.related_message_id
+        for _ in range(max_hops):
+            if not cursor or cursor in visited:
+                break
+            visited.add(cursor)
+
+            user_msg = await self.get_room_user_message_by_message_id(cursor)
+            if user_msg and user_msg.client_request_id:
+                return user_msg.client_request_id
+
+            parent_agent = await self.get_room_agent_message_by_message_id(cursor)
+            if parent_agent is None:
+                break
+            if parent_agent.client_request_id:
+                return parent_agent.client_request_id
+            cursor = parent_agent.related_message_id
+
+        if room_agent_message.turn_id:
+            turn_user_msg = await self.get_room_user_message_by_message_id(
+                room_agent_message.turn_id
+            )
+            if turn_user_msg and turn_user_msg.client_request_id:
+                return turn_user_msg.client_request_id
+
+        return None
+
+    async def resolve_client_request_id_for_message_id(
+        self, message_id: str
+    ) -> str | None:
+        """Resolve client_request_id for a user/agent message_id."""
+        user_msg = await self.get_room_user_message_by_message_id(message_id)
+        if user_msg and user_msg.client_request_id:
+            return user_msg.client_request_id
+
+        agent_msg = await self.get_room_agent_message_by_message_id(message_id)
+        if agent_msg:
+            return await self.resolve_client_request_id_for_agent_message(agent_msg)
+
+        return None
+
     async def claim_stuck_supervisor_trajectory(
         self, message_id: str
     ) -> bool:
@@ -2435,107 +2489,6 @@ class DatabaseService:
                 f"Failed to update webhook token hash for {message_id}: {e}"
             )
             return False
-
-    # --- Turn Events ---
-
-    async def turn_exists(self, room_id: str, turn_id: str) -> bool:
-        """Check if a turn document exists."""
-        doc = await self.mongo.turn_events_collection.find_one(
-            {"room_id": room_id, "turn_id": turn_id},
-            {"_id": 1},
-        )
-        return doc is not None
-
-    async def append_turn_event(
-        self, room_id: str, turn_id: str, event
-    ) -> bool:
-        """Append an event to a turn's events array. Creates the turn doc
-        if this is a turn_started event."""
-        event_doc = {
-            "event_id": event.event_id,
-            "seq": event.seq,
-            "ts": event.ts,
-            "type": event.type,
-            "payload": event.payload.model_dump(),
-        }
-        if event.client_request_id:
-            event_doc["client_request_id"] = event.client_request_id
-
-        if event.type == "turn_started":
-            doc = {
-                "room_id": room_id,
-                "turn_id": turn_id,
-                "events": [event_doc],
-                "status": "processing",
-                "created_at": utcnow(),
-                "completed_at": None,
-            }
-            try:
-                await self.mongo.turn_events_collection.insert_one(doc)
-                return True
-            except Exception as e:
-                logger.error("Failed to create turn %s: %s", turn_id, e)
-                return False
-        else:
-            update = {"$push": {"events": event_doc}}
-            if event.type in ("turn_completed", "turn_failed", "turn_canceled"):
-                status_map = {
-                    "turn_completed": "completed",
-                    "turn_failed": "failed",
-                    "turn_canceled": "canceled",
-                }
-                update["$set"] = {
-                    "status": status_map[event.type],
-                    "completed_at": utcnow(),
-                }
-            result = await self.mongo.turn_events_collection.update_one(
-                {"room_id": room_id, "turn_id": turn_id}, update
-            )
-            return result.modified_count > 0
-
-    async def get_turn_events(self, room_id: str, turn_id: str) -> dict | None:
-        """Get a single turn document with full event journal."""
-        return await self.mongo.turn_events_collection.find_one(
-            {"room_id": room_id, "turn_id": turn_id},
-            {"_id": 0},
-        )
-
-    async def get_recent_turns(
-        self, room_id: str, limit: int = 50
-    ) -> list[dict]:
-        """Get recent turns with full event journals for first-screen load."""
-        cursor = (
-            self.mongo.turn_events_collection
-            .find({"room_id": room_id}, {"_id": 0})
-            .sort("created_at", -1)
-            .limit(limit)
-        )
-        turns = await cursor.to_list(length=limit)
-        turns.reverse()  # oldest first for display
-        return turns
-
-    async def get_turns_summary(
-        self, room_id: str, page: int = 1, limit: int = 20
-    ) -> list[dict]:
-        """Get turn summaries (no events) for paginated list."""
-        skip = (page - 1) * limit
-        cursor = (
-            self.mongo.turn_events_collection
-            .find(
-                {"room_id": room_id},
-                {
-                    "_id": 0,
-                    "turn_id": 1,
-                    "status": 1,
-                    "created_at": 1,
-                    "completed_at": 1,
-                },
-            )
-            .sort("created_at", -1)
-            .skip(skip)
-            .limit(limit)
-        )
-        return await cursor.to_list(length=limit)
 
     async def ensure_hitl_indexes(self) -> None:
         """Create indexes for the hitl_requests collection."""

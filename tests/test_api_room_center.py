@@ -367,6 +367,7 @@ class TestCreateAndParseUserMessage:
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000010",
         })
         
         patch_room_center_deps["db_service"].get_room_by_room_id.return_value = sample_room
@@ -420,6 +421,7 @@ class TestSendMessage:
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
             "target_group": "room_team",
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000001",
         })
         
         mock_background_tasks = MagicMock()
@@ -450,6 +452,7 @@ class TestSendMessage:
         mock_request.json = AsyncMock(return_value={
             "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(),
+            "client_request_id": "c7c9a000-0000-4000-8000-000000000002",
         })
         
         mock_background_tasks = MagicMock()

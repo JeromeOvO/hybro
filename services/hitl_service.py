@@ -12,6 +12,7 @@ See docs/HITL_DESIGN.md §6 for full design details.
 
 from __future__ import annotations
 
+import inspect
 import re
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -89,7 +90,6 @@ class HITLService:
         self._db_service = None
         self._sse_manager = None
         self._a2a_service = None
-        self._turn_appender = None  # Phase 1c
 
     @property
     def database_service(self):
@@ -111,30 +111,6 @@ class HITLService:
             from services.a2a_service import a2a_service
             self._a2a_service = a2a_service
         return self._a2a_service
-
-    # ------------------------------------------------------------------
-    # Turn event emission (Phase 1c)
-    # ------------------------------------------------------------------
-
-    async def _emit_hitl_turn_event(
-        self,
-        room_id: str,
-        turn_id: str | None,
-        event_type: str,
-        payload: dict,
-    ) -> None:
-        """Emit a HITL lifecycle turn event if appender available and turn_id set."""
-        appender = getattr(self, '_turn_appender', None)
-        if not appender or not turn_id:
-            return
-        try:
-            await appender.append(room_id, turn_id, event_type, payload)
-        except Exception:
-            logger.debug(
-                "HITLService: turn event emission failed for %s",
-                event_type,
-                exc_info=True,
-            )
 
     # ------------------------------------------------------------------
     # Create HITL request
@@ -244,23 +220,6 @@ class HITLService:
             request=request,
         )
 
-        # Phase 1c: emit hitl_requested turn event
-        await self._emit_hitl_turn_event(
-            room_id=room_id,
-            turn_id=user_message_id,
-            event_type="hitl_requested",
-            payload={
-                "hitl_id": request.request_id,
-                "source": source,
-                "agent_name": agent_name,
-                "prompt": prompt,
-                "prompt_type": prompt_type.value if hasattr(prompt_type, 'value') else str(prompt_type),
-                "choices": choices,
-                "group_id": group_id,
-                "group_total": group_total,
-                "group_index": group_index,
-            },
-        )
 
         logger.info(
             "hitl_request_created",
@@ -441,16 +400,6 @@ class HITLService:
                     request=request,
                     error=str(exc),
                 )
-                # Phase 1c: emit hitl_error turn event
-                await self._emit_hitl_turn_event(
-                    room_id=room_id,
-                    turn_id=request.user_message_id,
-                    event_type="hitl_error",
-                    payload={
-                        "hitl_id": request.request_id,
-                        "error": str(exc),
-                    },
-                )
                 raise HTTPException(
                     502,
                     f"Failed to deliver response to {request.source}: {exc}",
@@ -499,16 +448,6 @@ class HITLService:
             request=request,
         )
 
-        # Phase 1c: emit hitl_answered turn event
-        await self._emit_hitl_turn_event(
-            room_id=room_id,
-            turn_id=request.user_message_id,
-            event_type="hitl_answered",
-            payload={
-                "hitl_id": request.request_id,
-                "answer": user_input,
-            },
-        )
 
         # Persist user's answer on the agent message for DB hydration
         if request.display_message_id:
@@ -762,14 +701,6 @@ class HITLService:
             request=request,
         )
 
-        # Phase 1c: emit hitl_canceled turn event
-        await self._emit_hitl_turn_event(
-            room_id=request.room_id,
-            turn_id=request.user_message_id,
-            event_type="hitl_canceled",
-            payload={"hitl_id": request.request_id},
-        )
-
         logger.info(
             "hitl_request_canceled",
             extra={
@@ -885,6 +816,39 @@ class HITLService:
             ),
             "source": request.source,
         }
+        get_user_message = getattr(
+            self.database_service, "get_room_user_message_by_message_id", None
+        )
+        user_message = None
+        if callable(get_user_message):
+            maybe_user_message = get_user_message(request.user_message_id)
+            user_message = (
+                await maybe_user_message
+                if inspect.isawaitable(maybe_user_message)
+                else maybe_user_message
+            )
+        client_request_id = user_message.client_request_id if user_message else None
+        if client_request_id:
+            data["client_request_id"] = client_request_id
+        else:
+            # Match SSEManager turn-correlation: resolve from display/continuation/agent
+            # message_id when the user row lacks client_request_id (strict frontend).
+            mid = data.get("message_id")
+            if isinstance(mid, str) and mid.strip():
+                resolve_fn = getattr(
+                    self.database_service,
+                    "resolve_client_request_id_for_message_id",
+                    None,
+                )
+                if callable(resolve_fn):
+                    maybe_resolved = resolve_fn(mid.strip())
+                    resolved = (
+                        await maybe_resolved
+                        if inspect.isawaitable(maybe_resolved)
+                        else maybe_resolved
+                    )
+                    if isinstance(resolved, str) and resolved.strip():
+                        data["client_request_id"] = resolved.strip()
 
         if event_type == HITLEventType.INPUT_REQUESTED:
             message_type = "hitl_input_requested"

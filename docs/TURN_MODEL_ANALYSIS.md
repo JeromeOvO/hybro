@@ -1,7 +1,7 @@
 # Analysis: Turn as a Data Primitive — Scope, Limits, and Long-Term Design
 
-> **Status:** Position paper / architectural analysis
-> **Date:** 2026-04-17
+> **Status:** Position paper / architectural analysis (**implementation update applied**)
+> **Date:** 2026-04-17 (updated 2026-04-25)
 > **Scope:** hybro-frontend + multi-agents-backend (+ their boundary contracts)
 > **Related:**
 > - `hybro-frontend/PLAN-turn-store-single-writer.md` — stabilization plan (ship first, this doc depends on it)
@@ -11,6 +11,19 @@
 > captured on 2026-04-17 and are indicative, not authoritative. Trust the
 > symbol name over the line number; re-run the cited `rg` queries before
 > acting on a specific reference.
+
+---
+
+## Implementation Update (2026-04-25)
+
+The cleanup described in this document has now been applied for the turn-event backend/frontend path:
+
+- Frontend no longer consumes `turn_event` SSE for room rendering; turn UI is derived from `message-store`.
+- Backend turn-event runtime wiring has been removed from the active room execution path.
+- Turns API has been removed (`api/turns.py` + router include).
+- Turn-event persistence primitives have been removed from active database service/mongo index setup paths.
+
+Remaining references in this document that mention `turn_events`/`turn_event` should be read as historical analysis context unless explicitly marked as current-state behavior.
 
 ---
 
@@ -55,8 +68,8 @@ Materially, this manifests as:
 | Role | Expression in code |
 |---|---|
 | Identity | `turn_id = user_message.message_id` |
-| Persistence | MongoDB `turn_events` collection, keyed by `turn_id` |
-| Protocol | SSE `turn_event` messages (`models/turn_event.py:191`) |
+| Persistence | **Removed** from active architecture (historically `turn_events`) |
+| Protocol | Runtime uses `processing_status` / `task_*` / `agent_response`; `turn_event` kept only as compatibility type |
 | Frontend store | `stores/turn-event-store/*` — event log + projections |
 | UI grouping | `TurnViewModel`, rendered by `components/turn/*` |
 | Per-message annotation | `RoomAgentMessage.turn_id` (`models/room.py:140`) |
@@ -90,7 +103,7 @@ These are two different concepts wearing the same name:
 | Cardinality | 1 per user prompt | 1 per message in the context window (user or agent) |
 | Lifetime | Tied to the user message | Independent |
 | Semantics | "A user request and its responses" | "A single history item / context-window entry" |
-| Defined in | `models/room.py:140`, `models/turn_event.py:191` | `models/memory.py:112` |
+| Defined in | `models/room.py:140` (historically also `models/turn_event.py`) | `models/memory.py:112` |
 
 Any future code that tries to join on `turn_id` across the chat/memory boundary will be subtly wrong. **This is the single most dangerous finding in this analysis** — it is already a bug, it is just not yet weaponized.
 
@@ -129,9 +142,9 @@ Every modern agent framework has concluded these two concerns should *not* share
 | LangGraph | `Run` | Graph state + messages | No |
 | Anthropic Messages | — (request-scoped) | `messages[]` array | No |
 | Google Gemini | `Request` (stateless) | `contents[]` | No |
-| **Hybro (today)** | **—** | **`RoomMessage`** | **Yes (`turn_events`)** |
+| **Hybro (today)** | **Room-level processing + per-message task state (no persisted Turn primitive)** | **`RoomMessage`** | **No (removed from active architecture)** |
 
-Hybro is the only system on this list treating Turn as a stored primitive. That's the structural bet that needs to be unwound.
+Historically Hybro treated Turn as a stored primitive. That path has now been removed from active frontend/backend runtime architecture.
 
 ## 4. Evidence the model is already biting
 
@@ -185,12 +198,12 @@ Its existence reveals the underlying truth: **the system already needs a "parent
 
 | Layer | Files | Role | Verdict |
 |---|---|---|---|
-| **UI components** | `components/turn/*` (11 files — `TurnList`, `OrchestraTurn`, `UserInputBlock`, `AgentContentBlock`, `SummaryContentBlock`, `HitlRecordBlock`, `ContentSlotRenderer`, `OrchestrationRail`, `expand-collapse-context`), plus `components/conversation-turn.tsx`, `components/turn-event-timeline.tsx` | Rendering-only, derive view models | ✅ Fine as UI grouping |
+| **UI components** | `components/turn/*` (11 files — `TurnList`, `OrchestraTurn`, `UserInputBlock`, `AgentContentBlock`, `SummaryContentBlock`, `HitlRecordBlock`, `ContentSlotRenderer`, `OrchestrationRail`, `expand-collapse-context`), plus `components/conversation-turn.tsx` | Rendering-only, derive view models | ✅ Fine as UI grouping |
 | **Render hooks** | `hooks/turn/useTurnProjection`, `hooks/turn/useTurnScroll` | Build view state for render | ✅ Fine |
 | **Data layer (event-sourced)** | `stores/turn-event-store/*` (index, types, event-log, projections/content-slots, projections/rail, projections/composer) | In-memory event-sourced state | ⚠ Deepens Turn-as-primitive |
-| **Bridge / adapter** | `hooks/turn/useMessageStoreSync`, `hooks/turn/useSSEToEventLog`, `hooks/turn/useTurnHydration`, `lib/turn-event-store/legacy-adapter.ts` | Messages ↔ turn events | ⚠ Only exists because of the dual-store design |
-| **Protocol** | `lib/types/sse.ts:10` (`turn_event` SSE kind), `lib/types/sse.ts:67-70` | Reflects backend wire format | ⚠ Couples FE to Turn-as-protocol |
-| **API client** | `lib/api/turns.ts` | REST calls to `/rooms/:id/turns/:turn_id` | ⚠ Exposes Turn as an HTTP resource |
+| **Bridge / adapter** | `hooks/turn/useMessageStoreSync`, `hooks/turn/useTurnHydration` | Derive turn projection from message-store | ⚠ Transitional while turn-event-store still exists |
+| **Protocol** | `lib/types/sse.ts:10` (`turn_event` kind retained for compatibility) | `turn_event` is ignored in runtime | ✅ No longer a write-path dependency |
+| **API client** | — | Removed (`lib/api/turns.ts` deleted) | ✅ Turn is no longer an HTTP resource |
 | **Timeline builder** | `lib/room-timeline/build-turns.ts`, `lib/room-timeline/types.ts`, `lib/room-timeline/event-log.ts` | Pure function: messages → TurnViewModel | ✅ **The desired shape.** More code should look like this |
 | **Message store** | `stores/message-store/*` | **Zero `turnId` references** | ✅ Clean — messages don't carry Turn |
 
@@ -198,11 +211,11 @@ Its existence reveals the underlying truth: **the system already needs a "parent
 
 | Layer | Files | Role | Verdict |
 |---|---|---|---|
-| **Chat event lane** | `models/turn_event.py`, `services/turn_event_service.py`, `api/turns.py` | Chat event stream | ✅ Appropriate — this *is* the chat lane |
+| **Chat event lane** | — | Removed from active architecture | ✅ Completed cleanup |
 | **Turn-id utility** | `common/utils/turn_id.py` | Resolve root user-msg for an agent msg | ⚠ Exists because the concept is derivable, not primary |
 | **Persisted on agent messages** | `models/room.py:140` — `RoomAgentMessage.turn_id` | "Root user message_id that triggered this processing chain" | ❌ Too far — should be `parent_message_id` |
-| **Chat service propagation** | `services/hitl_service.py` (8 refs, all `turn_id=user_message_id`), `services/slot_lifecycle.py` (6), `services/room_services.py` (6), `services/database_service.py` (12), `services/turn_event_service.py` (24) | Threads `turn_id` through every chat path | Appropriate today, but wide surface |
-| **Module propagation** | `modules/RoomMessageCenter.py` (9), `modules/SupervisorExecutor.py` (7), `modules/WorkflowCenter.py` (3), `modules/QueueExecutor.py` (11), `modules/agent_event.py` (1), `modules/agent_response_handler.py` (3), `modules/transports/direct.py` (2) | Carries `turn_id` on every agent dispatch | ❌ Too far — execution layer should speak `run_id` |
+| **Chat service propagation** | `services/hitl_service.py`, `services/room_services.py` | Residual `turn_id` usage in non-turn-event flows | ⚠ Reduced surface; continue migration to parent-message/run model |
+| **Module propagation** | `modules/RoomMessageCenter.py`, `modules/SupervisorExecutor.py`, `modules/WorkflowCenter.py`, `modules/QueueExecutor.py`, `modules/agent_event.py`, `modules/agent_response_handler.py`, `modules/transports/direct.py` | Residual `turn_id` threading in execution path | ❌ Still too far — execution layer should speak `run_id` |
 | **Memory subsystem (NAME COLLISION)** | `models/memory.py`, `models/search.py`, `models/compaction.py`, `services/memory_service.py` (12), `services/compaction_service.py` (16), `services/content_storage_service.py` (27), `services/memory_search_service.py` (18) | Different concept, same field name | ❌ Too far — needs rename |
 | **A2A adapter** | `a2a-adapter/` | **Zero `turn_id` references** | ✅ Clean — external boundary uncorrupted |
 | **Hub / webhooks / task-notification** | `hub/`, `api/webhooks.py`, `services/task_notification_service.py` | **Zero `turn_id` references** | ✅ Clean |
@@ -522,9 +535,9 @@ Those are additive edits; the doc doesn't need a rewrite.
 | `/Users/kflu/Projects/multi-agents-backend/models/search.py:42` | `MemorySearchResult.turn_id` |
 | `/Users/kflu/Projects/multi-agents-backend/models/compaction.py:85` | `StoredContent.turn_id` |
 | `/Users/kflu/Projects/multi-agents-backend/models/room.py:140` | `RoomAgentMessage.turn_id` |
-| `/Users/kflu/Projects/multi-agents-backend/models/turn_event.py:191` | `TurnEvent.turn_id` |
+| `/Users/kflu/Projects/multi-agents-backend/models/turn_event.py` | **Removed** (turn-event model deleted) |
 | `/Users/kflu/Projects/multi-agents-backend/common/utils/turn_id.py:15` | `resolve_turn_id()` fallback utility |
-| `/Users/kflu/Projects/multi-agents-backend/api/turns.py:51` | `/rooms/:id/turns/:turn_id` endpoint |
+| `/Users/kflu/Projects/multi-agents-backend/api/turns.py` | **Removed** (turns API deleted) |
 | `/Users/kflu/Projects/multi-agents-backend/services/hitl_service.py` | 8× `turn_id=user_message_id` sites |
 | `/Users/kflu/Projects/hybro-frontend/src/lib/types/sse.ts:67` | Frontend `turn_event` SSE type |
 | `/Users/kflu/Projects/hybro-frontend/src/stores/turn-event-store/types.ts` | Frontend turn-event envelope + projections |

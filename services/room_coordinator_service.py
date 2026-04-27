@@ -79,6 +79,7 @@ class RoomCoordinatorService:
         """
         summary_message_id: str | None = None
         coordinator_agent_id: str | None = None
+        summary_client_request_id: str | None = None
 
         try:
             room: Room | None = await self.database_service.get_room_by_room_id(room_id)
@@ -164,6 +165,12 @@ class RoomCoordinatorService:
             # Pre-generate message_id and emit a "working" indicator so the
             # frontend shows a spinner while the LLM summarisation runs.
             summary_message_id = str(uuid4())
+            root_user_message = await self.database_service.get_room_user_message_by_message_id(
+                room_user_message_id
+            )
+            summary_client_request_id = (
+                root_user_message.client_request_id if root_user_message else None
+            )
             agent_name = (
                 "Debate Coordinator" if is_debate_mode else "Summary Agent"
             )
@@ -176,6 +183,7 @@ class RoomCoordinatorService:
                 status="working",
                 related_message_id=room_user_message_id,
                 task_content="Summarizing agent responses…",
+                client_request_id=summary_client_request_id,
             )
 
             summary_text = await self.openai_service.summarize_agent_responses(
@@ -189,6 +197,7 @@ class RoomCoordinatorService:
                     message_id=summary_message_id,
                     status="completed",
                     agent_id=coordinator_agent_id,
+                    client_request_id=summary_client_request_id,
                 )
                 return
 
@@ -212,6 +221,7 @@ class RoomCoordinatorService:
                         message_id=summary_message_id,
                         status="failed",
                         agent_id=coordinator_agent_id,
+                        client_request_id=summary_client_request_id,
                     )
                 except Exception:  # noqa: BLE001
                     pass
@@ -340,6 +350,7 @@ class RoomCoordinatorService:
             room_user_message_id
         )
         user_id = user_message.user_id if user_message else None
+        client_request_id = user_message.client_request_id if user_message else None
 
         summary_agent_message = RoomAgentMessage(
             room_id=room_id,
@@ -347,6 +358,7 @@ class RoomCoordinatorService:
             agent_id=coordinator_agent_id,
             related_message_id=room_user_message_id,
             user_id=user_id,
+            client_request_id=client_request_id,
             message_content=summary_content,
             message_created_at=utcnow(),
             extend_info={
@@ -367,6 +379,7 @@ class RoomCoordinatorService:
             coordinator_agent_id,
             summary_text,
             related_message_id=room_user_message_id,
+            client_request_id=client_request_id,
         )
 
 

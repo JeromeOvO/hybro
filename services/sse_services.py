@@ -121,6 +121,31 @@ class SSEManager:
         # Draining flag — reject new connections during shutdown
         self._draining: bool = False
 
+    async def _resolve_client_request_id(
+        self, message_id: str | None, provided_client_request_id: str | None
+    ) -> str | None:
+        """Resolve best-effort client_request_id for SSE correlation."""
+        if provided_client_request_id:
+            return provided_client_request_id
+        if not message_id:
+            return None
+        import inspect
+
+        resolver = getattr(db_service, "resolve_client_request_id_for_message_id", None)
+        if not callable(resolver):
+            return None
+        # unittest.mock.AsyncMock is a coroutine function but returns MagicMock by default;
+        # only accept real string IDs for JSON-safe SSE payloads.
+        if inspect.iscoroutinefunction(resolver):
+            raw = await resolver(message_id)
+        else:
+            raw = resolver(message_id)
+            if inspect.isawaitable(raw):
+                raw = await raw
+        if isinstance(raw, str) and raw.strip():
+            return raw
+        return None
+
     # ------------------------------------------------------------------
     # Event broker lifecycle
     # ------------------------------------------------------------------
@@ -338,8 +363,12 @@ class SSEManager:
         content: str,
         related_message_id: str = None,
         parts: list[dict] | None = None,
+        client_request_id: str | None = None,
     ):
         """send agent response"""
+        resolved_client_request_id = await self._resolve_client_request_id(
+            message_id, client_request_id
+        )
         data = {
             "message_id": message_id,
             "agent_id": agent_id,
@@ -347,6 +376,8 @@ class SSEManager:
             "related_message_id": related_message_id,
             "timestamp": utcnow().isoformat(),
         }
+        if resolved_client_request_id:
+            data["client_request_id"] = resolved_client_request_id
         if parts:
             data["parts"] = parts
         await self.broadcast_to_room(room_id, "agent_response", data)
@@ -415,6 +446,7 @@ class SSEManager:
         artifact: Any,
         append: bool = False,
         last_chunk: bool = False,
+        client_request_id: str | None = None,
     ):
         """
         Send artifact update event from A2A agent streaming.
@@ -430,6 +462,9 @@ class SSEManager:
             append: Whether to append to existing artifact
             last_chunk: Whether this is the final chunk
         """
+        resolved_client_request_id = await self._resolve_client_request_id(
+            message_id, client_request_id
+        )
         data = {
             "message_id": message_id,
             "agent_id": agent_id,
@@ -438,6 +473,8 @@ class SSEManager:
             "last_chunk": last_chunk,
             "timestamp": utcnow().isoformat(),
         }
+        if resolved_client_request_id:
+            data["client_request_id"] = resolved_client_request_id
         await self.broadcast_to_room(room_id, "artifact_update", data)
 
     async def send_processing_status(
@@ -498,14 +535,17 @@ class SSEManager:
             await db_service.clear_room_processing_status_if_matches(room_id, message_id)
 
         # Send SSE event to connected clients
+        resolved_client_request_id = await self._resolve_client_request_id(
+            message_id, client_request_id
+        )
         data = {
             "status": status,
             "message_id": message_id,
             "details": details,
             "timestamp": utcnow().isoformat(),
         }
-        if client_request_id is not None:
-            data["client_request_id"] = client_request_id
+        if resolved_client_request_id:
+            data["client_request_id"] = resolved_client_request_id
         if agents is not None:
             data["agents"] = agents
         await self.broadcast_to_room(room_id, "processing_status", data)
@@ -523,6 +563,7 @@ class SSEManager:
         step_number: int | None = None,
         total_steps: int | None = None,
         task_content: str | None = None,
+        client_request_id: str | None = None,
     ):
         """
         Send task submitted event for long-running tasks.
@@ -538,6 +579,9 @@ class SSEManager:
             total_steps: Total number of steps in the workflow
             task_content: The task description/content being processed
         """
+        resolved_client_request_id = await self._resolve_client_request_id(
+            message_id, client_request_id
+        )
         data = {
             "message_id": message_id,
             "task_id": _enum_value(task_id),
@@ -551,6 +595,8 @@ class SSEManager:
             "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
+        if resolved_client_request_id:
+            data["client_request_id"] = resolved_client_request_id
         await self.broadcast_to_room(room_id, "task_submitted", data)
 
     async def send_task_update(
@@ -571,10 +617,14 @@ class SSEManager:
         total_steps: int | None = None,
         task_content: str | None = None,
         parts: list[dict] | None = None,
+        client_request_id: str | None = None,
     ):
         """
         Send task update event when task state changes.
         """
+        resolved_client_request_id = await self._resolve_client_request_id(
+            message_id, client_request_id
+        )
         data = {
             "message_id": message_id,
             "status": _enum_value(status),
@@ -592,6 +642,8 @@ class SSEManager:
             "task_content": task_content,
             "timestamp": utcnow().isoformat(),
         }
+        if resolved_client_request_id:
+            data["client_request_id"] = resolved_client_request_id
         if parts:
             data["parts"] = parts
         await self.broadcast_to_room(room_id, "task_update", data)
@@ -884,11 +936,6 @@ class SSEManager:
     def remove_token(self, message_id: str) -> None:
         """Remove (but do not cancel) the token for *message_id*."""
         self._cancellation_tokens.pop(message_id, None)
-
-    async def broadcast_turn_event(self, room_id: str, event) -> None:
-        """Broadcast a TurnEvent to all room SSE connections."""
-        await self.broadcast_to_room(room_id, "turn_event", event.to_wire())
-
 
 # global SSE manager instance
 sse_manager = SSEManager()

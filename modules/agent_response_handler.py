@@ -124,6 +124,10 @@ class AgentResponseHandler:
             )
 
         # SSE emission: artifact_update for real artifacts or synthetic text-only fallback
+        sse_kw: dict = {}
+        if e.client_request_id:
+            sse_kw["client_request_id"] = e.client_request_id
+
         if artifact:
             logger.debug(
                 "Sending artifact_update SSE for message %s (append=%s, last_chunk=%s)",
@@ -138,6 +142,7 @@ class AgentResponseHandler:
                 artifact=artifact,
                 append=e.append,
                 last_chunk=e.last_chunk,
+                **sse_kw,
             )
         elif e.text:
             fallback_artifact = {
@@ -151,6 +156,7 @@ class AgentResponseHandler:
                 artifact=fallback_artifact,
                 append=e.append,
                 last_chunk=e.last_chunk,
+                **sse_kw,
             )
 
     # --- Terminal events (DB persist -> notify_task_update -> orchestration) ---
@@ -255,6 +261,9 @@ class AgentResponseHandler:
     # --- Non-terminal events ---
 
     async def _on_submitted(self, e: AgentEvent) -> None:
+        kw: dict = {}
+        if e.client_request_id:
+            kw["client_request_id"] = e.client_request_id
         await self._sse.send_task_submitted(
             room_id=e.room_id,
             message_id=e.message_id,
@@ -265,24 +274,33 @@ class AgentResponseHandler:
             related_message_id=e.related_message_id,
             step_number=e.step_number,
             total_steps=e.total_steps,
+            **kw,
         )
 
     async def _on_status(self, e: AgentEvent) -> None:
         if e.text:
+            kw: dict = {}
+            if e.client_request_id:
+                kw["client_request_id"] = e.client_request_id
             await self._sse.send_task_update(
                 room_id=e.room_id,
                 message_id=e.message_id,
                 status="working",
                 status_message=e.text,
                 agent_id=e.agent_id,
+                **kw,
             )
 
     async def _on_processing_status(self, e: AgentEvent) -> None:
+        kw: dict = {}
+        if e.client_request_id:
+            kw["client_request_id"] = e.client_request_id
         await self._sse.send_processing_status(
             e.room_id,
             e.state,
             message_id=e.message_id,
             details=e.details,
+            **kw,
         )
 
     # --- Helpers ---

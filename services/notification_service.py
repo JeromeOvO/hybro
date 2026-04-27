@@ -41,6 +41,7 @@ class NotificationService:
         task_content: str | None = None,
         related_message_id: str | None = None,
         parts: list[dict] | None = None,
+        client_request_id: str | None = None,
     ) -> None:
         """
         Send a task update notification to the room via SSE.
@@ -62,6 +63,7 @@ class NotificationService:
             total_steps: Total workflow steps
             task_content: Original task content/description
             related_message_id: ID of the related message
+            client_request_id: Correlation ID associated with the originating user turn
         """
         if not message_id:
             logger.warning("NotificationService: Skipping update with no message_id")
@@ -89,6 +91,7 @@ class NotificationService:
             task_content=task_content,
             related_message_id=related_message_id,
             parts=parts,
+            client_request_id=client_request_id,
         )
 
 
