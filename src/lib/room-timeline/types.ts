@@ -81,6 +81,8 @@ export interface AgentResultViewModel {
   status: 'completed' | 'failed' | 'awaiting_input' | 'working'
   content: string
   artifacts: ArtifactData[]
+  /** Task-level status hint (for terminal/interactive states). */
+  taskStatusMessage?: string | null
   hitlHistory?: { prompt: string; answer: string }[]
   /** Whether this agent is a summary-family system agent. */
   isSummaryAgent: boolean

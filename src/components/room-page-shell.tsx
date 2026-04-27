@@ -77,8 +77,8 @@ interface TurnBasedViewProps {
 }
 
 function TurnBasedView({ adapter }: TurnBasedViewProps) {
+  useMessageStoreSync()
   useTurnHydration(adapter.roomId, adapter.getToken)
-  useMessageStoreSync() // Bridge legacy SSE → turn events when Redis/journal is down
 
   return (
     <>

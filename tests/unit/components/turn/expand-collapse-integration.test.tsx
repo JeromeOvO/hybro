@@ -104,7 +104,9 @@ function setupTurnWithLongContent() {
 
 describe('Expand/Collapse integration (TurnList -> Context -> AgentContentBlock)', () => {
   beforeEach(() => {
-    useTurnEventStore.getState().reset()
+    const store = useTurnEventStore.getState()
+    store.reset()
+    store.markHydrated()
   })
 
   // React 19 scheduler can fire async work after jsdom teardown

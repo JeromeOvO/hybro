@@ -7,6 +7,8 @@ import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
+const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
+
 /**
  * Extract plain text from React children tree (strips HTML / highlight spans).
  */
@@ -123,6 +125,58 @@ function isAgentMentionHref(href: string | undefined): boolean {
   return !!href && href.startsWith('/c/agents/')
 }
 
+export function copySelectionWithMentions(
+  e: React.ClipboardEvent<HTMLElement>,
+  container: HTMLElement
+) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return
+
+  const range = selection.getRangeAt(0)
+  if (!container.contains(range.commonAncestorContainer)) return
+
+  const fragment = range.cloneContents()
+  let plainText = ''
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      plainText += node.textContent || ''
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const element = node as HTMLElement
+    if (element.tagName === 'BR') {
+      plainText += '\n'
+      return
+    }
+    element.childNodes.forEach(visit)
+  }
+  fragment.childNodes.forEach(visit)
+
+  let mentionStorageText = plainText
+  const mentionLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.room-mention'))
+    .filter((link) => {
+      try {
+        return range.intersectsNode(link)
+      } catch {
+        return false
+      }
+    })
+
+  mentionLinks.forEach((link) => {
+    const href = link.getAttribute('href') || ''
+    const match = href.match(/\/c\/agents\/([^/?#]+)/)
+    const agentId = match?.[1]
+    const mentionText = (link.textContent || '').trim()
+    const agentName = mentionText.startsWith('@') ? mentionText.slice(1) : mentionText
+    if (!agentId || !mentionText) return
+    mentionStorageText = mentionStorageText.replace(mentionText, `<@${agentId}|${agentName}>`)
+  })
+
+  e.preventDefault()
+  e.clipboardData.setData('text/plain', plainText)
+  e.clipboardData.setData(MENTION_CLIPBOARD_MIME, mentionStorageText)
+}
+
 /** Shared custom component overrides used by all Streamdown instances. */
 function makeComponents(isStreaming: boolean) {
   return {
@@ -130,7 +184,7 @@ function makeComponents(isStreaming: boolean) {
     if (isAgentMentionHref(href)) {
       return (
         <a
-          className="prose room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
+          className="prose room-mention mx-1 select-text hover:underline underline-offset-2 transition-opacity hover:opacity-80"
           href={href}
           target="_blank"
           rel="noopener noreferrer"
@@ -154,7 +208,10 @@ function makeComponents(isStreaming: boolean) {
   },
   code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
     const match = /language-(\w+)/.exec(className || '')
-    const isInline = !match
+    // Fenced blocks without a language tag have no className, but they always
+    // contain newlines. Inline backticks never do. Use this to distinguish them
+    // so that unlabelled ``` blocks still get <pre> treatment.
+    const isInline = !match && !extractText(children).includes('\n')
     if (isInline) {
       return (
         <code
@@ -165,7 +222,7 @@ function makeComponents(isStreaming: boolean) {
         </code>
       )
     }
-    const isJson = match[1] === 'json'
+    const isJson = match?.[1] === 'json'
     if (isJson && !isStreaming) {
       const text = extractText(children)
       const lineCount = text.split('\n').filter((l, i, a) => i < a.length - 1 || l.trim()).length
@@ -235,14 +292,24 @@ export function MarkdownContent({
   autoFormatJson?: boolean
   className?: string
 }) {
+  const contentRef = useRef<HTMLDivElement>(null)
   const formatted = autoFormatJson ? formatIfJson(content) : content
   const processedContent = processMentions(formatted)
   // Memoize components by isStreaming to avoid Streamdown re-rendering on every render
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const components = React.useMemo(() => makeComponents(isStreaming), [isStreaming])
+  const handleCopy = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    const container = contentRef.current
+    if (!container) return
+    copySelectionWithMentions(e, container)
+  }, [])
 
   return (
-    <div className={cn("min-w-0 text-sm leading-relaxed text-inherit", className)}>
+    <div
+      ref={contentRef}
+      onCopy={handleCopy}
+      className={cn("min-w-0 text-sm leading-relaxed text-inherit", className)}
+    >
       <Streamdown
         mode={isStreaming ? 'streaming' : 'static'}
         caret={isStreaming ? 'block' : undefined}
@@ -295,7 +362,7 @@ export function LinkifiedContent({ content }: { content: string }) {
           href={`/c/agents/${agentId}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="room-mention mx-1 hover:underline underline-offset-2 transition-opacity hover:opacity-80"
+          className="room-mention mx-1 select-text hover:underline underline-offset-2 transition-opacity hover:opacity-80"
           title={`Agent: ${agentName}`}
         >
           @{agentName}

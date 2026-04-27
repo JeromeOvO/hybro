@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { SSEConnection, SSEMessage } from '@/lib/api/sse'
+import type { SSECloseReason } from '@/lib/api/sse'
 
 interface UseRoomSSEOptions {
   roomId: string
@@ -9,18 +10,19 @@ interface UseRoomSSEOptions {
   onConnectionChange?: (connected: boolean) => void
 }
 
+const RESURRECT_DELAY_MS = 45_000
+
 export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConnectionChange }: UseRoomSSEOptions) {
   const [connected, setConnected] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<SSEConnection | null>(null)
+  const resurrectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   
-  // Use refs for callbacks to avoid recreating connect/disconnect and triggering reconnections
   const onMessageRef = useRef(onMessage)
   const onConnectionChangeRef = useRef(onConnectionChange)
   const getTokenRef = useRef(getToken)
   
-  // Keep refs up to date without triggering reconnections
   useEffect(() => {
     onMessageRef.current = onMessage
   }, [onMessage])
@@ -33,7 +35,6 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     getTokenRef.current = getToken
   }, [getToken])
 
-  // Stable handlers that use refs - won't change and won't trigger reconnections
   const handleMessage = useCallback((message: SSEMessage) => {
     console.log('📨 SSE Hook received message:', message)
     onMessageRef.current?.(message)
@@ -44,40 +45,59 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     onConnectionChangeRef.current?.(isConnected)
   }, [])
 
+  const clearResurrectTimer = useCallback(() => {
+    if (resurrectTimerRef.current) {
+      clearTimeout(resurrectTimerRef.current)
+      resurrectTimerRef.current = null
+    }
+  }, [])
+
   const connect = useCallback(async () => {
     if (!enabled || !roomId || connectionRef.current?.isConnected()) {
       return
     }
 
+    clearResurrectTimer()
+
     try {
       setConnecting(true)
       setError(null)
 
-      // Disconnect existing connection
       if (connectionRef.current) {
         connectionRef.current.disconnect()
       }
 
-      // Create new connection using ref for getToken
       connectionRef.current = new SSEConnection({
         roomId,
         getToken: () => getTokenRef.current?.() ?? Promise.resolve(null),
         onMessage: handleMessage,
         onOpen: () => {
           console.log('✅ SSE connected')
+          clearResurrectTimer()
           handleConnectionChange(true)
           setConnecting(false)
         },
-        onError: (event) => {
-          console.error('❌ SSE error:', event)
+        onError: () => {
           setError('Connection error')
           handleConnectionChange(false)
           setConnecting(false)
         },
-        onClose: () => {
-          console.log('🔌 SSE disconnected')
+        onClose: (reason: SSECloseReason) => {
           handleConnectionChange(false)
           setConnecting(false)
+
+          if (reason === 'permanent-failure') {
+            console.log(`🔌 SSE permanently failed — will resurrect in ${RESURRECT_DELAY_MS / 1000}s`)
+            connectionRef.current = null
+            clearResurrectTimer()
+            resurrectTimerRef.current = setTimeout(() => {
+              // Re-read enabled/roomId from the closure at timer-fire time.
+              // connect() has its own guards, so stale calls are harmless.
+              connectRef.current()
+            }, RESURRECT_DELAY_MS)
+          } else {
+            console.log('🔌 SSE disconnected (manual)')
+          }
         }
       })
 
@@ -88,9 +108,16 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       setConnecting(false)
       handleConnectionChange(false)
     }
-  }, [roomId, enabled, handleMessage, handleConnectionChange])
+  }, [roomId, enabled, handleMessage, handleConnectionChange, clearResurrectTimer])
+
+  // Stable ref to `connect` so the resurrect timer can call the latest version
+  const connectRef = useRef(connect)
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   const disconnect = useCallback(() => {
+    clearResurrectTimer()
     if (connectionRef.current) {
       connectionRef.current.disconnect()
       connectionRef.current = null
@@ -98,13 +125,10 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     handleConnectionChange(false)
     setConnecting(false)
     setError(null)
-  }, [handleConnectionChange])
+  }, [handleConnectionChange, clearResurrectTimer])
 
-  // Auto connect/disconnect based on enabled and roomId ONLY
-  // Removed connect/disconnect from deps to prevent reconnection loops
   useEffect(() => {
     if (enabled && roomId) {
-      // Ensure previous connection is closed before creating a new one
       if (connectionRef.current) {
         connectionRef.current.disconnect()
         connectionRef.current = null
@@ -114,8 +138,8 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
       disconnect()
     }
 
-    // Cleanup on unmount or when roomId/enabled change
     return () => {
+      clearResurrectTimer()
       if (connectionRef.current) {
         connectionRef.current.disconnect()
         connectionRef.current = null

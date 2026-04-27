@@ -37,61 +37,7 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
   // Actions
   append(turnId: string, event: TurnEvent): void {
     const state = get()
-
-    // Check for optimistic merge
     let finalTurnId = turnId
-    if (event.type === 'turn_started' && event.clientRequestId) {
-      const optimisticTurnId = state.turnIdByClientRequestId.get(event.clientRequestId)
-      if (optimisticTurnId) {
-        // Replace optimistic turn with real turn
-        const optimisticLog = state.turnLogs.get(optimisticTurnId)
-        if (optimisticLog) {
-          // Create new log with real turnId
-          const newLog = new TurnEventLog(turnId)
-          const optimisticEvents = optimisticLog.getEvents()
-
-          // Transfer events to new log, replacing the first turn_started
-          for (let i = 0; i < optimisticEvents.length; i++) {
-            if (i === 0) {
-              newLog.append(event)
-            } else {
-              newLog.append({ ...optimisticEvents[i], turnId })
-            }
-          }
-
-          // Update state
-          const newTurnLogs = new Map(state.turnLogs)
-          newTurnLogs.delete(optimisticTurnId)
-          newTurnLogs.set(turnId, newLog)
-
-          // Replace optimistic turnId with real turnId, then deduplicate.
-          // A slot_opened turn_event may have already added the real turnId
-          // to orderedTurnIds before this merge runs, producing [realId, realId].
-          const mapped = state.orderedTurnIds.map(id =>
-            id === optimisticTurnId ? turnId : id
-          )
-          const seen = new Set<string>()
-          const newOrderedTurnIds = mapped.filter(id => {
-            if (seen.has(id)) return false
-            seen.add(id)
-            return true
-          })
-
-          // Keep the clientRequestId → turnId mapping updated (not deleted)
-          // so subsequent ID swaps (tempMessageId → realMessageId) can
-          // still find and merge the turn via the same clientRequestId.
-          const newLookup = new Map(state.turnIdByClientRequestId)
-          newLookup.set(event.clientRequestId, turnId)
-
-          set({
-            turnLogs: newTurnLogs,
-            orderedTurnIds: newOrderedTurnIds,
-            turnIdByClientRequestId: newLookup,
-          })
-          return
-        }
-      }
-    }
 
     // Normal append logic
     let log = state.turnLogs.get(finalTurnId)
@@ -131,6 +77,9 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
       set({
         turnLogs: newTurnLogs,
         orderedTurnIds: newOrderedTurnIds,
+        turnIdByClientRequestId: event.type === 'turn_started' && event.clientRequestId
+          ? new Map(state.turnIdByClientRequestId).set(event.clientRequestId, finalTurnId)
+          : state.turnIdByClientRequestId,
         composerState: newComposerState,
       })
     }
@@ -139,6 +88,13 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
   createOptimisticTurn(clientRequestId: string, userInput: UserInputData): void {
     const state = get()
     const optimisticTurnId = clientRequestId
+
+    // Idempotency guard: if this request is already mapped and the log exists,
+    // do not append a second optimistic turn entry.
+    const existingTurnId = state.turnIdByClientRequestId.get(clientRequestId)
+    if (existingTurnId && state.turnLogs.has(existingTurnId)) {
+      return
+    }
 
     const log = new TurnEventLog(optimisticTurnId)
     const syntheticEvent: TurnEvent = {
@@ -163,7 +119,9 @@ export const useTurnEventStore = create<TurnEventStoreState>((set, get) => ({
 
     set({
       turnLogs: newTurnLogs,
-      orderedTurnIds: [...state.orderedTurnIds, optimisticTurnId],
+      orderedTurnIds: state.orderedTurnIds.includes(optimisticTurnId)
+        ? state.orderedTurnIds
+        : [...state.orderedTurnIds, optimisticTurnId],
       turnIdByClientRequestId: newLookup,
       composerState: newComposerState,
     })

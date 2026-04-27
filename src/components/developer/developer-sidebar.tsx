@@ -106,18 +106,18 @@ export function DeveloperSidebar({ ...props }: React.ComponentProps<typeof Sideb
       </SidebarContent>
       <SidebarFooter>
         <div className="border-t border-sidebar-border mx-2 mb-1" />
-        {/* Try Agents link */}
+        {/* User Portal link */}
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild
               size="default"
-              tooltip="Try Agents"
+              tooltip="User Portal"
             >
               <Link href={consumerUrl("/chat")} prefetch={false}>
                 <Bot className={`h-4 w-4 transition-colors ${SIDEBAR_PORTAL_ICON} ${SIDEBAR_ICON_CENTER}`} />
                 <span className={`${SIDEBAR_PORTAL_TEXT} ${SIDEBAR_ICON_HIDDEN}`}>
-                  Try Agents →
+                  User Portal →
                 </span>
               </Link>
             </SidebarMenuButton>

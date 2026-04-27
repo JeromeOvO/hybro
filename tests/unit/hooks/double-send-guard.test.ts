@@ -84,6 +84,13 @@ function createWrapper() {
 }
 
 const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+const latestClientRequestId = (roomId = 'room-1') =>
+  useMessageStore
+    .getState()
+    .orderedIds
+    .map((id) => useMessageStore.getState().entities[id])
+    .filter((m) => m?.roomId === roomId && m?.messageType === 'user')
+    .at(-1)?.clientRequestId
 
 describe('useRoomWebhook double-send guard', () => {
   beforeEach(() => {
@@ -144,11 +151,13 @@ describe('useRoomWebhook double-send guard', () => {
       await result.current.sendUserMessage('Hello')
     })
     expect(flags().processing).toBe(true)
+    const clientRequestId = latestClientRequestId()
+    expect(clientRequestId).toBeTruthy()
 
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed', message_id: 'msg-1' },
+        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId },
       }))
     })
     expect(flags().processing).toBe(false)
@@ -171,6 +180,8 @@ describe('useRoomWebhook double-send guard', () => {
       await result.current.sendUserMessage('Hello')
     })
     expect(flags().processing).toBe(true)
+    const clientRequestId = latestClientRequestId()
+    expect(clientRequestId).toBeTruthy()
 
     // task_update with terminal status does NOT clear processing —
     // it means one agent finished, but room-level processing continues
@@ -179,6 +190,7 @@ describe('useRoomWebhook double-send guard', () => {
         type: 'task_update',
         data: {
           message_id: 'task-msg-1',
+          client_request_id: clientRequestId,
           status: 'completed',
           content: 'Done!',
           agent_name: 'Agent',
@@ -192,7 +204,7 @@ describe('useRoomWebhook double-send guard', () => {
     await act(async () => {
       await capturedOnMessage!(makeSSEMessage({
         type: 'processing_status',
-        data: { status: 'completed', message_id: 'msg-1' },
+        data: { status: 'completed', message_id: 'msg-1', client_request_id: clientRequestId },
       }))
     })
     expect(flags().processing).toBe(false)

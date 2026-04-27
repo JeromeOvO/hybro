@@ -23,133 +23,146 @@ import { isSystemAgent } from '@/lib/system-agents'
 export function useMessageStoreSync() {
   const processedRef = useRef(new Map<string, number>()) // turnId → fingerprint
 
+  // Clear bridge cache when turn store resets so re-hydration can rebuild turns
   useEffect(() => {
+    let prevHydrated = useTurnEventStore.getState().hydrated
+    const unsub = useTurnEventStore.subscribe((s) => {
+      if (prevHydrated && !s.hydrated) {
+        processedRef.current.clear()
+      }
+      prevHydrated = s.hydrated
+    })
+    return unsub
+  }, [])
+
+  useEffect(() => {
+    const syncNow = () => {
+      const { entities, orderedIds } = useMessageStore.getState()
+      const store = useTurnEventStore.getState()
+      const processed = processedRef.current
+
+      // Group entities into user and agent messages
+      const userEntities: MessageEntity[] = []
+      const agentEntities: MessageEntity[] = []
+
+      for (const id of orderedIds) {
+        const entity = entities[id]
+        if (!entity || entity.isEphemeral) continue
+        if (entity.messageType === 'user') userEntities.push(entity)
+        else if (entity.messageType === 'agent') agentEntities.push(entity)
+      }
+
+      // Canonical routing: prefer direct clientRequestId on agent entities.
+      // Keep relatedMessageId traversal as a bounded compatibility fallback
+      // for legacy rows that may not carry clientRequestId yet.
+      const agentsByTurn = new Map<string, MessageEntity[]>()
+      const userByMessageId = new Map<string, MessageEntity>()
+      const userMessageIds = new Set<string>()
+      const entityById = new Map(orderedIds.map(id => [id, entities[id]]))
+      for (const user of userEntities) {
+        userByMessageId.set(user.id, user)
+        userMessageIds.add(user.id)
+      }
+
+      const unlinked: MessageEntity[] = []
+
+      for (const agent of agentEntities) {
+        if (agent.clientRequestId) {
+          const list = agentsByTurn.get(agent.clientRequestId) ?? []
+          list.push(agent)
+          agentsByTurn.set(agent.clientRequestId, list)
+          continue
+        }
+
+        const relId = agent.relatedMessageId
+        if (!relId) { unlinked.push(agent); continue }
+
+        let userMessageId: string | undefined
+        if (userMessageIds.has(relId)) {
+          userMessageId = relId
+        } else {
+          // Chain routing: follow one level
+          const related = entityById.get(relId)
+          if (related?.relatedMessageId && userMessageIds.has(related.relatedMessageId)) {
+            userMessageId = related.relatedMessageId
+          }
+        }
+
+        const turnId = userMessageId ? userByMessageId.get(userMessageId)?.clientRequestId : undefined
+        if (turnId) {
+          const list = agentsByTurn.get(turnId) ?? []
+          list.push(agent)
+          agentsByTurn.set(turnId, list)
+        } else {
+          unlinked.push(agent)
+        }
+      }
+
+      // Intentionally do not attach unlinked agents to a fallback turn.
+      // Attaching to the most recent user can permanently mis-thread
+      // append-only turn events when SSE arrives before user-id resolution.
+
+      // For each user message, check if this turn needs updating
+      for (const userEntity of userEntities) {
+        const turnId = userEntity.clientRequestId
+        if (!turnId) continue
+        const turnAgents = agentsByTurn.get(turnId) ?? []
+
+        // Build a fingerprint to detect changes
+        const fingerprint = computeFingerprint(userEntity, turnAgents)
+        if (processed.get(turnId) === fingerprint) continue
+
+        const existingLog = store.turnLogs.get(turnId)
+
+        if (existingLog) {
+          // Turn already exists — only push incremental updates
+          pushIncrementalUpdates(store, turnId, existingLog, turnAgents, userEntity)
+        } else {
+          // Brand new turn — create from scratch
+          const events = buildTurnEvents(turnId, userEntity, turnAgents)
+          for (const event of events) {
+            store.append(turnId, event)
+          }
+        }
+
+        processed.set(turnId, fingerprint)
+      }
+
+      // Keep only canonical turn ids that still exist in message-store.
+      cleanupOrphanOptimisticTurns(store, new Set(userEntities.map(u => u.clientRequestId).filter((v): v is string => !!v)))
+    }
+
+    // Handle pre-populated message-store state immediately on mount so we do
+    // not depend on a later version bump to seed the turn store.
+    syncNow()
+
     const unsub = useMessageStore.subscribe(
       (s) => s.version,
-      () => {
-        const { entities, orderedIds } = useMessageStore.getState()
-        const store = useTurnEventStore.getState()
-        const processed = processedRef.current
-
-        // Group entities into user and agent messages
-        const userEntities: MessageEntity[] = []
-        const agentEntities: MessageEntity[] = []
-
-        for (const id of orderedIds) {
-          const entity = entities[id]
-          if (!entity || entity.isEphemeral) continue
-          if (entity.messageType === 'user') userEntities.push(entity)
-          else if (entity.messageType === 'agent') agentEntities.push(entity)
-        }
-
-        // Index agent messages by their related user message (turn) ID
-        const agentsByTurn = new Map<string, MessageEntity[]>()
-        const userIds = new Set(userEntities.map(u => u.id))
-        const entityById = new Map(orderedIds.map(id => [id, entities[id]]))
-
-        const unlinked: MessageEntity[] = []
-
-        for (const agent of agentEntities) {
-          const relId = agent.relatedMessageId
-          if (!relId) { unlinked.push(agent); continue }
-
-          let turnId: string | undefined
-          if (userIds.has(relId)) {
-            turnId = relId
-          } else {
-            // Chain routing: follow one level
-            const related = entityById.get(relId)
-            if (related?.relatedMessageId && userIds.has(related.relatedMessageId)) {
-              turnId = related.relatedMessageId
-            }
-          }
-
-          if (turnId) {
-            const list = agentsByTurn.get(turnId) ?? []
-            list.push(agent)
-            agentsByTurn.set(turnId, list)
-          } else {
-            unlinked.push(agent)
-          }
-        }
-
-        // Fallback: assign unlinked agents to the most recent user message.
-        // This handles cases where relatedMessageId uses the server-assigned ID
-        // but the user entity still has a temp ID (pre-swap timing gap).
-        // Skip unlinked entities when a task-tracked entity with the same
-        // agentId already exists in the turn (prevents duplicate from
-        // agent_response SSE arriving after task_submitted).
-        if (unlinked.length > 0 && userEntities.length > 0) {
-          const lastUser = userEntities[userEntities.length - 1]
-          const list = agentsByTurn.get(lastUser.id) ?? []
-          for (const agent of unlinked) {
-            const isDuplicate = agent.agentId && list.some(
-              existing => existing.agentId === agent.agentId && existing.taskStatus != null,
-            )
-            if (!isDuplicate) {
-              list.push(agent)
-            }
-          }
-          agentsByTurn.set(lastUser.id, list)
-        }
-
-        // For each user message, check if this turn needs updating
-        for (const userEntity of userEntities) {
-          const turnId = userEntity.id
-          const turnAgents = agentsByTurn.get(turnId) ?? []
-
-          // Build a fingerprint to detect changes
-          const fingerprint = computeFingerprint(userEntity, turnAgents)
-          if (processed.get(turnId) === fingerprint) continue
-
-          const existingLog = store.turnLogs.get(turnId)
-
-          if (existingLog) {
-            // Turn already exists — only push incremental updates
-            pushIncrementalUpdates(store, turnId, existingLog, turnAgents)
-          } else {
-            // Brand new turn — create from scratch
-            const events = buildTurnEvents(turnId, userEntity, turnAgents)
-            for (const event of events) {
-              store.append(turnId, event)
-            }
-          }
-
-          processed.set(turnId, fingerprint)
-        }
-
-        // Clean up orphan optimistic turns that have been superseded by real turns
-        cleanupOrphanOptimisticTurns(store, userIds)
-      },
+      syncNow,
     )
 
     return unsub
   }, [])
 }
 
-/** Remove optimistic turns whose real counterpart now exists in the store. */
+/** Remove optimistic turns whose real counterpart now exists in the store.
+ *
+ * An "orphan" optimistic turn is any turn whose turnId is not a real user
+ * message id (i.e. it is keyed by clientRequestId or a tempMessageId) but
+ * whose clientRequestId now maps to a different, real turn. This can happen
+ * when turn_event SSEs (e.g. slot_opened) create a turn at realMessageId
+ * before the bridge's merge gets a chance to run, leaving the optimistic
+ * turn stranded with accumulated events. We intentionally do NOT require
+ * events.length === 1 — the optimistic turn may have accumulated slot_opened /
+ * slot_snapshot events pushed by the bridge before the ID swap happened.
+ */
 function cleanupOrphanOptimisticTurns(
   store: ReturnType<typeof useTurnEventStore.getState>,
-  realUserIds: Set<string>,
+  canonicalTurnIds: Set<string>,
 ) {
-  // Optimistic turns use clientRequestId as turnId
-  // Check each turnId — if it's NOT a real user message ID and has only a turn_started event,
-  // and the real turn already exists, remove the orphan
   for (const turnId of store.orderedTurnIds) {
-    if (realUserIds.has(turnId)) continue // real turn, skip
-    const log = store.turnLogs.get(turnId)
-    if (!log) continue
-    const events = log.getEvents()
-    // Optimistic turns have exactly 1 event (turn_started) with a clientRequestId
-    if (events.length === 1 && events[0].type === 'turn_started') {
-      const ev = events[0] as TurnEvent & { type: 'turn_started'; clientRequestId?: string }
-      if (ev.clientRequestId) {
-        // This is an optimistic turn — check if real turn exists
-        // Real turnId would be a user message_id in the message store
-        // We can't know the exact mapping, but if the user message exists in
-        // the store (realUserIds), the optimistic one is orphaned
-        store.removeTurn(turnId)
-      }
+    if (!canonicalTurnIds.has(turnId)) {
+      store.removeTurn(turnId)
     }
   }
 }
@@ -160,6 +173,7 @@ function pushIncrementalUpdates(
   turnId: string,
   existingLog: ReturnType<typeof useTurnEventStore.getState>['turnLogs'] extends Map<string, infer V> ? V : never,
   agentEntities: MessageEntity[],
+  userEntity: MessageEntity,
 ) {
   const existingEvents = existingLog.getEvents()
   let nextSeq = existingEvents.length > 0
@@ -280,13 +294,33 @@ function pushIncrementalUpdates(
     }
   }
 
-  // NOTE: Do NOT emit turn_completed here. Individual agent terminal
-  // status does not mean the room-level processing is done (e.g. Supervisor
-  // may continue evaluating/planning after an agent completes). The
-  // authoritative signal is the processing_status terminal SSE event —
-  // that handler emits turn_completed/turn_failed/turn_canceled.
-  // buildTurnEvents() still emits turn_completed for historical data
-  // loaded via hydration, where the processing is already finished.
+  // Derive turn-level terminal event from the room-level signal stamped on
+  // the user entity by the processing_status SSE handler.
+  //
+  // Individual agent slot_terminated events do NOT imply the room is done —
+  // the supervisor may continue after one agent completes. Only the
+  // processing_status terminal event (proxied here via turnTerminalStatus on
+  // the user entity) is the authoritative room-level completion signal.
+  //
+  // buildTurnEvents() still emits turn_completed for historical/hydrated turns
+  // using the allTerminal heuristic, since those are already complete at load time.
+  const turnAlreadyTerminal = existingEvents.some(
+    e => e.type === 'turn_completed' || e.type === 'turn_failed' || e.type === 'turn_canceled',
+  )
+  if (!turnAlreadyTerminal && userEntity.turnTerminalStatus) {
+    const type =
+      userEntity.turnTerminalStatus === 'failed'   ? 'turn_failed'   :
+      userEntity.turnTerminalStatus === 'canceled' ? 'turn_canceled' : 'turn_completed'
+    store.append(turnId, {
+      eventId: `sync_terminal_${turnId}`,
+      turnId,
+      seq: nextSeq++,
+      ts: Date.now(),
+      type,
+      durationMs: 0,
+      ...(type === 'turn_failed' ? { reason: 'processing_failed', code: 'error' } : {}),
+    } as TurnEvent)
+  }
 }
 
 /** Simple numeric fingerprint based on entity versions + count. */

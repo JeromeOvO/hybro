@@ -177,13 +177,16 @@ export async function createAndParseUserMessage(
   user_input: string,
   getToken?: () => Promise<string | null>,
   user_id?: string,
-  user_name?: string
+  user_name?: string,
+  clientRequestId?: string,
 ): Promise<RoomCenterUserMessageResponse> {
+  const resolvedClientRequestId = clientRequestId ?? crypto.randomUUID()
   const requestData: RoomCenterUserMessageRequest = {
     room_id,
     user_id: user_id || "",
     user_name: user_name || "",
     user_input,
+    client_request_id: resolvedClientRequestId,
     message: {
       room_id,
       message_id: "",

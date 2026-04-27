@@ -6,7 +6,7 @@ export type ArtifactData = StoreArtifactData
 
 // ── Wire-to-store field name mapping ──────────────────────────
 // SSE wire format uses snake_case. These types are camelCase (frontend convention).
-// The adapter in useSSEToEventLog handles the transformation.
+// Mapping (when needed) is handled in the SSE/message normalization layer.
 
 // ── Turn Event Envelope ───────────────────────────────────────
 

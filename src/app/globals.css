@@ -629,13 +629,16 @@
   transition: all 0.2s ease;
   vertical-align: baseline;
   white-space: nowrap;
-  cursor: default;
-  user-select: none;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 a.room-mention {
   cursor: pointer;
   text-decoration: none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .room-mention:hover {

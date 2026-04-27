@@ -21,6 +21,8 @@ async function connectAndOpen(options: Partial<SSEConnectionOptions> = {}) {
 }
 
 describe('SSEConnection', () => {
+  let mathRandomSpy: ReturnType<typeof vi.spyOn> | undefined
+
   beforeAll(() => {
     // Disable MSW so our fetch mock has full control
     server.close()
@@ -37,9 +39,12 @@ describe('SSEConnection', () => {
     vi.useFakeTimers()
     MockSSEStream.clearInstances()
     mockFetch.mockClear()
+    // Keep reconnect delays deterministic in fake-timer tests.
+    mathRandomSpy = vi.spyOn(Math, 'random').mockReturnValue(0)
   })
 
   afterEach(() => {
+    mathRandomSpy?.mockRestore()
     vi.useRealTimers()
   })
 
@@ -209,6 +214,37 @@ describe('SSEConnection', () => {
       // No new fetch calls should have been made after disconnect
       expect(MockSSEStream.getFetchCallCount()).toBe(countBeforeDisconnect)
       expect(connection.isConnected()).toBe(false)
+    })
+
+    it('should keep first reconnect deterministic when jitter is enabled', async () => {
+      const { instance } = await connectAndOpen({
+        reconnectJitterMs: 1000,
+        randomFn: () => 1,
+      })
+      const initialCount = MockSSEStream.getFetchCallCount()
+
+      instance.simulateClose()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(MockSSEStream.getFetchCallCount()).toBeGreaterThan(initialCount)
+    })
+
+    it('should apply jitter when deterministic first reconnect is disabled', async () => {
+      const { instance } = await connectAndOpen({
+        reconnectJitterMs: 1000,
+        randomFn: () => 1,
+        deterministicFirstReconnect: false,
+      })
+      const initialCount = MockSSEStream.getFetchCallCount()
+
+      // First reconnect: 1000ms base + 1000ms jitter
+      instance.simulateClose()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(MockSSEStream.getFetchCallCount()).toBe(initialCount)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(MockSSEStream.getFetchCallCount()).toBeGreaterThan(initialCount)
     })
   })
 

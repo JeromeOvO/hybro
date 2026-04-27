@@ -84,6 +84,13 @@ function createWrapper() {
 }
 
 const flags = (roomId = 'room-1') => useRoomUiStore.getState().getRoomFlags(roomId)
+const latestClientRequestId = (roomId = 'room-1') =>
+  useMessageStore
+    .getState()
+    .orderedIds
+    .map((id) => useMessageStore.getState().entities[id])
+    .filter((m) => m?.roomId === roomId && m?.messageType === 'user')
+    .at(-1)?.clientRequestId
 
 describe('Room lifecycle characterization tests', () => {
   beforeEach(() => {
@@ -341,6 +348,8 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await result.current.sendUserMessage('Test')
       })
+      const clientRequestId = latestClientRequestId('room-1')
+      expect(clientRequestId).toBeTruthy()
 
       // Switch to fake timers AFTER async setup
       vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -354,7 +363,7 @@ describe('Room lifecycle characterization tests', () => {
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
           type: 'processing_status',
-          data: { status: 'canceled', message_id: 'msg-cancel-2' },
+          data: { status: 'canceled', message_id: 'msg-cancel-2', client_request_id: clientRequestId },
         }))
       })
 

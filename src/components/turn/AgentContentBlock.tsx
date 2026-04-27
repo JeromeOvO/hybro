@@ -29,7 +29,7 @@ function useTypewriter(fullContent: string, slot: ContentSlotView) {
   const shouldAnimate = useMemo(() => {
     if (!fullContent) return false
     // Only animate live SSE content — skip hydrated (DB/page refresh)
-    if (slot.hydrated) return false
+    if (slot.hydrated !== false) return false
     // Skip if artifacts are still streaming
     if (slot.artifacts?.some(a => a.isStreaming)) return false
     return true

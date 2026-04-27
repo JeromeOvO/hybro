@@ -1,62 +1,70 @@
 'use client'
 
-import { useEffect } from 'react'
-import { fetchRecentTurns } from '@/lib/api/turns'
+import { useEffect, useRef } from 'react'
 import { fetchPendingHitlRequests, type HitlPendingRequest } from '@/lib/api/hitl'
+import { useMessageStore } from '@/stores/message-store'
 import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { TurnEvent } from '@/stores/turn-event-store/types'
-import { camelCaseEvent } from '@/hooks/turn/useSSEToEventLog'
-
-interface HydrationTurn {
-  turnId: string
-  startTs: number
-  events: TurnEvent[]
-}
 
 export function useTurnHydration(
   roomId: string,
   getToken?: () => Promise<string | null>,
 ) {
+  // Ref-ify getToken so the effect only re-runs when roomId changes.
+  // Clerk's useAuth().getToken is not referentially stable — including it in
+  // the deps array caused store.reset() on every parent re-render, wiping
+  // all turns mid-session (the "No messages yet" bug).
+  const getTokenRef = useRef(getToken)
+  getTokenRef.current = getToken
+
   useEffect(() => {
     if (!roomId) return
 
     let canceled = false
-    const store = useTurnEventStore.getState()
-    store.reset()
+    useTurnEventStore.getState().reset()
 
     async function hydrate() {
-      // Fetch journal turns (the native turn-event source).
-      // Legacy messages are NOT fetched here — useRoomHydration populates
-      // the message store and useMessageStoreSync bridges them into the
-      // turn-event-store. Having two independent paths for the same data
-      // caused duplicate slot rendering due to race conditions.
-      const journals = await fetchRecentTurns(roomId, getToken).catch(() => null)
-      if (canceled) return
-
-      // Convert journal turns
-      const journalTurns: HydrationTurn[] = []
-      if (journals && journals.length > 0) {
-        for (const journal of journals) {
-          const events = journal.events.map(we =>
-            camelCaseEvent(we as Record<string, unknown>),
-          )
-          journalTurns.push({
-            turnId: journal.turn_id,
-            startTs: events[0]?.ts ?? 0,
-            events,
-          })
-        }
+      // Single source of truth: turn-event-store is derived only from message-store.
+      // Trigger the bridge to rebuild immediately when messages already exist.
+      const msgStore = useMessageStore.getState()
+      if (msgStore.roomId === roomId && msgStore.orderedIds.length > 0) {
+        msgStore.nudgeSyncBridge()
       }
 
-      // Sort chronologically and append.
-      journalTurns.sort((a, b) => a.startTs - b.startTs)
-      for (const turn of journalTurns) {
-        for (const event of turn.events) {
-          store.append(event.turnId, event)
+      // Hydration is complete when either:
+      // 1) turn store has at least one turn, or
+      // 2) message store is fully hydrated for this room and empty.
+      const maybeMarkHydrated = () => {
+        const turnStore = useTurnEventStore.getState()
+        const m = useMessageStore.getState()
+        if (turnStore.orderedTurnIds.length > 0) {
+          turnStore.markHydrated()
+          return true
         }
+        if (m.hydratedFromDb && m.roomId === roomId && m.orderedIds.length === 0) {
+          turnStore.markHydrated()
+          return true
+        }
+        return false
       }
 
-      store.markHydrated()
+      if (!maybeMarkHydrated()) {
+        // Wait for message-store hydration/updates then mark turn-store hydrated.
+        const unsub = useMessageStore.subscribe(
+          s => [s.version, s.hydratedFromDb, s.roomId] as const,
+          () => {
+            if (canceled) {
+              unsub()
+              return
+            }
+            const m = useMessageStore.getState()
+            if (m.roomId !== roomId) return
+            if (maybeMarkHydrated()) {
+              unsub()
+            }
+          },
+        )
+      }
 
       // Inject pending HITL requests into the turn store.
       // Turns may not be populated yet (useMessageStoreSync creates them
@@ -64,7 +72,7 @@ export function useTurnHydration(
       // Retry a few times to allow the sync bridge to finish.
       if (canceled) return
       try {
-        const hitlRes = await fetchPendingHitlRequests(roomId, getToken)
+        const hitlRes = await fetchPendingHitlRequests(roomId, getTokenRef.current)
         if (canceled) return
         if (hitlRes.requests?.length) {
           await injectHitlRequests(hitlRes.requests, canceled)
@@ -76,7 +84,7 @@ export function useTurnHydration(
 
     hydrate()
     return () => { canceled = true }
-  }, [roomId, getToken])
+  }, [roomId])
 }
 
 /**
