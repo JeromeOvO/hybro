@@ -47,23 +47,19 @@ export function TurnList() {
   const hydrated = useTurnEventStore(s => s.hydrated)
 
   // Expand / collapse all agent responses
-  const [expandSignal, setExpandSignal] = useState(0)
-  const [collapseSignal, setCollapseSignal] = useState(0)
   const [allExpanded, setAllExpanded] = useState(true)
 
   const handleToggleAll = useCallback(() => {
     if (allExpanded) {
-      setCollapseSignal(prev => prev + 1)
       setAllExpanded(false)
     } else {
-      setExpandSignal(prev => prev + 1)
       setAllExpanded(true)
     }
   }, [allExpanded])
 
   const signals = useMemo(
-    () => ({ expandSignal, collapseSignal }),
-    [expandSignal, collapseSignal],
+    () => ({ expandSignal: 0, collapseSignal: 0 }),
+    [],
   )
 
   const hasTurns = orderedTurnIds.length > 0

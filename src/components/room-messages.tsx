@@ -139,7 +139,7 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
   useAutoHideScroll(scrollContainerRef)
 
   // ── Expand / collapse state (pure UI, not in message store — Gap 4) ──
-  const [collapseSignal, setCollapseSignal] = useState(0)
+  const [collapseSignal] = useState(0)
   const [autoCollapseVersion, setAutoCollapseVersion] = useState(0)
   const [userExpandedIds, setUserExpandedIds] = useState<Set<string>>(new Set())
   const prevLatestAgentIdRef = useRef<string | null>(null)
@@ -189,7 +189,6 @@ export function RoomMessages({ onQuote }: RoomMessagesProps) {
 
   // Bulk collapse/expand for agent message bubbles
   const collapseAll = useCallback(() => {
-    setCollapseSignal((v) => v + 1)
     setUserExpandedIds(new Set())
   }, [])
 
