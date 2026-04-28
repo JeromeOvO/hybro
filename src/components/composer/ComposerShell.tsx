@@ -1,12 +1,31 @@
 'use client'
 
 import React from 'react'
-import { useTurnEventStore } from '@/stores/turn-event-store'
-import { HitlResponseBar } from './HitlResponseBar'
+import { useShallow } from 'zustand/react/shallow'
+import { useMessageStore } from '@/stores/message-store'
+import { selectComposerState } from '@/lib/selectors'
+import type { PendingHitl } from '@/lib/selectors/conversation-types'
+import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
 
-// Adapter interface for props passed from RoomPageShell
+function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
+  return {
+    hitlId: hitl.hitlId,
+    turnId: hitl.messageId,
+    ts: Date.now(),
+    source: 'agent',
+    agentName: hitl.agentName,
+    prompt: hitl.question,
+    promptType: hitl.promptType,
+    choices: hitl.choices,
+    groupId: hitl.groupId,
+    groupTotal: hitl.groupTotal,
+    groupIndex: hitl.groupIndex,
+  }
+}
+
 export interface ComposerShellAdapter {
+  roomId: string
   onSendMessage: (...args: any[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
@@ -34,7 +53,6 @@ export interface ComposerShellAdapter {
     clearQuote: () => void
   }
   chatMode: any
-  // Prefill support
   externalValue?: string
   onExternalValueConsumed?: () => void
 }
@@ -44,17 +62,15 @@ interface ComposerShellProps {
 }
 
 export function ComposerShell({ adapter }: ComposerShellProps) {
-  const composerState = useTurnEventStore(s => s.composerState)
+  const composerState = useMessageStore(
+    useShallow(s => selectComposerState(adapter.roomId, s.entities, s.orderedIds))
+  )
   const isHitlMode = composerState.mode === 'hitl_responding'
-
-  // Use turn event store's processing state — it correctly tracks turn_completed
-  // events from both SSE and the message-store sync bridge, unlike the legacy
-  // processing lifecycle which can get stuck when Redis is down.
   const isProcessing = composerState.isProcessing && adapter.isProcessing
 
   const hitlBar = composerState.pendingHitls.length > 0 ? (
     <HitlResponseBar
-      hitls={composerState.pendingHitls}
+      hitls={composerState.pendingHitls.map(toHitlPromptView)}
       onSubmit={adapter.onRespondToHitl}
     />
   ) : undefined

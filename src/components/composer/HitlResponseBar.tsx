@@ -3,7 +3,20 @@
 import React, { useState, useCallback } from 'react'
 import { MessageCircleQuestion, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { HitlPromptView } from '@/stores/turn-event-store/types'
+
+export interface HitlPromptView {
+  hitlId: string
+  turnId: string
+  ts: number
+  source: 'supervisor' | 'agent'
+  agentName?: string
+  prompt: string
+  promptType: 'text' | 'choice' | 'confirmation'
+  choices?: string[]
+  groupId?: string
+  groupTotal?: number
+  groupIndex?: number
+}
 
 interface HitlResponseBarProps {
   hitls: HitlPromptView[]
