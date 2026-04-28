@@ -5,7 +5,6 @@ import type { QuoteData } from '@/lib/types/quote'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
-import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { clearPendingSseForClientRequest } from './sse-handlers/pending-turn-buffer'
@@ -58,11 +57,6 @@ export function useSendMessage(
       fileName: att.file.name,
       sizeBytes: att.file.size,
     }))
-    const turnStore = useTurnEventStore.getState()
-    turnStore.createOptimisticTurn(clientRequestId, {
-      text: userInput,
-      attachments: optimisticAttachments ?? [],
-    })
 
     const processingPlaceholderId = lifecycle.placeholderId(roomId)
     const msgStoreSend = useMessageStore.getState()
@@ -142,7 +136,6 @@ export function useSendMessage(
         const msgStoreNoId = useMessageStore.getState()
         msgStoreNoId.removeMessage(optimisticUserMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
-        useTurnEventStore.getState().removeTurn(clientRequestId)
         clearPendingSseForClientRequest(clientRequestId)
 
         banner.error('Message sent but server returned no ID. Please try again.')
@@ -189,18 +182,6 @@ export function useSendMessage(
         }),
       }, 'optimistic')
       msgStoreSwap.replaceMessageId(optimisticUserMessageId, messageId)
-      turnStore.append(clientRequestId, {
-        eventId: `post_started_${clientRequestId}`,
-        turnId: clientRequestId,
-        seq: 1,
-        ts: new Date(currentTime).getTime() || Date.now(),
-        type: 'turn_started',
-        userInput: {
-          text: userInput,
-          attachments: optimisticAttachments ?? [],
-        },
-        clientRequestId,
-      })
 
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
       if (onPostMessageIdResolved) {
@@ -251,7 +232,6 @@ export function useSendMessage(
       const msgStoreErr = useMessageStore.getState()
       msgStoreErr.removeMessage(optimisticUserMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
-      useTurnEventStore.getState().removeTurn(clientRequestId)
       clearPendingSseForClientRequest(clientRequestId)
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)

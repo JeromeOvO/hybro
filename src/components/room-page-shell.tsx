@@ -5,10 +5,8 @@ import type { AgentGroup } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
-import { TurnList } from '@/components/turn/TurnList'
+import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
-import { useTurnHydration } from '@/hooks/turn/useTurnHydration'
-import { useMessageStoreSync } from '@/hooks/turn/useMessageStoreSync'
 
 export interface GroupManagementAdapter {
   groups: AgentGroup[]
@@ -53,16 +51,13 @@ interface RoomPageShellProps {
 }
 
 export function RoomPageShell({ adapter }: RoomPageShellProps) {
-  useMessageStoreSync()
-  useTurnHydration(adapter.roomId, adapter.getToken)
-
   return (
     <>
       <main className="flex-1 overflow-hidden">
-        <TurnList />
+        <ConversationMessageList roomId={adapter.roomId} />
       </main>
-      <div className="bg-background p-4">
-        <div className="max-w-4xl mx-auto">
+      <div className="bg-background" style={{ borderTop: '1px solid var(--conversation-border)' }}>
+        <div style={{ maxWidth: 'var(--conversation-max-width)', margin: '0 auto' }}>
           <ComposerShell adapter={adapter} />
         </div>
       </div>

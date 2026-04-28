@@ -13,6 +13,7 @@ vi.mock('@/components/room-chat-input', () => ({
 }))
 
 const mockAdapter = {
+  roomId: 'test-room-id',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
   onRespondToHitl: vi.fn(),
