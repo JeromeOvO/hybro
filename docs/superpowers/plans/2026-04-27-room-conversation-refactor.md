@@ -317,7 +317,7 @@ grep -r "import.*QuoteData.*from.*message-bubble" src/ --include="*.ts" --includ
 For every file listed, change:
 
 ```typescript
-import type { QuoteData } from '@/lib/types/quote'
+import type { QuoteData } from '@/components/message-bubble'
 ```
 
 to:
@@ -546,6 +546,7 @@ git commit -m "fix(send): add clientRequestId to ephemeral processing placeholde
 
 ```typescript
 import type { MessageEntity } from '@/stores/message-store/types'
+import type { HITLPromptType } from '@/lib/types/sse'
 
 // ── Agent theme ─────────────────────────────────────────────
 
@@ -608,6 +609,8 @@ export interface PendingHitl {
   hitlId: string
   agentName: string
   question: string
+  promptType: HITLPromptType
+  choices?: string[]
   messageId: string
   groupId?: string
   groupTotal?: number
@@ -983,7 +986,6 @@ Create `src/lib/selectors/map-agent-display.ts`:
 ```typescript
 import type { MessageEntity } from '@/stores/message-store/types'
 import type { AgentDisplayProps } from './conversation-types'
-import { isPendingState, isTerminalState } from '@/lib/types/sse'
 
 function relativeTime(isoDate: string | undefined | null): string {
   if (!isoDate) return ''
@@ -996,45 +998,52 @@ function relativeTime(isoDate: string | undefined | null): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+function make(name: string, label: string, tone: AgentDisplayProps['tone'], isAnimated: boolean): AgentDisplayProps {
+  return { label, tone, isAnimated, ariaLabel: `${name} — ${label}` }
+}
+
 export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
   const name = entity.senderName ?? 'Agent'
   const status = entity.taskStatus
 
-  if (!status || status === 'submitted' || (status === 'working' && !(entity.content ?? '').trim())) {
-    return { label: 'Working', tone: 'accent', isAnimated: true, ariaLabel: `${name} — Working` }
-  }
+  switch (status) {
+    case undefined:
+    case null:
+    case 'submitted':
+      return make(name, 'Working', 'accent', true)
 
-  if (status === 'working' && (entity.content ?? '').trim()) {
-    return { label: 'Streaming', tone: 'accent', isAnimated: true, ariaLabel: `${name} — Streaming` }
-  }
+    case 'working': {
+      const hasContent = (entity.content ?? '').trim().length > 0
+      return hasContent
+        ? make(name, 'Streaming', 'accent', true)
+        : make(name, 'Working', 'accent', true)
+    }
 
-  if (status === 'completed') {
-    const time = relativeTime(entity.taskUpdatedAt)
-    const label = time ? `Completed · ${time}` : 'Completed'
-    return { label, tone: 'muted', isAnimated: false, ariaLabel: `${name} — ${label}` }
-  }
+    case 'completed': {
+      const time = relativeTime(entity.taskUpdatedAt)
+      const label = time ? `Completed · ${time}` : 'Completed'
+      return make(name, label, 'muted', false)
+    }
 
-  if (status === 'failed') {
-    return { label: 'Failed', tone: 'danger', isAnimated: false, ariaLabel: `${name} — Failed` }
-  }
+    case 'failed':
+      return make(name, 'Failed', 'danger', false)
 
-  if (status === 'rejected') {
-    return { label: 'Rejected', tone: 'danger', isAnimated: false, ariaLabel: `${name} — Rejected` }
-  }
+    case 'rejected':
+      return make(name, 'Rejected', 'danger', false)
 
-  if (status === 'canceled') {
-    return { label: 'Canceled', tone: 'muted', isAnimated: false, ariaLabel: `${name} — Canceled` }
-  }
+    case 'canceled':
+      return make(name, 'Canceled', 'muted', false)
 
-  if (status === 'input-required') {
-    return { label: 'Needs Input', tone: 'warning', isAnimated: true, ariaLabel: `${name} — Needs Input` }
-  }
+    case 'input-required':
+      return make(name, 'Needs Input', 'warning', true)
 
-  if (status === 'auth-required') {
-    return { label: 'Auth Required', tone: 'warning', isAnimated: false, ariaLabel: `${name} — Auth Required` }
-  }
+    case 'auth-required':
+      return make(name, 'Auth Required', 'warning', false)
 
-  return { label: 'Working', tone: 'accent', isAnimated: true, ariaLabel: `${name} — Working` }
+    default:
+      console.warn(`[mapAgentDisplayProps] unhandled taskStatus: ${status}`)
+      return make(name, 'Working', 'accent', true)
+  }
 }
 ```
 
@@ -1136,6 +1145,48 @@ describe('selectPendingHitls', () => {
     expect(result[0].isAnswered).toBe(true)
     expect(result[1].isAnswered).toBe(false)
     expect(result[0].groupId).toBe('group-A')
+  })
+
+  it('passes through choice promptType and choices', () => {
+    const { entities, orderedIds } = setup([
+      createAgentMessage({
+        id: 'hitl-c', roomId: 'room-1',
+        hitlRequestId: 'req-c', hitlPrompt: 'Pick one',
+        hitlPromptType: 'choice', hitlChoices: ['A', 'B', 'C'],
+        senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
+      }),
+    ])
+    const result = selectPendingHitls('room-1', entities, orderedIds)
+    expect(result).toHaveLength(1)
+    expect(result[0].promptType).toBe('choice')
+    expect(result[0].choices).toEqual(['A', 'B', 'C'])
+  })
+
+  it('passes through confirmation promptType', () => {
+    const { entities, orderedIds } = setup([
+      createAgentMessage({
+        id: 'hitl-cf', roomId: 'room-1',
+        hitlRequestId: 'req-cf', hitlPrompt: 'Approve deploy?',
+        hitlPromptType: 'confirmation',
+        senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
+      }),
+    ])
+    const result = selectPendingHitls('room-1', entities, orderedIds)
+    expect(result).toHaveLength(1)
+    expect(result[0].promptType).toBe('confirmation')
+    expect(result[0].choices).toBeUndefined()
+  })
+
+  it('defaults promptType to text when hitlPromptType is undefined', () => {
+    const { entities, orderedIds } = setup([
+      createAgentMessage({
+        id: 'hitl-t', roomId: 'room-1',
+        hitlRequestId: 'req-t', hitlPrompt: 'What?',
+        senderName: 'Analyst', taskStatus: TASK_STATE.INPUT_REQUIRED,
+      }),
+    ])
+    const result = selectPendingHitls('room-1', entities, orderedIds)
+    expect(result[0].promptType).toBe('text')
   })
 
   it('excludes HITL from other rooms', () => {
@@ -1241,6 +1292,8 @@ export function selectPendingHitls(
       hitlId: e.hitlRequestId!,
       agentName: e.senderName,
       question: e.hitlPrompt ?? e.content ?? e.taskStatusMessage ?? '',
+      promptType: e.hitlPromptType ?? 'text',
+      choices: e.hitlChoices ?? undefined,
       messageId: e.id,
       groupId: e.hitlGroupId,
       groupTotal: e.hitlGroupTotal,
@@ -1530,14 +1583,20 @@ describe('selectConversationTurns', () => {
   it('unresolved does NOT auto-attach to nearest user turn', () => {
     const { entities, orderedIds } = setup([
       createUserMessage({ id: 'user-1', roomId: 'room-1' }),
-      createAgentMessage({ id: 'orphan-1', roomId: 'room-1', taskStatus: TASK_STATE.COMPLETED }),
+      createAgentMessage({ id: 'orphan-1', roomId: 'room-1', taskStatus: TASK_STATE.COMPLETED, senderName: 'Orphan Agent' }),
     ])
     const turns = selectConversationTurns('room-1', entities, orderedIds)
     const userTurn = turns.find(t => t.turnId === 'user-1')
-    const hasOrphanInUserTurn = userTurn?.blocks.some(
-      b => b.type === 'agent_card' && b.agentId === undefined
+    const orphanInUserTurn = userTurn?.blocks.some(
+      b => (b.type === 'agent_card' || b.type === 'agent_content') &&
+           'agentId' in b && b.agentId === 'orphan-1'
     )
-    expect(hasOrphanInUserTurn).toBeFalsy()
+    expect(orphanInUserTurn).toBeFalsy()
+    const unresolvedTurn = turns.find(t => t.turnId === '__unresolved__')
+    expect(unresolvedTurn).toBeDefined()
+    expect(unresolvedTurn!.blocks.some(
+      b => b.type === 'agent_card' && b.agentId === 'orphan-1'
+    )).toBe(true)
   })
 
   it('ephemeral placeholder produces synthetic working card', () => {
@@ -2635,7 +2694,35 @@ git commit -m "feat(conversation): add ConversationTurn, ConversationMessageList
 **Files:**
 - Modify: `src/components/composer/ComposerShell.tsx`
 
-- [ ] **Step 1: Replace useTurnEventStore with selectComposerState**
+- [ ] **Step 1: Inline HitlPromptView in HitlResponseBar**
+
+In `src/components/composer/HitlResponseBar.tsx`, replace:
+
+```typescript
+import type { HitlPromptView } from '@/stores/turn-event-store/types'
+```
+
+with an inline exported interface (so ComposerShell can import it from here):
+
+```typescript
+export interface HitlPromptView {
+  hitlId: string
+  turnId: string
+  ts: number
+  source: 'supervisor' | 'agent'
+  agentName?: string
+  prompt: string
+  promptType: 'text' | 'choice' | 'confirmation'
+  choices?: string[]
+  groupId?: string
+  groupTotal?: number
+  groupIndex?: number
+}
+```
+
+Verify build: `npx tsc --noEmit`
+
+- [ ] **Step 2: Replace useTurnEventStore with selectComposerState**
 
 Replace the entire `src/components/composer/ComposerShell.tsx`:
 
@@ -2647,8 +2734,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
 import { selectComposerState } from '@/lib/selectors'
 import type { PendingHitl } from '@/lib/selectors/conversation-types'
-import type { HitlPromptView } from '@/stores/turn-event-store/types'
-import { HitlResponseBar } from './HitlResponseBar'
+import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
@@ -2659,7 +2745,8 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
     source: 'agent',
     agentName: hitl.agentName,
     prompt: hitl.question,
-    promptType: 'text',
+    promptType: hitl.promptType,
+    choices: hitl.choices,
     groupId: hitl.groupId,
     groupTotal: hitl.groupTotal,
     groupIndex: hitl.groupIndex,
@@ -2751,19 +2838,19 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
 }
 ```
 
-Note: The `adapter` interface now requires `roomId` — this is passed from `RoomPageShell` which already has `adapter.roomId`. The `toHitlPromptView` mapper bridges `PendingHitl` → `HitlPromptView` so `HitlResponseBar` works unchanged. In Phase 5 (Task 20), when `turn-event-store` is deleted, move the `HitlPromptView` type definition into `src/lib/selectors/conversation-types.ts` (or inline it in `HitlResponseBar.tsx`) and drop the import from turn-event-store.
+Note: The `adapter` interface now requires `roomId` — this is passed from `RoomPageShell` which already has `adapter.roomId`. The `toHitlPromptView` mapper bridges `PendingHitl` → `HitlPromptView` (now owned by `HitlResponseBar.tsx` per Step 1).
 
-- [ ] **Step 2: Verify build**
+- [ ] **Step 3: Verify build**
 
 ```bash
 npx tsc --noEmit
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/components/composer/ComposerShell.tsx
-git commit -m "refactor(composer): migrate ComposerShell from useTurnEventStore to selectComposerState"
+git add src/components/composer/HitlResponseBar.tsx src/components/composer/ComposerShell.tsx
+git commit -m "refactor(composer): migrate ComposerShell from useTurnEventStore to selectComposerState, inline HitlPromptView"
 ```
 
 ---
@@ -2916,41 +3003,7 @@ rm -rf src/components/turn/
 rm -f src/components/conversation-timeline.tsx
 ```
 
-- [ ] **Step 3: Migrate HitlPromptView out of turn-event-store**
-
-`ComposerShell.tsx` (from Task 18) imports `HitlPromptView` from `@/stores/turn-event-store/types`. Before deleting that store, move the type. In `src/components/composer/HitlResponseBar.tsx`, replace:
-
-```typescript
-import type { HitlPromptView } from '@/stores/turn-event-store/types'
-```
-
-with an inline interface definition:
-
-```typescript
-export interface HitlPromptView {
-  hitlId: string
-  turnId: string
-  ts: number
-  source: 'supervisor' | 'agent'
-  agentName?: string
-  prompt: string
-  promptType: 'text' | 'choice' | 'confirmation'
-  choices?: string[]
-  groupId?: string
-  groupTotal?: number
-  groupIndex?: number
-}
-```
-
-And in `ComposerShell.tsx`, update the import:
-
-```typescript
-import type { HitlPromptView } from './HitlResponseBar'
-```
-
-Verify build: `npx tsc --noEmit`
-
-- [ ] **Step 4: Clean up useRoomMessages.ts**
+- [ ] **Step 3: Clean up useRoomMessages.ts**
 
 In `src/hooks/useRoomMessages.ts`, the `useConversationTurns`, `useActiveTurn`, `useTurnById`, and `useHitlTurnContext` functions all depend on `buildTurnsIncremental` and `TurnViewModel`. These are now dead. Remove them:
 
@@ -2965,7 +3018,7 @@ Delete functions: `useConversationTurns`, `useActiveTurn`, `useTurnById`, `useHi
 
 Keep: `useOrderedIds`, `useOrderedMessages`, `useMessage`, `useMessageCount`, `useMessagesHydrated`, `useActiveHitlRequests`, `useMessageStoreRoomId`.
 
-- [ ] **Step 5: Run reference check on remaining consumers**
+- [ ] **Step 4: Run reference check on remaining consumers**
 
 ```bash
 grep -r "useConversationTurns\|useActiveTurn\|useTurnById\|useHitlTurnContext" src/ --include="*.ts" --include="*.tsx"
@@ -2973,7 +3026,7 @@ grep -r "useConversationTurns\|useActiveTurn\|useTurnById\|useHitlTurnContext" s
 
 Expected: zero matches (these hooks were consumed by now-deleted components).
 
-- [ ] **Step 6: Verify build and tests**
+- [ ] **Step 5: Verify build and tests**
 
 ```bash
 npx tsc --noEmit && npx vitest run --reporter=verbose 2>&1 | tail -30
@@ -2993,7 +3046,7 @@ Re-run tests:
 npx vitest run --reporter=verbose 2>&1 | tail -30
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
