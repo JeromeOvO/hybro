@@ -1,0 +1,49 @@
+:root {
+  --conversation-bg: #09090b;
+  --conversation-surface: #0a0a0f;
+
+  --conversation-border: #27272a;
+  --conversation-border-subtle: #18181b;
+
+  --conversation-text-primary: #fafafa;
+  --conversation-text-secondary: #e4e4e7;
+  --conversation-text-tertiary: #d4d4d8;
+  --conversation-text-muted: #71717a;
+  --conversation-text-dim: #52525b;
+
+  --conversation-agent-green: #4ade80;
+  --conversation-agent-blue: #3b82f6;
+  --conversation-agent-purple: #a78bfa;
+  --conversation-agent-amber: #fbbf24;
+  --conversation-agent-rose: #fb7185;
+  --conversation-agent-yellow: #eab308;
+
+  --conversation-danger: #ef4444;
+  --conversation-danger-border: #ef444433;
+
+  --conversation-padding-outer: 16px;
+  --conversation-padding-inner: 32px;
+  --conversation-gap-turn: 32px;
+  --conversation-gap-block: 8px;
+  --conversation-sticky-top: 12px;
+  --conversation-max-width: 800px;
+
+  --conversation-shimmer-duration: 3.5s;
+  --conversation-fade-duration: 200ms;
+  --conversation-chevron-duration: 150ms;
+  --conversation-cursor-duration: 800ms;
+}
+
+@media (max-width: 639px) {
+  :root {
+    --conversation-padding-outer: 12px;
+    --conversation-padding-inner: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --conversation-shimmer-duration: 0s;
+    --conversation-fade-duration: 0s;
+  }
+}

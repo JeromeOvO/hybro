@@ -1,0 +1,31 @@
+@keyframes conversation-shimmer {
+  0% { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes conversation-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.conversation-card-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(0 0% 100% / 0.03) 50%,
+    transparent 100%
+  );
+  background-size: 300% 100%;
+  animation: conversation-shimmer var(--conversation-shimmer-duration) ease-in-out infinite;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.conversation-streaming-cursor::after {
+  content: '|';
+  color: var(--conversation-agent-blue);
+  animation: conversation-cursor-blink var(--conversation-cursor-duration) step-end infinite;
+}

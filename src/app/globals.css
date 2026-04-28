@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import '../components/conversation/conversation-tokens.css';
+@import '../components/conversation/shimmer.css';
 
 @custom-variant dark (&:is(.dark *));
 
