@@ -5,14 +5,6 @@ import { useParams } from 'next/navigation'
 import { useUser, useAuth } from '@clerk/nextjs'
 import { RequireAuth } from '@/components/require-auth'
 import { toast } from 'sonner'
-import { Users, Pencil, Check, X as XIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { GroupManagementModal } from '@/components/group-management-modal'
 import { RoomDefaultAgentsEditor } from '@/components/room-default-agents-editor'
 import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
@@ -23,7 +15,7 @@ import type { QuoteData } from '@/components/message-bubble'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
-import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
+import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet } from '@/lib/api/room'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
 
@@ -46,11 +38,6 @@ export default function RoomChatPage() {
 
   // Local chat mode (synced from room, user can override before sending)
   const [localChatMode, setLocalChatMode] = useState<ChatMode | null>(null)
-
-  // Inline room name editing
-  const [editingName, setEditingName] = useState(false)
-  const [editNameValue, setEditNameValue] = useState('')
-  const nameInputRef = useRef<HTMLInputElement>(null)
 
   const confirmedChatModeRef = useRef<ChatMode | null>(null)
 
@@ -280,40 +267,6 @@ export default function RoomChatPage() {
     setEditorOpen(false)
   }, [roomId, getToken])
 
-  // Inline room name editing
-  const startEditingName = useCallback(() => {
-    if (!room) return
-    setEditNameValue(room.room_name || '')
-    setEditingName(true)
-    setTimeout(() => nameInputRef.current?.focus(), 0)
-  }, [room])
-
-  const saveRoomName = useCallback(async () => {
-    if (!room || !editNameValue.trim()) {
-      setEditingName(false)
-      return
-    }
-    if (editNameValue.trim() === room.room_name) {
-      setEditingName(false)
-      return
-    }
-    try {
-      const result = await updateRoomName(roomId, editNameValue.trim(), getToken)
-      if (result.success) {
-        await refreshRoomSetting()
-      } else {
-        toast.error(result.error || 'Failed to update room name')
-      }
-    } catch {
-      toast.error('Failed to update room name')
-    }
-    setEditingName(false)
-  }, [room, roomId, editNameValue, getToken, refreshRoomSetting])
-
-  const cancelEditingName = useCallback(() => {
-    setEditingName(false)
-  }, [])
-
   // Current room agent IDs for the editor
   const currentRoomAgentIds = useMemo(
     () => room ? Object.keys(room.room_agent_set || {}) : [],
@@ -392,103 +345,6 @@ export default function RoomChatPage() {
     <div className="flex flex-col h-screen bg-background">
       <div className="flex-1 overflow-hidden">
         <div className="w-full h-full flex flex-col">
-          {/* Fixed Header */}
-          <header className="shrink-0 flex items-center justify-between py-4 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 max-w-4xl mx-auto w-full">
-            <div className="flex items-center gap-3">
-              <div className="space-y-1">
-                {/* Inline-editable room name */}
-                {editingName ? (
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      ref={nameInputRef}
-                      type="text"
-                      value={editNameValue}
-                      onChange={(e) => setEditNameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') saveRoomName()
-                        if (e.key === 'Escape') cancelEditingName()
-                      }}
-                      onBlur={saveRoomName}
-                      className="text-xl font-semibold bg-transparent border-b-2 border-primary outline-none px-0 py-0 min-w-[120px]"
-                    />
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onMouseDown={(e) => { e.preventDefault(); saveRoomName() }}>
-                      <Check className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onMouseDown={(e) => { e.preventDefault(); cancelEditingName() }}>
-                      <XIcon className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={startEditingName}
-                    className="flex items-center gap-1.5 group text-left"
-                    title="Click to edit room name"
-                  >
-                    <h1 className="text-xl font-semibold">{room.room_name}</h1>
-                    <Pencil className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </button>
-                )}
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  {roomAgentCount > 0 && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                            <Users className="h-3 w-3" />
-                            <span>Room: {roomAgentCount} agent{roomAgentCount !== 1 ? 's' : ''}</span>
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <div className="space-y-1">
-                            <p className="font-medium">Room agents:</p>
-                            {Object.values(room.room_agent_set || {}).map((name, i) => (
-                              <p key={i} className="text-xs">{name}</p>
-                            ))}
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
-
-                  {debateMode && (
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />
-                      <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
-                        Debate Mode
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div
-                className={`w-2 h-2 rounded-full transition-colors duration-200 ${sseConnected ? 'bg-green-500' :
-                  sseConnecting ? 'bg-yellow-500 animate-pulse' :
-                    'bg-red-500'
-                  }`}
-                title={
-                  sseConnected ? 'Live updates connected' :
-                    sseConnecting ? 'Connecting to live updates...' :
-                      'Live updates disconnected'
-                }
-              />
-            </div>
-
-            <div className="flex items-center gap-2 self-start">
-              {!sseEnabled && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleSSE}
-                  className="text-xs text-muted-foreground"
-                >
-                  Enable Live Updates
-                </Button>
-              )}
-            </div>
-          </header>
-
           <RoomPageShell
             adapter={timelineAdapter}
             turnBasedTimeline={turnBasedTimeline}
