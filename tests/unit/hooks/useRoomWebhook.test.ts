@@ -87,7 +87,6 @@ describe('useRoomWebhook SSE message handling', () => {
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()
     useRoomUiStore.getState().resetAll()
-    useRoomUiStore.getState().setGlobalTurnBasedTimeline(true)
   })
 
   afterEach(() => {

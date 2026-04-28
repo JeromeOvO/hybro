@@ -47,8 +47,6 @@ interface RoomUiState {
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
-  /** Global user preference: use turn-based timeline for all rooms */
-  globalTurnBasedTimeline: boolean
 
   // Per-room flag setters (roomId, value)
   setSending: (roomId: RoomId, v: boolean) => void
@@ -71,8 +69,6 @@ interface RoomUiState {
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
-  /** Set global turn-based timeline preference (persisted to localStorage) */
-  setGlobalTurnBasedTimeline: (v: boolean) => void
 }
 
 function readLocalStorageBool(key: string, fallback: boolean): boolean {
@@ -84,7 +80,6 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
   pendingTurnSkeletons: {},
-  globalTurnBasedTimeline: readLocalStorageBool('hybro:turnBasedTimeline', false),
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
   setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
@@ -136,10 +131,6 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       else copy[roomId] = value
       return { pendingTurnSkeletons: copy }
     }),
-  setGlobalTurnBasedTimeline: (v) => {
-    set({ globalTurnBasedTimeline: v })
-    try { localStorage.setItem('hybro:turnBasedTimeline', String(v)) } catch { /* ignore */ }
-  },
 }))
 
 /** Reactive hook that returns room-scoped flags with shallow equality. */

@@ -85,9 +85,6 @@ export default function RoomChatPage() {
   // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
   const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
 
-  // Feature flag: turn-based timeline (global user preference)
-  const turnBasedTimeline = useRoomUiStore(s => s.globalTurnBasedTimeline)
-
   // Group management (extracted hook)
   const gm = useGroupManagement({
     userId: user?.id,
@@ -347,7 +344,6 @@ export default function RoomChatPage() {
         <div className="w-full h-full flex flex-col">
           <RoomPageShell
             adapter={timelineAdapter}
-            turnBasedTimeline={turnBasedTimeline}
           />
         </div>
       </div>
