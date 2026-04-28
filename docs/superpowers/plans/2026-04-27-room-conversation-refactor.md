@@ -1702,6 +1702,38 @@ describe('selectConversationTurns', () => {
     const dividers = turns[0].blocks.filter(b => b.type === 'agent_divider')
     expect(dividers.length).toBeGreaterThanOrEqual(1)
   })
+
+  it('user message with attachments retains attachments on the turn', () => {
+    const attachments = [
+      { fileId: 'f1', mimeType: 'image/png', fileName: 'screenshot.png', sizeBytes: 1024 },
+      { fileId: 'f2', mimeType: 'application/pdf', fileName: 'doc.pdf', sizeBytes: 2048 },
+    ]
+    const { entities, orderedIds } = seedMessages([
+      createUserMessage({ id: 'user-1', roomId: 'room-1', attachments }),
+    ])
+    const turns = selectConversationTurns('room-1', entities, orderedIds)
+    expect(turns).toHaveLength(1)
+    expect(turns[0].userMessage?.attachments).toEqual(attachments)
+  })
+
+  it('agent message with artifacts creates agent_content block with artifacts', () => {
+    const artifacts = [
+      { artifactId: 'art-1', name: 'result.json', parts: [{ type: 'text', text: '{}' }] },
+    ]
+    const { entities, orderedIds } = seedMessages([
+      createUserMessage({ id: 'user-1', roomId: 'room-1' }),
+      createAgentMessage({
+        id: 'a1', roomId: 'room-1', relatedMessageId: 'user-1',
+        agentId: 'agent-a', senderName: 'Agent A',
+        taskStatus: TASK_STATE.COMPLETED, content: 'Here are the results',
+        artifacts,
+      }),
+    ])
+    const turns = selectConversationTurns('room-1', entities, orderedIds)
+    const contentBlocks = turns[0].blocks.filter(b => b.type === 'agent_content')
+    expect(contentBlocks).toHaveLength(1)
+    expect(contentBlocks[0]).toHaveProperty('artifacts', artifacts)
+  })
 })
 ```
 
@@ -3048,15 +3080,17 @@ grep -r "turn-event-store\|useTurnEventStore" src/ --include="*.ts" --include="*
 grep -r "useMessageStoreSync\|useTurnHydration\|useTurnProjection\|useTurnScroll" src/ --include="*.ts" --include="*.tsx"
 grep -r "TurnList\|OrchestraTurn\|OrchestrationRail\|ContentSlotRenderer\|SummaryContentBlock\|HitlRecordBlock\|UserInputBlock\|expand-collapse-context" src/ --include="*.ts" --include="*.tsx"
 grep -r "conversation-timeline\|conversation-turn\|AgentResultCard\|AgentResultStack\|AgentPlaceholderRow\|SupervisorHeader\|AgentBadge\|MemoizedTurn" src/ --include="*.ts" --include="*.tsx"
-grep -r "message-bubble\|EntityUserBubble\|EntityAgentBubble\|UserAttachmentCard" src/ --include="*.ts" --include="*.tsx"
+grep -r "message-bubble\|EntityUserBubble\|EntityAgentBubble" src/ --include="*.ts" --include="*.tsx"
 ```
 
 Each grep should return zero matches outside the files being deleted. If any live `src/` file still imports these symbols, fix the import first.
 
+> **Note:** `UserAttachmentCard` is **not** a legacy component — it was extracted from `message-bubble.tsx` in Task 4b and is now a first-class part of the new renderer (`UserMessageBlock` imports it). Do **not** delete `src/components/conversation/UserAttachmentCard.tsx`.
+
 > **Note:** `message-bubble.tsx` can be safely deleted because:
 > - `QuoteData` was moved to `src/lib/types/quote.ts` in Task 4b
+> - `UserAttachmentCard` was extracted to `src/components/conversation/UserAttachmentCard.tsx` in Task 4b
 > - `EntityUserBubble`/`EntityAgentBubble` were only consumed by `room-messages.tsx` (deleted Phase 1) and `conversation-timeline.tsx` (deleted here)
-> - `UserAttachmentCard` was only consumed by `conversation-turn.tsx` and `turn/UserInputBlock.tsx` (both deleted here)
 
 - [ ] **Step 2: Delete the directories and files**
 
