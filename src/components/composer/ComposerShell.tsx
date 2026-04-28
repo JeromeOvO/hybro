@@ -1,10 +1,9 @@
 'use client'
 
 import React from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
 import { selectComposerState } from '@/lib/selectors'
-import type { PendingHitl } from '@/lib/selectors/conversation-types'
+import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
 import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
 
@@ -61,10 +60,25 @@ interface ComposerShellProps {
   adapter: ComposerShellAdapter
 }
 
+function useComposerState(roomId: string): ComposerState {
+  const prev = React.useRef<ComposerState>({ mode: 'normal', isProcessing: false, pendingHitls: [] })
+  return useMessageStore(s => {
+    const next = selectComposerState(roomId, s.entities, s.orderedIds)
+    if (
+      prev.current.mode === next.mode &&
+      prev.current.isProcessing === next.isProcessing &&
+      prev.current.pendingHitls.length === next.pendingHitls.length &&
+      prev.current.pendingHitls.every((h, i) => h.hitlId === next.pendingHitls[i]?.hitlId && h.isAnswered === next.pendingHitls[i]?.isAnswered)
+    ) {
+      return prev.current
+    }
+    prev.current = next
+    return next
+  })
+}
+
 export function ComposerShell({ adapter }: ComposerShellProps) {
-  const composerState = useMessageStore(
-    useShallow(s => selectComposerState(adapter.roomId, s.entities, s.orderedIds))
-  )
+  const composerState = useComposerState(adapter.roomId)
   const isHitlMode = composerState.mode === 'hitl_responding'
   const isProcessing = composerState.isProcessing && adapter.isProcessing
 

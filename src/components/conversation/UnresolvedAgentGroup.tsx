@@ -1,6 +1,7 @@
 import type { ConversationBlock } from '@/lib/selectors/conversation-types'
 import { AgentCard } from './AgentCard'
 import { AgentContentBlock } from './AgentContentBlock'
+import { UserAnswerCard } from './UserAnswerCard'
 
 interface UnresolvedAgentGroupProps {
   blocks: ConversationBlock[]
@@ -16,6 +17,12 @@ export function UnresolvedAgentGroup({ blocks }: UnresolvedAgentGroupProps) {
         {blocks.map((block, i) => {
           if (block.type === 'agent_card') return <AgentCard key={i} {...block} />
           if (block.type === 'agent_content') return <AgentContentBlock key={i} {...block} />
+          if (block.type === 'user_answer') return <UserAnswerCard key={i} {...block} />
+          if (block.type === 'agent_divider') {
+            return (
+              <div key={i} style={{ height: 1, backgroundColor: 'var(--conversation-border-subtle)' }} />
+            )
+          }
           if (block.type === 'unresolved_content') {
             return (
               <div key={i} className="text-sm" style={{ color: 'var(--conversation-text-tertiary)' }}>
