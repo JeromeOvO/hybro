@@ -59,8 +59,8 @@
 | Phase | Files |
 |-------|-------|
 | Phase 0 | `src/components/settings/appearance-section.tsx` |
-| Phase 1 | `src/components/room-messages.tsx`, `src/components/message-bubble.tsx` (if only consumed by legacy) |
-| Phase 5 | `src/stores/turn-event-store/` (entire directory), `src/hooks/turn/` (entire directory), `src/components/turn/` (entire directory), `src/components/conversation-timeline.tsx` |
+| Phase 1 | `src/components/room-messages.tsx` |
+| Phase 5 | `src/stores/turn-event-store/` (entire directory), `src/hooks/turn/` (entire directory), `src/components/turn/` (entire directory), `src/components/conversation-timeline.tsx`, `src/components/conversation-turn.tsx`, `src/components/agent-result-card.tsx`, `src/components/agent-result-stack.tsx`, `src/components/agent-placeholder-row.tsx`, `src/components/supervisor-header.tsx`, `src/components/agent-badge.tsx`, `src/components/message-bubble.tsx` |
 
 ---
 
@@ -970,6 +970,13 @@ describe('mapAgentDisplayProps', () => {
     expect(result.tone).toBe('warning')
     expect(result.isAnimated).toBe(false)
   })
+
+  it('returns Working for unknown status', () => {
+    const entity = asEntity(createTaskMessage('unknown' as any))
+    const result = mapAgentDisplayProps(entity)
+    expect(result.label).toBe('Working')
+    expect(result.tone).toBe('accent')
+  })
 })
 ```
 
@@ -986,6 +993,7 @@ Create `src/lib/selectors/map-agent-display.ts`:
 ```typescript
 import type { MessageEntity } from '@/stores/message-store/types'
 import type { AgentDisplayProps } from './conversation-types'
+import type { TaskState } from '@/lib/types/sse'
 
 function relativeTime(isoDate: string | undefined | null): string {
   if (!isoDate) return ''
@@ -1004,11 +1012,11 @@ function make(name: string, label: string, tone: AgentDisplayProps['tone'], isAn
 
 export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
   const name = entity.senderName ?? 'Agent'
-  const status = entity.taskStatus
+  const status: TaskState | null | undefined = entity.taskStatus
+
+  if (status == null) return make(name, 'Working', 'accent', true)
 
   switch (status) {
-    case undefined:
-    case null:
     case 'submitted':
       return make(name, 'Working', 'accent', true)
 
@@ -1040,9 +1048,14 @@ export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
     case 'auth-required':
       return make(name, 'Auth Required', 'warning', false)
 
-    default:
-      console.warn(`[mapAgentDisplayProps] unhandled taskStatus: ${status}`)
+    case 'unknown':
       return make(name, 'Working', 'accent', true)
+
+    default: {
+      const _exhaustive: never = status
+      console.warn(`[mapAgentDisplayProps] unhandled taskStatus: ${_exhaustive}`)
+      return make(name, 'Working', 'accent', true)
+    }
   }
 }
 ```
@@ -1053,7 +1066,7 @@ export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
 npx vitest run tests/unit/lib/selectors/map-agent-display.test.ts --reporter=verbose
 ```
 
-Expected: all 9 tests PASS.
+Expected: all 10 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -2982,6 +2995,13 @@ git commit -m "refactor(room): wire ConversationMessageList into page, remove tu
 - Delete: `src/hooks/turn/` (entire directory)
 - Delete: `src/components/turn/` (entire directory)
 - Delete: `src/components/conversation-timeline.tsx`
+- Delete: `src/components/conversation-turn.tsx`
+- Delete: `src/components/agent-result-card.tsx`
+- Delete: `src/components/agent-result-stack.tsx`
+- Delete: `src/components/agent-placeholder-row.tsx`
+- Delete: `src/components/supervisor-header.tsx`
+- Delete: `src/components/agent-badge.tsx`
+- Delete: `src/components/message-bubble.tsx`
 
 - [ ] **Step 1: Run reference check before deletion**
 
@@ -2989,10 +3009,16 @@ git commit -m "refactor(room): wire ConversationMessageList into page, remove tu
 grep -r "turn-event-store\|useTurnEventStore" src/ --include="*.ts" --include="*.tsx" | grep -v "node_modules"
 grep -r "useMessageStoreSync\|useTurnHydration\|useTurnProjection\|useTurnScroll" src/ --include="*.ts" --include="*.tsx"
 grep -r "TurnList\|OrchestraTurn\|OrchestrationRail\|ContentSlotRenderer\|SummaryContentBlock\|HitlRecordBlock\|UserInputBlock\|expand-collapse-context" src/ --include="*.ts" --include="*.tsx"
-grep -r "conversation-timeline" src/ --include="*.ts" --include="*.tsx"
+grep -r "conversation-timeline\|conversation-turn\|AgentResultCard\|AgentResultStack\|AgentPlaceholderRow\|SupervisorHeader\|AgentBadge\|MemoizedTurn" src/ --include="*.ts" --include="*.tsx"
+grep -r "message-bubble\|EntityUserBubble\|EntityAgentBubble\|UserAttachmentCard" src/ --include="*.ts" --include="*.tsx"
 ```
 
-Each grep should return zero matches in `src/` (may have matches in tests/ or docs/ which is fine). If any `src/` file still imports these, fix the import first.
+Each grep should return zero matches outside the files being deleted. If any live `src/` file still imports these symbols, fix the import first.
+
+> **Note:** `message-bubble.tsx` can be safely deleted because:
+> - `QuoteData` was moved to `src/lib/types/quote.ts` in Task 4b
+> - `EntityUserBubble`/`EntityAgentBubble` were only consumed by `room-messages.tsx` (deleted Phase 1) and `conversation-timeline.tsx` (deleted here)
+> - `UserAttachmentCard` was only consumed by `conversation-turn.tsx` and `turn/UserInputBlock.tsx` (both deleted here)
 
 - [ ] **Step 2: Delete the directories and files**
 
@@ -3001,6 +3027,13 @@ rm -rf src/stores/turn-event-store/
 rm -rf src/hooks/turn/
 rm -rf src/components/turn/
 rm -f src/components/conversation-timeline.tsx
+rm -f src/components/conversation-turn.tsx
+rm -f src/components/agent-result-card.tsx
+rm -f src/components/agent-result-stack.tsx
+rm -f src/components/agent-placeholder-row.tsx
+rm -f src/components/supervisor-header.tsx
+rm -f src/components/agent-badge.tsx
+rm -f src/components/message-bubble.tsx
 ```
 
 - [ ] **Step 3: Clean up useRoomMessages.ts**
