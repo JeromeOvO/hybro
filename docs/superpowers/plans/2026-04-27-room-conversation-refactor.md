@@ -1708,7 +1708,7 @@ describe('selectConversationTurns', () => {
       { fileId: 'f1', mimeType: 'image/png', fileName: 'screenshot.png', sizeBytes: 1024 },
       { fileId: 'f2', mimeType: 'application/pdf', fileName: 'doc.pdf', sizeBytes: 2048 },
     ]
-    const { entities, orderedIds } = seedMessages([
+    const { entities, orderedIds } = setup([
       createUserMessage({ id: 'user-1', roomId: 'room-1', attachments }),
     ])
     const turns = selectConversationTurns('room-1', entities, orderedIds)
@@ -1718,9 +1718,9 @@ describe('selectConversationTurns', () => {
 
   it('agent message with artifacts creates agent_content block with artifacts', () => {
     const artifacts = [
-      { artifactId: 'art-1', name: 'result.json', parts: [{ type: 'text', text: '{}' }] },
+      { artifactId: 'art-1', name: 'result.json', parts: [{ kind: 'text', text: '{}' }] },
     ]
-    const { entities, orderedIds } = seedMessages([
+    const { entities, orderedIds } = setup([
       createUserMessage({ id: 'user-1', roomId: 'room-1' }),
       createAgentMessage({
         id: 'a1', roomId: 'room-1', relatedMessageId: 'user-1',
