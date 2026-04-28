@@ -1,6 +1,6 @@
 import type { SSEMessage } from '@/lib/types/sse'
 
-const PENDING_SSE_BUFFER_TTL_MS = 30_000
+const PENDING_SSE_BUFFER_TTL_MS = 120_000
 const MAX_PENDING_CLIENT_REQUESTS = 64
 const MAX_EVENTS_PER_CLIENT_REQUEST = 256
 
@@ -22,10 +22,13 @@ function warnOnce(message: string, ...args: unknown[]) {
 function evictExpired(now: number) {
   for (const [clientRequestId, pending] of pendingByClientRequestId) {
     if (now - pending.createdAt <= PENDING_SSE_BUFFER_TTL_MS) continue
+    const eventCount = pending.events.length
     pendingByClientRequestId.delete(clientRequestId)
-    warnOnce(
-      'pending SSE buffer evicted for clientRequestId=%s — possible orphan SSE stream',
+    console.warn(
+      '[SSE buffer] evicted clientRequestId=%s after %dms — %d events dropped (possible orphan stream)',
       clientRequestId,
+      now - pending.createdAt,
+      eventCount,
     )
   }
 }
