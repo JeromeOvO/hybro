@@ -2,7 +2,7 @@
 
 import React from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
 

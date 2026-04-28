@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { SendMessage } from '@/lib/api/room'
 import { banner } from '@/components/ui/banner'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'

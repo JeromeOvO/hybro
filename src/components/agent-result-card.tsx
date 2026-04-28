@@ -11,7 +11,7 @@ import { HitlCompactCard } from './hitl-compact-card'
 import { HitlQuestionCard } from './hitl-question-card'
 import { AlertTriangle } from 'lucide-react'
 import type { AgentResultViewModel } from '@/lib/room-timeline/types'
-import type { QuoteData } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 
 // ── Status indicator ──────────────────────────────────────────
 

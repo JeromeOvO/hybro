@@ -11,7 +11,7 @@ import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shel
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { BUILTIN_GROUP_ROOM_TEAM, BUILTIN_GROUP_ALL_AGENTS, isBuiltinGroup } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'

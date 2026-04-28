@@ -4,7 +4,7 @@
 import React from 'react'
 import { AgentResultCard } from './agent-result-card'
 import type { AgentResultViewModel, TurnSummaryViewModel } from '@/lib/room-timeline/types'
-import type { QuoteData } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 
 // ── Sort order ──────────────────────────────────────────────────
 

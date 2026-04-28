@@ -15,7 +15,7 @@ import {
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
-import type { QuoteData } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
 import { ModeSelector } from './mode-selector'

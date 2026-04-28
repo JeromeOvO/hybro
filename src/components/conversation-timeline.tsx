@@ -14,7 +14,8 @@ import {
   useMessageCount,
 } from '@/hooks/useRoomMessages'
 import { useMessageStore } from '@/stores/message-store'
-import { EntityUserBubble, EntityAgentBubble, type QuoteData } from './message-bubble'
+import { EntityUserBubble, EntityAgentBubble } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import { MemoizedTurn } from './conversation-turn'
 
 // ── Empty state ─────────────────────────────────────────────────

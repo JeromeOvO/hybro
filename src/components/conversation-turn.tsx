@@ -12,7 +12,7 @@ import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { isSystemAgent } from '@/lib/system-agents'
 import { TruncatedContent } from './truncated-content'
 import { UserAttachmentCard } from './message-bubble'
-import type { QuoteData } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 
 import { UserCircle } from 'lucide-react'
 
