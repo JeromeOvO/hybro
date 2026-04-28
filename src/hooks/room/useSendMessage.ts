@@ -88,6 +88,7 @@ export function useSendMessage(
         taskContent: 'Processing your request\u2026',
         timestamp: new Date(Date.now() + 1).toISOString(),
         isEphemeral: true,
+        clientRequestId,
       },
     ], 'optimistic')
 
