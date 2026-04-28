@@ -29,7 +29,8 @@
 | `src/components/conversation/ConversationTurn.tsx` | Turn grouping shell — branches on `userMessage` presence |
 | `src/components/conversation/UserMessageBlock.tsx` | User message with truncation + expand |
 | `src/components/conversation/AgentCard.tsx` | Agent status card, purely presentational |
-| `src/components/conversation/AgentContentBlock.tsx` | Borderless markdown content |
+| `src/components/conversation/AgentContentBlock.tsx` | Markdown content + artifact list with download |
+| `src/components/conversation/UserAttachmentCard.tsx` | Extracted from message-bubble.tsx — renders image/audio/video/file attachments |
 | `src/components/conversation/UserAnswerCard.tsx` | HITL Q&A record |
 | `src/components/conversation/UnresolvedAgentGroup.tsx` | Unattributed response group |
 | `src/components/conversation/ScrollToBottomButton.tsx` | Scroll control with badge |
@@ -330,9 +331,25 @@ Files expected: `page.tsx`, `room-page-shell.tsx`, `room-chat-input.tsx`, `useSe
 
 If `message-bubble.tsx` has other exports consumed by `room-messages.tsx` only (e.g. `EntityUserBubble`), those will be deleted with `room-messages.tsx` in the next task.
 
-- [ ] **Step 3: Re-export from message-bubble for any stragglers**
+- [ ] **Step 3: Extract UserAttachmentCard to standalone file**
 
-In `src/components/message-bubble.tsx`, replace the `QuoteData` definition with a re-export so nothing breaks if we missed a consumer:
+`UserAttachmentCard` is defined in `message-bubble.tsx` and renders image/audio/video/file attachments. Move it to `src/components/conversation/UserAttachmentCard.tsx`:
+
+1. Copy the `UserAttachmentCard` function and its helpers (`AttachmentExpiredBanner`, `ImageLightbox` usage) from `message-bubble.tsx` into the new file.
+2. Add necessary imports (`AttachmentData` from `@/lib/types/attachments`, icons from `lucide-react`, etc.).
+3. In `message-bubble.tsx`, replace the function body with:
+
+```typescript
+export { UserAttachmentCard } from './conversation/UserAttachmentCard'
+```
+
+This keeps existing consumers working until they're deleted.
+
+4. Update imports in `conversation-turn.tsx` and `turn/UserInputBlock.tsx` to import from the new location (these files will be deleted in Phase 5, but this ensures they compile until then).
+
+- [ ] **Step 4: Re-export QuoteData from message-bubble for stragglers**
+
+In `src/components/message-bubble.tsx`, replace the `QuoteData` definition with a re-export:
 
 ```typescript
 export type { QuoteData } from '@/lib/types/quote'
@@ -340,17 +357,17 @@ export type { QuoteData } from '@/lib/types/quote'
 
 Remove the old `export interface QuoteData { ... }` block.
 
-- [ ] **Step 4: Verify build**
+- [ ] **Step 5: Verify build**
 
 ```bash
 npx tsc --noEmit
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/lib/types/quote.ts && git add -u
-git commit -m "refactor(types): extract QuoteData to shared lib/types/quote.ts"
+git add src/lib/types/quote.ts src/components/conversation/UserAttachmentCard.tsx && git add -u
+git commit -m "refactor(types): extract QuoteData and UserAttachmentCard before legacy deletion"
 ```
 
 ---
@@ -545,7 +562,7 @@ git commit -m "fix(send): add clientRequestId to ephemeral processing placeholde
 - [ ] **Step 1: Create the types file**
 
 ```typescript
-import type { MessageEntity } from '@/stores/message-store/types'
+import type { MessageEntity, ArtifactData } from '@/stores/message-store/types'
 import type { HITLPromptType } from '@/lib/types/sse'
 
 // ── Agent theme ─────────────────────────────────────────────
@@ -590,7 +607,7 @@ export interface AgentDisplayProps {
 
 export type ConversationBlock =
   | { type: 'agent_card'; agentId: string; agentName: string; display: AgentDisplayProps; taskDescription: string; theme: AgentTheme }
-  | { type: 'agent_content'; agentId: string; agentName: string; content: string; isStreaming: boolean }
+  | { type: 'agent_content'; agentId: string; agentName: string; content: string; isStreaming: boolean; artifacts?: ArtifactData[] }
   | { type: 'user_answer'; agentName: string; question: string; answer: string }
   | { type: 'agent_divider' }
   | { type: 'unresolved_content'; entity: MessageEntity }
@@ -1053,8 +1070,7 @@ export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
 
     default: {
       const _exhaustive: never = status
-      console.warn(`[mapAgentDisplayProps] unhandled taskStatus: ${_exhaustive}`)
-      return make(name, 'Working', 'accent', true)
+      return _exhaustive
     }
   }
 }
@@ -1762,9 +1778,10 @@ export function selectConversationTurns(
       theme,
     })
 
-    // Agent content (if non-empty)
+    // Agent content (if non-empty content or has artifacts)
     const content = (agent.content ?? '').trim()
-    if (content) {
+    const hasArtifacts = agent.artifacts && agent.artifacts.length > 0
+    if (content || hasArtifacts) {
       const isStreaming = agent.taskStatus === 'working' && content.length > 0
       blocks.push({
         type: 'agent_content',
@@ -1772,6 +1789,7 @@ export function selectConversationTurns(
         agentName: agent.senderName,
         content,
         isStreaming,
+        artifacts: agent.artifacts,
       })
     }
 
@@ -2207,6 +2225,7 @@ Create `src/components/conversation/UserMessageBlock.tsx`:
 
 import { useState, useRef, useEffect } from 'react'
 import type { MessageEntity } from '@/stores/message-store/types'
+import { UserAttachmentCard } from './UserAttachmentCard'
 
 interface UserMessageBlockProps {
   entity: MessageEntity
@@ -2272,6 +2291,13 @@ export function UserMessageBlock({ entity, onSentinelRef }: UserMessageBlockProp
             >
               {entity.content}
             </div>
+            {entity.attachments && entity.attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {entity.attachments.map(att => (
+                  <UserAttachmentCard key={att.fileId} attachment={att} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2286,6 +2312,8 @@ Create `src/components/conversation/AgentContentBlock.tsx`:
 
 ```tsx
 import { MarkdownContent } from '@/components/markdown-content'
+import { ArtifactList } from '@/components/artifact-list'
+import type { ArtifactData } from '@/stores/message-store/types'
 
 interface AgentContentBlockProps {
   agentId: string
@@ -2293,9 +2321,10 @@ interface AgentContentBlockProps {
   content: string
   isStreaming: boolean
   showAttribution?: boolean
+  artifacts?: ArtifactData[]
 }
 
-export function AgentContentBlock({ agentName, content, isStreaming, showAttribution }: AgentContentBlockProps) {
+export function AgentContentBlock({ agentName, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
   return (
     <div style={{ padding: '0 var(--conversation-padding-inner)' }}>
       {showAttribution && (
@@ -2306,10 +2335,19 @@ export function AgentContentBlock({ agentName, content, isStreaming, showAttribu
       <div className={isStreaming ? 'conversation-streaming-cursor' : ''}>
         <MarkdownContent content={content} />
       </div>
+      {artifacts && artifacts.length > 0 && (
+        <ArtifactList artifacts={artifacts} />
+      )}
     </div>
   )
 }
 ```
+
+> **Note:** `ArtifactList` and `ArtifactRenderer` are existing standalone components
+> that already render file parts with icons and collapsible UI. They are NOT being deleted
+> in Phase 5. The `ArtifactRenderer` renders each `ArtifactPart` — including file parts
+> with download links (via `PartRenderer`). If a dedicated download button is needed beyond
+> what `PartRenderer` provides, add it to `ArtifactRenderer` as a follow-up.
 
 - [ ] **Step 3: Implement UserAnswerCard**
 
