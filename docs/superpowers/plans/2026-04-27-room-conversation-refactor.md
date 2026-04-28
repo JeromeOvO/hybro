@@ -285,6 +285,76 @@ git commit -m "refactor(room): remove globalTurnBasedTimeline feature flag"
 
 ---
 
+## Task 4b: Phase 1 prereq — Extract QuoteData to shared types
+
+**Files:**
+- Create: `src/lib/types/quote.ts`
+- Modify: all files that `import type { QuoteData } from '@/lib/types/quote'`
+
+> `QuoteData` is defined in `message-bubble.tsx` and imported by 6+ src/ files.
+> Before we can delete the legacy bubble view, we must move this type out.
+
+- [ ] **Step 1: Create shared QuoteData type**
+
+Create `src/lib/types/quote.ts`:
+
+```typescript
+export interface QuoteData {
+  messageId: string
+  content: string
+  senderName: string
+}
+```
+
+Verify the fields match the existing definition in `src/components/message-bubble.tsx` (search for `export interface QuoteData`). If there are extra fields, include them.
+
+- [ ] **Step 2: Update imports across the codebase**
+
+```bash
+grep -r "import.*QuoteData.*from.*message-bubble" src/ --include="*.ts" --include="*.tsx" -l
+```
+
+For every file listed, change:
+
+```typescript
+import type { QuoteData } from '@/lib/types/quote'
+```
+
+to:
+
+```typescript
+import type { QuoteData } from '@/lib/types/quote'
+```
+
+Files expected: `page.tsx`, `room-page-shell.tsx`, `room-chat-input.tsx`, `useSendMessage.ts`, `agent-result-card.tsx`, `agent-result-stack.tsx`, `conversation-turn.tsx`, `chat/page.tsx`.
+
+If `message-bubble.tsx` has other exports consumed by `room-messages.tsx` only (e.g. `EntityUserBubble`), those will be deleted with `room-messages.tsx` in the next task.
+
+- [ ] **Step 3: Re-export from message-bubble for any stragglers**
+
+In `src/components/message-bubble.tsx`, replace the `QuoteData` definition with a re-export so nothing breaks if we missed a consumer:
+
+```typescript
+export type { QuoteData } from '@/lib/types/quote'
+```
+
+Remove the old `export interface QuoteData { ... }` block.
+
+- [ ] **Step 4: Verify build**
+
+```bash
+npx tsc --noEmit
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/types/quote.ts && git add -u
+git commit -m "refactor(types): extract QuoteData to shared lib/types/quote.ts"
+```
+
+---
+
 ## Task 5: Phase 1 — Remove RoomPageShell view-switching, delete legacy bubble view
 
 **Files:**
@@ -300,9 +370,13 @@ Replace the entire `src/components/room-page-shell.tsx` content. Remove `LegacyV
 
 import React from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
+import { TurnList } from '@/components/turn/TurnList'
+import { ComposerShell } from '@/components/composer/ComposerShell'
+import { useTurnHydration } from '@/hooks/turn/useTurnHydration'
+import { useMessageStoreSync } from '@/hooks/turn/useMessageStoreSync'
 
 export interface GroupManagementAdapter {
   groups: AgentGroup[]
@@ -341,11 +415,6 @@ export interface TimelineAdapter {
   externalValue?: string
   onExternalValueConsumed?: () => void
 }
-
-import { TurnList } from '@/components/turn/TurnList'
-import { ComposerShell } from '@/components/composer/ComposerShell'
-import { useTurnHydration } from '@/hooks/turn/useTurnHydration'
-import { useMessageStoreSync } from '@/hooks/turn/useMessageStoreSync'
 
 interface RoomPageShellProps {
   adapter: TimelineAdapter
@@ -569,33 +638,24 @@ export interface ContentView {
 }
 ```
 
-- [ ] **Step 2: Create barrel index**
-
-Create `src/lib/selectors/index.ts`:
-
-```typescript
-export * from './conversation-types'
-export { routeAgentToTurn } from './route-agent'
-export { mapAgentDisplayProps } from './map-agent-display'
-export { selectConversationTurns } from './select-conversation-turns'
-export { selectPendingHitls, selectAgentHitlState } from './select-hitl'
-export { selectComposerState } from './select-composer-state'
-```
-
-- [ ] **Step 3: Verify build**
+- [ ] **Step 2: Verify build**
 
 ```bash
 npx tsc --noEmit
 ```
 
-Expected: barrel imports will fail until selector files are created (Tasks 8-12). This is expected.
+Expected: no errors — this file only defines types and has no barrel yet.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/lib/selectors/conversation-types.ts src/lib/selectors/index.ts
-git commit -m "feat(selectors): define conversation selector types and barrel"
+git add src/lib/selectors/conversation-types.ts
+git commit -m "feat(selectors): define conversation selector types"
 ```
+
+> **Note:** The barrel `src/lib/selectors/index.ts` is NOT created here.
+> It will be created in Task 12 Step 5 (after all selector files exist)
+> so that every commit passes `tsc --noEmit`.
 
 ---
 
@@ -616,14 +676,10 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import { createUserMessage, createAgentMessage, resetCounters } from '../../../fixtures'
 import { useMessageStore } from '@/stores/message-store'
 
-function buildState(messages: Parameters<typeof useMessageStore.getState>['0'] extends infer S ? never : never) {
-  // Helper: just use the store for realistic entity building
-}
-
 function makeEntities(msgs: ReturnType<typeof createUserMessage>[]) {
   const store = useMessageStore.getState()
   store.clearRoom()
-  store.setRoomId('room-1')
+  store.setRoom('room-1')
   for (const m of msgs) store.upsertMessage(m, m.id.startsWith('cr:') ? 'optimistic' : 'db')
   const s = useMessageStore.getState()
   return { entities: s.entities, orderedIds: s.orderedIds }
@@ -1019,7 +1075,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 function setup(msgs: ReturnType<typeof createAgentMessage>[]) {
   const store = useMessageStore.getState()
   store.clearRoom()
-  store.setRoomId('room-1')
+  store.setRoom('room-1')
   for (const m of msgs) store.upsertMessage(m, 'db')
   const s = useMessageStore.getState()
   return { entities: s.entities, orderedIds: s.orderedIds }
@@ -1241,7 +1297,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 function setup(msgs: ReturnType<typeof createAgentMessage>[]) {
   const store = useMessageStore.getState()
   store.clearRoom()
-  store.setRoomId('room-1')
+  store.setRoom('room-1')
   for (const m of msgs) store.upsertMessage(m, 'db')
   const s = useMessageStore.getState()
   return { entities: s.entities, orderedIds: s.orderedIds }
@@ -1393,7 +1449,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 function setup(msgs: ReturnType<typeof createUserMessage>[]) {
   const store = useMessageStore.getState()
   store.clearRoom()
-  store.setRoomId('room-1')
+  store.setRoom('room-1')
   for (const m of msgs) store.upsertMessage(m, m.id.startsWith('cr:') ? 'optimistic' : 'db')
   const s = useMessageStore.getState()
   return { entities: s.entities, orderedIds: s.orderedIds }
@@ -1433,7 +1489,7 @@ describe('selectConversationTurns', () => {
   it('after replaceMessageId, turnId becomes persisted id', () => {
     const store = useMessageStore.getState()
     store.clearRoom()
-    store.setRoomId('room-1')
+    store.setRoom('room-1')
     store.upsertMessage(
       createUserMessage({ id: 'cr:req-123', roomId: 'room-1', clientRequestId: 'req-123' }),
       'optimistic',
@@ -1736,9 +1792,32 @@ Expected: all 10 tests PASS.
 
 - [ ] **Step 5: Commit**
 
+- [ ] **Step 5: Create barrel index (all selector files now exist)**
+
+Create `src/lib/selectors/index.ts`:
+
+```typescript
+export * from './conversation-types'
+export { routeAgentToTurn } from './route-agent'
+export { mapAgentDisplayProps } from './map-agent-display'
+export { selectConversationTurns } from './select-conversation-turns'
+export { selectPendingHitls, selectAgentHitlState } from './select-hitl'
+export { selectComposerState } from './select-composer-state'
+```
+
+- [ ] **Step 6: Verify barrel build**
+
 ```bash
-git add src/lib/selectors/select-conversation-turns.ts tests/unit/lib/selectors/select-conversation-turns.test.ts
-git commit -m "feat(selectors): implement selectConversationTurns with turn grouping and ephemeral dedup"
+npx tsc --noEmit
+```
+
+Expected: no errors — all re-exported modules now exist.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/selectors/select-conversation-turns.ts tests/unit/lib/selectors/select-conversation-turns.test.ts src/lib/selectors/index.ts
+git commit -m "feat(selectors): implement selectConversationTurns and create barrel index"
 ```
 
 ---
@@ -1848,6 +1927,9 @@ Create `src/components/conversation/conversation-tokens.css`:
   --conversation-agent-amber: #fbbf24;
   --conversation-agent-rose: #fb7185;
   --conversation-agent-yellow: #eab308;
+
+  --conversation-danger: #ef4444;
+  --conversation-danger-border: #ef444433;
 
   --conversation-padding-outer: 16px;
   --conversation-padding-inner: 32px;
@@ -1975,7 +2057,7 @@ export function AgentCard({ agentName, agentId, taskDescription, theme, display 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: theme.accent,
     muted: 'var(--conversation-text-dim)',
-    danger: '#ef4444',
+    danger: 'var(--conversation-danger)',
     warning: 'var(--conversation-agent-yellow)',
   }
 
@@ -1984,7 +2066,7 @@ export function AgentCard({ agentName, agentId, taskDescription, theme, display 
       className={`relative rounded-lg border px-3 py-2.5 overflow-hidden ${display.isAnimated ? 'conversation-card-shimmer' : ''}`}
       style={{
         backgroundColor: 'var(--conversation-surface)',
-        borderColor: display.tone === 'danger' ? '#ef444433' : 'var(--conversation-border)',
+        borderColor: display.tone === 'danger' ? 'var(--conversation-danger-border)' : 'var(--conversation-border)',
       }}
     >
       <div className="flex items-center gap-2.5">
@@ -2131,6 +2213,8 @@ export function UserMessageBlock({ entity, onSentinelRef }: UserMessageBlockProp
 Create `src/components/conversation/AgentContentBlock.tsx`:
 
 ```tsx
+import { MarkdownContent } from '@/components/markdown-content'
+
 interface AgentContentBlockProps {
   agentId: string
   agentName: string
@@ -2147,11 +2231,8 @@ export function AgentContentBlock({ agentName, content, isStreaming, showAttribu
           {agentName}:
         </div>
       )}
-      <div
-        className={`text-sm leading-[1.8] break-words ${isStreaming ? 'conversation-streaming-cursor' : ''}`}
-        style={{ color: 'var(--conversation-text-tertiary)' }}
-      >
-        {content}
+      <div className={isStreaming ? 'conversation-streaming-cursor' : ''}>
+        <MarkdownContent content={content} />
       </div>
     </div>
   )
@@ -2371,6 +2452,7 @@ Create `src/components/conversation/ConversationMessageList.tsx`:
 'use client'
 
 import { useRef, useState, useCallback, useEffect } from 'react'
+import { useMessageStore } from '@/stores/message-store'
 import { useConversationTurnViews } from '@/hooks/useConversationTurnViews'
 import { ConversationTurn } from './ConversationTurn'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -2389,8 +2471,6 @@ export function ConversationMessageList({ roomId }: ConversationMessageListProps
   const [stickyTurn, setStickyTurn] = useState<ConversationTurnView | null>(null)
   const [stickyVisible, setStickyVisible] = useState(false)
   const sentinelRefs = useRef<Map<string, HTMLDivElement>>(new Map())
-  const prevTurnCountRef = useRef(turns.length)
-
   const isNearBottom = useCallback(() => {
     const el = scrollRef.current
     if (!el) return true
@@ -2402,17 +2482,29 @@ export function ConversationMessageList({ roomId }: ConversationMessageListProps
     setHasNewContent(false)
   }, [])
 
-  // Auto-scroll on new content
+  // Auto-scroll: subscribe to message-store orderedIds length (new turns)
+  // AND entity content changes (streaming updates within existing turns).
+  // We use a lightweight selector that returns a fingerprint that changes
+  // whenever orderedIds or the last entity's content changes.
+  const scrollFingerprint = useMessageStore(s => {
+    const len = s.orderedIds.length
+    if (len === 0) return '0:'
+    const lastId = s.orderedIds[len - 1]
+    const last = s.entities[lastId]
+    return `${len}:${last?.content?.length ?? 0}:${last?.taskStatus ?? ''}`
+  })
+
+  const prevFingerprintRef = useRef(scrollFingerprint)
   useEffect(() => {
-    if (turns.length > prevTurnCountRef.current) {
+    if (scrollFingerprint !== prevFingerprintRef.current) {
+      prevFingerprintRef.current = scrollFingerprint
       if (isNearBottom()) {
         scrollToBottom()
       } else {
         setHasNewContent(true)
       }
     }
-    prevTurnCountRef.current = turns.length
-  }, [turns.length, isNearBottom, scrollToBottom])
+  }, [scrollFingerprint, isNearBottom, scrollToBottom])
 
   // Scroll position tracking
   useEffect(() => {
@@ -2554,8 +2646,25 @@ import React from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
 import { selectComposerState } from '@/lib/selectors'
+import type { PendingHitl } from '@/lib/selectors/conversation-types'
+import type { HitlPromptView } from '@/stores/turn-event-store/types'
 import { HitlResponseBar } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
+
+function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
+  return {
+    hitlId: hitl.hitlId,
+    turnId: hitl.messageId,
+    ts: Date.now(),
+    source: 'agent',
+    agentName: hitl.agentName,
+    prompt: hitl.question,
+    promptType: 'text',
+    groupId: hitl.groupId,
+    groupTotal: hitl.groupTotal,
+    groupIndex: hitl.groupIndex,
+  }
+}
 
 export interface ComposerShellAdapter {
   roomId: string
@@ -2603,7 +2712,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
 
   const hitlBar = composerState.pendingHitls.length > 0 ? (
     <HitlResponseBar
-      hitls={composerState.pendingHitls}
+      hitls={composerState.pendingHitls.map(toHitlPromptView)}
       onSubmit={adapter.onRespondToHitl}
     />
   ) : undefined
@@ -2642,7 +2751,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
 }
 ```
 
-Note: The `adapter` interface now requires `roomId` — this is passed from `RoomPageShell` which already has `adapter.roomId`. Verify `HitlResponseBar` accepts `PendingHitl[]` from selectors (field names may differ from old turn-event-store format). If `HitlResponseBar.hitls` expects a different shape, add a mapping layer.
+Note: The `adapter` interface now requires `roomId` — this is passed from `RoomPageShell` which already has `adapter.roomId`. The `toHitlPromptView` mapper bridges `PendingHitl` → `HitlPromptView` so `HitlResponseBar` works unchanged. In Phase 5 (Task 20), when `turn-event-store` is deleted, move the `HitlPromptView` type definition into `src/lib/selectors/conversation-types.ts` (or inline it in `HitlResponseBar.tsx`) and drop the import from turn-event-store.
 
 - [ ] **Step 2: Verify build**
 
@@ -2673,9 +2782,11 @@ Replace the content of `src/components/room-page-shell.tsx`:
 
 import React from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
+import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
+import { ComposerShell } from '@/components/composer/ComposerShell'
 
 export interface GroupManagementAdapter {
   groups: AgentGroup[]
@@ -2714,9 +2825,6 @@ export interface TimelineAdapter {
   externalValue?: string
   onExternalValueConsumed?: () => void
 }
-
-import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
-import { ComposerShell } from '@/components/composer/ComposerShell'
 
 interface RoomPageShellProps {
   adapter: TimelineAdapter
@@ -2808,7 +2916,41 @@ rm -rf src/components/turn/
 rm -f src/components/conversation-timeline.tsx
 ```
 
-- [ ] **Step 3: Clean up useRoomMessages.ts**
+- [ ] **Step 3: Migrate HitlPromptView out of turn-event-store**
+
+`ComposerShell.tsx` (from Task 18) imports `HitlPromptView` from `@/stores/turn-event-store/types`. Before deleting that store, move the type. In `src/components/composer/HitlResponseBar.tsx`, replace:
+
+```typescript
+import type { HitlPromptView } from '@/stores/turn-event-store/types'
+```
+
+with an inline interface definition:
+
+```typescript
+export interface HitlPromptView {
+  hitlId: string
+  turnId: string
+  ts: number
+  source: 'supervisor' | 'agent'
+  agentName?: string
+  prompt: string
+  promptType: 'text' | 'choice' | 'confirmation'
+  choices?: string[]
+  groupId?: string
+  groupTotal?: number
+  groupIndex?: number
+}
+```
+
+And in `ComposerShell.tsx`, update the import:
+
+```typescript
+import type { HitlPromptView } from './HitlResponseBar'
+```
+
+Verify build: `npx tsc --noEmit`
+
+- [ ] **Step 4: Clean up useRoomMessages.ts**
 
 In `src/hooks/useRoomMessages.ts`, the `useConversationTurns`, `useActiveTurn`, `useTurnById`, and `useHitlTurnContext` functions all depend on `buildTurnsIncremental` and `TurnViewModel`. These are now dead. Remove them:
 
@@ -2823,7 +2965,7 @@ Delete functions: `useConversationTurns`, `useActiveTurn`, `useTurnById`, `useHi
 
 Keep: `useOrderedIds`, `useOrderedMessages`, `useMessage`, `useMessageCount`, `useMessagesHydrated`, `useActiveHitlRequests`, `useMessageStoreRoomId`.
 
-- [ ] **Step 4: Run reference check on remaining consumers**
+- [ ] **Step 5: Run reference check on remaining consumers**
 
 ```bash
 grep -r "useConversationTurns\|useActiveTurn\|useTurnById\|useHitlTurnContext" src/ --include="*.ts" --include="*.tsx"
@@ -2831,7 +2973,7 @@ grep -r "useConversationTurns\|useActiveTurn\|useTurnById\|useHitlTurnContext" s
 
 Expected: zero matches (these hooks were consumed by now-deleted components).
 
-- [ ] **Step 5: Verify build and tests**
+- [ ] **Step 6: Verify build and tests**
 
 ```bash
 npx tsc --noEmit && npx vitest run --reporter=verbose 2>&1 | tail -30
@@ -2851,7 +2993,7 @@ Re-run tests:
 npx vitest run --reporter=verbose 2>&1 | tail -30
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
