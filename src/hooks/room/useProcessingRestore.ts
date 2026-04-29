@@ -38,7 +38,11 @@ export function useProcessingRestore(
       // Check if the triggering user message is stale (> 2 min).
       const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
       const triggerMsg = store.entities[room.processing_message_id]
-      if (triggerMsg && isStale(triggerMsg.timestamp, PLACEHOLDER_STALE_MS)) {
+      if (!triggerMsg) {
+        console.log('🔄 Skipping placeholder - processing trigger message not in hydrated store')
+        return
+      }
+      if (isStale(triggerMsg.timestamp, PLACEHOLDER_STALE_MS)) {
         console.log('🔄 Skipping placeholder - processing message is stale (>2min)')
         return
       }
@@ -71,6 +75,12 @@ export function useProcessingRestore(
       }, 'optimistic')
 
       lifecycle.setProcessing(true)
+    } else {
+      // Backend truth says no active processing — aggressively clean up any
+      // stale local spinner/placeholder left behind by missed terminal SSE.
+      store.removeMessage(lifecycle.placeholderId(roomId))
+      lifecycle.setMessageId(null)
+      lifecycle.setProcessing(false)
     }
   }, [room, queryLoading, roomId, lifecycle, hydratedFromDb])
 }

@@ -82,13 +82,12 @@ export function useRoomSSEConnection(
       reconcileWithDb(roomId)
     }
 
-    // Safety-net: if SSE reconnected after a gap during processing, the
-    // terminal processing_status SSE may have been the event that was lost.
-    // Schedule a deferred check against the room's persisted state.
+    // Safety-net: while processing is active, periodically verify backend truth.
+    // This covers both reconnect gaps and cases where terminal SSE events are
+    // missed without an explicit disconnect marker.
     let safetyTimer: ReturnType<typeof setTimeout> | null = null
-    if (sseConnected && processing && lifecycle.hadSseDisconnection()) {
+    if (sseConnected && processing) {
       safetyTimer = setTimeout(async () => {
-        if (!lifecycle.hadSseDisconnection()) return
         try {
           const result = await roomQuery.refetch()
           const freshRoom = result.data as { processing_message_id?: string | null } | null

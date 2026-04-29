@@ -253,7 +253,7 @@ function pushIncrementalUpdates(
         slotId,
         slotType,
         agentId: agent.agentId ?? '',
-        agentName: undefined,
+        agentName: agent.senderName || undefined,
       } as TurnEvent)
     }
 
@@ -483,7 +483,7 @@ export function buildTurnEvents(
       slotId,
       slotType,
       agentId: agent.agentId ?? '',
-      agentName: undefined,
+      agentName: agent.senderName || undefined,
     } as TurnEvent)
 
     const agentHasArtifacts = agent.artifacts && agent.artifacts.length > 0
