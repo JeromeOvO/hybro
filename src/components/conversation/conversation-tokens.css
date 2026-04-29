@@ -1,9 +1,26 @@
 :root {
-  --conversation-bg: #09090b;
-  --conversation-surface: #0a0a0f;
+  --conversation-surface-user: #18181b;
 
   --conversation-border: #27272a;
   --conversation-border-subtle: #18181b;
+
+  --conversation-agent-border-green: #1a3a2a;
+  --conversation-agent-border-blue: #1e3a5f;
+  --conversation-agent-border-purple: #3b1a70;
+  --conversation-agent-border-amber: #5a2d0a;
+  --conversation-agent-border-rose: #5c1a2a;
+
+  --conversation-agent-bg-green: #16332a;
+  --conversation-agent-bg-blue: #172554;
+  --conversation-agent-bg-purple: #2e1065;
+  --conversation-agent-bg-amber: #451a03;
+  --conversation-agent-bg-rose: #4c0519;
+
+  --conversation-agent-card-green: rgba(74, 222, 128, 0.22);
+  --conversation-agent-card-blue: rgba(59, 130, 246, 0.22);
+  --conversation-agent-card-purple: rgba(167, 139, 250, 0.22);
+  --conversation-agent-card-amber: rgba(251, 191, 36, 0.22);
+  --conversation-agent-card-rose: rgba(251, 113, 133, 0.22);
 
   --conversation-text-primary: #fafafa;
   --conversation-text-secondary: #e4e4e7;
@@ -21,10 +38,8 @@
   --conversation-danger: #ef4444;
   --conversation-danger-border: #ef444433;
 
-  --conversation-padding-outer: 16px;
-  --conversation-padding-inner: 32px;
   --conversation-gap-turn: 32px;
-  --conversation-gap-block: 8px;
+  --conversation-gap-block: 10px;
   --conversation-sticky-top: 12px;
   --conversation-max-width: 800px;
 
@@ -34,16 +49,45 @@
   --conversation-cursor-duration: 800ms;
 }
 
-@media (max-width: 639px) {
-  :root {
-    --conversation-padding-outer: 12px;
-    --conversation-padding-inner: 20px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   :root {
     --conversation-shimmer-duration: 0s;
     --conversation-fade-duration: 0s;
+  }
+}
+
+.conversation-gutter {
+  padding-left: 2rem;
+  padding-right: 2rem;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+@media (min-width: 640px) {
+  .conversation-gutter {
+    padding-left: 3rem;
+    padding-right: 3rem;
+  }
+}
+
+.conversation-content-area {
+  width: 100%;
+  max-width: var(--conversation-max-width);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@keyframes conversation-sticky-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.conversation-sticky-fade-in {
+  animation: conversation-sticky-fade-in var(--conversation-fade-duration) ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-sticky-fade-in {
+    animation: none;
   }
 }

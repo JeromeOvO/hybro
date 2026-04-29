@@ -1,3 +1,7 @@
+import { ArrowDown } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+
 interface ScrollToBottomButtonProps {
   visible: boolean
   hasNewContent: boolean
@@ -5,23 +9,24 @@ interface ScrollToBottomButtonProps {
 }
 
 export function ScrollToBottomButton({ visible, hasNewContent, onClick }: ScrollToBottomButtonProps) {
-  if (!visible) return null
-
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="sm"
       onClick={onClick}
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full border px-3 py-1.5 text-xs font-medium transition-opacity"
-      style={{
-        backgroundColor: 'var(--conversation-surface)',
-        borderColor: 'var(--conversation-border)',
-        color: 'var(--conversation-text-secondary)',
-      }}
+      className={cn(
+        "absolute bottom-4 left-1/2 -translate-x-1/2 h-9 w-9 p-0 rounded-full bg-muted/80 backdrop-blur-sm shadow-md hover:bg-muted hover:shadow-lg transition-all duration-200 z-10",
+        visible
+          ? "opacity-100 scale-100"
+          : "opacity-0 scale-90 pointer-events-none"
+      )}
       aria-label="Scroll to bottom"
+      tabIndex={visible ? 0 : -1}
     >
-      ↓ Bottom
+      <ArrowDown className="h-4 w-4" />
       {hasNewContent && (
         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-blue-500" />
       )}
-    </button>
+    </Button>
   )
 }

@@ -5,20 +5,22 @@ import type { HITLPromptType } from '@/lib/types/sse'
 
 export interface AgentTheme {
   name: string
-  accent: string   // CSS custom property name, e.g. '--conversation-agent-green'
-  bg: string       // subtle background tint class
+  accent: string
+  border: string
+  avatarBg: string
+  cardBg: string
 }
 
 export const AGENT_THEMES: AgentTheme[] = [
-  { name: 'green',  accent: 'var(--conversation-agent-green)',  bg: 'bg-green-500/5' },
-  { name: 'blue',   accent: 'var(--conversation-agent-blue)',   bg: 'bg-blue-500/5' },
-  { name: 'purple', accent: 'var(--conversation-agent-purple)', bg: 'bg-purple-500/5' },
-  { name: 'amber',  accent: 'var(--conversation-agent-amber)',  bg: 'bg-amber-500/5' },
-  { name: 'rose',   accent: 'var(--conversation-agent-rose)',   bg: 'bg-rose-500/5' },
+  { name: 'green',  accent: 'var(--conversation-agent-green)',  border: 'var(--conversation-agent-border-green)',  avatarBg: 'var(--conversation-agent-bg-green)',  cardBg: 'var(--conversation-agent-card-green)' },
+  { name: 'blue',   accent: 'var(--conversation-agent-blue)',   border: 'var(--conversation-agent-border-blue)',   avatarBg: 'var(--conversation-agent-bg-blue)',   cardBg: 'var(--conversation-agent-card-blue)' },
+  { name: 'purple', accent: 'var(--conversation-agent-purple)', border: 'var(--conversation-agent-border-purple)', avatarBg: 'var(--conversation-agent-bg-purple)', cardBg: 'var(--conversation-agent-card-purple)' },
+  { name: 'amber',  accent: 'var(--conversation-agent-amber)',  border: 'var(--conversation-agent-border-amber)',  avatarBg: 'var(--conversation-agent-bg-amber)',  cardBg: 'var(--conversation-agent-card-amber)' },
+  { name: 'rose',   accent: 'var(--conversation-agent-rose)',   border: 'var(--conversation-agent-border-rose)',   avatarBg: 'var(--conversation-agent-bg-rose)',   cardBg: 'var(--conversation-agent-card-rose)' },
 ]
 
 export const UNRESOLVED_THEME: AgentTheme = {
-  name: 'muted', accent: 'var(--conversation-text-muted)', bg: 'bg-zinc-500/5',
+  name: 'muted', accent: 'var(--conversation-text-muted)', border: 'var(--conversation-border)', avatarBg: '#27272a', cardBg: 'hsl(var(--card))',
 }
 
 export function getAgentTheme(agentId: string | undefined, agentName: string): AgentTheme {

@@ -9,7 +9,7 @@ interface UnresolvedAgentGroupProps {
 
 export function UnresolvedAgentGroup({ blocks }: UnresolvedAgentGroupProps) {
   return (
-    <div style={{ padding: '0 var(--conversation-padding-inner)' }}>
+    <div>
       <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
         Unattributed responses
       </div>

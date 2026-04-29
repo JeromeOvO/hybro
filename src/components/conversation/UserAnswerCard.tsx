@@ -7,19 +7,22 @@ interface UserAnswerCardProps {
 export function UserAnswerCard({ agentName, question, answer }: UserAnswerCardProps) {
   return (
     <div
-      className="rounded-lg border px-3 py-2.5"
+      className="border"
       style={{
-        backgroundColor: 'var(--conversation-surface)',
+        borderRadius: 12,
+
+        padding: '12px 14px',
+        backgroundColor: 'hsl(var(--card))',
         borderColor: 'var(--conversation-border)',
       }}
     >
-      <div className="text-xs mb-1.5" style={{ color: 'var(--conversation-text-muted)' }}>
+      <div className="text-[11px] mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
         Response to {agentName}
       </div>
-      <div className="pl-3 text-sm mb-1" style={{ color: 'var(--conversation-text-muted)' }}>
+      <div className="text-xs mb-1.5" style={{ color: 'var(--conversation-text-muted)', paddingLeft: 10 }}>
         {question}
       </div>
-      <div className="pl-3 text-sm" style={{ color: 'var(--conversation-text-secondary)' }}>
+      <div className="text-[13px]" style={{ color: 'var(--conversation-text-secondary)', paddingLeft: 10 }}>
         {answer}
       </div>
     </div>

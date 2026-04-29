@@ -56,8 +56,8 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       <main className="flex-1 overflow-hidden">
         <ConversationMessageList roomId={adapter.roomId} />
       </main>
-      <div className="bg-background" style={{ borderTop: '1px solid var(--conversation-border)' }}>
-        <div style={{ maxWidth: 'var(--conversation-max-width)', margin: '0 auto' }}>
+      <div className="bg-background conversation-gutter">
+        <div className="conversation-content-area">
           <ComposerShell adapter={adapter} />
         </div>
       </div>

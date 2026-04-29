@@ -13,13 +13,13 @@ interface AgentContentBlockProps {
 
 export function AgentContentBlock({ agentName, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
   return (
-    <div style={{ padding: '0 var(--conversation-padding-inner)' }}>
+    <div>
       {showAttribution && (
         <div className="text-xs mb-1" style={{ color: 'var(--conversation-text-muted)' }}>
           {agentName}:
         </div>
       )}
-      <div className={isStreaming ? 'conversation-streaming-cursor' : ''}>
+      <div className={isStreaming ? 'conversation-streaming-cursor' : ''} style={{ lineHeight: 1.8, fontSize: 14 }}>
         <MarkdownContent content={content} isStreaming={isStreaming} />
       </div>
       {artifacts && artifacts.length > 0 && (

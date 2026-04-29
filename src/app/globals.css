@@ -76,7 +76,7 @@
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 6px);
+  --radius-xl: 12px;
 
   /* Font families */
   --font-spaceGrotesk: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;

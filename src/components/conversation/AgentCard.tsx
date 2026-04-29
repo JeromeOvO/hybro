@@ -1,4 +1,5 @@
 import type { AgentDisplayProps, AgentTheme } from '@/lib/selectors/conversation-types'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
 
 interface AgentCardProps {
   agentName: string
@@ -8,52 +9,57 @@ interface AgentCardProps {
   display: AgentDisplayProps
 }
 
-function AgentAvatar({ name, theme }: { name: string; theme: AgentTheme }) {
-  const initials = name.slice(0, 2).toUpperCase()
+function AgentAvatar({ agentId, theme }: { agentId: string; theme: AgentTheme }) {
   return (
     <div
-      className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-medium shrink-0"
-      style={{ backgroundColor: `color-mix(in srgb, ${theme.accent} 15%, transparent)`, color: theme.accent }}
+      className="w-8 h-8 rounded-lg overflow-hidden shrink-0"
+      style={{ backgroundColor: theme.avatarBg }}
     >
-      {initials}
+      <img
+        src={getAgentAvatarUri(agentId)}
+        alt=""
+        className="w-full h-full"
+      />
     </div>
   )
 }
 
 export function AgentCard({ agentName, agentId, taskDescription, theme, display }: AgentCardProps) {
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
-    accent: theme.accent,
-    muted: 'var(--conversation-text-dim)',
+    accent: 'rgb(0, 255, 255)',
+    muted: 'var(--conversation-agent-green)',
     danger: 'var(--conversation-danger)',
     warning: 'var(--conversation-agent-yellow)',
   }
 
   return (
     <div
-      className={`relative rounded-lg border px-3 py-2.5 overflow-hidden ${display.isAnimated ? 'conversation-card-shimmer' : ''}`}
+      className={`relative border overflow-hidden ${display.isAnimated ? 'conversation-card-shimmer' : ''}`}
       style={{
-        backgroundColor: 'var(--conversation-surface)',
-        borderColor: display.tone === 'danger' ? 'var(--conversation-danger-border)' : 'var(--conversation-border)',
+        borderRadius: 12,
+        padding: '14px 16px',
+        backgroundColor: theme.cardBg,
+        borderColor: display.tone === 'danger' ? 'var(--conversation-danger-border)' : display.tone === 'warning' ? '#854d0e' : theme.cardBg,
       }}
     >
-      <div className="flex items-center gap-2.5">
-        <AgentAvatar name={agentName} theme={theme} />
-        <span className="text-sm font-medium" style={{ color: 'var(--conversation-text-primary)' }}>
+      <div className="flex items-center gap-2.5" style={{ position: 'relative', zIndex: 1 }}>
+        <AgentAvatar agentId={agentId} theme={theme} />
+        <span className="text-[13px] font-medium" style={{ color: 'var(--conversation-text-primary)' }}>
           {agentName}
         </span>
         <span
-          className="ml-auto text-xs"
+          className="ml-auto text-[13px] font-medium"
           role="status"
           aria-label={display.ariaLabel}
-          style={{ color: toneColors[display.tone] }}
+          style={{ color: toneColors[display.tone], position: 'relative', zIndex: 1 }}
         >
           {display.label}
         </span>
       </div>
       {taskDescription && (
-        <div className="flex items-center gap-1.5 mt-1.5 pl-[42px]">
-          <span className="text-xs" style={{ color: 'var(--conversation-text-dim)' }}>└</span>
-          <span className="text-xs truncate" style={{ color: 'var(--conversation-text-muted)' }}>
+        <div className="flex items-center gap-1.5 pl-[42px]" style={{ marginTop: 6, position: 'relative', zIndex: 1 }}>
+          <span className="text-sm leading-none" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
+          <span className="text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>
             {taskDescription}
           </span>
         </div>

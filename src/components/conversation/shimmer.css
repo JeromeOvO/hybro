@@ -1,6 +1,6 @@
 @keyframes conversation-shimmer {
-  0% { background-position: -100% 0; }
-  100% { background-position: 200% 0; }
+  0% { background-position: 200% 0; }
+  100% { background-position: -100% 0; }
 }
 
 @keyframes conversation-cursor-blink {
@@ -15,17 +15,20 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    hsl(0 0% 100% / 0.03) 50%,
+    rgba(255, 255, 255, 0.03) 40%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0.03) 60%,
     transparent 100%
   );
   background-size: 300% 100%;
   animation: conversation-shimmer var(--conversation-shimmer-duration) ease-in-out infinite;
   pointer-events: none;
-  border-radius: inherit;
+  border-radius: 12px;
 }
 
 .conversation-streaming-cursor::after {
   content: '|';
   color: var(--conversation-agent-blue);
+  font-weight: 300;
   animation: conversation-cursor-blink var(--conversation-cursor-duration) step-end infinite;
 }

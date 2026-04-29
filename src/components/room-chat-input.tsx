@@ -878,7 +878,7 @@ export function RoomChatInput({
           className={cn(
             "absolute bottom-full left-4 right-4 mb-3 z-50",
             "bg-popover backdrop-blur-xl",
-            "border border-border/50 shadow-xl rounded-2xl",
+            "border border-border/50 shadow-xl rounded-xl",
             "animate-in fade-in slide-in-from-bottom-3 duration-300"
           )}
         >
@@ -953,11 +953,11 @@ export function RoomChatInput({
         }}
         onDragOver={(e) => e.preventDefault()}
         className={cn(
-        "group/input relative flex flex-col rounded-3xl transition-all duration-500",
+        "group/input relative flex flex-col rounded-xl transition-all duration-500",
         "bg-gradient-to-b from-background via-background to-background/95",
         "shadow-xl hover:shadow-2xl",
         // Outer glow effects
-        "before:absolute before:-inset-[1px] before:rounded-3xl before:p-[1px]",
+        "before:absolute before:-inset-[1px] before:rounded-xl before:p-[1px]",
         "before:bg-gradient-to-b before:from-border/80 before:via-border/50 before:to-border/80",
         "before:transition-all before:duration-500 before:-z-10",
         // Focus/hover gradient border
@@ -971,7 +971,7 @@ export function RoomChatInput({
         "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
       )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-3xl bg-muted/70 dark:bg-muted/50 backdrop-blur-sm border border-border/50 overflow-hidden">
+        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm border border-border/50 overflow-hidden">
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 
