@@ -959,10 +959,7 @@ export function RoomChatInput({
         // Outer glow effects
         "before:absolute before:-inset-[1px] before:rounded-xl before:p-[1px]",
         "before:bg-gradient-to-b before:from-border/80 before:via-border/50 before:to-border/80",
-        "before:transition-all before:duration-500 before:-z-10",
-        // Focus/hover gradient border
-        "focus-within:before:from-primary/60 focus-within:before:via-primary/40 focus-within:before:to-primary/60",
-        "hover:before:from-primary/40 hover:before:via-primary/20 hover:before:to-primary/40",
+        "before:-z-10",
         // Shadow glow
         "hover:shadow-[0_8px_40px_-12px_rgba(var(--color-primary)/0.25)]",
         "focus-within:shadow-[0_8px_50px_-10px_rgba(var(--color-primary)/0.35)]",

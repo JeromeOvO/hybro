@@ -40,54 +40,105 @@
 
   --conversation-gap-turn: 32px;
   --conversation-gap-block: 10px;
+  --conversation-frame-max-width: 800px;
+  --conversation-body-inset: 16px;
+
+  --conversation-gutter-x: 2rem;
   --conversation-sticky-top: 12px;
-  --conversation-max-width: 800px;
 
   --conversation-shimmer-duration: 3.5s;
-  --conversation-fade-duration: 200ms;
   --conversation-chevron-duration: 150ms;
   --conversation-cursor-duration: 800ms;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --conversation-gutter-x: 3rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
     --conversation-shimmer-duration: 0s;
-    --conversation-fade-duration: 0s;
   }
 }
 
+/* ---------- Gutter ---------- */
+
 .conversation-gutter {
-  padding-left: 2rem;
-  padding-right: 2rem;
+  padding-left: var(--conversation-gutter-x);
+  padding-right: var(--conversation-gutter-x);
   padding-top: 0;
   padding-bottom: 0;
 }
 
-@media (min-width: 640px) {
-  .conversation-gutter {
-    padding-left: 3rem;
-    padding-right: 3rem;
-  }
+.conversation-scroll-area {
+  scrollbar-gutter: stable both-edges;
 }
 
-.conversation-content-area {
+/* ---------- Two-layer frame ---------- */
+
+.conversation-frame {
   width: 100%;
-  max-width: var(--conversation-max-width);
-  margin-left: auto;
-  margin-right: auto;
+  max-width: var(--conversation-frame-max-width);
+  margin-inline: auto;
 }
 
-@keyframes conversation-sticky-fade-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+.conversation-body-frame {
+  width: calc(100% - var(--conversation-body-inset) * 2);
+  margin-inline: auto;
 }
 
-.conversation-sticky-fade-in {
-  animation: conversation-sticky-fade-in var(--conversation-fade-duration) ease both;
+/* ---------- Turn container (gap lives here) ---------- */
+
+.conversation-turn {
+  position: relative;
+  padding-bottom: var(--conversation-gap-turn);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .conversation-sticky-fade-in {
-    animation: none;
-  }
+.conversation-turn:last-child {
+  padding-bottom: 0;
+}
+
+/* ---------- Top cover (opaque strip at scroll top) ---------- */
+
+.conversation-top-cover {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--conversation-sticky-top);
+  background: hsl(var(--color-background));
+  z-index: 25;
+  pointer-events: none;
+}
+
+/* ---------- Native sticky user message ---------- */
+
+.conversation-user-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: var(--conversation-sticky-top);
+  isolation: isolate;
+}
+
+.conversation-user-sticky::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--conversation-gutter-x));
+  right: calc(-1 * var(--conversation-gutter-x));
+  background: hsl(var(--color-background));
+  z-index: -1;
+}
+
+/* ---------- Bottom input dock ---------- */
+
+.conversation-input-dock {
+  position: relative;
+  z-index: 30;
+  background: hsl(var(--color-background));
+  padding: 0 0 16px;
 }

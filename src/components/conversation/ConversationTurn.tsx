@@ -1,4 +1,3 @@
-import { useRef, useEffect, useState } from 'react'
 import type { ConversationTurnView, ConversationBlock } from '@/lib/selectors/conversation-types'
 import { UserMessageBlock } from './UserMessageBlock'
 import { AgentCard } from './AgentCard'
@@ -8,8 +7,6 @@ import { UnresolvedAgentGroup } from './UnresolvedAgentGroup'
 
 interface ConversationTurnProps {
   turn: ConversationTurnView
-  isStuck?: boolean
-  onSentinelRef?: (el: HTMLDivElement | null) => void
   multiAgentTurn: boolean
 }
 
@@ -38,59 +35,25 @@ function BlockRenderer({ block, multiAgent }: { block: ConversationBlock; multiA
   }
 }
 
-export function ConversationTurn({ turn, isStuck, onSentinelRef, multiAgentTurn }: ConversationTurnProps) {
-  const prevStuckRef = useRef(isStuck)
-  const [fadeKey, setFadeKey] = useState(0)
-
-  useEffect(() => {
-    if (isStuck && !prevStuckRef.current) {
-      setFadeKey(k => k + 1)
-    }
-    prevStuckRef.current = isStuck
-  }, [isStuck])
-
+export function ConversationTurn({ turn, multiAgentTurn }: ConversationTurnProps) {
   if (turn.userMessage === null) {
-    return <UnresolvedAgentGroup blocks={turn.blocks} />
+    return (
+      <div className="conversation-turn">
+        <UnresolvedAgentGroup blocks={turn.blocks} />
+      </div>
+    )
   }
 
   return (
-    <div>
-      <div ref={onSentinelRef} style={{ height: 0 }} />
-      <div
-        key={fadeKey}
-        className={isStuck ? 'conversation-sticky-fade-in' : undefined}
-        style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: isStuck ? 15 : 10,
-          paddingTop: isStuck ? 'var(--conversation-sticky-top)' : undefined,
-          paddingBottom: 4,
-          background: isStuck ? 'hsl(var(--background))' : undefined,
-        }}
-      >
-        <UserMessageBlock entity={turn.userMessage} isStuck={isStuck} />
-        {isStuck && (
-          <div
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: -16,
-              height: 16,
-              background: 'linear-gradient(to bottom, hsl(var(--background)), transparent)',
-              pointerEvents: 'none',
-            }}
-          />
-        )}
+    <div className="conversation-turn">
+      <div className="conversation-user-sticky">
+        <UserMessageBlock entity={turn.userMessage} />
       </div>
 
       {turn.blocks.length > 0 && (
         <div
-          className="flex flex-col"
-          style={{
-            gap: 'var(--conversation-gap-block)',
-            padding: '10px 16px 0 16px',
-          }}
+          className="conversation-body-frame flex flex-col"
+          style={{ gap: 'var(--conversation-gap-block)', paddingTop: 10 }}
         >
           {turn.blocks.map((block, i) => (
             <BlockRenderer key={i} block={block} multiAgent={multiAgentTurn} />

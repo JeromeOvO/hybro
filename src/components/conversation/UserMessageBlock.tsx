@@ -33,10 +33,9 @@ function renderContent(content: string): ReactNode[] {
 
 interface UserMessageBlockProps {
   entity: MessageEntity
-  isStuck?: boolean
 }
 
-export function UserMessageBlock({ entity, isStuck }: UserMessageBlockProps) {
+export function UserMessageBlock({ entity }: UserMessageBlockProps) {
   const [expanded, setExpanded] = useState(false)
   const textRef = useRef<HTMLDivElement>(null)
   const [isOverflowing, setIsOverflowing] = useState(false)
@@ -51,9 +50,9 @@ export function UserMessageBlock({ entity, isStuck }: UserMessageBlockProps) {
 
   return (
     <div
-      className={`border border-border/50 bg-muted backdrop-blur-sm overflow-hidden transition-shadow duration-200 ${
+      className={`border border-border/50 bg-muted overflow-hidden transition-shadow duration-200 ${
         isOverflowing ? 'cursor-pointer' : ''
-      } ${isStuck ? 'shadow-lg shadow-black/20' : ''}`}
+      }`}
       style={{ borderRadius: 12 }}
       data-message-id={entity.id}
       onClick={() => isOverflowing && setExpanded(prev => !prev)}
