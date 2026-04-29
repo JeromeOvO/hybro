@@ -1756,6 +1756,7 @@ class RoomServices:
         agents: list | None = None,
         conversation_context: str | None = None,
         token: CancellationToken | None = None,
+        client_request_id: str | None = None,
     ) -> ParseResult:
         """
         Parse user message
@@ -1831,7 +1832,7 @@ class RoomServices:
             room_id,
             user_id=user_id,
             extend_info=extend_info,
-            client_request_id=request.client_request_id,
+            client_request_id=client_request_id,
         )
 
         return ParseResult(success=True) if agent_messages else ParseResult(success=False)
@@ -2002,6 +2003,15 @@ class RoomServices:
                 # so the frontend knows the user message exists in the DB
                 # and doesn't rollback optimistic state.
                 selection_result.message_id = user_message.message_id
+                # Processing status was set before selection; this early return
+                # must emit a terminal status to clear room.processing_message_id
+                # and dismiss frontend processing placeholders.
+                await self.sse_manager.send_processing_status(
+                    request.room_id,
+                    SSEProcessingStatus.FAILED,
+                    user_message.message_id,
+                    details=selection_result.error or "Agent selection failed",
+                )
                 return selection_result
             selected_agent_set, auto_assign, agents = selection_result
         elif pre_resolved_scope is not None:
@@ -2090,6 +2100,7 @@ class RoomServices:
                 agents=agents,
                 conversation_context=conversation_context,
                 token=token,
+                client_request_id=request.client_request_id,
             )
 
         if not parse_result.success:
