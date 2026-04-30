@@ -43,6 +43,15 @@ export const handlers = [
     })
   }),
 
+  http.post(`${roomCenter}/inquiryActiveRuns`, async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>
+    return HttpResponse.json({
+      success: true,
+      room_id: body.room_id,
+      active_runs: [],
+    })
+  }),
+
   http.post(`${roomCenter}/inquiryRoomsByRoomOwnerId`, async () => {
     return HttpResponse.json({
       success: true,

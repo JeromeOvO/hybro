@@ -95,6 +95,7 @@ const latestClientRequestId = (roomId = 'room-1') =>
 describe('Room lifecycle characterization tests', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
     capturedOnMessage = undefined
     mockSseConnected = true
     mockInquiryRoomSetting.mockResolvedValue({
@@ -174,26 +175,67 @@ describe('Room lifecycle characterization tests', () => {
   // ── Test 2: Processing restore on page refresh ──
 
   describe('Processing restore on page refresh', () => {
-    it('upserts placeholder when room has processing_message_id', async () => {
+    it('restores placeholder from active_runs', async () => {
+      const { inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValueOnce({
+        success: true,
+        message_list: [{
+          room_id: 'room-1',
+          message_id: 'msg-processing-1',
+          message_type: 'user',
+          user_id: 'u1',
+          message_created_at: new Date().toISOString(),
+          message_content: { message_text: 'Hello' },
+        }] as any,
+      })
       mockInquiryRoomSetting.mockResolvedValue({
         success: true,
         room: {
           room_id: 'room-1',
           room_name: 'Test',
           room_agent_set: {},
-          processing_message_id: 'msg-processing-1',
+          processing_message_id: null,
+          active_runs: [
+            { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+          ],
         },
       })
 
-      // Seed the triggering message with a recent timestamp
-      useMessageStore.getState().upsertMessage({
-        id: 'msg-processing-1',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Hello',
-        senderName: 'Test',
-        timestamp: new Date().toISOString(),
-      }, 'db')
+      await mountAndWaitForRoom()
+
+      const placeholderId = `processing-placeholder-room-1`
+      await waitFor(() => {
+        const entity = useMessageStore.getState().entities[placeholderId]
+        expect(entity).toBeDefined()
+      })
+      expect(flags('room-1').processing).toBe(true)
+    })
+
+    it('upserts placeholder when room has active run trigger', async () => {
+      const { inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValueOnce({
+        success: true,
+        message_list: [{
+          room_id: 'room-1',
+          message_id: 'msg-processing-1',
+          message_type: 'user',
+          user_id: 'u1',
+          message_created_at: new Date().toISOString(),
+          message_content: { message_text: 'Hello' },
+        }] as any,
+      })
+      mockInquiryRoomSetting.mockResolvedValue({
+        success: true,
+        room: {
+          room_id: 'room-1',
+          room_name: 'Test',
+          room_agent_set: {},
+          processing_message_id: null,
+          active_runs: [
+            { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+          ],
+        },
+      })
 
       await mountAndWaitForRoom()
 
@@ -233,7 +275,10 @@ describe('Room lifecycle characterization tests', () => {
           room_id: 'room-1',
           room_name: 'Test',
           room_agent_set: {},
-          processing_message_id: 'msg-stale',
+          processing_message_id: null,
+          active_runs: [
+            { run_id: 'run-stale', state: 'processing', trigger_message_id: 'msg-stale' },
+          ],
         },
       })
 

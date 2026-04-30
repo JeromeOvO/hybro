@@ -1,5 +1,10 @@
 export interface ProcessingLifecycle {
   setProcessing(active: boolean): void
+  startProcessing(messageId?: string | null): void
+  stopProcessing(options?: { clearMessageId?: boolean; clearSendGuard?: boolean }): void
+  setPendingRunEventAck(clientRequestId: string | null): void
+  getPendingRunEventAck(): string | null
+  clearPendingRunEventAck(): void
   setSendGuard(active: boolean): void
   isSendGuardActive(): boolean
   setMessageId(id: string | null): void
@@ -26,6 +31,7 @@ export function createProcessingLifecycle(
   let currentProcessingMessageId: string | null = null
   let placeholderDismissed = false
   let isProcessingGuard = false
+  let pendingRunEventAckClientRequestId: string | null = null
   let cancelTimeout: ReturnType<typeof setTimeout> | null = null
   let cancelTimedOut = false
   let sseHadDisconnection = false
@@ -37,6 +43,44 @@ export function createProcessingLifecycle(
       if (!active) {
         isProcessingGuard = false
       }
+    },
+
+    startProcessing(messageId) {
+      if (disposed) return
+      if (messageId !== undefined) {
+        currentProcessingMessageId = messageId
+      }
+      isProcessingGuard = true
+      setZustandProcessing(true)
+    },
+
+    stopProcessing(options) {
+      if (disposed) return
+      const clearMessageId = options?.clearMessageId ?? true
+      const clearSendGuard = options?.clearSendGuard ?? true
+      setZustandProcessing(false)
+      if (clearSendGuard) {
+        isProcessingGuard = false
+      }
+      if (clearMessageId) {
+        currentProcessingMessageId = null
+      }
+      pendingRunEventAckClientRequestId = null
+    },
+
+    setPendingRunEventAck(clientRequestId: string | null) {
+      if (disposed) return
+      pendingRunEventAckClientRequestId = clientRequestId
+    },
+
+    getPendingRunEventAck() {
+      if (disposed) return null
+      return pendingRunEventAckClientRequestId
+    },
+
+    clearPendingRunEventAck() {
+      if (disposed) return
+      pendingRunEventAckClientRequestId = null
     },
 
     setSendGuard(active: boolean) {
@@ -124,6 +168,7 @@ export function createProcessingLifecycle(
       currentProcessingMessageId = null
       placeholderDismissed = false
       isProcessingGuard = false
+      pendingRunEventAckClientRequestId = null
       cancelTimedOut = false
       sseHadDisconnection = false
       if (cancelTimeout) {

@@ -7,7 +7,7 @@ import { contentSlotsReducer, getVisibleSlots } from '@/stores/turn-event-store/
 import { railReducer } from '@/stores/turn-event-store/projections/rail'
 import { composerReducer } from '@/stores/turn-event-store/projections/composer'
 import { useMessageStore } from '@/stores/message-store'
-import { useRoomFlags } from '@/stores/room-ui-store'
+import { useRoomProcessing } from '@/stores/room-ui-store'
 import { UserInputBlock } from './UserInputBlock'
 import { ContentSlotRenderer } from './ContentSlotRenderer'
 import { OrchestrationRail } from './OrchestrationRail'
@@ -22,7 +22,7 @@ export const OrchestraTurn = React.memo(function OrchestraTurn({ turnLog }: Orch
   const railItems = useTurnProjection(turnLog, railReducer)
   const composerState = useTurnProjection(turnLog, composerReducer)
   const roomId = useMessageStore(s => s.roomId)
-  const { processing: roomProcessing } = useRoomFlags(roomId ?? '')
+  const roomProcessing = useRoomProcessing(roomId ?? '')
   const userInput = turnLog.getUserInput()
   const isTurnProcessing = composerState.isProcessing && roomProcessing
 

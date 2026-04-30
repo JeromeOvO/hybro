@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import type { UseQueryResult } from '@tanstack/react-query'
 import type { SSEMessage } from '@/lib/types/sse'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
+import { inquiryActiveRuns } from '@/lib/api/room'
 import { useRoomSSE } from '../useRoomSSE'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
@@ -17,7 +17,6 @@ export function useRoomSSEConnection(
   getAgentName: (agentId: string) => Promise<string>,
   getAgentSource: (agentId: string | undefined) => 'cloud' | 'hub' | undefined,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
-  roomQuery: UseQueryResult<unknown, Error>,
   reconcileWithDb: (roomId: string) => Promise<void>,
   setSseConnected: (v: boolean) => void,
   setSseError: (v: string | null) => void,
@@ -47,6 +46,17 @@ export function useRoomSSEConnection(
   const prevSseConnectedRef = useRef(false)
   const hasBeenConnectedRef = useRef(false)
   useEffect(() => {
+    const backendHasActiveLifecycle = async (): Promise<boolean | null> => {
+      if (!roomId) return null
+      try {
+        const result = await inquiryActiveRuns(roomId, getToken)
+        if (!result.success) return null
+        return (result.active_runs?.length ?? 0) > 0
+      } catch {
+        return null
+      }
+    }
+
     if (!sseConnected && processing) {
       console.log('⚠️ SSE disconnected during processing — will reconcile after completion')
       lifecycle.markSseDisconnection()
@@ -88,17 +98,12 @@ export function useRoomSSEConnection(
     let safetyTimer: ReturnType<typeof setTimeout> | null = null
     if (sseConnected && processing) {
       safetyTimer = setTimeout(async () => {
-        try {
-          const result = await roomQuery.refetch()
-          const freshRoom = result.data as { processing_message_id?: string | null } | null
-          if (freshRoom && !freshRoom.processing_message_id) {
-            console.log('🔄 Safety-net: backend confirms processing ended — clearing stuck spinner')
-            lifecycle.setProcessing(false)
-            lifecycle.clearSseDisconnection()
-            reconcileWithDb(roomId)
-          }
-        } catch {
-          // Network error — next reconnect cycle or page refresh will retry
+        const hasActiveLifecycle = await backendHasActiveLifecycle()
+        if (hasActiveLifecycle === false) {
+          console.log('🔄 Safety-net: backend confirms processing ended — clearing stuck spinner')
+          lifecycle.stopProcessing()
+          lifecycle.clearSseDisconnection()
+          reconcileWithDb(roomId)
         }
       }, 15_000)
     }
@@ -108,7 +113,7 @@ export function useRoomSSEConnection(
     return () => {
       if (safetyTimer) clearTimeout(safetyTimer)
     }
-  }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, hitlRequestIndex, roomQuery, lifecycle, reconcileWithDb])
+  }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, hitlRequestIndex, lifecycle, reconcileWithDb])
 
   return { sseConnected, sseConnecting, sseError }
 }

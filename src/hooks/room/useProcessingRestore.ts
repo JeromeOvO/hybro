@@ -4,9 +4,14 @@ import { useMessageStore } from '@/stores/message-store'
 import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
+interface ProcessingSnapshotRoom {
+  processing_message_id?: string | null
+  active_runs?: Array<{ trigger_message_id?: string | null }> | null
+}
+
 export function useProcessingRestore(
   roomId: string,
-  room: { processing_message_id?: string | null } | null,
+  room: ProcessingSnapshotRoom | null,
   queryLoading: boolean,
   lifecycle: ProcessingLifecycle,
 ) {
@@ -27,17 +32,29 @@ export function useProcessingRestore(
     // never re-add it — the restore effect is only for page-load recovery.
     if (lifecycle.isPlaceholderDismissed()) return
 
+    const activeRuns = room.active_runs ?? []
+    const activeRunTriggerMessageId =
+      activeRuns.find((run) => !!run.trigger_message_id)?.trigger_message_id ?? null
+    const lifecycleMessageId = activeRunTriggerMessageId
+    const hasActiveLifecycle = activeRuns.length > 0
+
     // Check if room has an active processing state
-    if (room.processing_message_id) {
-      console.log('🔄 Restoring processing placeholder for message:', room.processing_message_id)
+    if (hasActiveLifecycle) {
+      console.log('🔄 Restoring processing placeholder for message:', lifecycleMessageId)
 
       // Always restore the message ID so cancellation works after refresh,
       // regardless of whether the placeholder is shown below.
-      lifecycle.setMessageId(room.processing_message_id)
+      lifecycle.setMessageId(lifecycleMessageId)
+
+      // Some active runs are proactive and may not be anchored to a user message.
+      if (!lifecycleMessageId) {
+        lifecycle.startProcessing(null)
+        return
+      }
 
       // Check if the triggering user message is stale (> 2 min).
       const PLACEHOLDER_STALE_MS = 2 * 60 * 1000
-      const triggerMsg = store.entities[room.processing_message_id]
+      const triggerMsg = store.entities[lifecycleMessageId]
       if (!triggerMsg) {
         console.log('🔄 Skipping placeholder - processing trigger message not in hydrated store')
         return
@@ -74,13 +91,12 @@ export function useProcessingRestore(
         isEphemeral: true,
       }, 'optimistic')
 
-      lifecycle.setProcessing(true)
+      lifecycle.startProcessing(lifecycleMessageId)
     } else {
       // Backend truth says no active processing — aggressively clean up any
       // stale local spinner/placeholder left behind by missed terminal SSE.
       store.removeMessage(lifecycle.placeholderId(roomId))
-      lifecycle.setMessageId(null)
-      lifecycle.setProcessing(false)
+      lifecycle.stopProcessing()
     }
   }, [room, queryLoading, roomId, lifecycle, hydratedFromDb])
 }

@@ -5,6 +5,7 @@ import { errorHandlers } from '../../setup/msw-handlers'
 import { getApiUrl } from '@/lib/utils'
 import {
   createNewRoom,
+  inquiryActiveRuns,
   inquiryRoomSetting,
   inquiryRoomsByRoomOwnerId,
   SendMessage,
@@ -88,6 +89,28 @@ describe('Room API', () => {
       const result = await inquiryRoomSetting('room-42')
 
       expect(result.success).toBe(true)
+      expect(capturedBody).toMatchObject({ room_id: 'room-42' })
+    })
+  })
+
+  describe('inquiryActiveRuns', () => {
+    it('should fetch active runs with correct room_id', async () => {
+      let capturedBody: Record<string, unknown> | null = null
+      server.use(
+        http.post(`${roomCenter}/inquiryActiveRuns`, async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>
+          return HttpResponse.json({
+            success: true,
+            room_id: capturedBody.room_id,
+            active_runs: [{ run_id: 'run-1', state: 'processing', trigger_message_id: 'm1' }],
+          })
+        })
+      )
+
+      const result = await inquiryActiveRuns('room-42')
+
+      expect(result.success).toBe(true)
+      expect(result.active_runs).toHaveLength(1)
       expect(capturedBody).toMatchObject({ room_id: 'room-42' })
     })
   })

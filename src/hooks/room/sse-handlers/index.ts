@@ -253,15 +253,23 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
           }
 
           if (status === PROCESSING_STATUS.PROCESSING) {
+            const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
+            if (
+              pendingAckClientRequestId
+              && correlation.clientReqId
+              && correlation.clientReqId !== pendingAckClientRequestId
+            ) {
+              // Optional UX follow-up: keep optimistic display pinned to the
+              // current pending client_request_id until its first run_event ack.
+              break
+            }
+
             const realMessageId = sseMessage.data.message_id
             if (correlation.clientReqId && realMessageId) {
               resolveClientRequestMessageId(correlation.clientReqId, realMessageId)
             }
 
-            lifecycle.setProcessing(true)
-            if (!lifecycle.getMessageId() && sseMessage.data.message_id) {
-              lifecycle.setMessageId(sseMessage.data.message_id)
-            }
+            lifecycle.startProcessing(lifecycle.getMessageId() ?? sseMessage.data.message_id ?? undefined)
             const stageDetails = sseMessage.data.details as string | undefined
 
             // When details are present (supervisor stage updates), always
@@ -286,7 +294,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // lifecycle.getMessageId() is nulled in this block so we must save it first.
             const terminalUserMsgId = lifecycle.getMessageId() ?? (sseMessage.data.message_id as string | undefined)
 
-            lifecycle.setProcessing(false)
+            lifecycle.stopProcessing({ clearMessageId: false })
             setCancelling(false)
             lifecycle.disarmCancelTimeout()
             store.removeMessage(lifecycle.placeholderId(roomId))
@@ -534,7 +542,7 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // processing may still be ongoing (e.g. supervisor synthesis,
             // multi-agent queue).  The authoritative signal is the
             // processing_status event — only that handler should call
-            // lifecycle.setProcessing(false).
+            // lifecycle.stopProcessing(...).
 
             if (!lifecycle.hasCancelTimedOut()) {
               if (status === TASK_STATE.FAILED) {
@@ -780,6 +788,26 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         // turn-event-store is derived from normalized message-store only.
         // Ignore direct turn_event writes to prevent dual-source divergence.
         console.log('ℹ️ Ignoring turn_event SSE in single-writer mode')
+        break
+      }
+
+      case 'run_event': {
+        const correlationId = sseMessage.data?.correlation_id
+        if (typeof correlationId === 'string' && correlationId.length > 0) {
+          const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
+          if (pendingAckClientRequestId && pendingAckClientRequestId === correlationId) {
+            lifecycle.clearPendingRunEventAck()
+          }
+        }
+
+        const sub = sseMessage.data?.type as string | undefined
+        if (
+          sub === 'run_failed'
+          || sub === 'run_completed'
+          || sub === 'run_canceled'
+        ) {
+          void reconcileWithDb(roomId)
+        }
         break
       }
 

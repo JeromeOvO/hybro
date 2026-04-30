@@ -354,8 +354,24 @@ export interface RoomCenterRoomSettingResponse {
   room_agent_set?: string[] | null;
   resolved_agents?: RoomAgentRefWire[] | null;
   room_default_status?: "ok" | "degraded" | "empty" | "all_unavailable" | null;
+  active_runs?: ActiveRunRefWire[] | null;
   room?: Room | null;
   room_list?: Room[] | null;
+  success: boolean;
+  error?: string | null;
+  status_code?: number;
+}
+export interface ActiveRunRefWire {
+  run_id: string;
+  state: string;
+  trigger_message_id?: string | null;
+  agent_id?: string | null;
+  seq?: number;
+  updated_at?: string | null;
+}
+export interface RoomCenterActiveRunsResponse {
+  room_id?: string | null;
+  active_runs?: ActiveRunRefWire[] | null;
   success: boolean;
   error?: string | null;
   status_code?: number;
