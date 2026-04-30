@@ -47,6 +47,8 @@ interface RoomUiState {
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
+  localSendSeqByRoom: Record<RoomId, number>
+  initialHydrationSeqByRoom: Record<RoomId, number>
 
   // Per-room flag setters (roomId, value)
   setSending: (roomId: RoomId, v: boolean) => void
@@ -69,6 +71,8 @@ interface RoomUiState {
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
+  markLocalSend: (roomId: RoomId) => void
+  markInitialHydrated: (roomId: RoomId) => void
 }
 
 function readLocalStorageBool(key: string, fallback: boolean): boolean {
@@ -80,6 +84,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
   pendingTurnSkeletons: {},
+  localSendSeqByRoom: {},
+  initialHydrationSeqByRoom: {},
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
   setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
@@ -94,9 +100,13 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
 
   resetRoom: (roomId) =>
     set(s => {
-      const copy = { ...s.rooms }
-      delete copy[roomId]
-      return { rooms: copy }
+      const rooms = { ...s.rooms }
+      delete rooms[roomId]
+      const localSendSeqByRoom = { ...s.localSendSeqByRoom }
+      delete localSendSeqByRoom[roomId]
+      const initialHydrationSeqByRoom = { ...s.initialHydrationSeqByRoom }
+      delete initialHydrationSeqByRoom[roomId]
+      return { rooms, localSendSeqByRoom, initialHydrationSeqByRoom }
     }),
 
   resetAll: () =>
@@ -104,6 +114,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       rooms: {},
       pendingRoomData: {},
       pendingTurnSkeletons: {},
+      localSendSeqByRoom: {},
+      initialHydrationSeqByRoom: {},
     }),
 
   setPendingRoomData: (roomId, data) =>
@@ -131,9 +143,31 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
       else copy[roomId] = value
       return { pendingTurnSkeletons: copy }
     }),
+  markLocalSend: (roomId) =>
+    set((state) => ({
+      localSendSeqByRoom: {
+        ...state.localSendSeqByRoom,
+        [roomId]: (state.localSendSeqByRoom[roomId] ?? 0) + 1,
+      },
+    })),
+  markInitialHydrated: (roomId) =>
+    set((state) => ({
+      initialHydrationSeqByRoom: {
+        ...state.initialHydrationSeqByRoom,
+        [roomId]: (state.initialHydrationSeqByRoom[roomId] ?? 0) + 1,
+      },
+    })),
 }))
 
 /** Reactive hook that returns room-scoped flags with shallow equality. */
 export function useRoomFlags(roomId: string): RoomFlags {
   return useRoomUiStore(useShallow(s => s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS))
+}
+
+export function useLocalSendSeq(roomId: string): number {
+  return useRoomUiStore(s => s.localSendSeqByRoom[roomId] ?? 0)
+}
+
+export function useInitialHydrationSeq(roomId: string): number {
+  return useRoomUiStore(s => s.initialHydrationSeqByRoom[roomId] ?? 0)
 }

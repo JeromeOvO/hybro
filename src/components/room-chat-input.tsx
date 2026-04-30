@@ -876,9 +876,9 @@ export function RoomChatInput({
         <div
           ref={suggestionsRef}
           className={cn(
-            "absolute bottom-full left-4 right-4 mb-3 z-50",
+            "absolute bottom-full left-[var(--conversation-body-inset)] right-[var(--conversation-body-inset)] -mb-px z-50",
             "bg-popover backdrop-blur-xl",
-            "border border-border/50 shadow-xl rounded-xl",
+            "border border-border/50 shadow-xl rounded-t-xl rounded-b-none",
             "animate-in fade-in slide-in-from-bottom-3 duration-300"
           )}
         >

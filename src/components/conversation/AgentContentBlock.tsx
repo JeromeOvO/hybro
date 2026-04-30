@@ -11,7 +11,19 @@ interface AgentContentBlockProps {
   artifacts?: ArtifactData[]
 }
 
+function textOnlyArtifactContent(artifact: ArtifactData): string | null {
+  if (artifact.parts.length === 0) return null
+  if (!artifact.parts.every(part => part.kind === 'text')) return null
+  return artifact.parts.map(part => part.text ?? '').join('').trim()
+}
+
 export function AgentContentBlock({ agentName, content, isStreaming, showAttribution, artifacts }: AgentContentBlockProps) {
+  const normalizedContent = content.trim()
+  const displayArtifacts = artifacts?.filter(artifact => {
+    if (!normalizedContent) return true
+    return textOnlyArtifactContent(artifact) !== normalizedContent
+  })
+
   return (
     <div>
       {showAttribution && (
@@ -22,8 +34,8 @@ export function AgentContentBlock({ agentName, content, isStreaming, showAttribu
       <div className={isStreaming ? 'conversation-streaming-cursor' : ''} style={{ lineHeight: 1.8, fontSize: 14 }}>
         <MarkdownContent content={content} isStreaming={isStreaming} />
       </div>
-      {artifacts && artifacts.length > 0 && (
-        <ArtifactList artifacts={artifacts} />
+      {displayArtifacts && displayArtifacts.length > 0 && (
+        <ArtifactList artifacts={displayArtifacts} />
       )}
     </div>
   )

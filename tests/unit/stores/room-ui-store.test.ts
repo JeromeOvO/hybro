@@ -106,6 +106,74 @@ describe('RoomUiStore', () => {
     })
   })
 
+  describe('localSendSeq', () => {
+    it('increments from 0 to 1 to 2', () => {
+      const store = useRoomUiStore.getState()
+      expect(store.localSendSeqByRoom['room-1'] ?? 0).toBe(0)
+      store.markLocalSend('room-1')
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-1']).toBe(1)
+      useRoomUiStore.getState().markLocalSend('room-1')
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-1']).toBe(2)
+    })
+
+    it('is room-isolated', () => {
+      useRoomUiStore.getState().markLocalSend('room-1')
+      useRoomUiStore.getState().markLocalSend('room-1')
+      useRoomUiStore.getState().markLocalSend('room-2')
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-1']).toBe(2)
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-2']).toBe(1)
+    })
+
+    it('is deleted by resetRoom', () => {
+      useRoomUiStore.getState().markLocalSend('room-1')
+      useRoomUiStore.getState().markLocalSend('room-2')
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-1']).toBeUndefined()
+      expect(useRoomUiStore.getState().localSendSeqByRoom['room-2']).toBe(1)
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().markLocalSend('room-1')
+      useRoomUiStore.getState().markLocalSend('room-2')
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().localSendSeqByRoom).toEqual({})
+    })
+  })
+
+  describe('initialHydrationSeq', () => {
+    it('increments from 0 to 1 to 2', () => {
+      const store = useRoomUiStore.getState()
+      expect(store.initialHydrationSeqByRoom['room-1'] ?? 0).toBe(0)
+      store.markInitialHydrated('room-1')
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-1']).toBe(1)
+      useRoomUiStore.getState().markInitialHydrated('room-1')
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-1']).toBe(2)
+    })
+
+    it('is room-isolated', () => {
+      useRoomUiStore.getState().markInitialHydrated('room-1')
+      useRoomUiStore.getState().markInitialHydrated('room-1')
+      useRoomUiStore.getState().markInitialHydrated('room-2')
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-1']).toBe(2)
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-2']).toBe(1)
+    })
+
+    it('is deleted by resetRoom', () => {
+      useRoomUiStore.getState().markInitialHydrated('room-1')
+      useRoomUiStore.getState().markInitialHydrated('room-2')
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-1']).toBeUndefined()
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom['room-2']).toBe(1)
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().markInitialHydrated('room-1')
+      useRoomUiStore.getState().markInitialHydrated('room-2')
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().initialHydrationSeqByRoom).toEqual({})
+    })
+  })
+
   describe('pendingRoomData', () => {
     it('should store pending data for a room', () => {
       useRoomUiStore.getState().setPendingRoomData('room-1', {

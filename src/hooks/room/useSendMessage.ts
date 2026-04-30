@@ -86,6 +86,8 @@ export function useSendMessage(
       },
     ], 'optimistic')
 
+    useRoomUiStore.getState().markLocalSend(roomId)
+
     try {
       setSending(true)  // Show spinner during message creation & parsing
       lifecycle.setSendGuard(true)

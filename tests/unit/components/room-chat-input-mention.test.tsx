@@ -80,6 +80,25 @@ describe('RoomChatInput – @mention behavior', () => {
     expect(screen.getByText('Gamma Agent')).toBeTruthy()
   })
 
+  it('anchors the mention dropdown flush at the conversation body width', () => {
+    const { container } = renderInput()
+    const editor = getEditor(container)
+
+    typeInEditor(editor, '@')
+
+    const dropdown = screen.getByText('Mention an agent').closest('.absolute')
+
+    expect(dropdown).toBeTruthy()
+    expect(dropdown?.className).toContain('left-[var(--conversation-body-inset)]')
+    expect(dropdown?.className).toContain('right-[var(--conversation-body-inset)]')
+    expect(dropdown?.className).toContain('-mb-px')
+    expect(dropdown?.className).not.toContain('left-0')
+    expect(dropdown?.className).not.toContain('right-0')
+    expect(dropdown?.className).not.toContain('left-4')
+    expect(dropdown?.className).not.toContain('right-4')
+    expect(dropdown?.className).not.toContain('mb-3')
+  })
+
   it('should filter agents by text typed after @', () => {
     const { container } = renderInput()
     const editor = getEditor(container)
