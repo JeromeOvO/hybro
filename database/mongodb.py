@@ -380,6 +380,24 @@ class MongoDB:
             )
         return self.db.agent_capability_issues
 
+    @property
+    def runs_collection(self):
+        """Get runs collection for authoritative execution lifecycle state."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.runs
+
+    @property
+    def run_events_collection(self):
+        """Get run_events collection for append-only lifecycle events."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.run_events
+
     # agent management
     async def add_agent(self, agent: Agent) -> str:
         """
@@ -890,6 +908,33 @@ class MongoDB:
             {"$set": {"processing_message_id": None}},
         )
         return result.modified_count > 0
+
+    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
+        """Return non-terminal runs for a room, newest first."""
+        cursor = self.runs_collection.find(
+            {
+                "room_id": room_id,
+                "state": {"$in": ["queued", "processing", "awaiting_input"]},
+            }
+        ).sort("updated_at", -1)
+        return await cursor.to_list(length=None)
+
+    async def find_stale_non_terminal_runs(
+        self, *, stale_minutes: int, limit: int = 200
+    ) -> list[dict]:
+        """Runs stuck in a non-terminal state (watchdog)."""
+        cutoff = utcnow() - timedelta(minutes=stale_minutes)
+        cursor = (
+            self.runs_collection.find(
+                {
+                    "state": {"$in": ["queued", "processing", "awaiting_input"]},
+                    "updated_at": {"$lt": cutoff},
+                }
+            )
+            .sort("updated_at", 1)
+            .limit(limit)
+        )
+        return await cursor.to_list(length=limit)
 
     async def claim_user_message_for_processing(self, message_id: str) -> bool:
         """Atomically claim a user message for processing. Returns True if this call claimed it."""
@@ -2622,6 +2667,46 @@ class MongoDB:
             )
         except Exception as e:
             logger.error("Error creating capability issue indexes: %s", e)
+
+    async def create_run_lifecycle_indexes(self) -> None:
+        """Create indexes for runs and run_events collections."""
+        try:
+            await self.runs_collection.create_index(
+                [("run_id", 1)],
+                name="run_id_unique",
+                unique=True,
+            )
+            await self.runs_collection.create_index(
+                [("room_id", 1), ("state", 1), ("updated_at", -1)],
+                name="room_state_updated_at",
+            )
+            await self.runs_collection.create_index(
+                [("room_id", 1), ("client_request_id", 1), ("agent_id", 1)],
+                name="room_client_agent_idempotency",
+                unique=True,
+                partialFilterExpression={
+                    "client_request_id": {"$type": "string"},
+                    "agent_id": {"$type": "string"},
+                },
+            )
+
+            await self.run_events_collection.create_index(
+                [("event_id", 1)],
+                name="event_id_unique",
+                unique=True,
+            )
+            await self.run_events_collection.create_index(
+                [("run_id", 1), ("seq", 1)],
+                name="run_seq_unique",
+                unique=True,
+            )
+            await self.run_events_collection.create_index(
+                [("room_id", 1), ("ts", -1)],
+                name="room_ts",
+            )
+            logger.info("Run lifecycle indexes created on runs/run_events")
+        except Exception as e:
+            logger.error("Error creating run lifecycle indexes: %s", e)
 
 mongodb = MongoDB()
 

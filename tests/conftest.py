@@ -503,6 +503,7 @@ def mock_room_center():
     mock = MagicMock()
     mock.create_new_room = AsyncMock()
     mock.inquiry_room_setting = AsyncMock()
+    mock.inquiry_active_runs = AsyncMock()
     mock.inquiry_rooms_by_room_owner_id = AsyncMock()
     mock.update_room_agent_set = AsyncMock()
     mock.update_room_name = AsyncMock()

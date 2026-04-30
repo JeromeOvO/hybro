@@ -41,6 +41,7 @@ from models.request import (
 )
 from models.response import (
     RoomAgentRef,
+    RoomCenterActiveRunsResponse,
     RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -212,6 +213,22 @@ class RoomServices:
             normalized[agent_id] = str(agent_name)
 
         return normalized
+
+    @staticmethod
+    def _active_run_payloads_from_raw(active_runs_raw: list) -> list[dict]:
+        """Normalize Mongo run documents to ActiveRunRef-compatible dicts."""
+        return [
+            {
+                "run_id": r.get("run_id"),
+                "state": r.get("state"),
+                "trigger_message_id": r.get("trigger_message_id"),
+                "agent_id": r.get("agent_id"),
+                "seq": r.get("seq", 0),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in active_runs_raw
+            if isinstance(r, dict) and r.get("run_id") and r.get("state")
+        ]
 
     async def _resolve_membership_input(
         self,
@@ -471,16 +488,57 @@ class RoomServices:
             resolved_agents, room_default_status = await self._resolve_room_agent_refs(
                 room.room_agent_set, viewer_user_id=request.requesting_user_id
             )
+            active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+                room.room_id
+            )
+            active_runs = self._active_run_payloads_from_raw(active_runs_raw)
 
             return RoomCenterRoomSettingResponse(
                 room_id=room.room_id,
                 room=room,
                 resolved_agents=resolved_agents,
                 room_default_status=room_default_status,
+                active_runs=active_runs,
                 success=True,
                 error=None,
                 status_code=200,
             )
+
+    async def inquiry_active_runs(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterActiveRunsResponse:
+        """Return non-terminal runs for a room (same run shape as inquiry_room_setting)."""
+        if request.room_id is None:
+            return RoomCenterActiveRunsResponse(
+                room_id=None,
+                active_runs=None,
+                success=False,
+                error="Room id is required",
+                status_code=400,
+            )
+
+        room_id = request.room_id
+        room = await self.database_service.get_room_by_room_id(room_id)
+        if room is None:
+            return RoomCenterActiveRunsResponse(
+                room_id=None,
+                active_runs=None,
+                success=False,
+                error="Room not found",
+                status_code=404,
+            )
+
+        active_runs_raw = await self.database_service.get_active_runs_by_room_id(
+            room.room_id
+        )
+        active_runs = self._active_run_payloads_from_raw(active_runs_raw)
+        return RoomCenterActiveRunsResponse(
+            room_id=room.room_id,
+            active_runs=active_runs,
+            success=True,
+            error=None,
+            status_code=200,
+        )
 
     async def inquiry_rooms_by_room_owner_id(
         self, request: RoomCenterRoomSettingRequest

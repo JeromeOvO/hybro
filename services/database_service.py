@@ -796,6 +796,26 @@ class DatabaseService:
             )
             return False
 
+    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict[str, Any]]:
+        """Get active (non-terminal) runs for a room."""
+        try:
+            return await self.mongo.get_active_runs_by_room_id(room_id)
+        except Exception as e:
+            logger.error(f"Failed to get active runs for room {room_id}: {str(e)}")
+            return []
+
+    async def find_stale_non_terminal_runs(
+        self, stale_minutes: int, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Runs in non-terminal state with updated_at older than stale_minutes."""
+        try:
+            return await self.mongo.find_stale_non_terminal_runs(
+                stale_minutes=stale_minutes, limit=limit
+            )
+        except Exception as e:
+            logger.error("Failed to list stale non-terminal runs: %s", e)
+            return []
+
     async def claim_user_message_for_processing(self, message_id: str) -> bool:
         """Atomically claim a user message for processing."""
         try:

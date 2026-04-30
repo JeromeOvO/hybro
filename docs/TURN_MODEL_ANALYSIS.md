@@ -27,6 +27,22 @@ Remaining references in this document that mention `turn_events`/`turn_event` sh
 
 ---
 
+## Cross-Doc Alignment (2026-04-29)
+
+To align with `docs/EVENT_SOURCED_TURN_LIFECYCLE_REFACTOR_DESIGN.md`:
+
+- Run lifecycle shadow persistence (`runs` + `run_events`) and projector-owned `processing_message_id` mirror are now the active backend lifecycle path.
+- Non-SSE task notification paths no longer carry an opt-in `send_processing_status` boolean; lifecycle emission is unified.
+- `turn_events` are not part of active backend persistence/runtime flow.
+
+Still pending (strategic items from this analysis):
+
+- Memory-lane `turn_id` naming collision cleanup (`turn_id` -> `message_id`/`history_item_id` style naming).
+- Full execution-layer migration from residual `turn_id` threading to `run_id` + `parent_message_id`.
+- Historical message graph backfill and complete write-path population (`parent_message_id`, `run_id`).
+
+---
+
 ## TL;DR
 
 1. **Turn is the right concept for UI grouping, but the wrong concept for a data / protocol primitive** given Hybro's trajectory (multi-agent rooms, A2A delegation, proactive agents, long-horizon tasks).
@@ -405,17 +421,17 @@ Endgame:
 
 **Multi-quarter, five phases. Do not start Phase 2+ until the stabilization plan is in production.**
 
-### Phase 0 — Stabilize (now)
+### Phase 0 — Stabilize (completed)
 
 Ship `hybro-frontend/PLAN-turn-store-single-writer.md`. Fixes the duplication bug, gives a stable `turn_id`, a single writer, and a backend-authoritative event stream. **This is required regardless of destination** — a Run migration is much safer to execute on top of a stable current system than on top of a racy one.
 
-### Phase 1 — Contain (this quarter, after Phase 0 lands)
+### Phase 1 — Contain (in progress)
 
 - Adopt the "don't expand Turn" architecture rule (§9).
 - **Rename memory-lane `turn_id` → `message_id`** (in `ConversationTurn`, `MemorySearchResult`, `StoredContent`, `RoomSummary.updated_after_*`, `RoomFact.source_*`, and all service call sites). Isolated subsystem, medium-effort, high-value (kills the name collision).
 - Audit new PRs against the architecture rule to prevent further sprawl.
 
-### Phase 2 — RFC (next quarter)
+### Phase 2 — RFC / hardening plan (next)
 
 Write a Run-model RFC. Define:
 - `Run` schema (id, parent_run_id, parent_message_id, agent_id, status, events, timestamps)
@@ -425,9 +441,9 @@ Write a Run-model RFC. Define:
 
 Prototype against A2A and proactive use cases to validate the model before committing.
 
-### Phase 3 — Dual-write (quarter after RFC)
+### Phase 3 — Dual-write hardening (quarter after RFC)
 
-Backend dual-writes `runs` + `run_events` alongside `turn_events`. Frontend can read from either source (flag-gated). No user-visible change. Parity-check suite runs for weeks.
+Backend dual-write for `runs` + `run_events` is active in lifecycle paths. Focus here is hardening (idempotency matrix, transaction topology, parity/observability export) and completing residual `turn_id` execution-lane migration.
 
 ### Phase 4 — Flip
 
@@ -451,8 +467,8 @@ Adopt and enforce this rule in review (copy into `docs/ARCHITECTURE.md` or equiv
 > - `hooks/turn/*`
 >
 > Backend:
-> - `models/turn_event.py`, `services/turn_event_service.py`, `api/turns.py`
-> - `services/hitl_service.py` (HITL lifecycle is chat-scoped today; re-homes under Run later)
+> - `services/hitl_service.py` (HITL lifecycle is chat-scoped today; re-homes under Run/message graph later)
+> - UI-facing compatibility handling where `turn_id` still exists on message models during migration
 >
 > **🚫 `turn_id` must not appear in:**
 >
@@ -517,10 +533,10 @@ Those are additive edits; the doc doesn't need a rewrite.
 | Frontend store (`stores/turn-event-store/*`) | Event-sourced Turn primitive | Replaced by selectors over `runs[]` + `messages[]` |
 | Bridge (`useMessageStoreSync`) | Reconciles two stores | **Deleted** |
 | SSE protocol | `turn_event` as primary | `run_event` as primary; Turn-grouping is a UI concept |
-| Backend chat lane (`models/turn_event.py`, `api/turns.py`) | Primary persistence | **Deleted** (Phase 5) |
+| Backend chat lane (`models/turn_event.py`, `api/turns.py`) | Primary persistence (historical) | **Already deleted** |
 | Backend orchestration (`QueueExecutor`, etc.) | Knows `turn_id` | Knows `run_id` + `parent_message_id` |
 | Backend messages (`RoomAgentMessage.turn_id`) | Stored annotation | Renamed to `parent_message_id` |
-| Backend memory (`ConversationTurn.turn_id`, etc.) | Overloaded name | Renamed to `message_id` (Phase 1) |
+| Backend memory (`ConversationTurn.turn_id`, etc.) | Overloaded name | Pending rename to `message_id` / `history_item_id` (Phase 1 target) |
 | External protocols (a2a-adapter, hub, webhooks) | Clean | Stay clean |
 
 ---

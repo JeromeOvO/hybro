@@ -12,6 +12,7 @@ This module provides a background job that:
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -33,6 +34,7 @@ from services.a2a_constants import (
     TERMINAL_STATES,
     is_terminal_state,
 )
+from services.run_metrics import increment_counter
 from services.a2a_service import a2a_service
 from services.database_service import db_service
 
@@ -210,6 +212,58 @@ class StaleTaskChecker:
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
+        # 8. Fail runs stuck without a terminal transition (run lifecycle watchdog).
+        await self._fail_stale_runs()
+
+    async def _fail_stale_runs(self) -> None:
+        """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
+        if os.environ.get("FEATURE_RUN_WATCHDOG", "1").strip().lower() in (
+            "0",
+            "false",
+            "off",
+        ):
+            return
+        stale_mins = int(os.environ.get("RUN_WATCHDOG_STALE_MINUTES", "90"))
+        try:
+            stale = await db_service.find_stale_non_terminal_runs(stale_mins, limit=100)
+        except Exception as e:
+            logger.error("run watchdog: failed to list stale runs: %s", e)
+            return
+        if not stale:
+            return
+
+        from services.run_command_handler import run_command_handler
+        from services.run_projector import sync_room_processing_mirror
+        from services.sse_services import sse_manager
+        from services.a2a_constants import SSEProcessingStatus
+
+        for doc in stale:
+            room_id = str(doc.get("room_id") or "")
+            run_id = str(doc.get("run_id") or "")
+            if not room_id or not run_id:
+                continue
+            try:
+                await run_command_handler.append_run_timeout_failure(
+                    room_id, run_id, stale_minutes=stale_mins
+                )
+                increment_counter("run_watchdog_forced_failure_total")
+                await sync_room_processing_mirror(room_id)
+                tid = doc.get("trigger_message_id") or run_id
+                await sse_manager.send_processing_status(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    str(tid),
+                    details="Run watchdog: stale non-terminal run timed out",
+                )
+            except Exception as e:
+                logger.error(
+                    "run watchdog: failed to timeout run_id=%s room=%s: %s",
+                    run_id,
+                    room_id,
+                    e,
+                    exc_info=True,
+                )
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -272,7 +326,6 @@ class StaleTaskChecker:
                     state=TaskState.canceled,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
-                    send_processing_status=True,
                 )
                 return
 
@@ -316,7 +369,6 @@ class StaleTaskChecker:
                     state=new_state,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
-                    send_processing_status=True,
                 )
             else:
                 # Still working - timestamp already touched by update_task_on_message
@@ -482,7 +534,6 @@ class StaleTaskChecker:
             state=TaskState.failed,
             room_id=msg.room_id,
             user_id=msg.user_id or "",
-            send_processing_status=True,
         )
 
     async def _cleanup_stuck_processing_status(self) -> None:

@@ -83,6 +83,7 @@ PROCESSING_DONE_STATUSES = {
     SSEProcessingStatus.FAILED,
     SSEProcessingStatus.REJECTED,
     SSEProcessingStatus.RATE_LIMITED,
+    SSEProcessingStatus.ERROR,
 }
 
 

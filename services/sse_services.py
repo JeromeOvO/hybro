@@ -16,6 +16,8 @@ from config.settings import settings
 from infrastructure.event_broker import EventBroker
 from services.a2a_constants import PROCESSING_DONE_STATUSES, SSEProcessingStatus
 from services.database_service import db_service
+from services.run_command_handler import run_command_handler, run_event_sse_enabled
+from services.run_projector import sync_room_processing_mirror
 
 if TYPE_CHECKING:
     from infrastructure.redis_service import RedisService
@@ -527,12 +529,30 @@ class SSEManager:
                     logger.warning("Redis terminal dedup check failed: %s", e)
             self._terminal_status_sent[dedup_key] = status  # L1 cache
 
-        # Persist processing state to room for page refresh recovery
-        # Set processing_message_id when processing starts, clear it when done
-        if status == SSEProcessingStatus.PROCESSING and message_id:
-            await db_service.update_room_processing_status(room_id, message_id)
-        elif status in PROCESSING_DONE_STATUSES and message_id:
-            await db_service.clear_room_processing_status_if_matches(room_id, message_id)
+        # Persist run lifecycle, then project room processing mirror from runs.
+        last_run_event_payload: dict | None = None
+        last_run_event_payload = await run_command_handler.record_processing_status(
+            room_id=room_id,
+            status=status,
+            message_id=message_id,
+            client_request_id=client_request_id,
+            details=details,
+        )
+        await sync_room_processing_mirror(room_id)
+
+        if run_event_sse_enabled() and last_run_event_payload:
+            await self.broadcast_to_room(
+                room_id,
+                "run_event",
+                {
+                    "event_id": last_run_event_payload.get("event_id"),
+                    "run_id": last_run_event_payload.get("run_id"),
+                    "seq": last_run_event_payload.get("seq"),
+                    "type": last_run_event_payload.get("type"),
+                    "payload": last_run_event_payload.get("payload") or {},
+                    "correlation_id": client_request_id,
+                },
+            )
 
         # Send SSE event to connected clients
         resolved_client_request_id = await self._resolve_client_request_id(

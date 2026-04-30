@@ -114,6 +114,7 @@ async def lifespan(app: FastAPI):
         await mongodb.create_context_memory_indexes()
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
+        await mongodb.create_run_lifecycle_indexes()
         if settings.webhook_signing_key:
             await mongodb.create_task_tracking_indexes()
             from services.database_service import db_service

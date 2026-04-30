@@ -292,7 +292,6 @@ class TestWebhookTransportNormalize:
         event = wt._task_to_event(task, msg)
         assert event.kind == "response"
         assert event.text == "done"
-        assert event.send_processing_status is True
 
     def test_failed_task(self):
         wt = _make_webhook_transport()
