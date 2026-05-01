@@ -1756,6 +1756,7 @@ class RoomServices:
         agents: list | None = None,
         conversation_context: str | None = None,
         token: CancellationToken | None = None,
+        client_request_id: str | None = None,
     ) -> ParseResult:
         """
         Parse user message
@@ -1831,7 +1832,7 @@ class RoomServices:
             room_id,
             user_id=user_id,
             extend_info=extend_info,
-            client_request_id=request.client_request_id,
+            client_request_id=client_request_id,
         )
 
         return ParseResult(success=True) if agent_messages else ParseResult(success=False)
@@ -2090,6 +2091,7 @@ class RoomServices:
                 agents=agents,
                 conversation_context=conversation_context,
                 token=token,
+                client_request_id=request.client_request_id,
             )
 
         if not parse_result.success:

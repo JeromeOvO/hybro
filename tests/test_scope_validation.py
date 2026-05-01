@@ -503,3 +503,37 @@ class TestClientRequestIdPropagation:
         room_center._send_processing_status.assert_called_once_with(
             "room-1", "msg-real-456", "cr-123"
         )
+
+    @pytest.mark.asyncio
+    async def test_parse_user_message_direct_chat_does_not_reference_request_scope(self, room_center):
+        room_center._generate_agent_messages_based_on_parsed_result = AsyncMock(
+            return_value=[MagicMock()]
+        )
+
+        result = await room_center.parse_user_message(
+            "room-1",
+            "msg-1",
+            "hello",
+            {"a1": "Alpha"},
+            user_id="user-1",
+        )
+
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_parse_user_message_passes_client_request_id_to_agent_messages(self, room_center):
+        room_center._generate_agent_messages_based_on_parsed_result = AsyncMock(
+            return_value=[MagicMock()]
+        )
+
+        await room_center.parse_user_message(
+            "room-1",
+            "msg-1",
+            "hello",
+            {"a1": "Alpha"},
+            user_id="user-1",
+            client_request_id="cr-456",
+        )
+
+        call_kwargs = room_center._generate_agent_messages_based_on_parsed_result.call_args.kwargs
+        assert call_kwargs["client_request_id"] == "cr-456"
