@@ -31,7 +31,7 @@ Remaining references in this document that mention `turn_events`/`turn_event` sh
 
 To align with `docs/EVENT_SOURCED_TURN_LIFECYCLE_REFACTOR_DESIGN.md`:
 
-- Run lifecycle shadow persistence (`runs` + `run_events`) and projector-owned `processing_message_id` mirror are now the active backend lifecycle path.
+- Run lifecycle shadow persistence (`runs` + `run_events`) is the active backend lifecycle path; **`rooms.processing_message_id`** is legacy (not written on lifecycle; optional null repair).
 - Non-SSE task notification paths no longer carry an opt-in `send_processing_status` boolean; lifecycle emission is unified.
 - `turn_events` are not part of active backend persistence/runtime flow.
 

@@ -16,6 +16,7 @@ from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
+from models.run import NON_TERMINAL_RUN_STATE_VALUES
 from models.supervisor_v2 import TrajectoryStatus
 from models.task import BaseTask, MetaTask, TaskSession
 
@@ -885,39 +886,27 @@ class MongoDB:
         )
         return result.modified_count >= 0
 
-    async def update_room_processing_status(
-        self, room_id: str, processing_message_id: str | None
-    ) -> bool:
-        """
-        Update the processing_message_id field on a room.
-        Used to track which user message is currently being processed.
-        Set to message_id when processing starts, None when complete/cancelled/failed.
-        """
-        result = await self.rooms_collection.update_one(
-            {"room_id": room_id},
-            {"$set": {"processing_message_id": processing_message_id}},
-        )
-        return result.modified_count >= 0
-
-    async def clear_room_processing_status_if_matches(
-        self, room_id: str, message_id: str
-    ) -> bool:
-        """CAS clear: only clear processing_message_id if it matches the given message_id."""
-        result = await self.rooms_collection.update_one(
-            {"room_id": room_id, "processing_message_id": message_id},
-            {"$set": {"processing_message_id": None}},
-        )
-        return result.modified_count > 0
-
     async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
         """Return non-terminal runs for a room, newest first."""
         cursor = self.runs_collection.find(
             {
                 "room_id": room_id,
-                "state": {"$in": ["queued", "processing", "awaiting_input"]},
+                "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
             }
         ).sort("updated_at", -1)
         return await cursor.to_list(length=None)
+
+    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
+        """Distinct room_ids that have at least one non-terminal run (compaction / skip sets)."""
+        ids = await self.runs_collection.distinct(
+            "room_id",
+            {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
+        )
+        out: list[str] = []
+        for rid in ids:
+            if rid:
+                out.append(str(rid))
+        return out
 
     async def find_stale_non_terminal_runs(
         self, *, stale_minutes: int, limit: int = 200
@@ -927,7 +916,7 @@ class MongoDB:
         cursor = (
             self.runs_collection.find(
                 {
-                    "state": {"$in": ["queued", "processing", "awaiting_input"]},
+                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
                     "updated_at": {"$lt": cutoff},
                 }
             )

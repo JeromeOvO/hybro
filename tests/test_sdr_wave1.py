@@ -92,43 +92,6 @@ class TestClaimOrReclaimUserMessage:
         assert result is False
 
 
-class TestClearRoomProcessingStatusIfMatches:
-    """Tests for CAS clear of processing_message_id."""
-
-    @pytest.mark.asyncio
-    async def test_clears_when_message_id_matches(self):
-        from database.mongodb import MongoDB
-
-        db = object.__new__(MongoDB)
-        mock_collection = MagicMock()
-        mock_result = MagicMock()
-        mock_result.modified_count = 1
-        mock_collection.update_one = AsyncMock(return_value=mock_result)
-        db._rooms_collection = mock_collection
-        type(db).rooms_collection = property(lambda self: self._rooms_collection)
-
-        result = await db.clear_room_processing_status_if_matches("r1", "m1")
-        assert result is True
-
-        call_args = mock_collection.update_one.call_args
-        assert call_args[0][0] == {"room_id": "r1", "processing_message_id": "m1"}
-
-    @pytest.mark.asyncio
-    async def test_noop_when_message_id_does_not_match(self):
-        from database.mongodb import MongoDB
-
-        db = object.__new__(MongoDB)
-        mock_collection = MagicMock()
-        mock_result = MagicMock()
-        mock_result.modified_count = 0
-        mock_collection.update_one = AsyncMock(return_value=mock_result)
-        db._rooms_collection = mock_collection
-        type(db).rooms_collection = property(lambda self: self._rooms_collection)
-
-        result = await db.clear_room_processing_status_if_matches("r1", "wrong-id")
-        assert result is False
-
-
 class TestIdempotencyGuardInRoomMessageCenter:
     """Tests for the idempotency guard in process_room_user_message."""
 

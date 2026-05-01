@@ -1,6 +1,6 @@
 # Run + Message Graph Lifecycle Refactor Design
 
-> **Status:** **Phase A / C / D lifecycle authority cleanup (shipped 2026-04)** — shadow dual-write + projector-owned room mirror (default path), optional **`run_event` SSE**, run watchdog, migration script for indexes, message graph fields on `RoomMessage`, and removal of obsolete `send_processing_status` task-plumbing flags. Remaining major work is reducer/idempotency matrix hardening, transactions by deployment topology, and observability export wiring.  
+> **Status:** **Phase A / C / D lifecycle authority cleanup (shipped 2026-04)** — shadow dual-write, optional **`run_event` SSE**, run watchdog, migration script for indexes, message graph fields on `RoomMessage`, removal of obsolete `send_processing_status` task-plumbing flags, and **2026-04-29: no DB writes to `rooms.processing_message_id`** (runs-only; legacy field cleared by `stale_task_checker` + optional migration script). Remaining major work is reducer/idempotency matrix hardening, transactions by deployment topology, and observability export wiring.  
 > **Date:** 2026-04-28 (updated 2026-04-29)  
 > **Owners:** Backend + Frontend platform  
 > **Scope:** `multi-agents-backend` + `hybro-frontend`  
@@ -17,15 +17,15 @@ Use this as the PR sequence; each item should land with tests + metrics where no
 2. **[~] Reducer:** `services/run_reducer.py` — `ensure_transition_allowed`, `RunTransitionError`, `next_state_for_terminal_event` (illegal-transition guard used by `RunCommandHandler`). **Not** a standalone `apply_run_event(state, event) -> state` reducer over full event types; tests in `tests/test_run_reducer.py`.
 3. **[x] Command handler:** `services/run_command_handler.py` (`RunCommandHandler`) appends `run_events` and updates `runs` head from unified lifecycle status semantics. `services/run_lifecycle_service.py` is a **thin facade** delegating to the handler.
 4. **[x] Dual-write (Phase A full path coverage):** Lifecycle transitions from dispatch/HITL/task terminal+interactive edges route through `RunCommandHandler` via the unified lifecycle emission path (`send_processing_status` in SSE manager and mapped task-state notifications).
-5. **[x] Mirror authority:** lifecycle persist path projects mirror via `services/run_projector.sync_room_processing_mirror(room_id)` applying §N.1. `modules/RoomMessageCenter.py` terminal/lock paths also sync via projector.
+5. **[x] Mirror removal:** `rooms.processing_message_id` is **not** persisted on lifecycle paths; **`run_projector.compute_processing_message_id_mirror`** remains a **pure** §N.1 helper for tests / optional read shims. Stale values are nulled when no non-terminal runs exist (`stale_task_checker`, compaction skip-set, `database/migration/null_legacy_room_processing_message_id.py`).
 6. **[~] SSE:** **`processing_status`** remains the primary client envelope. Optional **`run_event`** broadcast **after** successful persist when **`FEATURE_RUN_EVENT_SSE=1`** (`services/sse_services.py`). Frontend: **`NEXT_PUBLIC_FEATURE_RUN_EVENT_SSE=1`** → terminal `run_event` subtypes trigger `reconcileWithDb` (`hybro-frontend` SSE dispatcher).
 7. **[x] API (reconcile):** **Option A** — `active_runs` embedded on **`POST /api/v1/roomCenter/inquiryRoomSetting`** response (`RoomCenterRoomSettingResponse`). Dedicated **`POST /api/v1/roomCenter/inquiryActiveRuns`** for lightweight poll (`RoomCenterActiveRunsResponse`). **Not** `GET /api/v1/rooms/:roomId/runs` (spec alternative deferred).
-8. **[~] Shadow metrics:** Optional **log sampling** when **`FEATURE_RUN_PARITY_LOG=1`** — `run_projector` logs current vs desired mirror when they differ. **Not** Prometheus counters / dashboard (§10) yet.
+8. **[ ] Shadow metrics:** **`FEATURE_RUN_PARITY_LOG`** / projector drift logging **removed** with mirror writes; replace with run-state metrics if needed (§10).
 9. **[x] Frontend (Phase B/C path):** Restore / safety-net paths use **`active_runs`** and call **`inquiryActiveRuns`** where needed (`hybro-frontend`: `useProcessingRestore`, `useRoomSSEConnection`, `lib/api/room.ts`).
 10. **[x] Frontend:** Reconnect/restore processing authority is runs-first (`active_runs` + reconcile); `run_event` terminal reconciliation is integrated.
 11. **[x] Phase C:** Competing room-level lifecycle authority removed; processing transitions use centralized lifecycle methods and room UI reads use narrow selectors (`useRoomProcessing` + per-flag selectors) instead of broad flag objects.
-12. **[x] Watchdog:** `jobs/stale_task_checker.py` step **`_fail_stale_runs`**: **`find_stale_non_terminal_runs`** → **`append_run_timeout_failure`** → mirror sync → lifecycle failed status emission. Gated by **`FEATURE_RUN_WATCHDOG`** (default on), **`RUN_WATCHDOG_STALE_MINUTES`** (default `90`). Distinct from older “stuck `processing_message_id`” cleanup in the same job.
-13. **[x] Phase D:** `processing_message_id` demoted to projector-derived legacy mirror; lifecycle authority is run-based.
+12. **[x] Watchdog:** `jobs/stale_task_checker.py` step **`_fail_stale_runs`**: **`find_stale_non_terminal_runs`** → **`append_run_timeout_failure`** → lifecycle failed status emission (no room mirror write). Gated by **`FEATURE_RUN_WATCHDOG`** (default on), **`RUN_WATCHDOG_STALE_MINUTES`** (default `90`). Distinct from legacy-field cleanup in the same job (**`_cleanup_stuck_processing_status`**: null `processing_message_id` when **no** non-terminal runs).
+13. **[x] Phase D:** `processing_message_id` is a **legacy** Mongo field (optional null repair); lifecycle authority is **`runs` / `run_events`** only.
 14. **[x] Docs:** **`docs/ARCHITECTURE.md`** + this file track rollout truth.
 15. **[x] Ops migration:** `scripts/migrations/run_run_lifecycle_indexes.py` + `scripts/migrations/README.md` — idempotent index ensure for deploys without relying on app startup alone.
 16. **[~] Message graph:** `models/room.py` — **`parent_message_id`**, **`run_id`** on **`RoomMessage`** (optional fields). Backfill from `turn_id` / population on write paths still **deferred** (see §5.4).
@@ -102,9 +102,9 @@ These choices remove ambiguity from design review (multi-run mirror, idempotency
 
 ### N.3 Transaction ordering (dual-write)
 
-- **Preferred:** one **MongoDB multi-document transaction** per lifecycle step: append `run_event(s)` → update `runs` head → update `room.processing_message_id` (mirror) → **commit** → then emit SSE (after commit).
+- **Preferred:** one **MongoDB multi-document transaction** per lifecycle step: append `run_event(s)` → update `runs` head → **commit** → then emit SSE (after commit). **`rooms.processing_message_id` is not** part of the transactional write set; busy state is **`runs`** only.
 - **Ops note:** multi-document transactions require a **replica set** (not standalone `mongod` in some dev setups). Document or script dev clusters accordingly; where transactions are unavailable, use **§N.3** fallback ordering only.
-- **If a path cannot use a transaction:** strict order **(1)** persist `run_events` + `runs`, **(2)** mirror + legacy-compatible `processing_status` SSE. If **(2)** fails after **(1)** committed, a **projector repair** pass (cron, next room read, or explicit reconcile job) must re-derive mirror from `runs`—never leave runs terminal while mirror implies busy without a follow-up write.
+- **If a path cannot use a transaction:** strict order **(1)** persist `run_events` + `runs`, **(2)** legacy-compatible `processing_status` SSE. If **(2)** fails after **(1)** committed, clients reconcile from **`runs` / `active_runs`**; any stale **`processing_message_id`** in Mongo is cleared by **`stale_task_checker._cleanup_stuck_processing_status`** or the **`null_legacy_room_processing_message_id`** migration when there are no non-terminal runs.
 
 ### N.4 `seq` / replay
 
@@ -114,17 +114,17 @@ These choices remove ambiguity from design review (multi-run mirror, idempotency
 ### N.5 Parse failure and “no run”
 
 - **No persisted user message** (fail before persist): **no `runs` row** in v1; HTTP error + client optimistic rollback.
-- **User message persisted**, then failure on parse/selection/dispatch: append **`run_failed`** on the run(s) tied to `trigger_message_id = user_message.message_id` (and per-agent runs as applicable), then apply terminal mirror rules.
+- **User message persisted**, then failure on parse/selection/dispatch: append **`run_failed`** on the run(s) tied to `trigger_message_id = user_message.message_id` (and per-agent runs as applicable), then apply terminal **run** state (§N.1 applies only if you still compute a transient display value from `runs`).
 
 ### N.6 SSE and room mutation consolidation
 
 **As implemented (2026-04):** `services/sse_services.py` → **`SSEManager.send_processing_status`**:
 
 - **Dual-write:** `RunCommandHandler.record_processing_status` runs for every path (kill-switch **`FEATURE_RUN_DUAL_WRITE`**).
-- **Mirror:** lifecycle status emission always projects room mirror via **`sync_room_processing_mirror(room_id)`** after persist (§N.1). Legacy direct room writes in this path were removed.
+- **Room mirror:** there is **no** post-persist write to **`rooms.processing_message_id`**; busy truth is **`runs`** (and **`active_runs`** on room API). Legacy Mongo values may remain until the watchdog / migration nulls them.
 - **`run_event` SSE:** If **`FEATURE_RUN_EVENT_SSE`** is on and the handler returns a payload, broadcast **`run_event`** **before** the usual **`processing_status`** SSE (both after DB commit of the run row).
 
-**Current state:** non-SSE task notification call sites no longer carry an opt-in `send_processing_status` boolean; mapped task states emit lifecycle status unconditionally through the same writer path. Continue guarding against direct room mirror writes outside projector sync points.
+**Current state:** non-SSE task notification call sites no longer carry an opt-in `send_processing_status` boolean; mapped task states emit lifecycle status unconditionally through the same writer path.
 
 ### N.7 HTTP authorization
 
@@ -140,10 +140,7 @@ flowchart LR
   runCommandHandler --> runEvents[(run_events)]
   runCommandHandler --> runs[(runs head)]
   runCommandHandler --> messages[(messages)]
-  runEvents --> projector[RunProjector]
-  runs --> projector
-  projector --> roomMirror[room.processing_message_id mirror]
-  projector --> sseFanout[SSE]
+  runs --> sseFanout[SSE]
   runs --> roomApi[Room / Runs API]
   roomApi --> fe[Frontend]
   messages --> fe
@@ -151,7 +148,7 @@ flowchart LR
   runs --> turnVM
 ```
 
-*Note:* `RunCommandHandler` persists `run_events` and the materialized `runs` head. **`RunProjector`** (`run_projector.py`) recomputes **`processing_message_id`** from active runs (§N.1); it does **not** emit SSE by itself — **`SSEManager`** emits **`processing_status`** and optional **`run_event`** after persistence.
+*Note:* `RunCommandHandler` persists `run_events` and the materialized `runs` head. **`SSEManager`** emits **`processing_status`** and optional **`run_event`** after persistence. **`run_projector.compute_processing_message_id_mirror`** is a **pure** §N.1 helper only (no DB writes).
 
 ---
 
@@ -260,17 +257,16 @@ Minimum fields (extend as needed for agents/HITL):
 1. Validate transition against current `runs.state` via **`ensure_transition_allowed`** (`run_reducer.py`).
 2. Insert `run_events` row with next `seq` (duplicate `seq` / `event_id` → no-op or skip per handler logic).
 3. Update `runs` head document.
-4. **Mirror / SSE:** caller orchestrates — **`sse_services`** calls **`sync_room_processing_mirror`** after persist; **`RunLifecycleService`** is a **facade** that forwards **`record_processing_status`** to this handler only.
+4. **SSE:** caller orchestrates — **`sse_services`** calls **`record_processing_status`** then optional **`run_event`** + **`processing_status`** broadcast; **`RunLifecycleService`** is a **facade** that forwards **`record_processing_status`** to this handler only.
 
 **Forbidden (target):** Any other module writing `run_events` or mutating `runs.state` directly. **Today:** grep for `runs_collection` / `run_events_collection` outside **`run_command_handler.py`** before claiming exclusivity.
 
-### 6.2 `processing_message_id` mirror (Phase A–C)
+### 6.2 `processing_message_id` (legacy field)
 
 | Phase | Behavior |
 |-------|----------|
-| A | Projector updates mirror per **§N.1** (deterministic `trigger_message_id` when multiple active runs); clears when **no** active runs |
-| B–C | Legacy clients may still read this field; server maintains it for compatibility/rollback while **new** clients use `active_runs` |
-| D | Optional: remove field or make read-only computed in API layer |
+| Shipped | **No lifecycle writes** to `rooms.processing_message_id`; **`runs`** are authoritative. Optional **null repair**: `stale_task_checker._cleanup_stuck_processing_status`, compaction uses **`get_room_ids_with_non_terminal_runs`**, one-shot **`database/migration/null_legacy_room_processing_message_id.py`**. |
+| Future | **`$unset`** field + drop from API models when integrators are clear |
 
 ### 6.3 Failure safety
 
@@ -343,7 +339,7 @@ Rules:
 
 | Today (conceptual) | Run layer |
 |--------------------|-----------|
-| `processing_status` + message id | Primary client signal; drives **`RunCommandHandler`**. Mirror is projector-derived via `sync_room_processing_mirror`. **Truth** for multi-run busy = **`active_runs`** (§N.1). |
+| `processing_status` + message id | Primary client signal; drives **`RunCommandHandler`**. **Truth** for multi-run busy = **`active_runs`** / **`runs`** (§N.1 pure helper only for legacy display if needed). |
 | `run_event` (optional) | Additive envelope after append when **`FEATURE_RUN_EVENT_SSE`**; clients may reconcile on terminal types. |
 | Task / slot streaming | Can remain separate; **run** still owns terminal |
 
@@ -357,8 +353,8 @@ Rules:
 
 - [x] All targeted lifecycle transitions append run events + update `runs` through the unified lifecycle status path (SSE manager + task/HITL notification mappings + watchdog timeout path).
 - [x] **Shadow** append + `runs` head update for transitions on that path via **`RunCommandHandler`** (`services/run_command_handler.py`), invoked from **`run_lifecycle_service`** facade and **`sse_services`**. Kill-switch: **`FEATURE_RUN_DUAL_WRITE=0`** disables persistence (default on when unset).
-- [x] **`processing_message_id` from projector** — mirror derives via **`sync_room_processing_mirror`** after each relevant lifecycle status emission (and post-lock/terminal in **`RoomMessageCenter`**).
-- [~] Parity **logging** — **`FEATURE_RUN_PARITY_LOG=1`** samples drift (see `run_projector`). Dashboard counters (§10) still **[ ]**.
+- [x] **`processing_message_id` mirror writes removed** — no **`sync_room_processing_mirror`** / **`update_room_processing_status`** on lifecycle, compaction, or watchdog paths.
+- [x] Parity **logging** removed with mirror writes (**`FEATURE_RUN_PARITY_LOG`** obsolete). Dashboard counters (§10) still **[ ]**.
 
 **DoD:** 7+ days parity ≥ 99.9% in staging; zero unexplained mismatches in P1 triage.
 
@@ -380,7 +376,7 @@ Rules:
 ### Phase D — Legacy cleanup
 
 - [x] Stop relying on legacy `send_processing_status` task-plumbing flags (`AgentEvent.send_processing_status`, notify call-site booleans).
-- [x] Demote room-only lifecycle authority to projector-derived compatibility mirror (`processing_message_id`).
+- [x] Demote room-only lifecycle authority: **`processing_message_id`** is legacy storage only (not updated on lifecycle).
 - [ ] Document deprecation notes for external integrators still consuming room-only processing semantics.
 
 ---
@@ -397,8 +393,8 @@ Rules:
 
 ### Backend integration
 
-- `send_message_to_room` early returns (e.g. scope validation): assert `run_failed` and cleared mirror.
-- Multi-run: two agents, one fails, one completes → **no** non-terminal runs remain → mirror `null`; `active_runs` empty; assert **§N.1** mirror pick when both briefly active (earliest `created_at`, tie-break `run_id`).
+- `send_message_to_room` early returns (e.g. scope validation): assert `run_failed` and **`active_runs`** empty where applicable.
+- Multi-run: two agents, one fails, one completes → **no** non-terminal runs remain → **`active_runs` empty**; §N.1 pure projector ordering remains covered in **`tests/test_run_projector.py`**.
 
 ### Frontend
 
@@ -424,15 +420,14 @@ Counters / logs:
 
 - `run_event_append_total`, `run_transition_errors_total`
 - `run_active_by_room` gauge
-- `parity_legacy_processing_vs_run_mismatch_total`
 - `run_watchdog_forced_failure_total`
 - `frontend_reconcile_processing_clear_total`
 
-**As implemented now:** lightweight in-process counters exist in `services/run_metrics.py` and are incremented by `RunCommandHandler`, `run_projector`, and `stale_task_checker`. Prometheus/Otel export wiring is still pending.
+**As implemented now:** lightweight in-process counters exist in `services/run_metrics.py` and are incremented by `RunCommandHandler` and `stale_task_checker`. Prometheus/Otel export wiring is still pending.
 
 **SLO targets (initial):**
 
-- P99 projector apply latency `< 50ms` in API process (adjust when measured).
+- P99 **`record_processing_status`** latency (adjust when measured).
 - Watchdog max staleness = `SLA + 2m`.
 
 ---
@@ -444,7 +439,7 @@ Counters / logs:
 | `FEATURE_RUN_DUAL_WRITE` | **Backend** env | Persist `runs` / `run_events` from the **`processing_status`** lifecycle hook. **`0` / `false` / `no` / `off`** disables writes; default **on** when unset. |
 | `FEATURE_RUN_PROJECTOR_MIRROR` | **Removed (Phase D cleanup)** | Mirror projection is always on in active lifecycle paths; variable no longer controls runtime behavior. |
 | `FEATURE_RUN_EVENT_SSE` | **Backend** env | **`1` / `true` / `on`** — emit extra **`run_event`** SSE after each successful append. Default **off**. |
-| `FEATURE_RUN_PARITY_LOG` | **Backend** env | Set to **`1`** to log mirror drift (current vs desired) in **`run_projector`**. |
+| `FEATURE_RUN_PARITY_LOG` | **Removed** | Was mirror drift logging; mirror DB writes removed. |
 | `FEATURE_RUN_WATCHDOG` | **Backend** env | **`0` / `false` / `off`** disables stale-run timeout in **`stale_task_checker`**; default **on** when unset. |
 | `RUN_WATCHDOG_STALE_MINUTES` | **Backend** env | Non-terminal run **`updated_at`** age before watchdog fails it (default **90**). |
 | `FEATURE_RUN_LIFECYCLE_READ` | **Spec / server** (reserved) | Future: gate `active_runs` in JSON for old clients — **not** used on API today; field is always returned when implemented paths exist. |
@@ -472,8 +467,8 @@ Rollout: indexes → shadow (default on) → optional `run_event` SSE (backend +
 ## 13. Rollback
 
 - **Frontend:** unset **`NEXT_PUBLIC_FEATURE_RUN_EVENT_SSE`** to ignore **`run_event`** payloads (primary lifecycle still follows `processing_status` + HTTP reconcile).
-- **Backend shadow:** set **`FEATURE_RUN_DUAL_WRITE=0`** to stop persisting `runs` / `run_events` (SSE still emits `processing_status`; mirror behavior follows current projector-based path).
-- **Projector mirror rollback:** no runtime toggle in active path; use code rollback (or revert commit) if you must restore legacy direct mirror writes.
+- **Backend shadow:** set **`FEATURE_RUN_DUAL_WRITE=0`** to stop persisting `runs` / `run_events` (SSE still emits `processing_status`; **not** recommended in prod — see compaction / dual-write notes in plan review).
+- **Mirror rollback:** use code rollback if you must restore legacy **`rooms.processing_message_id`** writes (no env toggle).
 - **`run_event` SSE:** set **`FEATURE_RUN_EVENT_SSE=0`** on API.
 - Persisted run data remains available even if optional `run_event` SSE is disabled.
 
@@ -497,7 +492,7 @@ Rollout: indexes → shadow (default on) → optional `run_event` SSE (backend +
 | Best-effort updates | SSE (`processing_status` + optional `run_event`) |
 | Truth when unsure | **HTTP snapshot** + transition guard / future full reducer |
 
-**Normative v1** (§N.*) remains the contract for **remaining** work: reducer/idempotency hardening, Mongo transactions where replica set allows, Prometheus-style metrics (§10). The shipped slice is **SSE-shadow + projector mirror authority + optional `run_event` + watchdog + index migration + API/frontend read path + frontend selector/lifecycle consolidation**.
+**Normative v1** (§N.*) remains the contract for **remaining** work: reducer/idempotency hardening, Mongo transactions where replica set allows, Prometheus-style metrics (§10). The shipped slice is **SSE-shadow + runs authority (no room mirror writes) + optional `run_event` + watchdog + index migration + API/frontend read path + frontend selector/lifecycle consolidation**.
 
 ---
 
@@ -506,12 +501,13 @@ Rollout: indexes → shadow (default on) → optional `run_event` SSE (backend +
 | Layer | Behavior |
 |-------|----------|
 | **Write (shadow)** | `RunCommandHandler` persists from unified lifecycle status emission path (SSE manager, mapped task notifications, watchdog timeout). **`FEATURE_RUN_DUAL_WRITE`** gates writes. |
-| **Mirror** | Projector-derived via **`sync_room_processing_mirror`** in lifecycle status emission and RoomMessageCenter terminal/lock sync points. |
+| **Legacy field** | **`rooms.processing_message_id`** is not written on lifecycle; optional null via **`stale_task_checker`** / migration script. |
 | **SSE** | Always **`processing_status`**. Optional **`run_event`** when **`FEATURE_RUN_EVENT_SSE`**. |
-| **Watchdog** | **`stale_task_checker._fail_stale_runs`**: non-terminal **`updated_at`** older than **`RUN_WATCHDOG_STALE_MINUTES`** → **`append_run_timeout_failure`** + lifecycle failed status emission. |
+| **Watchdog** | **`stale_task_checker._fail_stale_runs`**: non-terminal **`updated_at`** older than **`RUN_WATCHDOG_STALE_MINUTES`** → **`append_run_timeout_failure`** (which first calls **`heal_head_from_events`** to fix diverged heads) + lifecycle failed status emission. |
+| **Startup heal** | **`_heal_diverged_runs_on_startup`** in **`main.py`**: one-shot sweep of all non-terminal runs; calls **`heal_head_from_events`** to project the `runs` head forward when `run_events` has committed events the head missed (crash-window recovery). |
 | **Read** | `get_active_runs_by_room_id` → `active_runs` on room setting + `inquiryActiveRuns`. |
 | **Indexes / ops** | `scripts/migrations/run_run_lifecycle_indexes.py` (+ README); `main.py` still calls **`create_run_lifecycle_indexes`** on startup. |
-| **Tests (backend)** | `tests/test_api_room_center.py` (`TestInquiryActiveRuns`), `tests/test_flow_contracts.py`, `tests/test_run_lifecycle_service.py`, `tests/test_run_reducer.py`, `tests/test_run_projector.py`. |
+| **Tests (backend)** | `tests/test_api_room_center.py` (`TestInquiryActiveRuns`), `tests/test_flow_contracts.py`, `tests/test_run_lifecycle_service.py`, `tests/test_run_reducer.py`, `tests/test_run_projector.py`, `tests/test_get_room_ids_non_terminal_runs.py`, `tests/test_stale_legacy_processing_cleanup.py`, `tests/test_heal_head_from_events.py`. |
 | **Tests (frontend)** | `hybro-frontend`: `tests/unit/hooks/room-lifecycle.test.ts`, `tests/unit/lib/room-api.test.ts`, MSW handlers for `inquiryActiveRuns`. |
 
-**Next PRs:** follow **Remaining work by track** above — typical order: **(1)** backend reducer/idempotency + transactions + metrics export, **(2)** frontend reconcile-all-paths (Phase B), **(3)** message graph backfill + write-path population, **(4)** integrator docs.
+**Next PRs:** follow **Remaining work by track** above — typical order: **(1)** ~~backend heal-from-events (Fix A)~~ done, **(2)** backend transactions (Fix B — requires replica set), **(3)** backend reducer/idempotency + metrics export, **(4)** frontend reconcile-all-paths (Phase B), **(5)** message graph backfill + write-path population, **(6)** integrator docs.

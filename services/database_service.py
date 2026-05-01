@@ -765,43 +765,20 @@ class DatabaseService:
             logger.error(f"Failed to update room {room_id} in databases: {str(e)}")
             return False
 
-    async def update_room_processing_status(
-        self, room_id: str, processing_message_id: str | None
-    ) -> bool:
-        """
-        Update the processing_message_id field on a room.
-        Used to track which user message is currently being processed.
-        """
-        try:
-            return await self.mongo.update_room_processing_status(
-                room_id, processing_message_id
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to update room processing status for {room_id}: {str(e)}"
-            )
-            return False
-
-    async def clear_room_processing_status_if_matches(
-        self, room_id: str, message_id: str
-    ) -> bool:
-        """CAS clear: only clear processing_message_id if it matches the given message_id."""
-        try:
-            return await self.mongo.clear_room_processing_status_if_matches(
-                room_id, message_id
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to CAS-clear processing status for room {room_id}: {str(e)}"
-            )
-            return False
-
     async def get_active_runs_by_room_id(self, room_id: str) -> list[dict[str, Any]]:
         """Get active (non-terminal) runs for a room."""
         try:
             return await self.mongo.get_active_runs_by_room_id(room_id)
         except Exception as e:
             logger.error(f"Failed to get active runs for room {room_id}: {str(e)}")
+            return []
+
+    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
+        """Room IDs that have at least one non-terminal run (e.g. compaction skip set)."""
+        try:
+            return await self.mongo.get_room_ids_with_non_terminal_runs()
+        except Exception as e:
+            logger.error("Failed to list room ids with non-terminal runs: %s", e)
             return []
 
     async def find_stale_non_terminal_runs(

@@ -122,12 +122,99 @@ class RunCommandHandler:
             )
         return None
 
+    async def heal_head_from_events(self, run_id: str) -> bool:
+        """Check run_events for events ahead of runs head and project forward.
+
+        Returns True if the head was healed (a newer event was found and
+        projected), False otherwise.  This fixes the divergence scenario
+        where run_events has a terminal event committed but the runs head
+        update was lost (crash / timeout between the two writes).
+        """
+        run_doc = await mongodb.runs_collection.find_one({"run_id": run_id})
+        if not run_doc:
+            return False
+
+        head_seq = int(run_doc.get("seq", 0))
+
+        latest_event = await mongodb.run_events_collection.find_one(
+            {"run_id": run_id, "seq": {"$gt": head_seq}},
+            sort=[("seq", -1)],
+        )
+        if not latest_event:
+            return False
+
+        event_type_str = str(latest_event.get("type", ""))
+        event_seq = int(latest_event["seq"])
+        payload = latest_event.get("payload") or {}
+
+        terminal_type_map = {
+            RunEventType.RUN_COMPLETED.value: RunState.COMPLETED,
+            RunEventType.RUN_FAILED.value: RunState.FAILED,
+            RunEventType.RUN_CANCELED.value: RunState.CANCELED,
+        }
+        active_type_map = {
+            RunEventType.RUN_STARTED.value: RunState.PROCESSING,
+            RunEventType.RUN_RESUMED.value: RunState.PROCESSING,
+            RunEventType.RUN_AWAITING_INPUT.value: RunState.AWAITING_INPUT,
+            RunEventType.RUN_CREATED.value: RunState.QUEUED,
+        }
+
+        resolved_state: RunState | None = terminal_type_map.get(event_type_str) or active_type_map.get(event_type_str)
+        if resolved_state is None:
+            logger.warning(
+                "heal_head_from_events: unknown event type %s for run %s — skipping",
+                event_type_str,
+                run_id,
+            )
+            return False
+
+        updates: dict[str, Any] = {
+            "state": resolved_state.value,
+            "seq": event_seq,
+            "updated_at": latest_event.get("ts") or utcnow(),
+        }
+        if resolved_state in TERMINAL_RUN_STATES:
+            updates["ended_at"] = latest_event.get("ts") or utcnow()
+            updates["error_code"] = payload.get("error_code")
+            updates["error_message"] = payload.get("error_message")
+
+        await mongodb.runs_collection.update_one(
+            {"run_id": run_id},
+            {"$set": updates},
+        )
+        room_id = str(run_doc.get("room_id", ""))
+        increment_counter(
+            "run_head_healed_total",
+            event_type=event_type_str,
+            to_state=resolved_state.value,
+        )
+        logger.info(
+            "heal_head_from_events: healed run %s (room=%s) seq %d→%d state→%s from event %s",
+            run_id,
+            room_id,
+            head_seq,
+            event_seq,
+            resolved_state.value,
+            event_type_str,
+        )
+        return True
+
     async def append_run_timeout_failure(
         self, room_id: str, run_id: str, *, stale_minutes: int
     ) -> dict[str, Any] | None:
-        """Watchdog: fail a stuck non-terminal run."""
+        """Watchdog: fail a stuck non-terminal run.
+
+        Before appending a new RUN_FAILED event, checks run_events for any
+        events ahead of the runs head.  If found (diverged head), projects
+        the head forward instead — avoiding the DuplicateKeyError loop that
+        previously left the run stuck forever.
+        """
         if not _feature_run_dual_write_enabled():
             return None
+
+        if await self.heal_head_from_events(run_id):
+            return None
+
         run_doc = await mongodb.runs_collection.find_one({"run_id": run_id})
         if not run_doc or str(run_doc.get("room_id")) != room_id:
             return None

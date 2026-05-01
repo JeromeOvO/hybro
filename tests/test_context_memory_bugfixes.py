@@ -106,17 +106,9 @@ class TestCompactionSweep:
         mock_mem_coll = MagicMock()
         mock_mem_coll.find.return_value = mock_mem_cursor
 
-        # Build async cursor for rooms_collection.find() (active rooms)
-        async def _no_active_rooms():
-            return
-            yield  # noqa: makes this an async generator
-
-        mock_rooms_coll = MagicMock()
-        mock_rooms_coll.find.return_value = _no_active_rooms()
-
         mock_mongodb = MagicMock()
         mock_mongodb.room_memories_collection = mock_mem_coll
-        mock_mongodb.rooms_collection = mock_rooms_coll
+        mock_mongodb.get_room_ids_with_non_terminal_runs = AsyncMock(return_value=[])
 
         with (
             patch("database.mongodb.mongodb", mock_mongodb),
@@ -130,7 +122,7 @@ class TestCompactionSweep:
 
     @pytest.mark.asyncio
     async def test_sweep_skips_rooms_with_active_processing(self, mock_compaction_config):
-        """Rooms with processing_message_id set should be skipped."""
+        """Rooms with non-terminal runs should be skipped."""
         from jobs.compaction_sweep import CompactionSweep
 
         sweep = CompactionSweep(interval_minutes=60)
@@ -142,13 +134,6 @@ class TestCompactionSweep:
         )
         mock_compaction_svc = AsyncMock()
         mock_compaction_svc.compact_if_needed = AsyncMock(return_value=mock_result)
-
-        # Active rooms cursor (rooms with processing_message_id set)
-        async def _active_rooms():
-            yield {"room_id": "active_room"}
-
-        mock_rooms_coll = MagicMock()
-        mock_rooms_coll.find.return_value = _active_rooms()
 
         # Room memories cursor: 2 rooms (one active, one idle)
         async def _room_mem_docs():
@@ -163,7 +148,9 @@ class TestCompactionSweep:
 
         mock_mongodb = MagicMock()
         mock_mongodb.room_memories_collection = mock_mem_coll
-        mock_mongodb.rooms_collection = mock_rooms_coll
+        mock_mongodb.get_room_ids_with_non_terminal_runs = AsyncMock(
+            return_value=["active_room"]
+        )
 
         with (
             patch("database.mongodb.mongodb", mock_mongodb),

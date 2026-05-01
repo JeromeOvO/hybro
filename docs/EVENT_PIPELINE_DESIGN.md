@@ -279,7 +279,7 @@ class EventBroadcaster(Protocol):
     ) -> None: ...
 ```
 
-> **Implementation note for `processing_status`**: `SSEManager.send_processing_status` is **not** a pure broadcast — it also performs terminal-status deduplication (via an in-memory `TTLCache`) and DB persistence for page-refresh recovery (`update_room_processing_status` / `clear_room_processing_status_if_matches`). `LocalBroadcaster` inherits this behavior by delegating directly. A future `RedisBroadcaster` must ensure these side effects remain on the sender side (ideally moved into the handler's `_on_processing_status`) rather than being lost in the broadcaster swap.
+> **Implementation note for `processing_status`**: `SSEManager.send_processing_status` is **not** a pure broadcast — it also performs terminal-status deduplication (via an in-memory `TTLCache`) and persists **`runs` / `run_events`** via **`RunCommandHandler.record_processing_status`** (dual-write gated by **`FEATURE_RUN_DUAL_WRITE`**). `LocalBroadcaster` inherits this behavior by delegating directly. A future `RedisBroadcaster` must ensure these side effects remain on the sender side (ideally moved into the handler's `_on_processing_status`) rather than being lost in the broadcaster swap.
 
 ### 4.3 LocalBroadcaster Implementation
 

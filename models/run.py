@@ -24,6 +24,14 @@ TERMINAL_RUN_STATES = {
     RunState.CANCELED,
 }
 
+# Persisted `state` values for runs that are not terminal — keep in sync with
+# `get_active_runs_by_room_id`, compaction skip-set, and stale-run watchdog.
+NON_TERMINAL_RUN_STATE_VALUES: tuple[str, ...] = (
+    RunState.QUEUED.value,
+    RunState.PROCESSING.value,
+    RunState.AWAITING_INPUT.value,
+)
+
 
 class RunEventType(StrEnum):
     RUN_CREATED = "run_created"

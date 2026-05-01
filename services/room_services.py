@@ -2062,8 +2062,8 @@ class RoomServices:
                 # and doesn't rollback optimistic state.
                 selection_result.message_id = user_message.message_id
                 # Processing status was set before selection; this early return
-                # must emit a terminal status to clear room.processing_message_id
-                # and dismiss frontend processing placeholders.
+                # must emit terminal processing_status (runs + SSE) so the client
+                # clears processing placeholders.
                 await self.sse_manager.send_processing_status(
                     request.room_id,
                     SSEProcessingStatus.FAILED,

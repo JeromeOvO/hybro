@@ -429,14 +429,7 @@ class RoomMessageCenter:
             room_user_message_id
         )
 
-        # Re-set processing_message_id to THIS message now that we hold the
-        # lock.  The API layer sent PROCESSING before we reached the lock,
-        # and a later queued message may have overwritten the room's
-        # processing_message_id in the meantime.  Restoring it here ensures
-        # cancel/page-refresh targets the correct (actively processing) turn.
-        from services.run_projector import sync_room_processing_mirror
-
-        await sync_room_processing_mirror(room_id)
+        # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
         try:
             return await self._process_room_user_message_locked(
@@ -1798,17 +1791,7 @@ class RoomMessageCenter:
                     room_id, user_message_id
                 )
 
-        # Unconditionally clear DB processing status for terminal run statuses.
-        # The SSE dedup layer may suppress the second "canceled/completed/failed"
-        # event (correct — no need to re-send to clients), but the DB
-        # processing_message_id can be re-set by mid-loop PROCESSING events
-        # that fire between the cancel endpoint and the executor's cancellation
-        # check.  Clearing here is the authoritative last-write and prevents
-        # a stale "Processing your request..." on page refresh.
-        if result.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELED):
-            from services.run_projector import sync_room_processing_mirror
-
-            await sync_room_processing_mirror(room_id)
+        # Terminal run state is persisted via run_command_handler / runs; no room mirror write.
 
         # Clean up cancellation token for all terminal statuses.
         # PAUSED and AWAITING_INPUT runs keep their token alive — the

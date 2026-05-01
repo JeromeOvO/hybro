@@ -431,7 +431,7 @@ This preserves the cooperative cancellation semantics (`token.race()`, `token.ch
 
 #### Processing Status
 
-`SSEManager.send_processing_status` currently persists processing state to MongoDB (`update_room_processing_status` / `clear_room_processing_status_if_matches`) for page-refresh recovery. This path remains unchanged — MongoDB is the source of truth.
+`SSEManager.send_processing_status` persists **`runs` / `run_events`** via **`RunCommandHandler.record_processing_status`** for lifecycle truth; **`rooms.processing_message_id`** is legacy and not updated here. Page-refresh recovery uses **`active_runs`** on room APIs (see event-sourced lifecycle doc).
 
 The terminal-status dedup cache (`_terminal_status_sent`) moves to Redis to prevent double-sends across instances. The check-and-set operation uses `SET NX`:
 
@@ -682,7 +682,7 @@ The `_finalize_streaming` ordering constraint from EVENT_PIPELINE_DESIGN §4.8 r
 `EVENT_PIPELINE_DESIGN.md` §4.2 flagged that `SSEManager.send_processing_status` is **not a pure broadcast** — it performs three operations:
 
 1. **Terminal-status deduplication** via `_terminal_status_sent` TTLCache
-2. **DB persistence** via `update_room_processing_status` / `clear_room_processing_status_if_matches`
+2. **DB persistence** via **`RunCommandHandler.record_processing_status`** (`runs` / `run_events`; **`FEATURE_RUN_DUAL_WRITE`**)
 3. **SSE broadcast** to connected clients
 
 `LocalBroadcaster.processing_status()` delegates to `SSEManager.send_processing_status`, inheriting all three behaviors. But when `RedisBroadcaster` publishes to Redis and the `EventSubscriber` on a remote instance calls `SSEManager.send_processing_status`, it would **re-execute the DB persistence on every receiving instance** — writing redundant processing status updates and potentially corrupting CAS (compare-and-swap) semantics.
@@ -715,7 +715,7 @@ The side-effect logic (dedup + DB persistence) stays in the handler's `_on_proce
 Sender Instance:
   AgentResponseHandler._on_processing_status(event)
     ├─→ Dedup check (Redis SET NX, §4.3)
-    ├─→ DB persistence (update_room_processing_status)
+    ├─→ DB persistence (record_processing_status → runs / run_events)
     └─→ self._broadcaster.processing_status(...)
           ├─→ Local: SSEManager.broadcast_processing_status(...)   [broadcast only]
           └─→ Redis: PUBLISH room:{room_id}:events {payload}
