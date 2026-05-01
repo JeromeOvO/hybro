@@ -20,7 +20,7 @@ const mockGetAgentsByProviderId = vi.fn<() => Promise<AgentCenterResponse>>()
 const mockBanner = { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() }
 
 vi.mock('@/lib/api', () => ({
-  getAgentsByProviderId: (...args: unknown[]) => mockGetAgentsByProviderId(...args),
+  getAgentsByProviderId: mockGetAgentsByProviderId,
 }))
 
 vi.mock('@/lib/urls', () => ({
@@ -46,11 +46,12 @@ function buildCard(overrides: Partial<AgentCard> = {}): AgentCard {
     name: 'My Agent',
     description: 'Agent description',
     version: '1.0.0',
+    protocolVersion: '1.0.0',
     url: 'http://localhost:8001',
-    iconUrl: null,
-    documentationUrl: null,
-    provider: null,
-    capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false, extensions: null },
+    iconUrl: undefined,
+    documentationUrl: undefined,
+    provider: undefined,
+    capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false, extensions: undefined },
     defaultInputModes: ['text/plain'],
     defaultOutputModes: ['text/plain'],
     skills: [],
@@ -153,7 +154,7 @@ describe('DeveloperAgentsPage', () => {
     it('falls back to provider_name when agent_card.provider is absent', async () => {
       mockGetAgentsByProviderId.mockResolvedValue(
         buildAgentsResponse([
-          buildAgent({ agent_card: buildCard({ provider: null }), provider_name: 'Kevin Lu' }),
+          buildAgent({ agent_card: buildCard({ provider: undefined }), provider_name: 'Kevin Lu' }),
         ])
       )
 
@@ -167,7 +168,7 @@ describe('DeveloperAgentsPage', () => {
     it('shows "Unknown" when neither organization nor provider_name is set', async () => {
       mockGetAgentsByProviderId.mockResolvedValue(
         buildAgentsResponse([
-          buildAgent({ agent_card: buildCard({ provider: null }), provider_name: null }),
+          buildAgent({ agent_card: buildCard({ provider: undefined }), provider_name: null }),
         ])
       )
 

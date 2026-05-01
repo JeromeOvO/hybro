@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { RoomChatInput, MAX_MESSAGE_LENGTH } from '@/components/room-chat-input'
 
 vi.mock('@/components/group-selector', () => ({
-  GroupSelector: () => <div data-testid="group-selector" />,
+  GroupSelector: ({ className }: { className?: string }) => <div data-testid="group-selector" className={className} />,
 }))
 
 // jsdom doesn't implement URL.createObjectURL / revokeObjectURL
@@ -73,9 +73,27 @@ describe('RoomChatInput', () => {
       expect(screen.queryByTestId('attachment-plus-icon')).toBeNull()
     })
 
-    it('places upload and mention actions on the right before submit', () => {
-      renderInput()
+    it('renders subdued composer chrome without glow-heavy shell classes', () => {
+      const { container } = renderInput()
 
+      const shell = container.querySelector('.group\\/input') as HTMLElement
+      const panel = shell.firstElementChild as HTMLElement
+
+      expect(shell).toBeTruthy()
+      expect(shell.className).not.toContain('bg-gradient-to-b')
+      expect(shell.className).not.toContain('shadow-xl')
+      expect(shell.className).not.toContain('hover:shadow-2xl')
+      expect(shell.className).not.toContain('rgba(0,255,255')
+      expect(shell.className).not.toContain('shadow-[0_8px')
+      expect(panel.className).toContain('border-border')
+      expect(panel.className).toContain('bg-muted')
+      expect(panel.className).not.toContain('bg-background')
+    })
+
+    it('keeps composer actions visible in a responsive controls layout', () => {
+      renderInput({ onChatModeChange: vi.fn() })
+
+      const controls = screen.getByTestId('composer-controls')
       const actions = screen.getByTestId('composer-actions')
       const selectors = screen.getByTestId('composer-selectors')
       const utilities = screen.getByTestId('composer-utilities')
@@ -84,8 +102,14 @@ describe('RoomChatInput', () => {
       const mentionButton = screen.getByRole('button', { name: /mention an agent/i })
       const sendButton = screen.getByTestId('send-button')
 
+      expect(controls.className).toContain('grid-cols-[minmax(0,1fr)_auto]')
+      expect(controls.className).toContain('max-[520px]:grid-cols-1')
       expect(selectors.className).toContain('gap-3')
+      expect(selectors.className).toContain('min-w-0')
+      expect(selectors.className).toContain('max-[520px]:w-full')
+      expect(screen.getByTestId('group-selector').className).toContain('min-w-0')
       expect(actions.className).not.toContain('gap-1')
+      expect(actions.className).toContain('justify-self-end')
       expect(utilities.className).toContain('gap-1.5')
       expect(primaryAction.className).toContain('ml-2')
       expect(utilities.contains(uploadButton)).toBe(true)
@@ -109,6 +133,21 @@ describe('RoomChatInput', () => {
     it('renders the send button as a composer-radius square', () => {
       renderInput()
       expectSquareActionButton(screen.getByTestId('send-button'))
+    })
+
+    it('keeps composer action buttons low-emphasis except for the primary fill', () => {
+      renderInput()
+
+      const uploadButton = screen.getByRole('button', { name: /add photos and files/i })
+      const mentionButton = screen.getByRole('button', { name: /mention an agent/i })
+      const sendButton = screen.getByTestId('send-button')
+
+      expect(uploadButton.className).not.toContain('hover:text-primary')
+      expect(mentionButton.className).not.toContain('hover:text-primary')
+      expect(sendButton.className).not.toContain('shadow-md')
+      expect(sendButton.className).not.toContain('hover:shadow-lg')
+      expect(sendButton.className).not.toContain('hover:scale-105')
+      expect(sendButton.className).not.toContain('active:scale-95')
     })
 
     it('should show spinner when sending=true', () => {

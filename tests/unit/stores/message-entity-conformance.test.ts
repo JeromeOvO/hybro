@@ -61,7 +61,7 @@ describe('MessageEntity type conformance', () => {
   it('uses messageType instead of type', () => {
     const entity = makeEntity()
     expect(entity.messageType).toBe('user')
-    expect((entity as Record<string, unknown>)['type']).toBeUndefined()
+    expect((entity as unknown as Record<string, unknown>)['type']).toBeUndefined()
   })
 
   it('applies overrides correctly', () => {

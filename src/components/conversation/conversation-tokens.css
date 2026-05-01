@@ -54,6 +54,7 @@
   --conversation-gap-block: 8px;
   --conversation-turn-content-top-gap: 8px;
   --conversation-frame-max-width: 800px;
+  --conversation-detail-width: 520px;
   --conversation-body-inset: 16px;
 
   --conversation-gutter-x: 2rem;
@@ -222,4 +223,84 @@
   z-index: 30;
   background: hsl(var(--color-background));
   padding: 0 0 16px;
+}
+
+/* ---------- Page split detail pane ---------- */
+
+.conversation-workspace {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.conversation-primary {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-detail-pane {
+  display: none;
+}
+
+@media (min-width: 1280px) {
+  .conversation-workspace[data-detail-open="true"] {
+    grid-template-columns: minmax(0, 1fr) minmax(420px, var(--conversation-detail-width));
+  }
+
+  .conversation-detail-pane {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--conversation-border);
+    background: hsl(var(--color-background));
+    overflow-y: auto;
+  }
+}
+
+.conversation-detail-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: hsl(var(--color-background));
+  padding: var(--conversation-sticky-top) var(--conversation-gutter-x) 10px;
+}
+
+.conversation-detail-header-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.conversation-detail-close-button {
+  display: inline-flex;
+  height: 30px;
+  width: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--conversation-text-muted);
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.conversation-detail-close-button:hover {
+  color: var(--conversation-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.conversation-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 var(--conversation-gutter-x) 32px;
+}
+
+.conversation-detail-request,
+.conversation-detail-response {
+  width: calc(100% - var(--conversation-body-inset) * 2);
+  margin-inline: auto;
 }

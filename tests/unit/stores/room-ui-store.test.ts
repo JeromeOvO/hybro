@@ -174,6 +174,41 @@ describe('RoomUiStore', () => {
     })
   })
 
+  describe('selectedAgentMessageId', () => {
+    it('openAgentDetail sets messageId for a room', () => {
+      useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-1']).toBe('agent-msg-1')
+    })
+
+    it('closeAgentDetail removes messageId for a room', () => {
+      useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')
+      useRoomUiStore.getState().closeAgentDetail('room-1')
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-1']).toBeUndefined()
+    })
+
+    it('is room-isolated', () => {
+      useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')
+      useRoomUiStore.getState().openAgentDetail('room-2', 'agent-msg-2')
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-1']).toBe('agent-msg-1')
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-2']).toBe('agent-msg-2')
+    })
+
+    it('is deleted by resetRoom', () => {
+      useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')
+      useRoomUiStore.getState().openAgentDetail('room-2', 'agent-msg-2')
+      useRoomUiStore.getState().resetRoom('room-1')
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-1']).toBeUndefined()
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom['room-2']).toBe('agent-msg-2')
+    })
+
+    it('is cleared by resetAll', () => {
+      useRoomUiStore.getState().openAgentDetail('room-1', 'agent-msg-1')
+      useRoomUiStore.getState().openAgentDetail('room-2', 'agent-msg-2')
+      useRoomUiStore.getState().resetAll()
+      expect(useRoomUiStore.getState().selectedAgentMessageIdByRoom).toEqual({})
+    })
+  })
+
   describe('pendingRoomData', () => {
     it('should store pending data for a room', () => {
       useRoomUiStore.getState().setPendingRoomData('room-1', {

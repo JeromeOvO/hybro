@@ -76,8 +76,8 @@ describe('room name inline editing', () => {
   let deps: UseSaveRoomNameDeps
 
   beforeEach(() => {
-    mockUpdateRoomName = vi.fn<[string, string], Promise<SaveResult>>().mockResolvedValue({ success: true })
-    mockRefreshRoomSetting = vi.fn<[], Promise<void>>().mockResolvedValue(undefined)
+    mockUpdateRoomName = vi.fn<(id: string, name: string) => Promise<SaveResult>>().mockResolvedValue({ success: true })
+    mockRefreshRoomSetting = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
     deps = { updateRoomName: mockUpdateRoomName, refreshRoomSetting: mockRefreshRoomSetting }
   })
 

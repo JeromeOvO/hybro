@@ -6,7 +6,7 @@ import type { HubStatusResponse } from '@/lib/api/hub'
 
 const mockGetMyHubStatus = vi.fn<() => Promise<HubStatusResponse>>()
 vi.mock('@/lib/api/hub', () => ({
-  getMyHubStatus: (...args: unknown[]) => mockGetMyHubStatus(...args),
+  getMyHubStatus: mockGetMyHubStatus,
 }))
 
 vi.mock('@clerk/nextjs', () => ({

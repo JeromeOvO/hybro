@@ -16,6 +16,7 @@ function makeMetaTask(overrides: Partial<MetaTask> = {}): MetaTask {
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     agent_id: 'agent-1',
+    provider_id: 'provider-1',
     agent_card: {
       name: 'Data Agent',
       description: 'Handles data analysis',

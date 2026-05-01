@@ -33,6 +33,8 @@ describe('selectConversationTurns', () => {
     expect(turns[0].turnId).toBe('user-1')
     expect(turns[0].userMessage!.id).toBe('user-1')
     expect(turns[0].blocks.length).toBeGreaterThanOrEqual(2)
+    const card = turns[0].blocks.find(b => b.type === 'agent_card')
+    expect(card).toMatchObject({ type: 'agent_card', messageId: 'agent-1' })
   })
 
   it('optimistic turn uses cr: prefix as temporary turnId', () => {

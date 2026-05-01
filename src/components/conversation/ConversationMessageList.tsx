@@ -2,7 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
 import { useMessageStore } from '@/stores/message-store'
-import { useInitialHydrationSeq, useLocalSendSeq } from '@/stores/room-ui-store'
+import { useInitialHydrationSeq, useLocalSendSeq, useRoomUiStore } from '@/stores/room-ui-store'
 import { useConversationTurnViews } from '@/hooks/useConversationTurnViews'
 import { ConversationTurn } from './ConversationTurn'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -11,6 +11,7 @@ import type { ConversationTurnView } from '@/lib/selectors/conversation-types'
 
 interface ConversationMessageListProps {
   roomId: string
+  selectedAgentMessageId?: string
 }
 
 interface ScrollMetrics {
@@ -27,7 +28,7 @@ function isAtBottom(m: ScrollMetrics): boolean {
   return m.scrollHeight - m.scrollTop - m.clientHeight < 100
 }
 
-export function ConversationMessageList({ roomId }: ConversationMessageListProps) {
+export function ConversationMessageList({ roomId, selectedAgentMessageId }: ConversationMessageListProps) {
   const turns = useConversationTurnViews(roomId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -139,6 +140,10 @@ export function ConversationMessageList({ roomId }: ConversationMessageListProps
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
+  const handleOpenAgentDetail = useCallback((messageId: string) => {
+    useRoomUiStore.getState().openAgentDetail(roomId, messageId)
+  }, [roomId])
+
   const hasMultipleAgents = (turn: ConversationTurnView) => {
     const agentIds = new Set<string>()
     for (const b of turn.blocks) {
@@ -165,6 +170,8 @@ export function ConversationMessageList({ roomId }: ConversationMessageListProps
                 key={turn.turnId}
                 turn={turn}
                 multiAgentTurn={hasMultipleAgents(turn)}
+                selectedAgentMessageId={selectedAgentMessageId}
+                onOpenAgentDetail={handleOpenAgentDetail}
               />
             ))}
           </div>

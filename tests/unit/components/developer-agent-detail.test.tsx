@@ -24,9 +24,9 @@ const mockUpdateAgent = vi.fn<() => Promise<AgentCenterResponse>>()
 const mockBanner = { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() }
 
 vi.mock('@/lib/api', () => ({
-  getAgent: (...args: unknown[]) => mockGetAgent(...args),
-  deleteAgent: (...args: unknown[]) => mockDeleteAgent(...args),
-  updateAgent: (...args: unknown[]) => mockUpdateAgent(...args),
+  getAgent: mockGetAgent,
+  deleteAgent: mockDeleteAgent,
+  updateAgent: mockUpdateAgent,
 }))
 
 vi.mock('@/lib/urls', () => ({
@@ -68,11 +68,12 @@ function buildCard(overrides: Partial<AgentCard> = {}): AgentCard {
     name: 'My Agent',
     description: 'Agent description',
     version: '2.0.0',
+    protocolVersion: '1.0.0',
     url: 'http://localhost:8001',
-    iconUrl: null,
-    documentationUrl: null,
-    provider: null,
-    capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false, extensions: null },
+    iconUrl: undefined,
+    documentationUrl: undefined,
+    provider: undefined,
+    capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false, extensions: undefined },
     defaultInputModes: ['text/plain'],
     defaultOutputModes: ['text/plain'],
     skills: [],
@@ -137,7 +138,7 @@ describe('DeveloperAgentManagePage', () => {
     it('falls back to provider_name when agent_card.provider is absent', async () => {
       mockGetAgent.mockResolvedValue(
         buildResponse(
-          buildAgent({ agent_card: buildCard({ provider: null }), provider_name: 'Kevin Lu' })
+          buildAgent({ agent_card: buildCard({ provider: undefined }), provider_name: 'Kevin Lu' })
         )
       )
 
@@ -151,7 +152,7 @@ describe('DeveloperAgentManagePage', () => {
     it('shows "Unknown Provider" when neither organization nor provider_name is set', async () => {
       mockGetAgent.mockResolvedValue(
         buildResponse(
-          buildAgent({ agent_card: buildCard({ provider: null }), provider_name: null })
+          buildAgent({ agent_card: buildCard({ provider: undefined }), provider_name: null })
         )
       )
 

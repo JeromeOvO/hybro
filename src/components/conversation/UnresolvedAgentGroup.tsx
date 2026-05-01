@@ -5,9 +5,11 @@ import { UserAnswerCard } from './UserAnswerCard'
 
 interface UnresolvedAgentGroupProps {
   blocks: ConversationBlock[]
+  selectedAgentMessageId?: string
+  onOpenAgentDetail?: (messageId: string) => void
 }
 
-export function UnresolvedAgentGroup({ blocks }: UnresolvedAgentGroupProps) {
+export function UnresolvedAgentGroup({ blocks, selectedAgentMessageId, onOpenAgentDetail }: UnresolvedAgentGroupProps) {
   return (
     <div>
       <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
@@ -15,7 +17,7 @@ export function UnresolvedAgentGroup({ blocks }: UnresolvedAgentGroupProps) {
       </div>
       <div className="flex flex-col" style={{ gap: 'var(--conversation-gap-block)' }}>
         {blocks.map((block, i) => {
-          if (block.type === 'agent_card') return <AgentCard key={i} {...block} />
+          if (block.type === 'agent_card') return <AgentCard key={i} {...block} selected={block.messageId === selectedAgentMessageId} onOpen={onOpenAgentDetail} />
           if (block.type === 'agent_content') return <AgentContentBlock key={i} {...block} />
           if (block.type === 'user_answer') return <UserAnswerCard key={i} {...block} />
           if (block.type === 'agent_divider') {

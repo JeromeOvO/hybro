@@ -71,10 +71,10 @@ export function ModeSelector({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+                  className="h-8 min-h-8 min-w-0 max-w-full px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                 >
-                  <CurrentIcon className={cn('h-3.5 w-3.5', current.iconColor)} />
-                  <span className="font-medium">{current.label}</span>
+                  <CurrentIcon className={cn('h-3.5 w-3.5 shrink-0', current.iconColor)} />
+                  <span className="min-w-0 truncate font-medium">{current.label}</span>
                   <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>

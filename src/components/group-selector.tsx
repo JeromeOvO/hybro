@@ -135,14 +135,14 @@ export function GroupSelector({
   // If mentions are present, show a special display
   if (hasMentions) {
     return (
-      <div className={cn("flex items-center gap-2", className)}>
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-sm">
-          {displayInfo.icon}
-          <span className="font-medium text-primary">{displayInfo.label}</span>
+      <div className={cn("flex min-w-0 items-center gap-2", className)}>
+        <div className="flex h-8 min-w-0 max-w-full items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-full bg-muted/60 border border-border/60 px-3 text-sm">
+          <span className="shrink-0">{displayInfo.icon}</span>
+          <span className="min-w-0 truncate font-medium text-primary">{displayInfo.label}</span>
           {onClearMentions && (
             <button
               onClick={onClearMentions}
-              className="ml-1 hover:bg-primary/20 rounded-full p-0.5"
+              className="ml-1 shrink-0 hover:bg-primary/20 rounded-full p-0.5"
             >
               <X className="h-3 w-3" />
             </button>
@@ -163,12 +163,12 @@ export function GroupSelector({
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    "h-8 min-h-8 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
+                    "h-8 min-h-8 min-w-0 max-w-full px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent",
                     isOverride && "bg-primary/10"
                   )}
                 >
-                  {displayInfo.icon}
-                  <span className="font-medium">{displayInfo.label}</span>
+                  <span className="shrink-0">{displayInfo.icon}</span>
+                  <span className="min-w-0 truncate font-medium">{displayInfo.label}</span>
                   <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
@@ -373,4 +373,3 @@ export function GroupSelector({
     </div>
   )
 }
-

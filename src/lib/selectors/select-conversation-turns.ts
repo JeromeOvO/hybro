@@ -53,6 +53,7 @@ export function selectConversationTurns(
     // Agent card
     blocks.push({
       type: 'agent_card',
+      messageId: agent.id,
       agentId: agent.agentId ?? agent.id,
       agentName: agent.senderName,
       display: mapAgentDisplayProps(agent),
@@ -101,6 +102,7 @@ export function selectConversationTurns(
     const blocks = turnBlocks.get(targetTurn) ?? (() => { const b: ConversationBlock[] = []; turnBlocks.set(targetTurn, b); return b })()
     blocks.push({
       type: 'agent_card',
+      messageId: eph.id,
       agentId: eph.id,
       agentName: eph.senderName,
       display: { label: 'Working', tone: 'accent', isAnimated: true, ariaLabel: `${eph.senderName} — Working` },

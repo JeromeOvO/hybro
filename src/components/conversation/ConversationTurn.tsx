@@ -8,12 +8,19 @@ import { UnresolvedAgentGroup } from './UnresolvedAgentGroup'
 interface ConversationTurnProps {
   turn: ConversationTurnView
   multiAgentTurn: boolean
+  selectedAgentMessageId?: string
+  onOpenAgentDetail?: (messageId: string) => void
 }
 
-function BlockRenderer({ block, multiAgent }: { block: ConversationBlock; multiAgent: boolean }) {
+function BlockRenderer({ block, multiAgent, selectedAgentMessageId, onOpenAgentDetail }: {
+  block: ConversationBlock
+  multiAgent: boolean
+  selectedAgentMessageId?: string
+  onOpenAgentDetail?: (messageId: string) => void
+}) {
   switch (block.type) {
     case 'agent_card':
-      return <AgentCard {...block} />
+      return <AgentCard {...block} selected={block.messageId === selectedAgentMessageId} onOpen={onOpenAgentDetail} />
     case 'agent_content':
       return <AgentContentBlock {...block} showAttribution={multiAgent} />
     case 'user_answer':
@@ -35,11 +42,11 @@ function BlockRenderer({ block, multiAgent }: { block: ConversationBlock; multiA
   }
 }
 
-export function ConversationTurn({ turn, multiAgentTurn }: ConversationTurnProps) {
+export function ConversationTurn({ turn, multiAgentTurn, selectedAgentMessageId, onOpenAgentDetail }: ConversationTurnProps) {
   if (turn.userMessage === null) {
     return (
       <div className="conversation-turn">
-        <UnresolvedAgentGroup blocks={turn.blocks} />
+        <UnresolvedAgentGroup blocks={turn.blocks} selectedAgentMessageId={selectedAgentMessageId} onOpenAgentDetail={onOpenAgentDetail} />
       </div>
     )
   }
@@ -55,7 +62,7 @@ export function ConversationTurn({ turn, multiAgentTurn }: ConversationTurnProps
           className="conversation-body-frame conversation-turn-content flex flex-col"
         >
           {turn.blocks.map((block, i) => (
-            <BlockRenderer key={i} block={block} multiAgent={multiAgentTurn} />
+            <BlockRenderer key={i} block={block} multiAgent={multiAgentTurn} selectedAgentMessageId={selectedAgentMessageId} onOpenAgentDetail={onOpenAgentDetail} />
           ))}
         </div>
       )}

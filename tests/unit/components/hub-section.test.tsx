@@ -14,13 +14,13 @@ vi.mock('@clerk/nextjs', () => ({
 
 const mockGetMyHubStatus = vi.fn<() => Promise<HubStatusResponse>>()
 vi.mock('@/lib/api/hub', () => ({
-  getMyHubStatus: (...args: unknown[]) => mockGetMyHubStatus(...args),
+  getMyHubStatus: mockGetMyHubStatus,
 }))
 
 const mockGetAllActiveAgents = vi.fn<() => Promise<AgentCenterResponse>>()
 vi.mock('@/lib/api/agent', () => ({
   getAllAgents: vi.fn().mockResolvedValue({ success: true, agents: [] }),
-  getAllActiveAgents: (...args: unknown[]) => mockGetAllActiveAgents(...args),
+  getAllActiveAgents: mockGetAllActiveAgents,
 }))
 
 vi.mock('@/lib/time', () => ({

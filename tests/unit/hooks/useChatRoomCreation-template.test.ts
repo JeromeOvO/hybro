@@ -49,7 +49,6 @@ const catalog: Agent[] = [
 const template: UseCaseTemplate = {
   id: "test-template",
   icon: Youtube,
-  iconGradient: ["#ff0050", "#ff4080"],
   title: "Test Template Room",
   description: "A test template",
   agents: [

@@ -58,7 +58,7 @@ export function FileAttachmentButton({
               size="icon"
               disabled={disabled}
               aria-label="Add photos and files"
-              className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors', className)}
+              className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-foreground transition-colors', className)}
               onClick={() => inputRef.current?.click()}
             >
               <Paperclip className="h-4 w-4" data-testid="attachment-upload-icon" />

@@ -956,7 +956,7 @@ export function RoomChatInput({
         </div>
       )}
 
-      {/* Main input container with animated gradient border */}
+      {/* Main input container */}
       <div
         onDrop={(e) => {
           e.preventDefault()
@@ -965,22 +965,10 @@ export function RoomChatInput({
         }}
         onDragOver={(e) => e.preventDefault()}
         className={cn(
-          "group/input relative flex flex-col rounded-xl transition-all duration-500",
-          "bg-gradient-to-b from-background via-background to-background/95",
-          "shadow-xl hover:shadow-2xl",
-          // Outer glow effects
-          "before:absolute before:-inset-[1px] before:rounded-xl before:p-[1px]",
-          "before:bg-gradient-to-b before:from-border/80 before:via-border/50 before:to-border/80",
-          "before:-z-10",
-          // Shadow glow
-          "hover:shadow-[0_8px_40px_-12px_rgba(var(--color-primary)/0.25)]",
-          "focus-within:shadow-[0_8px_50px_-10px_rgba(var(--color-primary)/0.35)]",
-          // Dark mode enhancements
-          "dark:hover:shadow-[0_8px_50px_-10px_rgba(0,255,255,0.2)]",
-          "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
+          "group/input relative flex flex-col rounded-xl transition-colors duration-200",
         )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm border border-border/50 overflow-hidden">
+        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm border border-border/60 shadow-sm overflow-hidden focus-within:border-border/80">
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 
@@ -1044,11 +1032,15 @@ export function RoomChatInput({
           </div>
 
           {/* Controls: GroupSelector left, utility actions + Send/Stop right */}
-          <div className="flex items-center justify-between px-4 pb-3 pt-2">
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 pb-3 pt-2 max-[520px]:grid-cols-1"
+            data-testid="composer-controls"
+          >
             {/* Group selector + mode selector (left) */}
-            <div className="flex items-center gap-3 text-sm text-muted-foreground" data-testid="composer-selectors">
+            <div className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground max-[520px]:w-full max-[520px]:gap-2 max-[520px]:overflow-hidden" data-testid="composer-selectors">
               {showGroupSelector && (
                 <GroupSelector
+                  className="min-w-0 max-w-[11rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   selectedGroup={selectedGroup}
                   onGroupChange={onGroupChange || (() => { })}
                   groups={groups}
@@ -1067,6 +1059,7 @@ export function RoomChatInput({
               )}
               {onChatModeChange && (
                 <ModeSelector
+                  className="min-w-0 max-w-[9rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   mode={chatMode ?? DEFAULT_CHAT_MODE}
                   onModeChange={onChatModeChange}
                   disabled={disabled || sending || processing}
@@ -1075,7 +1068,7 @@ export function RoomChatInput({
             </div>
 
             {/* Upload + @ + Send / Stop button (right) */}
-            <div className="flex items-center" data-testid="composer-actions">
+            <div className="flex items-center justify-self-end" data-testid="composer-actions">
               {isStorageOverLimit && !isDisplayOverLimit && plainTextLength < COUNTER_VISIBLE_THRESHOLD ? (
                 <span
                   className="text-xs font-medium text-red-600 dark:text-red-400 transition-colors duration-200 mr-2"
@@ -1130,6 +1123,7 @@ export function RoomChatInput({
                 <FileAttachmentButton
                   onFiles={addFiles}
                   disabled={disabled || sending || processing}
+                  className="hover:text-foreground hover:bg-muted/70"
                 />
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
@@ -1140,7 +1134,7 @@ export function RoomChatInput({
                         size="icon"
                         aria-label="Mention an agent"
                         disabled={disabled || sending || processing}
-                        className="h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors"
+                        className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
                         onClick={() => {
                           if (!editorRef.current) return
                           editorRef.current.focus()
@@ -1214,7 +1208,7 @@ export function RoomChatInput({
                           className={cn(
                             actionButtonClass,
                             "bg-muted text-muted-foreground",
-                            "hover:scale-105 active:scale-95 transition-all duration-200",
+                            "hover:bg-muted/80 transition-colors duration-200",
                           )}
                           data-testid="stop-processing"
                         >
@@ -1239,10 +1233,9 @@ export function RoomChatInput({
                           className={cn(
                             actionButtonClass,
                             "transition-all duration-300",
-                            "hover:scale-105 active:scale-95",
-                            "disabled:hover:scale-100 disabled:shadow-none disabled:cursor-default",
+                            "disabled:shadow-none disabled:cursor-default",
                             isReadyToSend
-                              ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40"
+                              ? "bg-primary text-primary-foreground hover:bg-primary/90"
                               : "bg-primary/40 text-primary-foreground/70"
                           )}
                         >
