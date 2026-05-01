@@ -52,8 +52,7 @@ export function ConversationTurn({ turn, multiAgentTurn }: ConversationTurnProps
 
       {turn.blocks.length > 0 && (
         <div
-          className="conversation-body-frame flex flex-col"
-          style={{ gap: 'var(--conversation-gap-block)', paddingTop: 10 }}
+          className="conversation-body-frame conversation-turn-content flex flex-col"
         >
           {turn.blocks.map((block, i) => (
             <BlockRenderer key={i} block={block} multiAgent={multiAgentTurn} />

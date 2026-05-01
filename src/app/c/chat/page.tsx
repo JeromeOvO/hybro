@@ -331,18 +331,10 @@ function ChatPageContent() {
                         </div>
 
                         {gm.agentsError && gm.availableAgents.length === 0 ? (
-                            <div className="flex flex-col items-center gap-3 py-8">
+                            <div className="flex items-center justify-center py-8">
                                 <p className="text-sm text-muted-foreground">
-                                    Failed to load agents
+                                    To Be Continued
                                 </p>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => gm.loadAvailableAgents?.()}
-                                >
-                                    <RefreshCw className="mr-2 h-3 w-3" />
-                                    Retry
-                                </Button>
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-2">

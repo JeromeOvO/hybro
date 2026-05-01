@@ -34,10 +34,8 @@ export function AgentCard({ agentName, agentId, taskDescription, theme, display 
 
   return (
     <div
-      className={`relative border overflow-hidden ${display.isAnimated ? 'conversation-card-shimmer' : ''}`}
+      className={`conversation-agent-card relative border overflow-hidden ${display.isAnimated ? 'conversation-card-shimmer' : ''}`}
       style={{
-        borderRadius: 12,
-        padding: '14px 16px',
         backgroundColor: theme.cardBg,
         borderColor: display.tone === 'danger' ? 'var(--conversation-danger-border)' : display.tone === 'warning' ? '#854d0e' : theme.cardBg,
       }}
@@ -48,7 +46,7 @@ export function AgentCard({ agentName, agentId, taskDescription, theme, display 
           {agentName}
         </span>
         <span
-          className="ml-auto text-[13px] font-medium"
+          className="conversation-agent-status ml-auto font-medium"
           role="status"
           aria-label={display.ariaLabel}
           style={{ color: toneColors[display.tone], position: 'relative', zIndex: 1 }}
@@ -57,9 +55,9 @@ export function AgentCard({ agentName, agentId, taskDescription, theme, display 
         </span>
       </div>
       {taskDescription && (
-        <div className="flex items-center gap-1.5 pl-[42px]" style={{ marginTop: 6, position: 'relative', zIndex: 1 }}>
+        <div className="conversation-agent-task-row flex items-center gap-1.5 pl-[42px]" style={{ position: 'relative', zIndex: 1 }}>
           <span className="text-sm leading-none" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
-          <span className="text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>
+          <span className="conversation-agent-task-text text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>
             {taskDescription}
           </span>
         </div>

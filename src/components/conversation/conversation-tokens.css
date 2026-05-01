@@ -38,13 +38,29 @@
   --conversation-danger: #ef4444;
   --conversation-danger-border: #ef444433;
 
-  --conversation-gap-turn: 32px;
-  --conversation-gap-block: 10px;
+  --conversation-radius-card: 10px;
+  --conversation-user-font-size: 14px;
+  --conversation-user-line-height: 22px;
+  --conversation-user-max-height: 66px;
+  --conversation-user-padding-x: 14px;
+  --conversation-user-padding-y: 10px;
+  --conversation-agent-card-padding-x: 16px;
+  --conversation-agent-card-padding-y: 13px;
+  --conversation-agent-status-font-size: 12px;
+  --conversation-content-font-size: 14px;
+  --conversation-content-line-height: 24px;
+
+  --conversation-gap-turn: 28px;
+  --conversation-gap-block: 8px;
+  --conversation-turn-content-top-gap: 8px;
   --conversation-frame-max-width: 800px;
   --conversation-body-inset: 16px;
 
   --conversation-gutter-x: 2rem;
   --conversation-sticky-top: 12px;
+
+  --chat-input-radius: 12px;
+  --chat-input-editor-collapsed-max-height: 56px;
 
   --conversation-shimmer-duration: 3.5s;
   --conversation-chevron-duration: 150ms;
@@ -89,6 +105,11 @@
   margin-inline: auto;
 }
 
+.conversation-turn-content {
+  gap: var(--conversation-gap-block);
+  padding-top: var(--conversation-turn-content-top-gap);
+}
+
 /* ---------- Turn container (gap lives here) ---------- */
 
 .conversation-turn {
@@ -98,6 +119,66 @@
 
 .conversation-turn:last-child {
   padding-bottom: 0;
+}
+
+/* ---------- User message anchor ---------- */
+
+.conversation-user-message {
+  border-radius: var(--conversation-radius-card);
+}
+
+.conversation-user-message-inner {
+  padding: var(--conversation-user-padding-y) var(--conversation-user-padding-x);
+}
+
+.conversation-user-message-text {
+  font-size: var(--conversation-user-font-size);
+  line-height: var(--conversation-user-line-height);
+}
+
+/* ---------- Agent blocks ---------- */
+
+.conversation-agent-card {
+  border-radius: var(--conversation-radius-card);
+  padding: var(--conversation-agent-card-padding-y) var(--conversation-agent-card-padding-x);
+}
+
+.conversation-agent-status {
+  font-size: var(--conversation-agent-status-font-size);
+}
+
+.conversation-agent-task-row {
+  margin-top: 5px;
+}
+
+.conversation-agent-task-text {
+  line-height: 18px;
+}
+
+.conversation-content-body,
+.conversation-markdown-body {
+  font-size: var(--conversation-content-font-size);
+  line-height: var(--conversation-content-line-height);
+}
+
+.conversation-content-body :where(p) {
+  margin-bottom: 10px;
+}
+
+.conversation-content-body :where(ul, ol) {
+  margin: 6px 0 10px 1.25rem;
+}
+
+.conversation-content-body :where(li) {
+  margin-bottom: 3px;
+}
+
+.conversation-content-body :where(pre) {
+  margin: 8px 0;
+}
+
+.conversation-content-body :where(code) {
+  font-size: 12px;
 }
 
 /* ---------- Top cover (opaque strip at scroll top) ---------- */

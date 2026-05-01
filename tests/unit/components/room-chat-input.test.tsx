@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import { RoomChatInput, MAX_MESSAGE_LENGTH } from '@/components/room-chat-input'
 
 vi.mock('@/components/group-selector', () => ({
@@ -62,22 +63,71 @@ describe('RoomChatInput', () => {
       const editor = container.querySelector('[contenteditable="false"]')
       expect(editor).toBeTruthy()
     })
+
+    it('renders the upload entry directly instead of a plus options button', () => {
+      renderInput()
+
+      const uploadButton = screen.getByRole('button', { name: /add photos and files/i })
+      expect(uploadButton).toBeTruthy()
+      expect(screen.getByTestId('attachment-upload-icon')).toBeTruthy()
+      expect(screen.queryByTestId('attachment-plus-icon')).toBeNull()
+    })
+
+    it('places upload and mention actions on the right before submit', () => {
+      renderInput()
+
+      const actions = screen.getByTestId('composer-actions')
+      const selectors = screen.getByTestId('composer-selectors')
+      const utilities = screen.getByTestId('composer-utilities')
+      const primaryAction = screen.getByTestId('composer-primary-action')
+      const uploadButton = screen.getByRole('button', { name: /add photos and files/i })
+      const mentionButton = screen.getByRole('button', { name: /mention an agent/i })
+      const sendButton = screen.getByTestId('send-button')
+
+      expect(selectors.className).toContain('gap-3')
+      expect(actions.className).not.toContain('gap-1')
+      expect(utilities.className).toContain('gap-1.5')
+      expect(primaryAction.className).toContain('ml-2')
+      expect(utilities.contains(uploadButton)).toBe(true)
+      expect(utilities.contains(mentionButton)).toBe(true)
+      expect(primaryAction.contains(sendButton)).toBe(true)
+      expect(actions.compareDocumentPosition(uploadButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(uploadButton.compareDocumentPosition(mentionButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(mentionButton.compareDocumentPosition(sendButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
   })
 
   describe('button states', () => {
+    function expectSquareActionButton(button: HTMLElement) {
+      expect(button.className).toContain('size-8')
+      expect(button.className).not.toContain('size-9')
+      expect(button.className).toContain('rounded-[var(--chat-input-radius)]')
+      expect(button.className).toContain('p-0')
+      expect(button.className).not.toContain('rounded-full')
+    }
+
+    it('renders the send button as a composer-radius square', () => {
+      renderInput()
+      expectSquareActionButton(screen.getByTestId('send-button'))
+    })
+
     it('should show spinner when sending=true', () => {
       renderInput({ sending: true })
-      expect(screen.getByTestId('sending-button')).toBeTruthy()
+      const button = screen.getByTestId('sending-button')
+      expectSquareActionButton(button)
+      const ping = button.closest('.relative')?.querySelector('.animate-ping')
+      expect(ping?.className).toContain('rounded-[var(--chat-input-radius)]')
+      expect(ping?.className).not.toContain('rounded-full')
     })
 
     it('should show stop button when processing=true', () => {
       renderInput({ processing: true })
-      expect(screen.getByTestId('stop-processing')).toBeTruthy()
+      expectSquareActionButton(screen.getByTestId('stop-processing'))
     })
 
     it('should show cancelling spinner when processing and cancelling', () => {
       renderInput({ processing: true, cancelling: true })
-      expect(screen.getByTestId('cancelling-button')).toBeTruthy()
+      expectSquareActionButton(screen.getByTestId('cancelling-button'))
     })
 
     it('should call onCancel when stop button is clicked', () => {
@@ -141,6 +191,32 @@ describe('RoomChatInput', () => {
     it('should not show expand button when content is not overflowing', () => {
       const { container } = renderInput()
       expect(container.querySelector('[data-testid="expand-editor"]')).toBeNull()
+    })
+
+    it('keeps the collapsed editor to two lines and scrolls from the third line', () => {
+      const tokens = readFileSync('src/components/conversation/conversation-tokens.css', 'utf8')
+      expect(tokens).toContain('--chat-input-editor-collapsed-max-height: 56px;')
+
+      const { container } = renderInput()
+      const editor = container.querySelector('[data-testid="chat-input"]') as HTMLElement
+
+      expect(editor.className).toContain('leading-7')
+      expect(editor.style.maxHeight).toBe('var(--chat-input-editor-collapsed-max-height)')
+      expect(editor.className).not.toContain('max-h-[200px]')
+
+      Object.defineProperty(editor, 'scrollHeight', { configurable: true, value: 84 })
+      Object.defineProperty(editor, 'clientHeight', { configurable: true, value: 56 })
+      editor.textContent = ['one', 'two', 'three'].join('\n')
+      fireEvent.input(editor)
+
+      const expandButton = screen.getByTestId('expand-editor')
+      const actions = screen.getByTestId('composer-actions')
+      expect(actions.contains(expandButton)).toBe(true)
+
+      fireEvent.click(expandButton)
+
+      expect(editor.style.maxHeight).toBe('60vh')
+      expect(editor.style.minHeight).toBe('200px')
     })
   })
 

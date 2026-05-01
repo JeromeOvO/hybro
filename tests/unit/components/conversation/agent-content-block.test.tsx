@@ -4,7 +4,7 @@ import { AgentContentBlock } from '@/components/conversation/AgentContentBlock'
 
 describe('AgentContentBlock', () => {
   it('does not render text-only stream artifacts when their text is already promoted to content', () => {
-    render(
+    const { container } = render(
       <AgentContentBlock
         agentId="agent-1"
         agentName="Hello World Agent"
@@ -22,5 +22,7 @@ describe('AgentContentBlock', () => {
     )
 
     expect(screen.getAllByText('Hello World')).toHaveLength(1)
+    expect(container.querySelector('.conversation-content-body')).toBeTruthy()
+    expect(container.querySelector('.conversation-markdown-body')).toBeTruthy()
   })
 })

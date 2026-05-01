@@ -31,8 +31,8 @@ export function AgentContentBlock({ agentName, content, isStreaming, showAttribu
           {agentName}:
         </div>
       )}
-      <div className={isStreaming ? 'conversation-streaming-cursor' : ''} style={{ lineHeight: 1.8, fontSize: 14 }}>
-        <MarkdownContent content={content} isStreaming={isStreaming} />
+      <div className={`conversation-content-body ${isStreaming ? 'conversation-streaming-cursor' : ''}`}>
+        <MarkdownContent className="conversation-markdown-body" content={content} isStreaming={isStreaming} />
       </div>
       {displayArtifacts && displayArtifacts.length > 0 && (
         <ArtifactList artifacts={displayArtifacts} />

@@ -50,20 +50,19 @@ export function UserMessageBlock({ entity }: UserMessageBlockProps) {
 
   return (
     <div
-      className={`border border-border/50 bg-muted overflow-hidden transition-shadow duration-200 ${
+      className={`conversation-user-message border border-border/50 bg-muted overflow-hidden transition-shadow duration-200 ${
         isOverflowing ? 'cursor-pointer' : ''
       }`}
-      style={{ borderRadius: 12 }}
       data-message-id={entity.id}
       onClick={() => isOverflowing && setExpanded(prev => !prev)}
     >
-      <div className="px-5 py-3">
+      <div className="conversation-user-message-inner">
         <div
           ref={textRef}
-          className="text-[15px] leading-7 text-foreground break-words"
+          className="conversation-user-message-text text-foreground break-words"
           style={{
             whiteSpace: 'pre-wrap',
-            maxHeight: expanded ? 'none' : '84px',
+            maxHeight: expanded ? 'none' : 'var(--conversation-user-max-height)',
             overflow: 'hidden',
             WebkitMaskImage: !expanded && isOverflowing
               ? 'linear-gradient(to bottom, black 50%, transparent 100%)'
