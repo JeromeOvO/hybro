@@ -282,7 +282,6 @@ export interface Room {
   /** @deprecated Use source_group_id from canonical provenance fields. */
   applied_from_group?: string | null;
   extend_info?: unknown;
-  processing_message_id?: string | null;
 
   // ── Canonical provenance fields ────────────────────────────────────────
   membership_origin?: "manual" | "saved_group" | "all_current_agents";

@@ -5,7 +5,6 @@ import { TASK_STATE, isTerminalState } from '@/lib/types/sse'
 import { isStale } from '@/lib/time'
 
 interface ProcessingSnapshotRoom {
-  processing_message_id?: string | null
   active_runs?: Array<{ trigger_message_id?: string | null }> | null
 }
 
