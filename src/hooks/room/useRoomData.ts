@@ -5,7 +5,9 @@ import {
 } from '@/lib/api/room'
 import { banner } from '@/components/ui/banner'
 import type { Agent } from '@/lib/types/agent'
-import type { RoomAgentRefWire } from '@/lib/types/response'
+import type { Room, RoomAgentRefWire, ActiveRunRefWire } from '@/lib/types/response'
+
+export type RoomWithActiveRuns = Room & { active_runs?: ActiveRunRefWire[] | null }
 
 export function useRoomData(
   roomId: string,
@@ -16,14 +18,12 @@ export function useRoomData(
   const activeRoomLoad = useRef<string | null>(null)
   const resolvedAgentsRef = useRef<RoomAgentRefWire[] | null>(null)
 
-  type RoomSettingResult = Awaited<ReturnType<typeof inquiryRoomSetting>>
-
   const roomQuery = useQuery({
     queryKey: ['room', roomId],
     enabled: !!roomId && activeRoomLoad.current !== roomId,
     retry: 0,
     staleTime: 1000 * 30,
-    queryFn: async ({ signal }): Promise<RoomSettingResult['room'] | null> => {
+    queryFn: async ({ signal }): Promise<RoomWithActiveRuns | null> => {
       activeRoomLoad.current = roomId
       console.log(`🏠 Loading room: ${roomId}`)
 
@@ -52,7 +52,7 @@ export function useRoomData(
           primeAgentNameCache(catalogEntries)
         }
         console.log(`✅ Room loaded: ${roomId}`)
-        return response.room
+        return { ...response.room, active_runs: response.active_runs ?? null }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
           return roomQuery.data ?? null

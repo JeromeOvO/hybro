@@ -237,7 +237,7 @@ Major refactoring of the frontend message state management.
 - Batch cancel all non-terminal tasks on processing_status done
 
 **Processing Placeholder Restoration:**
-- Checks if room has active `processing_message_id` on page reload
+- Uses `active_runs` from the room payload on page reload (not legacy `processing_message_id`)
 - Skips placeholder if message is >2min stale
 - Restores processing state without re-triggering backend
 

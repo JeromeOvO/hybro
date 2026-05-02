@@ -1,6 +1,7 @@
 // Room-related API functions
 import type { 
   RoomCenterRoomSettingResponse, 
+  RoomCenterActiveRunsResponse,
   RoomCenterUserMessageResponse,
   RoomCenterRoomMessageResponse
 } from '@/lib/types/response'
@@ -82,6 +83,23 @@ export async function inquiryRoomSetting(
 
   return apiPost<RoomCenterRoomSettingResponse>(
     `${API_BASE_URL}/inquiryRoomSetting`,
+    requestData,
+    getToken,
+    signal
+  )
+}
+
+export async function inquiryActiveRuns(
+  room_id: string,
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal
+): Promise<RoomCenterActiveRunsResponse> {
+  const requestData: RoomCenterRoomSettingRequest = {
+    room_id
+  }
+
+  return apiPost<RoomCenterActiveRunsResponse>(
+    `${API_BASE_URL}/inquiryActiveRuns`,
     requestData,
     getToken,
     signal

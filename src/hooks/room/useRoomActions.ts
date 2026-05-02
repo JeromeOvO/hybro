@@ -132,7 +132,7 @@ export function useRoomActions(
         if (cancelling) {
           lifecycle.setCancelTimedOut(true)
           setCancelling(false)
-          lifecycle.setProcessing(false)
+          lifecycle.stopProcessing({ clearMessageId: false })
           banner.warning('Cancellation timed out — the agent may still be running')
         }
       })
@@ -194,8 +194,7 @@ export function useRoomActions(
         timestamp: new Date(Date.now() + 1).toISOString(),
         isEphemeral: true,
       }, 'optimistic')
-      lifecycle.setProcessing(true)
-      lifecycle.setSendGuard(true)
+      lifecycle.startProcessing()
     }
 
     try {
@@ -234,7 +233,7 @@ export function useRoomActions(
       }
       if (isLastInGroup) {
         store.removeMessage(processingPlaceholderId)
-        lifecycle.setProcessing(false)
+        lifecycle.stopProcessing({ clearMessageId: false })
       }
 
       throw err

@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { useShallow } from 'zustand/react/shallow'
 import type { PendingAttachment } from '@/lib/types/attachments'
 
 type RoomId = string
@@ -179,9 +178,25 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     }),
 }))
 
-/** Reactive hook that returns room-scoped flags with shallow equality. */
-export function useRoomFlags(roomId: string): RoomFlags {
-  return useRoomUiStore(useShallow(s => s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS))
+/** Narrow selector: room processing lifecycle flag only. */
+export function useRoomProcessing(roomId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).processing)
+}
+
+export function useRoomSending(roomId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).sending)
+}
+
+export function useRoomCancelling(roomId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).cancelling)
+}
+
+export function useRoomUpdating(roomId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).updatingRoom)
+}
+
+export function useRoomSseEnabled(roomId: string): boolean {
+  return useRoomUiStore((s) => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).sseEnabled)
 }
 
 export function useLocalSendSeq(roomId: string): number {
