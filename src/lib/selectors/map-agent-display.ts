@@ -2,17 +2,6 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import type { AgentDisplayProps } from './conversation-types'
 import type { TaskState } from '@/lib/types/sse'
 
-function relativeTime(isoDate: string | undefined | null): string {
-  if (!isoDate) return ''
-  const diffMs = Date.now() - new Date(isoDate).getTime()
-  const mins = Math.floor(diffMs / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
-}
-
 function make(name: string, label: string, tone: AgentDisplayProps['tone'], isAnimated: boolean): AgentDisplayProps {
   return { label, tone, isAnimated, ariaLabel: `${name} — ${label}` }
 }
@@ -34,11 +23,8 @@ export function mapAgentDisplayProps(entity: MessageEntity): AgentDisplayProps {
         : make(name, 'Working', 'accent', true)
     }
 
-    case 'completed': {
-      const time = relativeTime(entity.taskUpdatedAt)
-      const label = time ? `Completed · ${time}` : 'Completed'
-      return make(name, label, 'muted', false)
-    }
+    case 'completed':
+      return make(name, 'Completed', 'muted', false)
 
     case 'failed':
       return make(name, 'Failed', 'danger', false)
