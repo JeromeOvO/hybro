@@ -9,7 +9,7 @@ Run these **before** or **during** deploy when the release notes call for it. Sc
 **Command** (from `multi-agents-backend` repo root, venv active, `MONGODB_URL` set):
 
 ```bash
-python scripts/migrations/run_run_lifecycle_indexes.py
+python database/migration/add_run_lifecycle_indexes.py
 ```
 
 ## Legacy `rooms.processing_message_id` null repair
@@ -36,7 +36,9 @@ DRY_RUN=1 python database/migration/purge_empty_artifact_parts.py
 python database/migration/purge_empty_artifact_parts.py
 ```
 
-`DRY_RUN=1` prints the match count and performs no writes. (rollout; set in your deploy config after indexes exist):
+`DRY_RUN=1` prints the match count and performs no writes.
+
+## Feature flags (rollout; set in your deploy config after indexes exist)
 
 | Variable | Purpose |
 |----------|---------|
