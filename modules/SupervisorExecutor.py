@@ -229,8 +229,7 @@ class SupervisorExecutor:
                 )
 
             # SSE: notify frontend of planning stage
-            # Skip if already cancelled — prevents re-setting processing_message_id
-            # in the DB after the cancel endpoint has cleared it.
+            # Skip if already cancelled — avoids duplicate PROCESSING after cancel.
             if not (token and token.is_cancelled):
                 try:
                     await self.sse_manager.send_processing_status(

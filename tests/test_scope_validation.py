@@ -449,6 +449,12 @@ class TestAllAgentsPostPersistMessageId:
         # The key assertion: message_id should be the real persisted ID, not None
         assert result.message_id == "msg-real-123"
         room_center._persist_user_message.assert_called_once()
+        room_center.sse_manager.send_processing_status.assert_awaited_with(
+            "room-1",
+            "failed",
+            "msg-real-123",
+            details="Agent selection failed.",
+        )
 
 
 # =============================================================================
@@ -505,35 +511,52 @@ class TestClientRequestIdPropagation:
         )
 
     @pytest.mark.asyncio
-    async def test_parse_user_message_direct_chat_does_not_reference_request_scope(self, room_center):
+    async def test_parse_user_message_forwards_client_request_id_to_agent_message_generation(
+        self, room_center
+    ):
+        """Regression: parse_user_message must not reference out-of-scope request."""
         room_center._generate_agent_messages_based_on_parsed_result = AsyncMock(
             return_value=[MagicMock()]
         )
 
         result = await room_center.parse_user_message(
-            "room-1",
-            "msg-1",
-            "hello",
-            {"a1": "Alpha"},
+            room_id="room-1",
+            user_message_id="msg-1",
+            message_text="hello",
+            selected_agent_set={"a1": "Alpha"},
             user_id="user-1",
+            is_debate_mode=False,
+            auto_assign_agents=False,
+            target_group="room_team",
+            agents=None,
+            conversation_context=None,
+            token=None,
+            client_request_id="cr-parse-1",
         )
 
         assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_parse_user_message_passes_client_request_id_to_agent_messages(self, room_center):
-        room_center._generate_agent_messages_based_on_parsed_result = AsyncMock(
-            return_value=[MagicMock()]
-        )
-
-        await room_center.parse_user_message(
-            "room-1",
+        room_center._generate_agent_messages_based_on_parsed_result.assert_awaited_once_with(
+            {
+                "message_type": "DIRECT_CHAT",
+                "original_text": "hello",
+                "needs_decomposition": False,
+                "task_steps": [
+                    {
+                        "step_id": "step_1",
+                        "agent_id": "a1",
+                        "agent_name": "Alpha",
+                        "task_content": "hello",
+                        "dependencies": [],
+                    }
+                ],
+            },
             "msg-1",
-            "hello",
-            {"a1": "Alpha"},
+            "room-1",
             user_id="user-1",
-            client_request_id="cr-456",
+            extend_info={
+                "allowed_agent_ids": ["a1"],
+                "target_group": "room_team",
+                "is_direct_chat": True,
+            },
+            client_request_id="cr-parse-1",
         )
-
-        call_kwargs = room_center._generate_agent_messages_based_on_parsed_result.call_args.kwargs
-        assert call_kwargs["client_request_id"] == "cr-456"

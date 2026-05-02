@@ -614,20 +614,21 @@ to your local agents expired while your hub was offline." The heartbeat loop
 periodically sweeps expired entries from in-memory offline queues to prevent
 memory leaks.
 
-> **Concurrency note**: The `Room.processing_message_id` field tracks which
-> user message is being processed (single-slot). In rooms with both cloud and
-> hub agents, a supervisor dispatch may call a fast cloud agent and a slow hub
-> agent concurrently. The relay must not clear `processing_message_id` when
-> one agent completes if another is still in-flight.
+> **Concurrency note**: **Authoritative busy state** for orchestration is
+> **`runs` / `active_runs`** (not `rooms.processing_message_id`, which is legacy
+> and may be nulled by cleanup when no non-terminal runs exist). In rooms with
+> both cloud and hub agents, a supervisor dispatch may call a fast cloud agent
+> and a slow hub agent concurrently. The relay must not emit **terminal**
+> lifecycle for that user turn until every in-flight agent leg has finished.
 >
 > **Mechanism**: The backend tracks in-flight agent dispatches per user message
 > using an atomic counter or a set of pending `agent_message_id`s on the
 > `RoomUserMessage` document (e.g., `pending_agent_ids: set[str]`). Each
 > agent completion (cloud direct or hub relay) removes its ID from the set.
-> `processing_message_id` is cleared only when the set is empty. This mirrors
-> how `asyncio.gather` completion works in the supervisor, but persisted to
-> handle relay-delayed completions. The existing per-agent `task_update` SSE
-> events provide progress while agents are in-flight.
+> Terminal `processing_status` / run transitions apply only when the set is
+> empty—analogous to `asyncio.gather`, but persisted to handle relay-delayed
+> completions. Per-agent `task_update` SSE events provide progress while
+> agents are in-flight.
 
 ### 5.7 Webhook Relay for Push Notifications
 

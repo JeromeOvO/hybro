@@ -3,7 +3,7 @@ Integration tests for AgentResponseHandler — parity verification.
 
 Tests that feeding the same AgentEvent sequences through the handler
 produces identical DB writes and SSE emissions for each event kind,
-and that flow-control flags (skip_persist, send_processing_status) work.
+and that flow-control flags (skip_persist) work.
 """
 
 import pytest
@@ -525,7 +525,6 @@ class TestHandlerNotifyTaskUpdate:
                 room_id="room-001",
                 user_id="user-001",
                 error=None,
-                send_processing_status=False,
                 parts=None,
             )
 
@@ -552,7 +551,7 @@ class TestHandlerNotifyTaskUpdate:
 
             event = AgentEvent(
                 kind="response", **_base_event(),
-                text="Done!", send_processing_status=True,
+                text="Done!",
                 parts=[{"kind": "text"}],
             )
             await h._notify(event, TaskState.completed)
@@ -561,4 +560,4 @@ class TestHandlerNotifyTaskUpdate:
         call_kw = mock_impl.call_args.kwargs
         assert call_kw["message_id"] == "msg-001"
         assert call_kw["room_id"] == "room-001"
-        assert call_kw["send_processing_status"] is True
+        assert call_kw["parts"] == [{"kind": "text"}]

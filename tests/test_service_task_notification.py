@@ -9,6 +9,7 @@ import pytest
 from a2a.types import Artifact, Part, Task, TaskState, TaskStatus, TextPart
 
 from models.room import MessageContent, Room, RoomAgentMessage
+from services.a2a_constants import SSEProcessingStatus
 from services.task_notification_service import notify_task_update
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
@@ -389,7 +390,6 @@ class TestNotifyTaskUpdate:
                 state=TaskState.input_required,
                 room_id="room-1",
                 user_id="user-1",
-                send_processing_status=True,
             )
 
             assert result is True
@@ -397,7 +397,9 @@ class TestNotifyTaskUpdate:
             call_kw = notif.send_task_update.call_args.kwargs
             assert call_kw["requires_input"] is True
             assert call_kw["status_message"] == "Please provide input"
-            sse.send_processing_status.assert_not_called()
+            sse.send_processing_status.assert_awaited_once_with(
+                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+            )
 
     # --------------------------------------------------------------------- #
     # 9. auth_required sets requires_auth flag
@@ -464,10 +466,10 @@ class TestNotifyTaskUpdate:
             assert call_kw["status_message"] == "No visible output from upstream agent"
 
     # --------------------------------------------------------------------- #
-    # 10. send_processing_status only for terminal states
+    # 10. lifecycle processing_status mapping for task states
     # --------------------------------------------------------------------- #
     @pytest.mark.asyncio
-    async def test_send_processing_status_only_for_terminal_states(self):
+    async def test_send_processing_status_for_terminal_and_interactive_states(self):
         task_completed = _make_task(TaskState.completed)
         msg_completed = _make_message(task=task_completed, message_text="done")
 
@@ -485,32 +487,32 @@ class TestNotifyTaskUpdate:
             _setup_notif_mock(notif)
             _setup_sse_mock(sse)
 
-            # --- completed + send_processing_status=True -> called
+            # --- completed -> lifecycle completed emitted
             _setup_db_mock(db, msg=msg_completed)
             await notify_task_update(
                 message_id="msg-1",
                 state=TaskState.completed,
                 room_id="room-1",
                 user_id="user-1",
-                send_processing_status=True,
             )
             sse.send_processing_status.assert_awaited_once_with(
-                "room-1", TaskState.completed, "msg-1",
+                "room-1", SSEProcessingStatus.COMPLETED, "msg-1",
             )
 
             sse.send_processing_status.reset_mock()
             notif.send_task_update.reset_mock()
 
-            # --- input_required + send_processing_status=True -> NOT called
+            # --- input_required -> lifecycle awaiting_input emitted
             _setup_db_mock(db, msg=msg_input)
             await notify_task_update(
                 message_id="msg-1",
                 state=TaskState.input_required,
                 room_id="room-1",
                 user_id="user-1",
-                send_processing_status=True,
             )
-            sse.send_processing_status.assert_not_called()
+            sse.send_processing_status.assert_awaited_once_with(
+                "room-1", SSEProcessingStatus.AWAITING_INPUT, "msg-1",
+            )
 
     # --------------------------------------------------------------------- #
     # 11. Agent name resolved from room

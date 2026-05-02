@@ -57,7 +57,6 @@ class AgentEvent:
     total_steps: int | None = None
 
     # Flow control
-    send_processing_status: bool = False
     skip_persist: bool = False
     s3_converted: bool = False
     details: str | None = None

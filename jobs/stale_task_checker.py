@@ -12,7 +12,7 @@ This module provides a background job that:
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+import os
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -23,7 +23,7 @@ from services.task_notification_service import notify_task_update
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from config.settings import settings
-from database.mongodb import get_db
+from database.mongodb import mongodb
 from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
 from modules.RoomMessageCenter import room_message_center
@@ -33,6 +33,7 @@ from services.a2a_constants import (
     TERMINAL_STATES,
     is_terminal_state,
 )
+from services.run_metrics import increment_counter
 from services.a2a_service import a2a_service
 from services.database_service import db_service
 
@@ -53,8 +54,8 @@ class StaleTaskChecker:
     2. Expired tasks: Auto-fail tasks that have been pending too long
     3. Never-acknowledged tasks: Fail tasks where agent never responded
     4. Orphaned messages: Recover agent messages that were never processed
-    5. Stuck processing status: Clear processing_message_id on rooms where
-       all tasks are done but the status was never cleared
+    5. Legacy room mirror: null rooms.processing_message_id when the room has
+       no non-terminal runs (runs are source of truth)
     """
 
     def __init__(
@@ -75,7 +76,7 @@ class StaleTaskChecker:
             pending_task_warning_hours: Warn (log) after this time
             check_interval_minutes: How often to run the check
             orphan_threshold_minutes: Recover orphaned messages older than this
-            processing_status_expiry_minutes: Clear stuck processing status older than this
+            processing_status_expiry_minutes: Reserved (legacy cleanup no longer uses age threshold)
         """
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
@@ -210,6 +211,56 @@ class StaleTaskChecker:
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
+        # 8. Fail runs stuck without a terminal transition (run lifecycle watchdog).
+        await self._fail_stale_runs()
+
+    async def _fail_stale_runs(self) -> None:
+        """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
+        if os.environ.get("FEATURE_RUN_WATCHDOG", "1").strip().lower() in (
+            "0",
+            "false",
+            "off",
+        ):
+            return
+        stale_mins = int(os.environ.get("RUN_WATCHDOG_STALE_MINUTES", "90"))
+        try:
+            stale = await db_service.find_stale_non_terminal_runs(stale_mins, limit=100)
+        except Exception as e:
+            logger.error("run watchdog: failed to list stale runs: %s", e)
+            return
+        if not stale:
+            return
+
+        from services.run_command_handler import run_command_handler
+        from services.sse_services import sse_manager
+        from services.a2a_constants import SSEProcessingStatus
+
+        for doc in stale:
+            room_id = str(doc.get("room_id") or "")
+            run_id = str(doc.get("run_id") or "")
+            if not room_id or not run_id:
+                continue
+            try:
+                await run_command_handler.append_run_timeout_failure(
+                    room_id, run_id, stale_minutes=stale_mins
+                )
+                increment_counter("run_watchdog_forced_failure_total")
+                tid = doc.get("trigger_message_id") or run_id
+                await sse_manager.send_processing_status(
+                    room_id,
+                    SSEProcessingStatus.FAILED,
+                    str(tid),
+                    details="Run watchdog: stale non-terminal run timed out",
+                )
+            except Exception as e:
+                logger.error(
+                    "run watchdog: failed to timeout run_id=%s room=%s: %s",
+                    run_id,
+                    room_id,
+                    e,
+                    exc_info=True,
+                )
+
     async def _process_stale_task(
         self,
         msg: RoomAgentMessage,
@@ -272,7 +323,6 @@ class StaleTaskChecker:
                     state=TaskState.canceled,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
-                    send_processing_status=True,
                 )
                 return
 
@@ -316,7 +366,6 @@ class StaleTaskChecker:
                     state=new_state,
                     room_id=msg.room_id,
                     user_id=msg.user_id or "",
-                    send_processing_status=True,
                 )
             else:
                 # Still working - timestamp already touched by update_task_on_message
@@ -482,107 +531,39 @@ class StaleTaskChecker:
             state=TaskState.failed,
             room_id=msg.room_id,
             user_id=msg.user_id or "",
-            send_processing_status=True,
         )
 
     async def _cleanup_stuck_processing_status(self) -> None:
         """
-        Clean up rooms with stuck processing_message_id.
+        Null legacy rooms.processing_message_id when there are no non-terminal runs.
 
-        This handles cases where processing_message_id was never cleared due to:
-        1. Server restart while processing a message
-        2. Unhandled exception during processing
-        3. All agent tasks completed but status was never cleared
-
-        For each room with processing_message_id set, checks if the referenced
-        user message is old enough and all related agent tasks are in terminal
-        state (or no agent messages exist). If so, clears the processing status.
+        Mirrors are no longer written on the lifecycle path; this job clears stale
+        Mongo values using the same predicate as compaction (runs-only busy).
         """
-        mongo_db = await get_db()
-        rooms_collection = mongo_db.rooms
-        agent_messages_collection = mongo_db.room_agent_messages
-        user_messages_collection = mongo_db.room_user_messages
-
-        # Find rooms with processing_message_id set
-        rooms_with_processing = await rooms_collection.find(
-            {"processing_message_id": {"$ne": None}}
-        ).to_list(length=None)
-
-        if not rooms_with_processing:
+        try:
+            busy_ids = await db_service.get_room_ids_with_non_terminal_runs()
+        except Exception as e:
+            logger.warning(
+                "legacy processing_message_id cleanup: could not list active rooms: %s",
+                e,
+            )
             return
 
-        terminal_state_values = [s.value for s in TERMINAL_STATES]
-        threshold = utcnow() - timedelta(minutes=self.processing_status_expiry_minutes)
-
-        rooms_to_clear = []
-
-        for room in rooms_with_processing:
-            room_id = room["room_id"]
-            processing_message_id = room["processing_message_id"]
-
-            # Get the user message being processed
-            user_message = await user_messages_collection.find_one(
-                {"message_id": processing_message_id}
-            )
-
-            if not user_message:
-                # User message doesn't exist - definitely stuck
-                rooms_to_clear.append(room_id)
-                logger.warning(
-                    f"Clearing stuck processing_message_id on room {room_id}: "
-                    f"user message {processing_message_id} not found"
+        busy = list({rid for rid in busy_ids if rid})
+        flt: dict = {"processing_message_id": {"$ne": None}}
+        if busy:
+            flt["room_id"] = {"$nin": busy}
+        try:
+            coll = mongodb.rooms_collection
+            res = await coll.update_many(flt, {"$set": {"processing_message_id": None}})
+            if res.modified_count:
+                logger.info(
+                    "legacy processing_message_id cleanup: nulled field on %d rooms "
+                    "(no non-terminal runs)",
+                    res.modified_count,
                 )
-                continue
-
-            message_created_at = user_message.get("message_created_at")
-            if isinstance(message_created_at, str):
-                from dateutil.parser import parse
-
-                message_created_at = parse(message_created_at)
-
-            # Skip if message is recent (still legitimately processing)
-            if message_created_at and ensure_utc(message_created_at) > threshold:
-                continue
-
-            # Get agent messages for this user message
-            agent_messages = await agent_messages_collection.find(
-                {"related_message_id": processing_message_id}
-            ).to_list(length=None)
-
-            if not agent_messages:
-                # No agent messages but message is old - stuck
-                rooms_to_clear.append(room_id)
-                logger.warning(
-                    f"Clearing stuck processing_message_id on room {room_id}: "
-                    f"no agent messages for {processing_message_id}"
-                )
-                continue
-
-            # Check if all tasks are in terminal state (or have no task at all)
-            has_non_terminal_task = False
-            for msg in agent_messages:
-                task = msg.get("message_content", {}).get("message_task")
-                if task:
-                    state = task.get("status", {}).get("state")
-                    if state and state not in terminal_state_values:
-                        has_non_terminal_task = True
-                        break
-
-            if not has_non_terminal_task:
-                rooms_to_clear.append(room_id)
-                logger.warning(
-                    f"Clearing stuck processing_message_id on room {room_id}: "
-                    f"all tasks terminal for {processing_message_id}"
-                )
-
-        if rooms_to_clear:
-            logger.info(
-                f"Clearing stuck processing_message_id on {len(rooms_to_clear)} rooms"
-            )
-            await rooms_collection.update_many(
-                {"room_id": {"$in": rooms_to_clear}},
-                {"$set": {"processing_message_id": None}},
-            )
+        except Exception as e:
+            logger.warning("legacy processing_message_id cleanup failed: %s", e)
 
     async def _recover_orphaned_messages(self) -> None:
         """

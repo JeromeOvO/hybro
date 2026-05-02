@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from models.request import (
     RoomCenterAgentMessageRequest,
     RoomCenterRoomMessageRequest,
@@ -5,6 +7,7 @@ from models.request import (
     RoomCenterUserMessageRequest,
 )
 from models.response import (
+    RoomCenterActiveRunsResponse,
     RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -26,6 +29,11 @@ class RoomCenter:
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
         return self.room_services.inquiry_room_setting(request)
+
+    def inquiry_active_runs(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterActiveRunsResponse:
+        return self.room_services.inquiry_active_runs(request)
 
     def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest

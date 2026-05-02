@@ -35,7 +35,7 @@ from common.utils.a2a_helpers import (
     task_has_visible_content,
 )
 from common.utils.logger import get_logger
-from services.a2a_constants import is_terminal_state
+from services.a2a_constants import SSEProcessingStatus
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -43,6 +43,21 @@ if TYPE_CHECKING:
     from services.sse_services import SSEManager
 
 logger = get_logger(__name__)
+
+
+def _map_task_state_to_processing_status(state: TaskState) -> SSEProcessingStatus | None:
+    """Map TaskState updates to lifecycle processing_status values."""
+    if state == TaskState.completed:
+        return SSEProcessingStatus.COMPLETED
+    if state == TaskState.failed:
+        return SSEProcessingStatus.FAILED
+    if state == TaskState.canceled:
+        return SSEProcessingStatus.CANCELED
+    if state == TaskState.rejected:
+        return SSEProcessingStatus.REJECTED
+    if state in (TaskState.input_required, TaskState.auth_required):
+        return SSEProcessingStatus.AWAITING_INPUT
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +76,6 @@ async def _notify_task_update_impl(
     room_id: str,
     user_id: str,
     error: str | None = None,
-    send_processing_status: bool = False,
     parts: list[dict] | None = None,
 ) -> bool:
     """Shared core: idempotency check, DB read, backfill, SSE emission.
@@ -347,13 +361,14 @@ async def _notify_task_update_impl(
 
     logger.info("Sent SSE notification for task %s state %s", message_id, state)
 
-    if send_processing_status and is_terminal_state(state):
+    mapped_status = _map_task_state_to_processing_status(state)
+    if mapped_status is not None:
         if client_request_id:
             await sse.send_processing_status(
-                room_id, state, message_id, client_request_id=client_request_id
+                room_id, mapped_status, message_id, client_request_id=client_request_id
             )
         else:
-            await sse.send_processing_status(room_id, state, message_id)
+            await sse.send_processing_status(room_id, mapped_status, message_id)
 
     return True
 
@@ -370,7 +385,6 @@ async def notify_task_update(
     room_id: str,
     user_id: str,
     error: str | None = None,
-    send_processing_status: bool = False,
     parts: list[dict] | None = None,
 ) -> bool:
     """Standalone entry point — thin wrapper passing global singletons.
@@ -393,6 +407,5 @@ async def notify_task_update(
         room_id=room_id,
         user_id=user_id,
         error=error,
-        send_processing_status=send_processing_status,
         parts=parts,
     )

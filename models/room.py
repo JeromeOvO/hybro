@@ -101,6 +101,9 @@ class RoomMessage(Message):
     message_type: str  # "user" or "agent"
     user_id: str | None = None
     agent_id: str | None = None
+    # Conversation graph / execution link (optional; see EVENT_SOURCED_TURN_LIFECYCLE_REFACTOR_DESIGN.md)
+    parent_message_id: str | None = None
+    run_id: str | None = None
     # Canonical frontend correlation key for turn identity.
     # For legacy rows this is backfilled to message_id via migration.
     client_request_id: str | None = None

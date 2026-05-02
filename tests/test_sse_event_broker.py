@@ -521,8 +521,7 @@ class TestSharedTerminalDedup:
         await sse_manager.start_redis_service(mock_redis)
 
         conn = await sse_manager.add_connection("room-1")
-        with patch("services.sse_services.db_service") as mock_db:
-            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+        with patch("services.sse_services.db_service"):
             await sse_manager.send_processing_status("room-1", "completed", "msg-1")
 
         # Connection queue should have the status event
@@ -538,8 +537,7 @@ class TestSharedTerminalDedup:
         await sse_manager.start_redis_service(mock_redis)
 
         conn = await sse_manager.add_connection("room-1")
-        with patch("services.sse_services.db_service") as mock_db:
-            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+        with patch("services.sse_services.db_service"):
             await sse_manager.send_processing_status("room-1", "completed", "msg-1")
 
         # Queue should be empty — dedup suppressed the send
@@ -552,8 +550,7 @@ class TestSharedTerminalDedup:
         sse_manager._terminal_status_sent["room-1:msg-1"] = "completed"  # pre-populate L1
 
         conn = await sse_manager.add_connection("room-1")
-        with patch("services.sse_services.db_service") as mock_db:
-            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+        with patch("services.sse_services.db_service"):
             await sse_manager.send_processing_status("room-1", "completed", "msg-1")
 
         # Queue should be empty — L1 cache suppressed the send
@@ -564,8 +561,7 @@ class TestSharedTerminalDedup:
     async def test_terminal_dedup_works_without_redis(self, sse_manager):
         """Terminal dedup still works with just L1 when Redis not attached."""
         conn = await sse_manager.add_connection("room-1")
-        with patch("services.sse_services.db_service") as mock_db:
-            mock_db.clear_room_processing_status_if_matches = AsyncMock()
+        with patch("services.sse_services.db_service"):
             # First send — should go through
             await sse_manager.send_processing_status("room-1", "completed", "msg-1")
             msg = await asyncio.wait_for(conn.queue.get(), timeout=1.0)

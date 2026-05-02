@@ -16,6 +16,7 @@ from models.agent_group import AgentGroup
 from models.api_key import APIKey
 from models.memory import ChatContext, RoomMemory
 from models.room import Room, RoomAgentMessage, RoomUserMessage
+from models.run import NON_TERMINAL_RUN_STATE_VALUES
 from models.supervisor_v2 import TrajectoryStatus
 from models.task import BaseTask, MetaTask, TaskSession
 
@@ -379,6 +380,24 @@ class MongoDB:
                 "MongoDB client is not connected. Please call connect() first."
             )
         return self.db.agent_capability_issues
+
+    @property
+    def runs_collection(self):
+        """Get runs collection for authoritative execution lifecycle state."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.runs
+
+    @property
+    def run_events_collection(self):
+        """Get run_events collection for append-only lifecycle events."""
+        if not self.client:
+            raise ConnectionError(
+                "MongoDB client is not connected. Please call connect() first."
+            )
+        return self.db.run_events
 
     # agent management
     async def add_agent(self, agent: Agent) -> str:
@@ -867,29 +886,44 @@ class MongoDB:
         )
         return result.modified_count >= 0
 
-    async def update_room_processing_status(
-        self, room_id: str, processing_message_id: str | None
-    ) -> bool:
-        """
-        Update the processing_message_id field on a room.
-        Used to track which user message is currently being processed.
-        Set to message_id when processing starts, None when complete/cancelled/failed.
-        """
-        result = await self.rooms_collection.update_one(
-            {"room_id": room_id},
-            {"$set": {"processing_message_id": processing_message_id}},
-        )
-        return result.modified_count >= 0
+    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
+        """Return non-terminal runs for a room, newest first."""
+        cursor = self.runs_collection.find(
+            {
+                "room_id": room_id,
+                "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+            }
+        ).sort("updated_at", -1)
+        return await cursor.to_list(length=None)
 
-    async def clear_room_processing_status_if_matches(
-        self, room_id: str, message_id: str
-    ) -> bool:
-        """CAS clear: only clear processing_message_id if it matches the given message_id."""
-        result = await self.rooms_collection.update_one(
-            {"room_id": room_id, "processing_message_id": message_id},
-            {"$set": {"processing_message_id": None}},
+    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
+        """Distinct room_ids that have at least one non-terminal run (compaction / skip sets)."""
+        ids = await self.runs_collection.distinct(
+            "room_id",
+            {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
         )
-        return result.modified_count > 0
+        out: list[str] = []
+        for rid in ids:
+            if rid:
+                out.append(str(rid))
+        return out
+
+    async def find_stale_non_terminal_runs(
+        self, *, stale_minutes: int, limit: int = 200
+    ) -> list[dict]:
+        """Runs stuck in a non-terminal state (watchdog)."""
+        cutoff = utcnow() - timedelta(minutes=stale_minutes)
+        cursor = (
+            self.runs_collection.find(
+                {
+                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+                    "updated_at": {"$lt": cutoff},
+                }
+            )
+            .sort("updated_at", 1)
+            .limit(limit)
+        )
+        return await cursor.to_list(length=limit)
 
     async def claim_user_message_for_processing(self, message_id: str) -> bool:
         """Atomically claim a user message for processing. Returns True if this call claimed it."""
@@ -2622,6 +2656,46 @@ class MongoDB:
             )
         except Exception as e:
             logger.error("Error creating capability issue indexes: %s", e)
+
+    async def create_run_lifecycle_indexes(self) -> None:
+        """Create indexes for runs and run_events collections."""
+        try:
+            await self.runs_collection.create_index(
+                [("run_id", 1)],
+                name="run_id_unique",
+                unique=True,
+            )
+            await self.runs_collection.create_index(
+                [("room_id", 1), ("state", 1), ("updated_at", -1)],
+                name="room_state_updated_at",
+            )
+            await self.runs_collection.create_index(
+                [("room_id", 1), ("client_request_id", 1), ("agent_id", 1)],
+                name="room_client_agent_idempotency",
+                unique=True,
+                partialFilterExpression={
+                    "client_request_id": {"$type": "string"},
+                    "agent_id": {"$type": "string"},
+                },
+            )
+
+            await self.run_events_collection.create_index(
+                [("event_id", 1)],
+                name="event_id_unique",
+                unique=True,
+            )
+            await self.run_events_collection.create_index(
+                [("run_id", 1), ("seq", 1)],
+                name="run_seq_unique",
+                unique=True,
+            )
+            await self.run_events_collection.create_index(
+                [("room_id", 1), ("ts", -1)],
+                name="room_ts",
+            )
+            logger.info("Run lifecycle indexes created on runs/run_events")
+        except Exception as e:
+            logger.error("Error creating run lifecycle indexes: %s", e)
 
 mongodb = MongoDB()
 

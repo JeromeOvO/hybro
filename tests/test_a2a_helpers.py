@@ -80,6 +80,26 @@ class TestSanitizeArtifactParts:
         result = sanitize_artifact_parts(original)
         assert result is not original
 
+    def test_empty_dict_dropped(self):
+        """Bare {} from protobuf Part(text='') serialization is dropped."""
+        parts = [{}]
+        assert sanitize_artifact_parts(parts) == []
+
+    def test_metadata_only_part_dropped(self):
+        """A part with only metadata and no content key is dropped."""
+        parts = [{"metadata": {"source": "db"}}]
+        assert sanitize_artifact_parts(parts) == []
+
+    def test_unknown_kind_with_content_key_kept(self):
+        """A part with unknown kind but recognized content key passes."""
+        parts = [{"kind": "custom", "url": "https://example.com/f.png"}]
+        assert sanitize_artifact_parts(parts) == parts
+
+    def test_url_part_without_kind_kept(self):
+        """Flat url-style part (no kind) passes the content-key check."""
+        parts = [{"url": "https://example.com/doc.pdf"}]
+        assert sanitize_artifact_parts(parts) == parts
+
 
 # ---------------------------------------------------------------------------
 # extract_parts

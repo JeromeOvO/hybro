@@ -75,15 +75,25 @@ class TestSanitizeParts:
         parts = [{"root": {"kind": "text", "text": "hi"}}]
         assert _sanitize_parts(parts) == parts
 
-    def test_unknown_kind_kept(self):
-        """Parts with unknown kind are kept (no validation rule for them)."""
+    def test_unknown_kind_without_content_key_dropped(self):
+        """Parts with unknown kind and no recognized content key are dropped."""
         parts = [{"kind": "unknown", "payload": "x"}]
+        assert _sanitize_parts(parts) == []
+
+    def test_unknown_kind_with_content_key_kept(self):
+        """Parts with unknown kind but a recognized content key are kept."""
+        parts = [{"kind": "custom", "text": "hello"}]
         assert _sanitize_parts(parts) == parts
 
-    def test_no_kind_kept(self):
-        """Parts without a 'kind' field are kept (nothing to validate against)."""
-        parts = [{"something": "else"}]
+    def test_no_kind_with_content_key_kept(self):
+        """Parts without 'kind' but with a recognized content key are kept."""
+        parts = [{"url": "https://example.com/doc.pdf"}]
         assert _sanitize_parts(parts) == parts
+
+    def test_no_kind_without_content_key_dropped(self):
+        """Parts without 'kind' and no recognized content key are dropped."""
+        parts = [{"something": "else"}]
+        assert _sanitize_parts(parts) == []
 
 
 # ---------------------------------------------------------------------------

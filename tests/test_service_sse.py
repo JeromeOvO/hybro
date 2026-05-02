@@ -180,7 +180,10 @@ class TestSendProcessingStatusClientRequestId:
         conn = await mgr.add_connection("room-1")
 
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("services.sse_services.db_service.update_room_processing_status", AsyncMock())
+            mp.setattr(
+                "services.sse_services.run_command_handler.record_processing_status",
+                AsyncMock(return_value=None),
+            )
 
             await mgr.send_processing_status(
                 "room-1", "processing", "msg-1", client_request_id="cr-abc"
@@ -198,7 +201,10 @@ class TestSendProcessingStatusClientRequestId:
         conn = await mgr.add_connection("room-1")
 
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("services.sse_services.db_service.update_room_processing_status", AsyncMock())
+            mp.setattr(
+                "services.sse_services.run_command_handler.record_processing_status",
+                AsyncMock(return_value=None),
+            )
 
             await mgr.send_processing_status(
                 "room-1", "processing", "msg-1"
