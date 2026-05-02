@@ -155,9 +155,7 @@ export function useSendMessage(
           }
         }
 
-        lifecycle.setProcessing(false)
-        lifecycle.setMessageId(null)
-        lifecycle.setSendGuard(false)
+        lifecycle.stopProcessing()
         useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
 
         return false
@@ -217,13 +215,14 @@ export function useSendMessage(
 
       // Store message ID for potential cancellation
       lifecycle.setMessageId(messageId)
+      lifecycle.setPendingRunEventAck(clientRequestId)
 
       // Step 3: Processing is auto-triggered by backend when sendMessage completes.
       // Only set processing state if SSE hasn't already dismissed the placeholder
       // (race condition: fast agents can complete before the HTTP response returns).
       setSending(false)
       if (!lifecycle.isPlaceholderDismissed()) {
-        lifecycle.setProcessing(true)
+        lifecycle.startProcessing(messageId)
       } else {
         // SSE already handled the full lifecycle — just make sure ref is clean
         lifecycle.setSendGuard(false)
@@ -272,8 +271,7 @@ export function useSendMessage(
         console.error('Failed to reconcile messages after error:', reloadError)
       }
 
-      lifecycle.setProcessing(false)
-      lifecycle.setMessageId(null)
+      lifecycle.stopProcessing()
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
 
       return false
@@ -282,7 +280,7 @@ export function useSendMessage(
       // NOTE: Do NOT clear send guard here on the success path.
       // It stays true until processing completes (via SSE terminal events)
       // to prevent a race window where the user could double-send between
-      // lifecycle.setProcessing(true) propagating through Zustand and the next render.
+      // lifecycle.startProcessing(...) propagating through Zustand and the next render.
     }
   }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onPostMessageIdResolved])
 

@@ -7,7 +7,7 @@
 export type { TaskState } from '@a2a-js/sdk'
 import type { TaskState } from '@a2a-js/sdk'
 export interface SSEMessage {
-  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update' | 'turn_event'
+  type: 'connected' | 'user_message' | 'agent_response' | 'processing_status' | 'heartbeat' | 'error' | 'task_submitted' | 'task_update' | 'hitl_input_requested' | 'hitl_status_update' | 'artifact_update' | 'turn_event' | 'run_event'
   room_id: string
   timestamp: string
   data?: {
@@ -74,6 +74,13 @@ export interface SSEMessage {
       client_request_id?: string
       [key: string]: unknown
     }
+    // Run lifecycle event (when backend FEATURE_RUN_EVENT_SSE + NEXT_PUBLIC_FEATURE_RUN_EVENT_SSE)
+    event_id?: string
+    run_id?: string
+    seq?: number
+    type?: string
+    payload?: Record<string, unknown>
+    correlation_id?: string
   }
 }
 
@@ -173,6 +180,7 @@ export type ProcessingStatus =
   | "failed"
   | "rejected"
   | "rate_limited"
+  | "error"
 
 export const PROCESSING_STATUS = {
   PROCESSING: "processing",
@@ -181,11 +189,13 @@ export const PROCESSING_STATUS = {
   FAILED: "failed",
   REJECTED: "rejected",
   RATE_LIMITED: "rate_limited",
+  ERROR: "error",
 } as const
 
 // Statuses that mean processing is done (clear spinner)
 export const PROCESSING_DONE_STATUSES: ProcessingStatus[] = [
-  PROCESSING_STATUS.COMPLETED, PROCESSING_STATUS.CANCELED, PROCESSING_STATUS.FAILED, PROCESSING_STATUS.REJECTED
+  PROCESSING_STATUS.COMPLETED, PROCESSING_STATUS.CANCELED, PROCESSING_STATUS.FAILED, PROCESSING_STATUS.REJECTED,
+  PROCESSING_STATUS.ERROR,
 ]
 
 export function isProcessingDone(status: ProcessingStatus): boolean {

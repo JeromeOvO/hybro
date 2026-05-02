@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useRoomUiStore, useRoomFlags } from '@/stores/room-ui-store'
+import {
+  useRoomUiStore,
+  useRoomProcessing,
+  useRoomSending,
+  useRoomCancelling,
+  useRoomUpdating,
+  useRoomSseEnabled,
+} from '@/stores/room-ui-store'
 import { useMessageStore } from '@/stores/message-store'
 import { useAgentCatalog } from './useAgentCatalog'
 import { useRoomData } from './useRoomData'
@@ -15,8 +22,12 @@ import type { UseRoomWebhookProps } from './types'
 import { flushPendingSseEvents } from './sse-handlers/pending-turn-buffer'
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
-  // Read per-room flags reactively
-  const { sending, processing, cancelling, updatingRoom, sseEnabled } = useRoomFlags(roomId)
+  // Read per-room flags reactively through narrow selectors.
+  const sending = useRoomSending(roomId)
+  const cancelling = useRoomCancelling(roomId)
+  const updatingRoom = useRoomUpdating(roomId)
+  const sseEnabled = useRoomSseEnabled(roomId)
+  const processing = useRoomProcessing(roomId)
 
   // Bind stable action refs to current roomId
   const setRoomSending = useRoomUiStore(s => s.setSending)
@@ -151,7 +162,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // SSE connection
   const { sseConnected: sseConnectedFromSSE, sseConnecting, sseError: sseErrorFromSSE } = useRoomSSEConnection(
     roomId, getToken, sseEnabled, processing, lifecycle, handleSSEMessage,
-    getAgentName, getAgentSource, hitlRequestIndex, roomQuery, reconcileWithDb,
+    getAgentName, getAgentSource, hitlRequestIndex, reconcileWithDb,
     setSseConnected, setSseError,
   )
 
