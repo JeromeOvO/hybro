@@ -248,6 +248,9 @@ def sanitize_artifact_parts(parts: list[dict]) -> list[dict]:
             if "data" not in root or root.get("data") is None:
                 logger.warning("Dropping malformed DataPart (missing or null 'data')")
                 continue
+        elif not any(k in root for k in ("text", "file", "data", "url", "raw")):
+            logger.warning("Dropping unrecognizable artifact part: %r", p)
+            continue
         cleaned.append(p)
     return cleaned
 

@@ -93,7 +93,7 @@ class CompactionSweep:
     async def sweep(self) -> dict:
         """Scan all rooms with memory and compact where needed.
 
-        Skips rooms with active processing (processing_message_id is set)
+        Skips rooms with any non-terminal run (queued / processing / awaiting_input)
         to avoid read-modify-write races with the V2 loop (§6.9).
 
         Uses a fixed-size worker pool to bound memory usage instead of
@@ -111,18 +111,11 @@ class CompactionSweep:
             logger.warning("Compaction sweep: room_memory collection not available")
             return stats
 
-        # Pre-fetch set of room_ids with active processing to skip
+        # Pre-fetch room_ids with non-terminal runs (runs are source of truth)
         active_room_ids: set[str] = set()
         try:
-            rooms_coll = mongodb.rooms_collection
-            cursor_active = rooms_coll.find(
-                {"processing_message_id": {"$ne": None}},
-                {"room_id": 1},
-            )
-            async for doc in cursor_active:
-                rid = doc.get("room_id")
-                if rid:
-                    active_room_ids.add(rid)
+            ids = await mongodb.get_room_ids_with_non_terminal_runs()
+            active_room_ids = {rid for rid in ids if rid}
         except Exception as e:
             logger.warning("Compaction sweep: could not check active rooms: %s", e)
 

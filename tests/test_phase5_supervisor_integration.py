@@ -886,7 +886,6 @@ class TestHandleV2RunResultUnifiedSummary:
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
-            mock_db.clear_room_processing_status_if_matches = AsyncMock()
             mock_sse.send_processing_status = AsyncMock()
             mock_sse.remove_token = MagicMock()
 

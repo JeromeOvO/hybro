@@ -168,6 +168,7 @@ class TestRoomLifecycleFlow:
     async def test_room_ownership_enforcement(self, flow_user):
         """Verify that a non-owner is blocked at every ownership-gated step."""
         from api.room_center import (
+            inquiry_active_runs,
             inquiry_room_setting,
             send_message,
             inquiry_room_messages,
@@ -192,7 +193,11 @@ class TestRoomLifecycleFlow:
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
         with patch(PATCH["room_center.db_service"], mock_db):
-            for endpoint_fn in [inquiry_room_setting, inquiry_room_messages]:
+            for endpoint_fn in [
+                inquiry_room_setting,
+                inquiry_active_runs,
+                inquiry_room_messages,
+            ]:
                 req = MagicMock()
                 req.json = AsyncMock(return_value={"room_id": "guarded-room"})
                 with pytest.raises(HTTPException) as exc:

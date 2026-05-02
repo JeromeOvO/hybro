@@ -119,6 +119,23 @@ async def inquiry_room_setting(
     return room_center_response
 
 
+@router.post("/roomCenter/inquiryActiveRuns")
+async def inquiry_active_runs(
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+):
+    """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
+    request_data = await request.json()
+    room_id = request_data.get("room_id")
+
+    await verify_room_ownership(room_id, user)
+
+    room_center_request = RoomCenterRoomSettingRequest(
+        room_id=room_id, requesting_user_id=user.user_id
+    )
+    return await room_center.inquiry_active_runs(room_center_request)
+
+
 @router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
 async def inquiry_rooms_by_room_owner_id(
     request: Request, user: ClerkUser = Depends(get_current_user)

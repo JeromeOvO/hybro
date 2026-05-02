@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from api.room_center import (
     verify_room_ownership,
     create_new_room,
+    inquiry_active_runs,
     inquiry_room_setting,
     inquiry_rooms_by_room_owner_id,
     update_room_agent_set,
@@ -30,6 +31,8 @@ from api.room_center import (
 )
 from models.room import Room
 from models.response import (
+    ActiveRunRef,
+    RoomCenterActiveRunsResponse,
     RoomCenterRoomSettingResponse,
     RoomCenterUserMessageResponse,
     RoomCenterRoomMessageResponse,
@@ -195,6 +198,64 @@ class TestInquiryRoomSetting:
             with pytest.raises(HTTPException) as exc_info:
                 await inquiry_room_setting(mock_request, mock_user_2)
         
+        assert exc_info.value.status_code == 403
+
+
+# =============================================================================
+# Active runs inquiry (lightweight reconcile)
+# =============================================================================
+
+
+class TestInquiryActiveRuns:
+    """Tests for inquiry_active_runs endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_returns_active_runs_for_owner(
+        self, mock_user, sample_room, patch_room_center_deps
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
+
+        patch_room_center_deps["db_service"].get_room_by_room_id.return_value = (
+            sample_room
+        )
+        ref = ActiveRunRef(
+            run_id="run-1",
+            state="processing",
+            trigger_message_id="m1",
+            agent_id="a1",
+            seq=1,
+        )
+        expected = RoomCenterActiveRunsResponse(
+            success=True,
+            room_id=sample_room.room_id,
+            active_runs=[ref],
+        )
+        patch_room_center_deps["room_center"].inquiry_active_runs.return_value = (
+            expected
+        )
+
+        response = await inquiry_active_runs(mock_request, mock_user)
+
+        assert response.success is True
+        assert response.room_id == sample_room.room_id
+        assert response.active_runs is not None
+        assert len(response.active_runs) == 1
+        assert response.active_runs[0].run_id == "run-1"
+
+    @pytest.mark.asyncio
+    async def test_raises_403_for_non_owner(
+        self, mock_user_2, mock_db_service, sample_room
+    ):
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
+
+        mock_db_service.get_room_by_room_id.return_value = sample_room
+
+        with patch(PATCH["room_center.db_service"], mock_db_service):
+            with pytest.raises(HTTPException) as exc_info:
+                await inquiry_active_runs(mock_request, mock_user_2)
+
         assert exc_info.value.status_code == 403
 
 

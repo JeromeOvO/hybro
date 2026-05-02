@@ -179,7 +179,6 @@ async def cancel_message(
                     state=TaskState.canceled,
                     room_id=agent_msg.room_id,
                     user_id=agent_msg.user_id or "",
-                    send_processing_status=False,
                 )
                 # Best-effort: tell remote agent to stop processing
                 if agent_msg.agent_url:

@@ -455,7 +455,6 @@ class QueueExecutor:
                     room_id=room_id,
                     user_id=current_message.user_id or "",
                     error=error_text,
-                    send_processing_status=True,
                 )
                 # --- Emit failed slot (Phase 1b) ---
                 if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
@@ -502,7 +501,6 @@ class QueueExecutor:
                 room_id=room_id,
                 user_id=current_message.user_id or "",
                 error="The assigned agent could not be found.",
-                send_processing_status=True,
             )
             # --- Emit failed slot (Phase 1b) ---
             if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:
@@ -557,7 +555,6 @@ class QueueExecutor:
                     room_id=room_id,
                     user_id=current_message.user_id or "",
                     error=error_text,
-                    send_processing_status=True,
                 )
                 # --- Emit failed slot (Phase 1b) ---
                 if getattr(self, '_slot_lifecycle', None) and current_message.turn_id:

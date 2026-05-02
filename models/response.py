@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from a2a.types import (
     AgentCard,
@@ -179,13 +179,36 @@ class ScopeResolutionError(BaseModel):
     code: str  # invalid_target | group_not_usable | unauthorized_mention | empty_scope
     message: str
 
+
+class ActiveRunRef(BaseModel):
+    """Lightweight run shape for room setting reconcile payloads."""
+
+    run_id: str
+    state: str
+    trigger_message_id: str | None = None
+    agent_id: str | None = None
+    seq: int = 0
+    updated_at: datetime | None = None
+
+
 class RoomCenterRoomSettingResponse(BaseModel):
     room_id: str | None = None
     room_agent_set: list[str] | None = None
     resolved_agents: list[RoomAgentRef] | None = None
     room_default_status: str | None = None  # ok | degraded | empty | all_unavailable
+    active_runs: list[ActiveRunRef] | None = None
     room: Room | None = None
     room_list: list[Room] | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+
+class RoomCenterActiveRunsResponse(BaseModel):
+    """Lightweight payload for reconnect / reconcile without full room settings."""
+
+    room_id: str | None = None
+    active_runs: list[ActiveRunRef] | None = None
     success: bool
     error: str | None = None
     status_code: int = 200

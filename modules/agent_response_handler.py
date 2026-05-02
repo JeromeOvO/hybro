@@ -312,7 +312,6 @@ class AgentResponseHandler:
         room_id: str,
         user_id: str,
         error: str | None = None,
-        send_processing_status: bool = False,
         parts: list[dict] | None = None,
     ) -> bool:
         """Handler-owned task notification — delegates to shared impl.
@@ -332,7 +331,6 @@ class AgentResponseHandler:
             room_id=room_id,
             user_id=user_id,
             error=error,
-            send_processing_status=send_processing_status,
             parts=parts,
         )
 
@@ -348,7 +346,6 @@ class AgentResponseHandler:
             room_id=e.room_id,
             user_id=e.user_id or "",
             error=error,
-            send_processing_status=e.send_processing_status,
             parts=e.parts,
         )
 

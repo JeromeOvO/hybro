@@ -126,7 +126,6 @@ class WebhookTransport(AgentTransport):
                 state=TaskState.canceled,
                 room_id=current_msg.room_id,
                 user_id=current_msg.user_id or "",
-                send_processing_status=True,
             )
             return {"status": "canceled"}
 
@@ -165,7 +164,6 @@ class WebhookTransport(AgentTransport):
             user_id=msg.user_id,
             task_id=task.id if hasattr(task, "id") else None,
             context_id=task.context_id if hasattr(task, "context_id") else None,
-            send_processing_status=True,
         )
 
         text = None

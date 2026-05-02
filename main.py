@@ -84,6 +84,39 @@ else:
     )
 
 
+async def _heal_diverged_runs_on_startup() -> None:
+    """One-shot sweep: heal any runs where run_events has advanced past the runs head.
+
+    This catches the crash-window divergence (event committed, head update lost)
+    that the periodic watchdog would otherwise fail to fix due to DuplicateKeyError.
+    """
+    from models.run import NON_TERMINAL_RUN_STATE_VALUES
+    from services.run_command_handler import run_command_handler
+
+    try:
+        cursor = mongodb.runs_collection.find(
+            {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
+        ).limit(500)
+        docs = await cursor.to_list(length=500)
+    except Exception as e:
+        logger.warning("startup heal: failed to query non-terminal runs: {}", e)
+        return
+
+    healed = 0
+    for doc in docs:
+        run_id = str(doc.get("run_id", ""))
+        if not run_id:
+            continue
+        try:
+            if await run_command_handler.heal_head_from_events(run_id):
+                healed += 1
+        except Exception as e:
+            logger.warning("startup heal: error healing run {}: {}", run_id, e)
+
+    if healed:
+        logger.info("startup heal: healed {} diverged run(s)", healed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager to handle startup and shutdown events.
@@ -114,6 +147,8 @@ async def lifespan(app: FastAPI):
         await mongodb.create_context_memory_indexes()
         await mongodb.ensure_agent_indexes()
         await mongodb.create_capability_issue_indexes()
+        await mongodb.create_run_lifecycle_indexes()
+        await _heal_diverged_runs_on_startup()
         if settings.webhook_signing_key:
             await mongodb.create_task_tracking_indexes()
             from services.database_service import db_service
