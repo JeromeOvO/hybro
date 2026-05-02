@@ -39,6 +39,7 @@ const mockCancelMessage = vi.fn().mockResolvedValue({ success: true, message_id:
 
 vi.mock('@/lib/api/room', () => ({
   inquiryRoomSetting: (...args: unknown[]) => mockInquiryRoomSetting(...args),
+  inquiryActiveRuns: vi.fn().mockResolvedValue({ success: true, active_runs: [] }),
   SendMessage: (...args: unknown[]) => mockSendMessage(...args),
   inquiryRoomMessagesByRoomId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
   updateRoomAgentSet: vi.fn().mockResolvedValue({ success: true }),
@@ -190,14 +191,10 @@ describe('Room lifecycle characterization tests', () => {
       })
       mockInquiryRoomSetting.mockResolvedValue({
         success: true,
-        room: {
-          room_id: 'room-1',
-          room_name: 'Test',
-          room_agent_set: {},
-          active_runs: [
-            { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
-          ],
-        },
+        room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
+        active_runs: [
+          { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+        ],
       })
 
       await mountAndWaitForRoom()
@@ -225,14 +222,10 @@ describe('Room lifecycle characterization tests', () => {
       })
       mockInquiryRoomSetting.mockResolvedValue({
         success: true,
-        room: {
-          room_id: 'room-1',
-          room_name: 'Test',
-          room_agent_set: {},
-          active_runs: [
-            { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
-          ],
-        },
+        room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
+        active_runs: [
+          { run_id: 'run-1', state: 'processing', trigger_message_id: 'msg-processing-1' },
+        ],
       })
 
       await mountAndWaitForRoom()
@@ -269,14 +262,10 @@ describe('Room lifecycle characterization tests', () => {
 
       mockInquiryRoomSetting.mockResolvedValue({
         success: true,
-        room: {
-          room_id: 'room-1',
-          room_name: 'Test',
-          room_agent_set: {},
-          active_runs: [
-            { run_id: 'run-stale', state: 'processing', trigger_message_id: 'msg-stale' },
-          ],
-        },
+        room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} },
+        active_runs: [
+          { run_id: 'run-stale', state: 'processing', trigger_message_id: 'msg-stale' },
+        ],
       })
 
       await mountAndWaitForRoom()

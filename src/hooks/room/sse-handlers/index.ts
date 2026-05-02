@@ -335,8 +335,10 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               const existingUserMsg = store.entities[terminalUserMsgId]
               if (existingUserMsg && !existingUserMsg.turnTerminalStatus) {
                 const terminalStatus =
-                  status === PROCESSING_STATUS.CANCELED ? 'canceled' :
-                  status === PROCESSING_STATUS.FAILED   ? 'failed'   : 'completed'
+                  status === PROCESSING_STATUS.CANCELED  ? 'canceled' :
+                  status === PROCESSING_STATUS.FAILED ||
+                  status === PROCESSING_STATUS.ERROR ||
+                  status === PROCESSING_STATUS.REJECTED  ? 'failed'   : 'completed'
                 store.upsertMessage({
                   id: terminalUserMsgId,
                   roomId,
