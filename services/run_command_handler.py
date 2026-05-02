@@ -168,6 +168,21 @@ class RunCommandHandler:
             )
             return False
 
+        current_state = RunState(run_doc.get("state", RunState.QUEUED.value))
+        try:
+            ensure_transition_allowed(current_state, resolved_state)
+        except RunTransitionError:
+            logger.warning(
+                "heal_head_from_events: run %s would-be-illegal transition %s→%s "
+                "(event=%s seq %d→%d) — healing anyway",
+                run_id,
+                current_state.value,
+                resolved_state.value,
+                event_type_str,
+                head_seq,
+                event_seq,
+            )
+
         updates: dict[str, Any] = {
             "state": resolved_state.value,
             "seq": event_seq,
@@ -229,6 +244,43 @@ class RunCommandHandler:
             error_message=f"No terminal transition within {stale_minutes} minutes",
         )
 
+    async def _ensure_run_exists(
+        self,
+        *,
+        room_id: str,
+        run_id: str,
+        trigger_message_id: str,
+        client_request_id: str | None,
+    ) -> dict[str, Any]:
+        """Return an up-to-date run_doc, creating the run + RUN_CREATED event if needed."""
+        run_doc = await mongodb.runs_collection.find_one({"run_id": run_id})
+        if run_doc:
+            return run_doc
+
+        run = Run(
+            run_id=run_id,
+            room_id=room_id,
+            trigger_message_id=trigger_message_id,
+            parent_message_id=trigger_message_id,
+            client_request_id=client_request_id,
+            state=RunState.QUEUED,
+            seq=0,
+        )
+        try:
+            await mongodb.runs_collection.insert_one(run.model_dump(mode="json"))
+        except DuplicateKeyError:
+            pass
+        run_doc = await mongodb.runs_collection.find_one({"run_id": run_id}) or run.model_dump(
+            mode="json"
+        )
+        await self._append_event_and_project(
+            run_doc=run_doc,
+            event_type=RunEventType.RUN_CREATED,
+            next_state=RunState.QUEUED,
+            payload={},
+        )
+        return await mongodb.runs_collection.find_one({"run_id": run_id}) or run_doc
+
     async def _record_active(
         self,
         *,
@@ -238,31 +290,12 @@ class RunCommandHandler:
         client_request_id: str | None,
         awaiting_input: bool,
     ) -> dict[str, Any] | None:
-        run_doc = await mongodb.runs_collection.find_one({"run_id": run_id})
-        if not run_doc:
-            run = Run(
-                run_id=run_id,
-                room_id=room_id,
-                trigger_message_id=trigger_message_id,
-                parent_message_id=trigger_message_id,
-                client_request_id=client_request_id,
-                state=RunState.QUEUED,
-                seq=0,
-            )
-            try:
-                await mongodb.runs_collection.insert_one(run.model_dump(mode="json"))
-            except DuplicateKeyError:
-                pass
-            run_doc = await mongodb.runs_collection.find_one({"run_id": run_id}) or run.model_dump(
-                mode="json"
-            )
-            await self._append_event_and_project(
-                run_doc=run_doc,
-                event_type=RunEventType.RUN_CREATED,
-                next_state=RunState.QUEUED,
-                payload={},
-            )
-            run_doc = await mongodb.runs_collection.find_one({"run_id": run_id}) or run_doc
+        run_doc = await self._ensure_run_exists(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=trigger_message_id,
+            client_request_id=client_request_id,
+        )
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
         if current_state in TERMINAL_RUN_STATES:
@@ -301,31 +334,12 @@ class RunCommandHandler:
         error_code: str | None,
         error_message: str | None,
     ) -> dict[str, Any] | None:
-        run_doc = await mongodb.runs_collection.find_one({"run_id": run_id})
-        if not run_doc:
-            run = Run(
-                run_id=run_id,
-                room_id=room_id,
-                trigger_message_id=trigger_message_id,
-                parent_message_id=trigger_message_id,
-                client_request_id=client_request_id,
-                state=RunState.QUEUED,
-                seq=0,
-            )
-            try:
-                await mongodb.runs_collection.insert_one(run.model_dump(mode="json"))
-            except DuplicateKeyError:
-                pass
-            run_doc = await mongodb.runs_collection.find_one({"run_id": run_id}) or run.model_dump(
-                mode="json"
-            )
-            await self._append_event_and_project(
-                run_doc=run_doc,
-                event_type=RunEventType.RUN_CREATED,
-                next_state=RunState.QUEUED,
-                payload={},
-            )
-            run_doc = await mongodb.runs_collection.find_one({"run_id": run_id}) or run_doc
+        run_doc = await self._ensure_run_exists(
+            room_id=room_id,
+            run_id=run_id,
+            trigger_message_id=trigger_message_id,
+            client_request_id=client_request_id,
+        )
 
         current_state = RunState(run_doc.get("state", RunState.QUEUED))
         if current_state in TERMINAL_RUN_STATES:
