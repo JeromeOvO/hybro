@@ -39,12 +39,18 @@ const detail: AgentResponseDetail = {
 }
 
 describe('AgentResponseDetailPane', () => {
-  it('renders a sticky readonly agent card and matching response body', () => {
-    render(<AgentResponseDetailPane detail={detail} onClose={vi.fn()} />)
+  it('renders a full-width pane header and matching response body', () => {
+    const { container } = render(<AgentResponseDetailPane detail={detail} onClose={vi.fn()} />)
 
     expect(screen.getByTestId('agent-response-detail-pane')).toBeInTheDocument()
-    expect(screen.getByTestId('agent-response-detail-sticky')).toBeInTheDocument()
+    const sticky = screen.getByTestId('agent-response-detail-sticky')
+    expect(sticky).toBeInTheDocument()
+    expect(within(sticky).getByTestId('agent-response-detail-header')).toBeInTheDocument()
+    expect(sticky.querySelector('.conversation-agent-card')).toBeNull()
+    expect(container.querySelector('.conversation-detail-agent-header')).toBeTruthy()
+    expect(within(sticky).getByRole('button', { name: /close agent response/i })).toBeInTheDocument()
     expect(screen.getByText('Researcher Alex')).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Researcher Alex completed' })).toHaveTextContent('Completed')
     expect(screen.queryByText('help me research a2a agents')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Report' })).toBeInTheDocument()
     expect(screen.getByText('A2A findings.')).toBeInTheDocument()

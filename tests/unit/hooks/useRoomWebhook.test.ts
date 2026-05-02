@@ -11,7 +11,7 @@ import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
-import type { SSEMessage } from '@/lib/types/sse'
+import { TASK_STATE, type SSEMessage } from '@/lib/types/sse'
 
 // Capture the onMessage callback passed to useRoomSSE
 let capturedOnMessage: ((msg: SSEMessage) => void) | undefined
@@ -172,6 +172,36 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.content).toBe('Agent reply')
     expect(entity.messageType).toBe('agent')
     expect(entity.isEphemeral).toBe(false)
+  })
+
+  it('marks an existing working agent as completed when final agent_response repeats streamed content', async () => {
+    await mountHook()
+
+    useMessageStore.getState().upsertMessage({
+      id: 'summary-task-1',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: 'Summary text is already visible.',
+      senderName: 'Summary Agent',
+      timestamp: new Date().toISOString(),
+      agentId: 'summary-agent',
+      taskStatus: TASK_STATE.WORKING,
+    }, 'sse')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'agent_response',
+        data: {
+          message_id: 'summary-task-1',
+          content: 'Summary text is already visible.',
+          agent_id: 'summary-agent',
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['summary-task-1']
+    expect(entity.content).toBe('Summary text is already visible.')
+    expect(entity.taskStatus).toBe(TASK_STATE.COMPLETED)
   })
 
   it('should handle heartbeat without side effects', async () => {
@@ -405,6 +435,94 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities['task-parts-only']).toBeUndefined()
+  })
+
+  it('does not store empty artifact_update payloads as renderable artifacts', async () => {
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    await mountHook()
+
+    resolveClientRequestMessageId('req-empty-artifact', 'task-empty-artifact')
+    useMessageStore.getState().upsertMessage({
+      id: 'task-empty-artifact',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: 'Here is the employee CSV report.',
+      senderName: 'CSV File Mock Agent',
+      timestamp: new Date().toISOString(),
+      agentId: 'agent-csv',
+      clientRequestId: 'req-empty-artifact',
+    }, 'sse')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'artifact_update',
+        data: {
+          client_request_id: 'req-empty-artifact',
+          message_id: 'task-empty-artifact',
+          agent_id: 'agent-csv',
+          artifact: {
+            artifact_id: 'empty-artifact',
+            name: 'Response files',
+            parts: [],
+          },
+          append: false,
+          last_chunk: true,
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-empty-artifact']
+    expect(entity.content).toBe('Here is the employee CSV report.')
+    expect(entity.artifacts).toEqual([])
+  })
+
+  it('normalizes root-wrapped file parts from task_update before storing artifacts', async () => {
+    const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
+    await mountHook()
+
+    resolveClientRequestMessageId('req-root-file', 'task-root-file')
+
+    await act(async () => {
+      await capturedOnMessage!(makeSSEMessage({
+        type: 'task_update',
+        data: {
+          client_request_id: 'req-root-file',
+          message_id: 'task-root-file',
+          status: 'completed',
+          content: 'Here is the PDF report.',
+          agent_name: 'PDF File Mock Agent',
+          agent_id: 'agent-pdf',
+          parts: [
+            {
+              root: {
+                kind: 'file',
+                file: {
+                  bytes: 'JVBERi0xLjQK',
+                  mime_type: 'application/pdf',
+                  name: 'mock_report.pdf',
+                },
+              },
+            },
+          ],
+        },
+      }))
+    })
+
+    const entity = useMessageStore.getState().entities['task-root-file']
+    expect(entity.content).toBe('Here is the PDF report.')
+    expect(entity.artifacts?.[0].parts).toEqual([
+      {
+        kind: 'file',
+        file: {
+          bytes: 'JVBERi0xLjQK',
+          mime_type: 'application/pdf',
+          name: 'mock_report.pdf',
+          uri: undefined,
+        },
+        data: undefined,
+        text: undefined,
+      },
+    ])
   })
 
   it('drops uncorrelated task_update even when lifecycle already has active message id', async () => {

@@ -85,7 +85,7 @@ describe('RoomChatInput', () => {
       expect(shell.className).not.toContain('hover:shadow-2xl')
       expect(shell.className).not.toContain('rgba(0,255,255')
       expect(shell.className).not.toContain('shadow-[0_8px')
-      expect(panel.className).toContain('border-border')
+      expect(panel.style.border).toContain('var(--conversation-border-light)')
       expect(panel.className).toContain('bg-muted')
       expect(panel.className).not.toContain('bg-background')
     })

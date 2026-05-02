@@ -50,7 +50,7 @@ export function UserMessageBlock({ entity }: UserMessageBlockProps) {
 
   return (
     <div
-      className={`conversation-user-message border border-border/50 bg-muted overflow-hidden transition-shadow duration-200 ${
+      className={`conversation-user-message bg-muted overflow-hidden transition-shadow duration-200 ${
         isOverflowing ? 'cursor-pointer' : ''
       }`}
       data-message-id={entity.id}

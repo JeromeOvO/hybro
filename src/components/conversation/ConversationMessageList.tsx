@@ -12,6 +12,7 @@ import type { ConversationTurnView } from '@/lib/selectors/conversation-types'
 interface ConversationMessageListProps {
   roomId: string
   selectedAgentMessageId?: string
+  enableAgentDetail?: boolean
 }
 
 interface ScrollMetrics {
@@ -28,7 +29,7 @@ function isAtBottom(m: ScrollMetrics): boolean {
   return m.scrollHeight - m.scrollTop - m.clientHeight < 100
 }
 
-export function ConversationMessageList({ roomId, selectedAgentMessageId }: ConversationMessageListProps) {
+export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
   const turns = useConversationTurnViews(roomId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -141,8 +142,9 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId }: Conv
   }, [])
 
   const handleOpenAgentDetail = useCallback((messageId: string) => {
+    if (!enableAgentDetail) return
     useRoomUiStore.getState().openAgentDetail(roomId, messageId)
-  }, [roomId])
+  }, [enableAgentDetail, roomId])
 
   const hasMultipleAgents = (turn: ConversationTurnView) => {
     const agentIds = new Set<string>()
@@ -170,8 +172,8 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId }: Conv
                 key={turn.turnId}
                 turn={turn}
                 multiAgentTurn={hasMultipleAgents(turn)}
-                selectedAgentMessageId={selectedAgentMessageId}
-                onOpenAgentDetail={handleOpenAgentDetail}
+                selectedAgentMessageId={enableAgentDetail ? selectedAgentMessageId : undefined}
+                onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
               />
             ))}
           </div>

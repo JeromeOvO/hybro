@@ -968,7 +968,7 @@ export function RoomChatInput({
           "group/input relative flex flex-col rounded-xl transition-colors duration-200",
         )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm border border-border/60 shadow-sm overflow-hidden focus-within:border-border/80">
+        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm shadow-sm overflow-hidden" style={{ border: '1px solid var(--conversation-border-light)' }}>
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 

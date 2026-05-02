@@ -69,4 +69,24 @@ describe('AgentCard', () => {
 
     expect(container.querySelector('.conversation-agent-card')?.getAttribute('data-selected')).toBe('true')
   })
+
+  it('does not render helper copy for input-required cards', () => {
+    render(
+      <AgentCard
+        agentId="agent-1"
+        agentName="Planner"
+        taskDescription="Plan the trip"
+        theme={AGENT_THEMES[0]}
+        display={{
+          label: 'Needs Input',
+          tone: 'warning',
+          isAnimated: true,
+          ariaLabel: 'Planner needs input',
+        }}
+      />
+    )
+
+    expect(screen.getByRole('status', { name: 'Planner needs input' })).toHaveTextContent('Needs Input')
+    expect(screen.queryByText('Agent is waiting for your response in the input panel below.')).not.toBeInTheDocument()
+  })
 })

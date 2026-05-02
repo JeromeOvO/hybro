@@ -83,41 +83,45 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   const isProcessing = composerState.isProcessing && adapter.isProcessing
 
   const hitlBar = composerState.pendingHitls.length > 0 ? (
-    <HitlResponseBar
-      hitls={composerState.pendingHitls.map(toHitlPromptView)}
-      onSubmit={adapter.onRespondToHitl}
-    />
+    <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
+      <HitlResponseBar
+        hitls={composerState.pendingHitls.map(toHitlPromptView)}
+        onSubmit={adapter.onRespondToHitl}
+      />
+    </div>
   ) : undefined
 
   return (
-    <RoomChatInput
-      onSubmit={adapter.onSendMessage}
-      disableSend={adapter.isSending || isProcessing || isHitlMode}
-      sending={adapter.isSending}
-      processing={isProcessing}
-      cancelling={adapter.isCancelling && isProcessing}
-      onCancel={adapter.onCancelProcessing}
-      agents={adapter.agents}
-      roomAgentIds={adapter.roomAgentIds}
-      showGroupSelector={!isHitlMode}
-      groups={adapter.groupManagement.groups}
-      loadingGroups={adapter.groupManagement.loadingGroups}
-      selectedGroup={adapter.groupManagement.selectedGroup}
-      onGroupChange={adapter.groupManagement.handleGroupChange}
-      roomAgentCount={adapter.roomAgentIds.length}
-      onCreateGroup={adapter.groupManagement.handleCreateGroup}
-      onEditGroup={adapter.groupManagement.handleEditGroup}
-      onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
-      onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
-      isOverride={adapter.groupManagement.isOverride}
-      onClearOverride={adapter.groupManagement.handleClearOverride}
-      quote={adapter.quoteState.quote}
-      onClearQuote={adapter.quoteState.clearQuote}
-      chatMode={adapter.chatMode}
-      onChatModeChange={adapter.onChatModeChange}
-      topSlot={hitlBar}
-      externalValue={adapter.externalValue}
-      onExternalValueConsumed={adapter.onExternalValueConsumed}
-    />
+    <>
+      {hitlBar}
+      <RoomChatInput
+        onSubmit={adapter.onSendMessage}
+        disableSend={adapter.isSending || isProcessing || isHitlMode}
+        sending={adapter.isSending}
+        processing={isProcessing}
+        cancelling={adapter.isCancelling && isProcessing}
+        onCancel={adapter.onCancelProcessing}
+        agents={adapter.agents}
+        roomAgentIds={adapter.roomAgentIds}
+        showGroupSelector={!isHitlMode}
+        groups={adapter.groupManagement.groups}
+        loadingGroups={adapter.groupManagement.loadingGroups}
+        selectedGroup={adapter.groupManagement.selectedGroup}
+        onGroupChange={adapter.groupManagement.handleGroupChange}
+        roomAgentCount={adapter.roomAgentIds.length}
+        onCreateGroup={adapter.groupManagement.handleCreateGroup}
+        onEditGroup={adapter.groupManagement.handleEditGroup}
+        onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
+        onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
+        isOverride={adapter.groupManagement.isOverride}
+        onClearOverride={adapter.groupManagement.handleClearOverride}
+        quote={adapter.quoteState.quote}
+        onClearQuote={adapter.quoteState.clearQuote}
+        chatMode={adapter.chatMode}
+        onChatModeChange={adapter.onChatModeChange}
+        externalValue={adapter.externalValue}
+        onExternalValueConsumed={adapter.onExternalValueConsumed}
+      />
+    </>
   )
 }

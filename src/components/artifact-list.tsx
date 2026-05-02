@@ -9,15 +9,25 @@ interface ArtifactListProps {
   artifacts: ArtifactData[]
 }
 
+function hasContent(artifact: ArtifactData): boolean {
+  if (artifact.isStreaming) return true
+  return artifact.parts.some(p =>
+    (p.kind === 'text' && !!p.text?.trim()) ||
+    (p.kind === 'file' && !!(p.file?.uri || p.file?.bytes)) ||
+    (p.kind === 'data' && p.data != null && Object.keys(p.data).length > 0)
+  )
+}
+
 export function ArtifactList({ artifacts }: ArtifactListProps) {
   const [expanded, setExpanded] = useState(true)
+  const nonEmpty = artifacts.filter(hasContent)
 
-  if (artifacts.length === 0) return null
+  if (nonEmpty.length === 0) return null
 
-  if (artifacts.length === 1) {
+  if (nonEmpty.length === 1) {
     return (
       <div className="mt-2">
-        <ArtifactRenderer artifact={artifacts[0]} />
+        <ArtifactRenderer artifact={nonEmpty[0]} />
       </div>
     )
   }
@@ -30,11 +40,11 @@ export function ArtifactList({ artifacts }: ArtifactListProps) {
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
         {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-        {artifacts.length} artifacts
+        {nonEmpty.length} artifacts
       </button>
       {expanded && (
         <div className="space-y-2">
-          {artifacts.map(artifact => (
+          {nonEmpty.map(artifact => (
             <ArtifactRenderer key={artifact.artifactId} artifact={artifact} />
           ))}
         </div>

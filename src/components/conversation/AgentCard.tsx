@@ -1,6 +1,7 @@
 import type { AgentDisplayProps, AgentTheme } from '@/lib/selectors/conversation-types'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { cn } from '@/lib/utils'
+import type { ReactNode } from 'react'
 
 interface AgentCardProps {
   messageId?: string
@@ -12,13 +13,14 @@ interface AgentCardProps {
   selected?: boolean
   interactive?: boolean
   onOpen?: (messageId: string) => void
+  rightAction?: ReactNode
 }
 
 function AgentAvatar({ agentId, theme }: { agentId: string; theme: AgentTheme }) {
   return (
     <div
-      className="w-8 h-8 rounded-lg overflow-hidden shrink-0"
-      style={{ backgroundColor: theme.avatarBg }}
+      className="w-8 h-8 overflow-hidden shrink-0"
+      style={{ backgroundColor: theme.avatarLightBg, borderRadius: 'var(--chat-input-radius)' }}
     >
       <img
         src={getAgentAvatarUri(agentId)}
@@ -39,6 +41,7 @@ export function AgentCard({
   selected = false,
   interactive = true,
   onOpen,
+  rightAction,
 }: AgentCardProps) {
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'rgb(0, 255, 255)',
@@ -78,19 +81,17 @@ export function AgentCard({
         >
           {display.label}
         </span>
+        {rightAction && (
+          <span className="conversation-agent-card-action">
+            {rightAction}
+          </span>
+        )}
       </div>
       {taskDescription && (
         <div className="conversation-agent-task-row flex items-center gap-1.5 pl-[42px]" style={{ position: 'relative', zIndex: 1 }}>
           <span className="text-sm leading-none" style={{ color: 'var(--conversation-text-dim)' }}>&#x2514;</span>
           <span className="conversation-agent-task-text text-[13px] font-medium truncate" style={{ color: 'var(--conversation-text-primary)' }}>
             {taskDescription}
-          </span>
-        </div>
-      )}
-      {display.tone === 'warning' && display.label === 'Needs Input' && (
-        <div className="mt-1.5 pl-[42px]">
-          <span className="text-xs" style={{ color: 'var(--conversation-text-dim)' }}>
-            Agent is waiting for your response in the input panel below.
           </span>
         </div>
       )}

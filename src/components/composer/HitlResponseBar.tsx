@@ -49,12 +49,12 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
     : 'HYBRO AI'
 
   return (
-    <div className="border-b border-border p-3 bg-amber-50/50 dark:bg-amber-950/20" data-testid="hitl-response-bar">
-      <div className="flex items-center gap-2 mb-2">
-        <MessageCircleQuestion className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-        <span className="text-sm font-medium">{sourceLabel} is asking:</span>
+    <div className="conversation-hitl-panel" data-testid="hitl-response-bar">
+      <div className="conversation-hitl-panel-header">
+        <MessageCircleQuestion className="h-4 w-4 conversation-hitl-panel-icon" />
+        <span className="conversation-hitl-panel-title">{sourceLabel} is asking</span>
         {hitls.length > 1 && (
-          <div className="flex items-center gap-1 ml-auto">
+          <div className="conversation-hitl-panel-pager">
             <Button
               variant="ghost" size="icon" className="h-6 w-6"
               disabled={currentIndex === 0}
@@ -75,10 +75,10 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
           </div>
         )}
       </div>
-      <p className="text-sm mb-2">{current.prompt}</p>
+      <p className="conversation-hitl-panel-prompt">{current.prompt}</p>
 
       {current.promptType === 'choice' && current.choices ? (
-        <div className="flex flex-wrap gap-2">
+        <div className="conversation-hitl-actions" data-testid="hitl-actions">
           {current.choices.map((choice) => (
             <Button
               key={choice}
@@ -86,22 +86,23 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
               size="sm"
               disabled={submitting}
               onClick={() => handleSubmit(choice)}
+              className="conversation-hitl-option-button"
             >
               {choice}
             </Button>
           ))}
         </div>
       ) : current.promptType === 'confirmation' ? (
-        <div className="flex gap-2">
-          <Button size="sm" disabled={submitting} onClick={() => handleSubmit('approved')}>
+        <div className="conversation-hitl-actions" data-testid="hitl-actions">
+          <Button size="sm" disabled={submitting} onClick={() => handleSubmit('approved')} className="conversation-hitl-option-button">
             Approve
           </Button>
-          <Button variant="outline" size="sm" disabled={submitting} onClick={() => handleSubmit('rejected')}>
+          <Button variant="outline" size="sm" disabled={submitting} onClick={() => handleSubmit('rejected')} className="conversation-hitl-option-button">
             Reject
           </Button>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div className="conversation-hitl-text-response">
           <input
             type="text"
             value={inputValue}
@@ -109,12 +110,13 @@ export function HitlResponseBar({ hitls, onSubmit }: HitlResponseBarProps) {
             onKeyDown={(e) => { if (e.key === 'Enter' && inputValue.trim()) handleSubmit(inputValue.trim()) }}
             placeholder="Answer question..."
             disabled={submitting}
-            className="flex-1 text-sm border rounded-md px-2 py-1.5 bg-background"
+            className="conversation-hitl-text-input"
           />
           <Button
             size="sm"
             disabled={submitting || !inputValue.trim()}
             onClick={() => handleSubmit(inputValue.trim())}
+            className="conversation-hitl-submit-button"
           >
             Submit
           </Button>

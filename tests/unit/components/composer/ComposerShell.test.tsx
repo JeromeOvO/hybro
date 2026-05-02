@@ -5,7 +5,7 @@ import { useMessageStore } from '@/stores/message-store'
 
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
-    <div data-testid="room-chat-input" data-disabled={props.disableSend}>
+    <div data-testid="room-chat-input" data-disabled={props.disableSend} data-has-top-slot={props.topSlot ? 'true' : 'false'}>
       {props.topSlot}
     </div>
   ),
@@ -78,5 +78,7 @@ describe('ComposerShell', () => {
 
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByText('What color?')).toBeDefined()
+    expect(screen.getByTestId('hitl-response-frame')).toBeDefined()
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-has-top-slot')).toBe('false')
   })
 })

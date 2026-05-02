@@ -8,19 +8,20 @@ export interface AgentTheme {
   accent: string
   border: string
   avatarBg: string
+  avatarLightBg: string
   cardBg: string
 }
 
 export const AGENT_THEMES: AgentTheme[] = [
-  { name: 'green',  accent: 'var(--conversation-agent-green)',  border: 'var(--conversation-agent-border-green)',  avatarBg: 'var(--conversation-agent-bg-green)',  cardBg: 'var(--conversation-agent-card-green)' },
-  { name: 'blue',   accent: 'var(--conversation-agent-blue)',   border: 'var(--conversation-agent-border-blue)',   avatarBg: 'var(--conversation-agent-bg-blue)',   cardBg: 'var(--conversation-agent-card-blue)' },
-  { name: 'purple', accent: 'var(--conversation-agent-purple)', border: 'var(--conversation-agent-border-purple)', avatarBg: 'var(--conversation-agent-bg-purple)', cardBg: 'var(--conversation-agent-card-purple)' },
-  { name: 'amber',  accent: 'var(--conversation-agent-amber)',  border: 'var(--conversation-agent-border-amber)',  avatarBg: 'var(--conversation-agent-bg-amber)',  cardBg: 'var(--conversation-agent-card-amber)' },
-  { name: 'rose',   accent: 'var(--conversation-agent-rose)',   border: 'var(--conversation-agent-border-rose)',   avatarBg: 'var(--conversation-agent-bg-rose)',   cardBg: 'var(--conversation-agent-card-rose)' },
+  { name: 'green',  accent: 'var(--conversation-agent-green)',  border: 'var(--conversation-agent-border-green)',  avatarBg: 'var(--conversation-agent-bg-green)',  avatarLightBg: 'var(--conversation-agent-avatar-green)',  cardBg: 'var(--conversation-agent-card-green)' },
+  { name: 'blue',   accent: 'var(--conversation-agent-blue)',   border: 'var(--conversation-agent-border-blue)',   avatarBg: 'var(--conversation-agent-bg-blue)',   avatarLightBg: 'var(--conversation-agent-avatar-blue)',   cardBg: 'var(--conversation-agent-card-blue)' },
+  { name: 'purple', accent: 'var(--conversation-agent-purple)', border: 'var(--conversation-agent-border-purple)', avatarBg: 'var(--conversation-agent-bg-purple)', avatarLightBg: 'var(--conversation-agent-avatar-purple)', cardBg: 'var(--conversation-agent-card-purple)' },
+  { name: 'amber',  accent: 'var(--conversation-agent-amber)',  border: 'var(--conversation-agent-border-amber)',  avatarBg: 'var(--conversation-agent-bg-amber)',  avatarLightBg: 'var(--conversation-agent-avatar-amber)',  cardBg: 'var(--conversation-agent-card-amber)' },
+  { name: 'rose',   accent: 'var(--conversation-agent-rose)',   border: 'var(--conversation-agent-border-rose)',   avatarBg: 'var(--conversation-agent-bg-rose)',   avatarLightBg: 'var(--conversation-agent-avatar-rose)',   cardBg: 'var(--conversation-agent-card-rose)' },
 ]
 
 export const UNRESOLVED_THEME: AgentTheme = {
-  name: 'muted', accent: 'var(--conversation-text-muted)', border: 'var(--conversation-border)', avatarBg: '#27272a', cardBg: 'hsl(var(--card))',
+  name: 'muted', accent: 'var(--conversation-text-muted)', border: 'var(--conversation-border)', avatarBg: '#27272a', avatarLightBg: 'rgba(113, 113, 122, 0.15)', cardBg: 'hsl(var(--color-card))',
 }
 
 export function getAgentTheme(agentId: string | undefined, agentName: string): AgentTheme {

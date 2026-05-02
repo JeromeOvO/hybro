@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -8,6 +8,11 @@ import type { ChatMode } from '@/lib/types/chat-mode'
 import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
 import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors'
@@ -15,6 +20,31 @@ import type { MessageEntity } from '@/stores/message-store/types'
 
 const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
 const EMPTY_ORDERED_IDS: string[] = []
+const DETAIL_PANE_QUERY = '(min-width: 1280px)'
+const DETAIL_PANE_LAYOUT = {
+  'conversation-primary-panel': 66,
+  'conversation-detail-panel': 34,
+}
+
+function canShowDetailPane(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return true
+  return window.matchMedia(DETAIL_PANE_QUERY).matches
+}
+
+function useCanShowDetailPane(): boolean {
+  const [canShow, setCanShow] = useState(canShowDetailPane)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const media = window.matchMedia(DETAIL_PANE_QUERY)
+    const handleChange = () => setCanShow(media.matches)
+    handleChange()
+    media.addEventListener('change', handleChange)
+    return () => media.removeEventListener('change', handleChange)
+  }, [])
+
+  return canShow
+}
 
 export interface GroupManagementAdapter {
   groups: AgentGroup[]
@@ -59,14 +89,15 @@ interface RoomPageShellProps {
 }
 
 export function RoomPageShell({ adapter }: RoomPageShellProps) {
+  const canShowAgentDetail = useCanShowDetailPane()
   const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
   const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
 
   const detail = useMemo(() => {
-    if (!selectedMessageId) return null
+    if (!canShowAgentDetail || !selectedMessageId) return null
     return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds)
-  }, [adapter.roomId, selectedMessageId, entities, orderedIds])
+  }, [adapter.roomId, canShowAgentDetail, selectedMessageId, entities, orderedIds])
 
   const prevRoomIdRef = useRef(adapter.roomId)
   useEffect(() => {
@@ -86,27 +117,59 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
     useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
   }, [adapter.roomId])
 
-  return (
-    <div
-      className="conversation-workspace"
-      data-detail-open={detail ? 'true' : undefined}
-    >
-      <div className="conversation-primary">
-        <main className="flex-1 overflow-hidden">
-          <ConversationMessageList
-            roomId={adapter.roomId}
-            selectedAgentMessageId={selectedMessageId}
-          />
-        </main>
-        <div className="conversation-input-dock conversation-gutter">
-          <div className="conversation-frame">
-            <ComposerShell adapter={adapter} />
-          </div>
+  const primaryContent = (
+    <div className="conversation-primary">
+      <main className="flex-1 overflow-hidden">
+        <ConversationMessageList
+          roomId={adapter.roomId}
+          selectedAgentMessageId={canShowAgentDetail ? selectedMessageId : undefined}
+          enableAgentDetail={canShowAgentDetail}
+        />
+      </main>
+      <div className="conversation-input-dock conversation-gutter">
+        <div className="conversation-frame">
+          <ComposerShell adapter={adapter} />
         </div>
       </div>
-      {detail && (
-        <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
-      )}
     </div>
+  )
+
+  return (
+    <ResizablePanelGroup
+      id={detail ? 'conversation-resizable-workspace' : undefined}
+      orientation="horizontal"
+      defaultLayout={detail ? DETAIL_PANE_LAYOUT : undefined}
+      className="conversation-workspace conversation-workspace-resizable"
+      data-detail-open={detail ? 'true' : undefined}
+    >
+      <ResizablePanel
+        id="conversation-primary-panel"
+        defaultSize={detail ? '66%' : '100%'}
+        minSize={detail ? '54%' : '100%'}
+        maxSize={detail ? '76%' : '100%'}
+        className="conversation-resizable-panel"
+        data-testid="conversation-primary-panel"
+      >
+        {primaryContent}
+      </ResizablePanel>
+      {detail && (
+        <>
+          <ResizableHandle
+            id="conversation-detail-resize-handle"
+            className="conversation-detail-resize-handle"
+          />
+          <ResizablePanel
+            id="conversation-detail-panel"
+            defaultSize="34%"
+            minSize="24%"
+            maxSize="46%"
+            className="conversation-detail-resizable-panel"
+            data-testid="conversation-detail-panel"
+          >
+            <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
   )
 }

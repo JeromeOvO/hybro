@@ -32,21 +32,22 @@ function partsToArtifacts(
 ): ArtifactData[] | undefined {
   if (!rawParts || rawParts.length === 0) return existing?.artifacts
   const nonTextParts = rawParts
-    .filter((p) => (p.kind as string) !== 'text')
     .map((p) => {
-      const fileData = p.file as Record<string, unknown> | undefined
+      const root = (p.root ?? p) as Record<string, unknown>
+      const fileData = root.file as Record<string, unknown> | undefined
       return {
-        kind: ((p.kind as string) || 'text') as ArtifactPart['kind'],
-        text: p.text as string | undefined,
+        kind: ((root.kind as string) || 'text') as ArtifactPart['kind'],
+        text: root.text as string | undefined,
         file: fileData ? {
           uri: (fileData.uri as string | undefined),
           bytes: (fileData.bytes as string | undefined),
           mime_type: ((fileData.mime_type || fileData.mimeType) as string | undefined),
           name: (fileData.name as string | undefined),
         } : undefined,
-        data: p.data as Record<string, unknown> | undefined,
+        data: root.data as Record<string, unknown> | undefined,
       }
     })
+    .filter((part) => part.kind !== 'text' && isRenderableArtifactPart(part))
   if (nonTextParts.length === 0) return existing?.artifacts
   const inline: ArtifactData = {
     artifactId: `${messageId}-parts`,
@@ -60,6 +61,13 @@ function isNonInformativeTextChunk(text: string | undefined): boolean {
   if (!text) return true
   const t = text.trim()
   return t === '' || t === '.' || t === '...' || t === '…'
+}
+
+function isRenderableArtifactPart(part: ArtifactPart): boolean {
+  if (part.kind === 'text') return !isNonInformativeTextChunk(part.text)
+  if (part.kind === 'file') return !!(part.file?.uri || part.file?.bytes)
+  if (part.kind === 'data') return !!part.data && Object.keys(part.data).length > 0
+  return false
 }
 
 function resolveSingleWriteContent(
@@ -188,6 +196,24 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             // - skip divergent rewrites (different leading text)
             // - allow only append-only upgrades
             if (hasExistingRenderable && (looksDuplicateContent || isDivergentRewrite)) {
+              const canFinalizeExisting = !existing.taskStatus || !isTerminalState(existing.taskStatus)
+              if (canFinalizeExisting) {
+                store.upsertMessage({
+                  id: messageId,
+                  roomId,
+                  messageType: 'agent',
+                  content: existing.content,
+                  senderName: existing.senderName,
+                  agentId: existing.agentId,
+                  agentSource: existing.agentSource,
+                  clientRequestId: existing.clientRequestId || sseMessage.data?.client_request_id,
+                  timestamp: existing.timestamp,
+                  taskStatus: TASK_STATE.COMPLETED,
+                  taskUpdatedAt: normalizeTimestampOrNow(sseMessage.timestamp),
+                  isEphemeral: false,
+                  ...(existing.artifacts ? { artifacts: existing.artifacts } : {}),
+                }, 'sse')
+              }
               console.log('🔄 Skipping duplicate agent_response for', messageId, '— streamed content already present')
               break
             }
@@ -218,10 +244,9 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               messageId,
               existing,
             )
-            // Preserve taskStatus when: (a) non-terminal (task_update owns
-            // the transition), or (b) already terminal (agent_response is
-            // backfilling content for a task_update that arrived first).
-            const preserveTaskStatus = !!(existing?.taskStatus)
+            const responseTaskStatus = existing?.taskStatus && isTerminalState(existing.taskStatus)
+              ? existing.taskStatus
+              : TASK_STATE.COMPLETED
 
             store.upsertMessage({
               id: messageId,
@@ -233,7 +258,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
               agentSource: agentId ? getAgentSource(agentId) : undefined,
               clientRequestId: existing?.clientRequestId || sseMessage.data?.client_request_id,
               timestamp: msgTimestamp,
-              ...(preserveTaskStatus ? {} : { taskStatus: null }),
+              taskStatus: responseTaskStatus,
+              taskUpdatedAt: msgTimestamp,
               isEphemeral: false,
               ...(artifacts ? { artifacts } : {}),
             }, 'sse')
@@ -574,17 +600,18 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             artifactId: artifact.artifact_id || (artifact as Record<string, unknown>).artifactId as string,
             name: artifact.name,
             parts: (artifact.parts || []).map((p: Record<string, unknown>) => {
-              const fileData = p.file as Record<string, unknown> | undefined
+              const root = (p.root ?? p) as Record<string, unknown>
+              const fileData = root.file as Record<string, unknown> | undefined
               return {
-                kind: ((p.kind as string) || 'text') as ArtifactPart['kind'],
-                text: p.text as string | undefined,
+                kind: ((root.kind as string) || 'text') as ArtifactPart['kind'],
+                text: root.text as string | undefined,
                 file: fileData ? {
                   uri: (fileData.uri as string | undefined),
                   bytes: (fileData.bytes as string | undefined),
                   mime_type: (fileData.mime_type || fileData.mimeType) as string | undefined,
                   name: (fileData.name as string | undefined),
                 } : undefined,
-                data: p.data as Record<string, unknown> | undefined,
+                data: root.data as Record<string, unknown> | undefined,
               }
             }),
             isStreaming: isAppend ? !last_chunk : false,
@@ -596,9 +623,17 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
             .map(p => p.text ?? '')
             .join('')
             .trim()
+          const canUpdateExistingStreamState =
+            isAppend &&
+            parts.length === 0 &&
+            !!existing?.artifacts?.some(a => a.artifactId === artifactData.artifactId)
           const shouldDropArtifact =
-            allTextOnly &&
-            isNonInformativeTextChunk(joinedText)
+            !canUpdateExistingStreamState &&
+            (
+              parts.length === 0 ||
+              !parts.some(isRenderableArtifactPart) ||
+              (allTextOnly && isNonInformativeTextChunk(joinedText))
+            )
 
           const merged = shouldDropArtifact
             ? (existing?.artifacts ?? [])
