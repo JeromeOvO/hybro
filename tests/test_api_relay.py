@@ -755,6 +755,41 @@ class TestRelayTransportNormalize:
         assert event.kind == "response"
         assert event.text == "done"
 
+    def test_agent_response_normalizes_hub_file_parts(self):
+        rt = _make_relay_transport()
+        msg = _make_msg()
+        event = rt._normalize(
+            "agent_response", "amsg-001",
+            {
+                "content": "Here is the PDF report.",
+                "parts": [
+                    {
+                        "raw": "JVBERi0xLjQK",
+                        "mediaType": "application/pdf",
+                        "filename": "mock_report.pdf",
+                    },
+                    {
+                        "raw": "JVBERi0xLjQK",
+                        "mediaType": "application/pdf",
+                        "filename": "mock_report.pdf",
+                    }
+                ],
+            },
+            msg,
+        )
+        assert event is not None
+        assert event.kind == "response"
+        assert event.parts == [
+            {
+                "kind": "file",
+                "file": {
+                    "bytes": "JVBERi0xLjQK",
+                    "mimeType": "application/pdf",
+                    "name": "mock_report.pdf",
+                },
+            }
+        ]
+
     def test_agent_error(self):
         rt = _make_relay_transport()
         msg = _make_msg()

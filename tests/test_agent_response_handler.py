@@ -23,6 +23,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()

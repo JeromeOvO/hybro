@@ -258,6 +258,73 @@ class AgentResponseHandler:
             )
         await self._notify(e, TaskState(state))
 
+        # For async transports (relay, webhook) the queue has already moved
+        # to PAUSED before this callback fires, so QueueExecutor never sees
+        # AWAITING_INPUT.  Create the HITL request here when a continuation
+        # is already saved (indicates an async callback, not inline dispatch).
+        if state == "input-required":
+            await self._maybe_create_hitl_for_async_interactive(e)
+
+    async def _maybe_create_hitl_for_async_interactive(
+        self, e: AgentEvent
+    ) -> None:
+        """Create HITL request for async transports (relay / webhook).
+
+        Only acts when a pending_continuation already exists on the message,
+        which proves this is an async callback — not an inline direct dispatch
+        where QueueExecutor handles HITL creation itself.
+        """
+        continuation = await self._db.get_pending_continuation_on_message(
+            e.message_id
+        )
+        if not continuation:
+            return
+
+        from services.hitl_service import hitl_service
+
+        user_message_id = continuation.get("user_message_id", "")
+        if not user_message_id:
+            logger.warning(
+                "_maybe_create_hitl_for_async_interactive: no user_message_id "
+                "in continuation for %s",
+                e.message_id,
+            )
+            return
+
+        msg = await self._db.get_room_agent_message_by_message_id(e.message_id)
+        agent_name = e.agent_name
+        if not agent_name and msg:
+            try:
+                room = await self._db.get_room_by_room_id(e.room_id)
+                if room and room.room_agent_set:
+                    agent_name = room.room_agent_set.get(e.agent_id)
+            except Exception:
+                pass
+
+        hitl_req = await hitl_service.request_input(
+            room_id=e.room_id,
+            user_message_id=user_message_id,
+            source="agent",
+            prompt=e.text or "The agent needs additional information.",
+            agent_id=e.agent_id,
+            agent_name=agent_name,
+            a2a_task_id=e.task_id,
+            a2a_context_id=e.context_id,
+            continuation_message_id=e.message_id,
+            display_message_id=msg.message_id if msg else e.message_id,
+        )
+        if hitl_req:
+            await self._sse.send_processing_status(
+                e.room_id,
+                "awaiting_input",
+                user_message_id,
+            )
+            logger.info(
+                "Created HITL request %s for async interactive event on %s",
+                hitl_req.request_id,
+                e.message_id,
+            )
+
     # --- Non-terminal events ---
 
     async def _on_submitted(self, e: AgentEvent) -> None:
