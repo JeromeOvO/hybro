@@ -3,7 +3,7 @@ import { TASK_STATE } from '@/lib/types/sse'
 import type { AgentResponseDetail } from './conversation-types'
 import { getAgentTheme, UNRESOLVED_THEME } from './conversation-types'
 import { mapAgentDisplayProps } from './map-agent-display'
-import { routeAgentToTurn } from './route-agent'
+import { buildClientRequestUserMessageIndex, routeAgentToTurn } from './route-agent'
 
 function findRequestMessage(
   agent: MessageEntity,
@@ -36,7 +36,12 @@ function findRequestMessage(
     }
   }
 
-  const routedTurnId = routeAgentToTurn(agent, userMessageIds, entities)
+  const routedTurnId = routeAgentToTurn(
+    agent,
+    userMessageIds,
+    entities,
+    buildClientRequestUserMessageIndex(userMessageIds, entities),
+  )
   if (routedTurnId !== 'unresolved') {
     const routed = entities[routedTurnId]
     if (routed?.messageType === 'user' && routed.roomId === agent.roomId) return routed

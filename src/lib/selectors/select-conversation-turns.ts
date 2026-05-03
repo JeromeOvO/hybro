@@ -14,6 +14,7 @@ export function selectConversationTurns(
   const userEntitiesOrdered: MessageEntity[] = []
   const agentEntities: MessageEntity[] = []
   const ephemeralByClientReqId = new Map<string, MessageEntity>()
+  const userMessageIdByClientRequestId = new Map<string, string>()
 
   for (const id of orderedIds) {
     const e = entities[id]
@@ -22,6 +23,9 @@ export function selectConversationTurns(
     if (e.messageType === 'user') {
       userMessageIds.add(e.id)
       userEntitiesOrdered.push(e)
+      if (e.clientRequestId && !userMessageIdByClientRequestId.has(e.clientRequestId)) {
+        userMessageIdByClientRequestId.set(e.clientRequestId, e.id)
+      }
     } else if (e.isEphemeral) {
       if (e.clientRequestId) ephemeralByClientReqId.set(e.clientRequestId, e)
     } else {
@@ -40,7 +44,12 @@ export function selectConversationTurns(
   }
 
   for (const agent of agentEntities) {
-    const targetTurn = routeAgentToTurn(agent, userMessageIds, entities)
+    const targetTurn = routeAgentToTurn(
+      agent,
+      userMessageIds,
+      entities,
+      userMessageIdByClientRequestId,
+    )
 
     const blocks = targetTurn === 'unresolved'
       ? unresolvedBlocks
@@ -92,11 +101,7 @@ export function selectConversationTurns(
   for (const [crId, eph] of ephemeralByClientReqId) {
     if (clientReqIdsWithRealAgent.has(crId)) continue
 
-    let targetTurn: string | undefined
-    for (const uid of userMessageIds) {
-      const u = entities[uid]
-      if (u?.clientRequestId === crId) { targetTurn = uid; break }
-    }
+    const targetTurn = userMessageIdByClientRequestId.get(crId)
     if (!targetTurn) continue
 
     const blocks = turnBlocks.get(targetTurn) ?? (() => { const b: ConversationBlock[] = []; turnBlocks.set(targetTurn, b); return b })()

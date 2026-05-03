@@ -2,10 +2,27 @@ import type { MessageEntity } from '@/stores/message-store/types'
 
 const MAX_HOPS = 2
 
+export type ClientRequestUserMessageIndex = ReadonlyMap<string, string>
+
+export function buildClientRequestUserMessageIndex(
+  userMessageIds: Set<string>,
+  entityById: Record<string, MessageEntity>,
+): Map<string, string> {
+  const index = new Map<string, string>()
+  for (const uid of userMessageIds) {
+    const clientRequestId = entityById[uid]?.clientRequestId
+    if (clientRequestId && !index.has(clientRequestId)) {
+      index.set(clientRequestId, uid)
+    }
+  }
+  return index
+}
+
 export function routeAgentToTurn(
   entity: MessageEntity,
   userMessageIds: Set<string>,
   entityById: Record<string, MessageEntity>,
+  clientRequestUserMessageIdByClientRequestId: ClientRequestUserMessageIndex,
 ): string | 'unresolved' {
   // Tier 1: relatedMessageId chain (stable path)
   if (entity.relatedMessageId) {
@@ -20,10 +37,8 @@ export function routeAgentToTurn(
 
   // Tier 2: clientRequestId (live correlation only)
   if (entity.clientRequestId) {
-    for (const uid of userMessageIds) {
-      const userEntity = entityById[uid]
-      if (userEntity?.clientRequestId === entity.clientRequestId) return uid
-    }
+    const uid = clientRequestUserMessageIdByClientRequestId.get(entity.clientRequestId)
+    if (uid && userMessageIds.has(uid)) return uid
   }
 
   // Tier 3: unresolved
