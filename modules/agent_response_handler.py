@@ -299,7 +299,7 @@ class AgentResponseHandler:
                 if room and room.room_agent_set:
                     agent_name = room.room_agent_set.get(e.agent_id)
             except Exception:
-                pass
+                logger.debug("agent name lookup failed", exc_info=True)
 
         hitl_req = await hitl_service.request_input(
             room_id=e.room_id,
