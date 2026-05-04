@@ -7,6 +7,7 @@ and that flow-control flags (skip_persist) work.
 """
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from modules.agent_event import AgentEvent
@@ -23,6 +24,7 @@ def _make_handler(*, db=None, sse=None, rmc=None):
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=True)
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(return_value=None)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
@@ -378,6 +380,97 @@ class TestInteractiveEvent:
             message_text="need input", task_id="t-1", context_id="c-1",
         )
         h._rmc.resume_queue_from_continuation.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_creates_hitl_request_for_async_interactive_continuation(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(
+            return_value={"user_message_id": "user-msg-001"}
+        )
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        db.get_room_by_room_id = AsyncMock(
+            return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
+        )
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="interactive", **_base_event(),
+            text="need input", state="input-required",
+            task_id="t-1", context_id="c-1",
+        )
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "modules.agent_response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            mp.setattr("services.hitl_service.hitl_service", hitl)
+            await h.handle(event)
+
+        hitl.request_input.assert_awaited_once_with(
+            room_id="room-001",
+            user_message_id="user-msg-001",
+            source="agent",
+            prompt="need input",
+            agent_id="agent-001",
+            agent_name="Agent X",
+            a2a_task_id="t-1",
+            a2a_context_id="c-1",
+            continuation_message_id="msg-001",
+            display_message_id="display-msg-001",
+        )
+        h._sse.send_processing_status.assert_awaited_once_with(
+            "room-001",
+            "awaiting_input",
+            "user-msg-001",
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
+        db = MagicMock()
+        db.update_task_state_on_message = AsyncMock(return_value=True)
+        db.accumulate_artifact_on_message = AsyncMock(return_value=True)
+        db.get_pending_continuation_on_message = AsyncMock(
+            return_value={"user_message_id": "user-msg-001"}
+        )
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        db.get_room_by_room_id = AsyncMock(side_effect=RuntimeError("db down"))
+        h = _make_handler(db=db)
+        event = AgentEvent(
+            kind="interactive", **_base_event(),
+            text="need input", state="input-required",
+            task_id="t-1", context_id="c-1",
+        )
+        hitl = SimpleNamespace(
+            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "modules.agent_response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            mp.setattr("services.hitl_service.hitl_service", hitl)
+            debug = MagicMock()
+            mp.setattr("modules.agent_response_handler.logger.debug", debug)
+            await h.handle(event)
+
+        debug.assert_called_once_with("agent name lookup failed", exc_info=True)
+        hitl.request_input.assert_awaited_once()
+        assert hitl.request_input.call_args.kwargs["agent_name"] is None
+        h._sse.send_processing_status.assert_awaited_once_with(
+            "room-001",
+            "awaiting_input",
+            "user-msg-001",
+        )
 
 
 # =============================================================================

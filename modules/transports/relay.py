@@ -242,7 +242,7 @@ class RelayTransport(AgentTransport):
                 kind="response",
                 **base,
                 text=data.get("content", ""),
-                parts=data.get("parts"),
+                parts=self._normalize_hub_parts(data.get("parts")),
             )
 
         if event_type == "agent_error":
@@ -256,6 +256,11 @@ class RelayTransport(AgentTransport):
         if event_type == "artifact_update":
             raw = data.get("raw", {})
             artifact_data = raw.get("artifact", data.get("artifact", {}))
+            if artifact_data and artifact_data.get("parts"):
+                artifact_data = {
+                    **artifact_data,
+                    "parts": self._normalize_hub_parts(artifact_data.get("parts")),
+                }
             text = data.get("text", "")
             append = data.get("append", False)
             last_chunk = data.get("last_chunk", False)
@@ -287,6 +292,76 @@ class RelayTransport(AgentTransport):
             event_type, agent_message_id,
         )
         return None
+
+    @staticmethod
+    def _normalize_hub_parts(parts: list[dict] | None) -> list[dict] | None:
+        """Convert hub canonical parts into backend A2A part dicts.
+
+        hybro-hub normalizes v0.3 FilePart into flattened keys
+        (raw/mediaType/filename).  The backend artifact path expects
+        kind=file with nested file.bytes/mimeType/name.
+        """
+        if not parts:
+            return parts
+
+        normalized: list[dict] = []
+        seen_file_keys: set[tuple] = set()
+        for part in parts:
+            if not isinstance(part, dict):
+                normalized.append(part)
+                continue
+
+            if part.get("kind"):
+                normalized.append(part)
+                continue
+
+            metadata = part.get("metadata")
+
+            if "text" in part:
+                out = {"kind": "text", "text": part.get("text", "")}
+                if metadata is not None:
+                    out["metadata"] = metadata
+                normalized.append(out)
+                continue
+
+            if "raw" in part or "url" in part:
+                file_info = {}
+                if "raw" in part:
+                    file_info["bytes"] = part["raw"]
+                if "url" in part:
+                    file_info["uri"] = part["url"]
+                mime = part.get("mediaType") or part.get("mimeType")
+                if mime:
+                    file_info["mimeType"] = mime
+                name = part.get("filename") or part.get("name")
+                if name:
+                    file_info["name"] = name
+
+                out = {"kind": "file", "file": file_info}
+                if metadata is not None:
+                    out["metadata"] = metadata
+                file_key = (
+                    file_info.get("bytes"),
+                    file_info.get("uri"),
+                    file_info.get("mimeType"),
+                    file_info.get("name"),
+                )
+                if file_key in seen_file_keys:
+                    continue
+                seen_file_keys.add(file_key)
+                normalized.append(out)
+                continue
+
+            if "data" in part:
+                out = {"kind": "data", "data": part.get("data")}
+                if metadata is not None:
+                    out["metadata"] = metadata
+                normalized.append(out)
+                continue
+
+            normalized.append(part)
+
+        return normalized
 
     def _normalize_task_status(
         self,

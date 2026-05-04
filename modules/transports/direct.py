@@ -1516,11 +1516,16 @@ class DirectTransport(AgentTransport):
                     status_message=response.get("message"),
                 )
 
+            # Interactive states (input-required / auth-required) are already
+            # final for this dispatch cycle regardless of push capability.
+            # Return immediately so QueueExecutor sees AWAITING_INPUT.
+            if response.get("requires_input") or response.get("requires_auth"):
+                task_obj = get_task(current_message)
+                if task_obj and task_obj.status:
+                    task_obj.status.state = TaskState(status) if isinstance(status, str) else status
+                return True, None, message_id
+
             if self.a2a_service.has_push_notification_capability(agent_card):
-                if response.get("requires_input"):
-                    task_obj = get_task(current_message)
-                    if task_obj and task_obj.status:
-                        task_obj.status.state = TaskState.input_required
                 return True, None, message_id
 
             # Non-push agent: poll for completion
