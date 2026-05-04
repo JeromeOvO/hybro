@@ -1,12 +1,50 @@
 'use client'
 
-import React from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
+import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
+import { ComposerShell } from '@/components/composer/ComposerShell'
+import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable'
+import { useMessageStore } from '@/stores/message-store'
+import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
+import { selectAgentResponseDetail } from '@/lib/selectors'
+import type { MessageEntity } from '@/stores/message-store/types'
 
-// ── TimelineAdapter interface ─────────────────────────────────
+const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
+const EMPTY_ORDERED_IDS: string[] = []
+const DETAIL_PANE_QUERY = '(min-width: 1280px)'
+const DETAIL_PANE_LAYOUT = {
+  'conversation-primary-panel': 66,
+  'conversation-detail-panel': 34,
+}
+
+function canShowDetailPane(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return true
+  return window.matchMedia(DETAIL_PANE_QUERY).matches
+}
+
+function useCanShowDetailPane(): boolean {
+  const [canShow, setCanShow] = useState(canShowDetailPane)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const media = window.matchMedia(DETAIL_PANE_QUERY)
+    const handleChange = () => setCanShow(media.matches)
+    handleChange()
+    media.addEventListener('change', handleChange)
+    return () => media.removeEventListener('change', handleChange)
+  }, [])
+
+  return canShow
+}
 
 export interface GroupManagementAdapter {
   groups: AgentGroup[]
@@ -28,134 +66,110 @@ export interface QuoteState {
 }
 
 export interface TimelineAdapter {
-  // Identity
   roomId: string
   getToken?: () => Promise<string | null>
-
-  // Actions
   onSendMessage: (message: string, targetGroup?: string, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
   onChatModeChange: (mode: ChatMode) => void
-
-  // State: processing & sending
   isSending: boolean
   isProcessing: boolean
   isCancelling: boolean
-
-  // State: agents & room
   agents: { id: string; name: string; iconUrl?: string }[]
   roomAgentIds: string[]
-
-  // State + actions: group management
   groupManagement: GroupManagementAdapter
-
-  // State: quote
   quoteState: QuoteState
-
-  // State: chat mode
   chatMode: ChatMode
-
-  // Prefill support
   externalValue?: string
   onExternalValueConsumed?: () => void
 }
 
-// ── View switcher ─────────────────────────────────────────────
-
-import { TurnList } from '@/components/turn/TurnList'
-import { ComposerShell } from '@/components/composer/ComposerShell'
-import { useTurnHydration } from '@/hooks/turn/useTurnHydration'
-import { useMessageStoreSync } from '@/hooks/turn/useMessageStoreSync'
-import { RoomMessages } from '@/components/room-messages'
-import { RoomChatInput } from '@/components/room-chat-input'
-import { HitlPanel } from '@/components/hitl-inline-reply-form'
-import { useActiveHitlRequests } from '@/hooks/useRoomMessages'
-
-interface TurnBasedViewProps {
+interface RoomPageShellProps {
   adapter: TimelineAdapter
 }
 
-function TurnBasedView({ adapter }: TurnBasedViewProps) {
-  useMessageStoreSync()
-  useTurnHydration(adapter.roomId, adapter.getToken)
+export function RoomPageShell({ adapter }: RoomPageShellProps) {
+  const canShowAgentDetail = useCanShowDetailPane()
+  const selectedMessageId = useSelectedAgentMessageId(adapter.roomId)
+  const entities = useMessageStore(s => selectedMessageId ? s.entities : EMPTY_ENTITIES)
+  const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
 
-  return (
-    <>
+  const detail = useMemo(() => {
+    if (!canShowAgentDetail || !selectedMessageId) return null
+    return selectAgentResponseDetail(adapter.roomId, selectedMessageId, entities, orderedIds)
+  }, [adapter.roomId, canShowAgentDetail, selectedMessageId, entities, orderedIds])
+
+  const prevRoomIdRef = useRef(adapter.roomId)
+  useEffect(() => {
+    if (adapter.roomId !== prevRoomIdRef.current) {
+      useRoomUiStore.getState().closeAgentDetail(prevRoomIdRef.current)
+      prevRoomIdRef.current = adapter.roomId
+    }
+  }, [adapter.roomId])
+
+  useLayoutEffect(() => {
+    if (selectedMessageId && !detail) {
+      useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
+    }
+  }, [selectedMessageId, detail, adapter.roomId])
+
+  const handleCloseDetail = useCallback(() => {
+    useRoomUiStore.getState().closeAgentDetail(adapter.roomId)
+  }, [adapter.roomId])
+
+  const primaryContent = (
+    <div className="conversation-primary">
       <main className="flex-1 overflow-hidden">
-        <TurnList />
+        <ConversationMessageList
+          roomId={adapter.roomId}
+          selectedAgentMessageId={canShowAgentDetail ? selectedMessageId : undefined}
+          enableAgentDetail={canShowAgentDetail}
+        />
       </main>
-      <div className="bg-background p-4">
-        <div className="max-w-4xl mx-auto">
+      <div className="conversation-input-dock conversation-gutter">
+        <div className="conversation-frame">
           <ComposerShell adapter={adapter} />
         </div>
       </div>
-    </>
+    </div>
   )
-}
-
-interface LegacyViewProps {
-  adapter: TimelineAdapter
-}
-
-function LegacyView({ adapter }: LegacyViewProps) {
-  const activeHitlRequests = useActiveHitlRequests()
 
   return (
-    <>
-      <main className="flex-1 overflow-hidden">
-        <RoomMessages onQuote={adapter.quoteState.setQuote} />
-      </main>
-      <div className="bg-background p-4">
-        <div className="max-w-4xl mx-auto">
-          <RoomChatInput
-            onSubmit={adapter.onSendMessage}
-            disableSend={adapter.isSending || adapter.isProcessing}
-            sending={adapter.isSending}
-            processing={adapter.isProcessing}
-            cancelling={adapter.isCancelling}
-            onCancel={adapter.onCancelProcessing}
-            agents={adapter.agents}
-            roomAgentIds={adapter.roomAgentIds}
-            showGroupSelector={true}
-            groups={adapter.groupManagement.groups}
-            loadingGroups={adapter.groupManagement.loadingGroups}
-            selectedGroup={adapter.groupManagement.selectedGroup}
-            onGroupChange={adapter.groupManagement.handleGroupChange}
-            roomAgentCount={adapter.roomAgentIds.length}
-            onCreateGroup={adapter.groupManagement.handleCreateGroup}
-            onEditGroup={adapter.groupManagement.handleEditGroup}
-            onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
-            onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
-            isOverride={adapter.groupManagement.isOverride}
-            onClearOverride={adapter.groupManagement.handleClearOverride}
-            quote={adapter.quoteState.quote}
-            onClearQuote={adapter.quoteState.clearQuote}
-            chatMode={adapter.chatMode}
-            onChatModeChange={adapter.onChatModeChange}
-            topSlot={activeHitlRequests.length > 0
-              ? <HitlPanel requests={activeHitlRequests} onSubmit={adapter.onRespondToHitl} />
-              : undefined
-            }
-            externalValue={adapter.externalValue}
-            onExternalValueConsumed={adapter.onExternalValueConsumed}
+    <ResizablePanelGroup
+      id={detail ? 'conversation-resizable-workspace' : undefined}
+      orientation="horizontal"
+      defaultLayout={detail ? DETAIL_PANE_LAYOUT : undefined}
+      className="conversation-workspace conversation-workspace-resizable"
+      data-detail-open={detail ? 'true' : undefined}
+    >
+      <ResizablePanel
+        id="conversation-primary-panel"
+        defaultSize={detail ? '66%' : '100%'}
+        minSize={detail ? '54%' : '100%'}
+        maxSize={detail ? '76%' : '100%'}
+        className="conversation-resizable-panel"
+        data-testid="conversation-primary-panel"
+      >
+        {primaryContent}
+      </ResizablePanel>
+      {detail && (
+        <>
+          <ResizableHandle
+            id="conversation-detail-resize-handle"
+            className="conversation-detail-resize-handle"
           />
-        </div>
-      </div>
-    </>
+          <ResizablePanel
+            id="conversation-detail-panel"
+            defaultSize="34%"
+            minSize="24%"
+            maxSize="46%"
+            className="conversation-detail-resizable-panel"
+            data-testid="conversation-detail-panel"
+          >
+            <AgentResponseDetailPane detail={detail} onClose={handleCloseDetail} />
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
   )
-}
-
-// ── Exported shell ────────────────────────────────────────────
-
-interface RoomPageShellProps {
-  adapter: TimelineAdapter
-  turnBasedTimeline: boolean
-}
-
-export function RoomPageShell({ adapter, turnBasedTimeline }: RoomPageShellProps) {
-  if (turnBasedTimeline) {
-    return <TurnBasedView adapter={adapter} />
-  }
-  return <LegacyView adapter={adapter} />
 }

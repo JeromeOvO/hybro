@@ -37,7 +37,7 @@ vi.mock('@clerk/nextjs', () => ({
 
 const mockGetAgent = vi.fn<() => Promise<AgentCenterResponse>>()
 vi.mock('@/lib/api', () => ({
-  getAgent: (...args: unknown[]) => mockGetAgent(...args),
+  getAgent: mockGetAgent,
 }))
 
 vi.mock('@/components/ui/banner', () => ({
@@ -74,15 +74,16 @@ function buildCard(overrides: Partial<AgentCard> = {}): AgentCard {
     name: 'Test Agent',
     description: 'A helpful test agent.',
     version: '1.0.0',
+    protocolVersion: '1.0.0',
     url: 'http://localhost:8001',
-    iconUrl: null,
+    iconUrl: undefined,
     documentationUrl: 'https://docs.example.com',
     provider: { organization: 'Acme Corp', url: 'https://acme.com' },
     capabilities: {
       streaming: true,
       pushNotifications: false,
       stateTransitionHistory: false,
-      extensions: null,
+      extensions: undefined,
     } as AgentCapabilities,
     defaultInputModes: ['text/plain', 'application/json'],
     defaultOutputModes: ['text/plain'],
@@ -183,7 +184,7 @@ describe('ConsumerAgentProfilePage', () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({
           card: {
-            skills: [buildSkill({ examples: [] }), buildSkill({ id: 's2', examples: null })],
+            skills: [buildSkill({ examples: [] }), buildSkill({ id: 's2', examples: undefined })],
           },
         }),
       )
@@ -277,7 +278,7 @@ describe('ConsumerAgentProfilePage', () => {
 
     it('hides View Documentation when URL is absent', async () => {
       mockGetAgent.mockResolvedValue(
-        buildAgentResponse({ card: { documentationUrl: null } }),
+        buildAgentResponse({ card: { documentationUrl: undefined } }),
       )
 
       render(<ConsumerAgentProfilePage />)
@@ -298,7 +299,7 @@ describe('ConsumerAgentProfilePage', () => {
               streaming: true,
               pushNotifications: true,
               stateTransitionHistory: false,
-              extensions: null,
+              extensions: undefined,
             } as AgentCapabilities,
           },
         }),
@@ -328,7 +329,7 @@ describe('ConsumerAgentProfilePage', () => {
               streaming: false,
               pushNotifications: false,
               stateTransitionHistory: false,
-              extensions: null,
+              extensions: undefined,
             } as AgentCapabilities,
           },
         }),

@@ -11,6 +11,8 @@ vi.mock('@/lib/api/room', () => ({
   suggestAgents: vi.fn(),
 }))
 
+import type { SuggestAgentsResponse } from '@/lib/api/room'
+
 vi.mock('@/lib/api/agent', () => ({
   getAllAgents: vi.fn(),
   getAllActiveAgents: vi.fn(),
@@ -108,7 +110,7 @@ describe('useChatRoomCreation', () => {
 
       const { result } = renderHook(() => useChatRoomCreation(defaultProps))
 
-      let response: typeof mockResponse | null
+      let response: SuggestAgentsResponse | null
       await act(async () => {
         response = await result.current.getAgentSuggestions('Help me code')
       })

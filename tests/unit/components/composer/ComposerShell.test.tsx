@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { ComposerShell } from '@/components/composer/ComposerShell'
-import { useTurnEventStore } from '@/stores/turn-event-store'
+import { useMessageStore } from '@/stores/message-store'
 
-// Mock the RoomChatInput to avoid pulling in all dependencies
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
-    <div data-testid="room-chat-input" data-disabled={props.disabled}>
+    <div data-testid="room-chat-input" data-disabled={props.disableSend} data-has-top-slot={props.topSlot ? 'true' : 'false'}>
       {props.topSlot}
     </div>
   ),
 }))
 
 const mockAdapter = {
+  roomId: 'test-room',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
   onRespondToHitl: vi.fn(),
@@ -41,7 +41,9 @@ const mockAdapter = {
 describe('ComposerShell', () => {
   beforeEach(() => {
     cleanup()
-    useTurnEventStore.getState().reset()
+    const store = useMessageStore.getState()
+    store.clearRoom()
+    store.setRoom('test-room')
   })
 
   it('renders in normal mode', () => {
@@ -50,20 +52,33 @@ describe('ComposerShell', () => {
   })
 
   it('shows HitlResponseBar when there are pending HITLs', () => {
-    const store = useTurnEventStore.getState()
-    store.append('turn-1', {
-      eventId: 'e1', turnId: 'turn-1', seq: 1, ts: 1000,
-      type: 'turn_started', userInput: { text: 'hi', attachments: [] },
-    })
-    store.append('turn-1', {
-      eventId: 'e2', turnId: 'turn-1', seq: 2, ts: 2000,
-      type: 'hitl_requested', hitlId: 'h1', source: 'agent',
-      agentName: 'Agent A', prompt: 'What color?', promptType: 'text',
-    } as any)
+    const store = useMessageStore.getState()
+    store.upsertMessage({
+      id: 'user-1',
+      roomId: 'test-room',
+      messageType: 'user',
+      content: 'hi',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+    }, 'db')
+    store.upsertMessage({
+      id: 'hitl-1',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Agent A',
+      timestamp: new Date().toISOString(),
+      relatedMessageId: 'user-1',
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'h1',
+      hitlPrompt: 'What color?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+    }, 'db')
 
-    const { container } = render(<ComposerShell adapter={mockAdapter} />)
-    // The HitlResponseBar is passed as topSlot to RoomChatInput, so it appears in the DOM
-    expect(container.querySelector('[data-testid="hitl-response-bar"]')).toBeDefined()
-    expect(screen.getAllByText('What color?').length).toBeGreaterThan(0)
+    render(<ComposerShell adapter={mockAdapter} />)
+    expect(screen.getByText('What color?')).toBeDefined()
+    expect(screen.getByTestId('hitl-response-frame')).toBeDefined()
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-has-top-slot')).toBe('false')
   })
 })

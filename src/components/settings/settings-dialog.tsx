@@ -13,7 +13,6 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { ProfileSection } from "@/components/settings/profile-section"
-import { AppearanceSection } from "@/components/settings/appearance-section"
 import { PasswordSection } from "@/components/settings/password-section"
 import { SessionsSection } from "@/components/settings/sessions-section"
 import { DangerZoneSection } from "@/components/settings/danger-zone-section"
@@ -94,7 +93,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <div className="space-y-6">
               <Separator />
               <ProfileSection user={user} />
-              <AppearanceSection />
               <HubStatusLine onNavigate={() => onOpenChange(false)} />
               <PasswordSection user={user} />
               <SessionsSection user={user} />

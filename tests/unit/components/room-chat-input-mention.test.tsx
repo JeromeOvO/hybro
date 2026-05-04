@@ -80,6 +80,47 @@ describe('RoomChatInput – @mention behavior', () => {
     expect(screen.getByText('Gamma Agent')).toBeTruthy()
   })
 
+  it('should show an empty mention dropdown when no agents are available', () => {
+    const { container } = renderInput({ agents: [] })
+    const editor = getEditor(container)
+
+    typeInEditor(editor, '@')
+
+    expect(screen.getByText('Mention an agent')).toBeTruthy()
+    expect(screen.getByText('No agents available')).toBeTruthy()
+  })
+
+  it('should not submit when Enter is pressed in an empty mention dropdown', () => {
+    const onSubmit = vi.fn()
+    const { container } = renderInput({ agents: [], onSubmit })
+    const editor = getEditor(container)
+
+    typeInEditor(editor, '@')
+    fireEvent.keyDown(editor, { key: 'Enter' })
+
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(screen.getByText('No agents available')).toBeTruthy()
+  })
+
+  it('anchors the mention dropdown flush at the conversation body width', () => {
+    const { container } = renderInput()
+    const editor = getEditor(container)
+
+    typeInEditor(editor, '@')
+
+    const dropdown = screen.getByText('Mention an agent').closest('.absolute')
+
+    expect(dropdown).toBeTruthy()
+    expect(dropdown?.className).toContain('left-[var(--conversation-body-inset)]')
+    expect(dropdown?.className).toContain('right-[var(--conversation-body-inset)]')
+    expect(dropdown?.className).toContain('-mb-px')
+    expect(dropdown?.className).not.toContain('left-0')
+    expect(dropdown?.className).not.toContain('right-0')
+    expect(dropdown?.className).not.toContain('left-4')
+    expect(dropdown?.className).not.toContain('right-4')
+    expect(dropdown?.className).not.toContain('mb-3')
+  })
+
   it('should filter agents by text typed after @', () => {
     const { container } = renderInput()
     const editor = getEditor(container)

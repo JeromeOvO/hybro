@@ -193,7 +193,9 @@ describe('Room API', () => {
         'all_agents', 'related-msg-1', 'Quoted text here'
       )
 
-      const message = capturedBody?.message as Record<string, unknown>
+      expect(capturedBody).not.toBeNull()
+      const body = capturedBody as unknown as Record<string, unknown>
+      const message = body.message as Record<string, unknown>
       expect(message.related_message_id).toBe('related-msg-1')
       expect(message.extend_info).toMatchObject({ quoted_text: 'Quoted text here' })
     })

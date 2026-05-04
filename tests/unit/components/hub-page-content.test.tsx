@@ -18,7 +18,7 @@ vi.mock('@/hooks/useHubStatus', () => ({
 
 const mockGetAllActiveAgents = vi.fn<() => Promise<AgentCenterResponse>>()
 vi.mock('@/lib/api/agent', () => ({
-  getAllActiveAgents: (...args: unknown[]) => mockGetAllActiveAgents(...args),
+  getAllActiveAgents: mockGetAllActiveAgents,
 }))
 
 vi.mock('@/lib/time', () => ({

@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
-import type { QuoteData } from "@/components/message-bubble"
+import type { QuoteData } from "@/lib/types/quote"
 import type { PendingAttachment } from "@/lib/types/attachments"
 import type { ChatMode } from "@/lib/types/chat-mode"
 import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
@@ -331,18 +331,10 @@ function ChatPageContent() {
                         </div>
 
                         {gm.agentsError && gm.availableAgents.length === 0 ? (
-                            <div className="flex flex-col items-center gap-3 py-8">
+                            <div className="flex items-center justify-center py-8">
                                 <p className="text-sm text-muted-foreground">
-                                    Failed to load agents
+                                    To Be Continued
                                 </p>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => gm.loadAvailableAgents?.()}
-                                >
-                                    <RefreshCw className="mr-2 h-3 w-3" />
-                                    Retry
-                                </Button>
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 px-2">

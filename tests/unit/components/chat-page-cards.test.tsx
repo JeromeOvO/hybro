@@ -122,14 +122,14 @@ describe("Chat page — Use Case Cards integration", () => {
     })
   })
 
-  it("shows error state with retry when catalog load fails", async () => {
+  it("shows To Be Continued when catalog load fails", async () => {
     gmState = { ...gmState, agentsError: "Network error", availableAgents: [] }
     render(<ChatPage />)
     await waitFor(() => {
-      expect(screen.getByText("Failed to load agents")).toBeDefined()
-      expect(screen.getByText("Retry")).toBeDefined()
+      expect(screen.getByText("To Be Continued")).toBeDefined()
     })
-    fireEvent.click(screen.getByText("Retry"))
-    expect(mockLoadAvailableAgents).toHaveBeenCalledOnce()
+    expect(screen.queryByText("Failed to load agents")).toBeNull()
+    expect(screen.queryByText("Retry")).toBeNull()
+    expect(mockLoadAvailableAgents).not.toHaveBeenCalled()
   })
 })

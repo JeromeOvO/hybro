@@ -601,7 +601,8 @@ describe('useRoomWebhook HITL SSE handling', () => {
         }
       })
 
-      expect(caughtError?.message).toBe('Server error')
+      expect(caughtError).not.toBeNull()
+      expect((caughtError as unknown as Error).message).toBe('Server error')
 
       // Entity should be reverted to hitlResolved: false
       const entityAfter = useMessageStore.getState().entities['msg-revert']

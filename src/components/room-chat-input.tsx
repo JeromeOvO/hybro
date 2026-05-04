@@ -15,7 +15,7 @@ import {
 import type { AgentGroup } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ALL_AGENTS, BUILTIN_GROUP_ROOM_TEAM } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
-import type { QuoteData } from './message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
 import { ModeSelector } from './mode-selector'
@@ -768,19 +768,23 @@ export function RoomChatInput({
   }, [message])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (showAgentSuggestions && filteredAgents.length > 0) {
+    if (showAgentSuggestions) {
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault()
-          setSelectedAgentIndex(prev =>
-            prev < filteredAgents.length - 1 ? prev + 1 : 0
-          )
+          if (filteredAgents.length > 0) {
+            setSelectedAgentIndex(prev =>
+              prev < filteredAgents.length - 1 ? prev + 1 : 0
+            )
+          }
           break
         case 'ArrowUp':
           e.preventDefault()
-          setSelectedAgentIndex(prev =>
-            prev > 0 ? prev - 1 : filteredAgents.length - 1
-          )
+          if (filteredAgents.length > 0) {
+            setSelectedAgentIndex(prev =>
+              prev > 0 ? prev - 1 : filteredAgents.length - 1
+            )
+          }
           break
         case 'Enter':
           e.preventDefault()
@@ -868,17 +872,18 @@ export function RoomChatInput({
   const isStorageOverLimit = trimmedStorageLength > MAX_MESSAGE_LENGTH
   const isOverLimit = isDisplayOverLimit || isStorageOverLimit
   const isReadyToSend = (message.trim() || attachments.length > 0) && !disableSend && !disabled && !isOverLimit
+  const actionButtonClass = "size-8 rounded-[var(--chat-input-radius)] p-0"
 
   return (
     <div className="relative">
       {/* Agent suggestions dropdown */}
-      {showAgentSuggestions && filteredAgents.length > 0 && (
+      {showAgentSuggestions && (
         <div
           ref={suggestionsRef}
           className={cn(
-            "absolute bottom-full left-4 right-4 mb-3 z-50",
+            "absolute bottom-full left-[var(--conversation-body-inset)] right-[var(--conversation-body-inset)] -mb-px z-50",
             "bg-popover backdrop-blur-xl",
-            "border border-border/50 shadow-xl rounded-2xl",
+            "border border-border/50 shadow-xl rounded-t-xl rounded-b-none",
             "animate-in fade-in slide-in-from-bottom-3 duration-300"
           )}
         >
@@ -896,55 +901,62 @@ export function RoomChatInput({
 
           {/* Agent list with scroll */}
           <div ref={listRef} className="py-1 max-h-52 overflow-y-auto">
-            {filteredAgents.map((agent, index) => (
-              <button
-                key={agent.id}
-                onClick={() => insertMention(agent)}
-                className={cn(
-                  "w-full text-left px-3 py-2.5 transition-all duration-100 flex items-center gap-3 mx-1 rounded-lg",
-                  index === selectedAgentIndex
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-foreground hover:bg-muted'
-                )}
-                onMouseEnter={() => setSelectedAgentIndex(index)}
-                style={{ width: 'calc(100% - 8px)' }}
-              >
-                {/* Agent avatar */}
-                <div className="w-8 h-8 rounded-full shrink-0 overflow-hidden bg-muted flex items-center justify-center">
-                  {agent.iconUrl ? (
-                    <Image
-                      src={agent.iconUrl}
-                      alt={agent.name}
-                      width={32}
-                      height={32}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none'
-                        e.currentTarget.nextElementSibling?.classList.remove('hidden')
-                      }}
-                    />
-                  ) : null}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={getAgentAvatarUri(agent.id)} alt="" className={cn("w-full h-full", agent.iconUrl && "hidden")} />
-                </div>
+            {filteredAgents.length > 0 ? (
+              filteredAgents.map((agent, index) => (
+                <button
+                  key={agent.id}
+                  onClick={() => insertMention(agent)}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 transition-all duration-100 flex items-center gap-3 mx-1 rounded-lg",
+                    index === selectedAgentIndex
+                      ? 'bg-accent text-accent-foreground'
+                      : 'text-foreground hover:bg-muted'
+                  )}
+                  onMouseEnter={() => setSelectedAgentIndex(index)}
+                  style={{ width: 'calc(100% - 8px)' }}
+                >
+                  {/* Agent avatar */}
+                  <div className="w-8 h-8 rounded-full shrink-0 overflow-hidden bg-muted flex items-center justify-center">
+                    {agent.iconUrl ? (
+                      <Image
+                        src={agent.iconUrl}
+                        alt={agent.name}
+                        width={32}
+                        height={32}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden')
+                        }}
+                      />
+                    ) : null}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={getAgentAvatarUri(agent.id)} alt="" className={cn("w-full h-full", agent.iconUrl && "hidden")} />
+                  </div>
 
-                <span className="font-medium truncate text-sm flex-1">
-                  {agent.name}
-                </span>
-
-                {/* Keyboard hint for selected item */}
-                {index === selectedAgentIndex && (
-                  <span className="text-[10px] px-2 py-1 bg-muted rounded font-medium text-muted-foreground whitespace-nowrap">
-                    Press Enter To Select
+                  <span className="font-medium truncate text-sm flex-1">
+                    {agent.name}
                   </span>
-                )}
-              </button>
-            ))}
+
+                  {/* Keyboard hint for selected item */}
+                  {index === selectedAgentIndex && (
+                    <span className="text-[10px] px-2 py-1 bg-muted rounded font-medium text-muted-foreground whitespace-nowrap">
+                      Press Enter To Select
+                    </span>
+                  )}
+                </button>
+              ))
+            ) : (
+              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+                <div className="font-medium text-foreground">No agents available</div>
+                <div className="mt-1 text-xs">Try changing the agent group below.</div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Main input container with animated gradient border */}
+      {/* Main input container */}
       <div
         onDrop={(e) => {
           e.preventDefault()
@@ -953,55 +965,16 @@ export function RoomChatInput({
         }}
         onDragOver={(e) => e.preventDefault()}
         className={cn(
-        "group/input relative flex flex-col rounded-3xl transition-all duration-500",
-        "bg-gradient-to-b from-background via-background to-background/95",
-        "shadow-xl hover:shadow-2xl",
-        // Outer glow effects
-        "before:absolute before:-inset-[1px] before:rounded-3xl before:p-[1px]",
-        "before:bg-gradient-to-b before:from-border/80 before:via-border/50 before:to-border/80",
-        "before:transition-all before:duration-500 before:-z-10",
-        // Focus/hover gradient border
-        "focus-within:before:from-primary/60 focus-within:before:via-primary/40 focus-within:before:to-primary/60",
-        "hover:before:from-primary/40 hover:before:via-primary/20 hover:before:to-primary/40",
-        // Shadow glow
-        "hover:shadow-[0_8px_40px_-12px_rgba(var(--color-primary)/0.25)]",
-        "focus-within:shadow-[0_8px_50px_-10px_rgba(var(--color-primary)/0.35)]",
-        // Dark mode enhancements
-        "dark:hover:shadow-[0_8px_50px_-10px_rgba(0,255,255,0.2)]",
-        "dark:focus-within:shadow-[0_8px_60px_-8px_rgba(0,255,255,0.3)]"
-      )}>
+          "group/input relative flex flex-col rounded-xl transition-colors duration-200",
+        )}>
         {/* Inner container with actual border */}
-        <div className="relative flex flex-col rounded-3xl bg-muted/70 dark:bg-muted/50 backdrop-blur-sm border border-border/50 overflow-hidden">
+        <div className="relative flex flex-col rounded-xl bg-muted backdrop-blur-sm shadow-sm overflow-hidden" style={{ border: '1px solid var(--conversation-border-light)' }}>
           {/* Top slot (e.g. HITL Questions panel) */}
           {topSlot}
 
           {/* Attachment previews */}
           <AttachmentPreview attachments={attachments} onRemove={removeAttachment} />
 
-          {/* Expand/Collapse toggle - shown when content overflows or already expanded */}
-          {(isOverflowing || isEditorExpanded) && (
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditorExpanded(prev => !prev)}
-                    data-testid="expand-editor"
-                    className="absolute top-2.5 right-3 z-10 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
-                  >
-                    {isEditorExpanded ? (
-                      <Minimize2 className="h-3.5 w-3.5" />
-                    ) : (
-                      <Maximize2 className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  {isEditorExpanded ? 'Collapse' : 'Expand'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
           {/* Quote preview */}
           {quote && (
             <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg bg-muted/60 px-3 py-2 text-sm">
@@ -1042,7 +1015,7 @@ export function RoomChatInput({
                 "w-full overflow-y-auto resize-none transition-[max-height] duration-200 ease-out",
                 "border-0 bg-transparent text-[15px] leading-7 text-foreground",
                 "focus:outline-none placeholder-editor",
-                isEditorExpanded ? "min-h-[200px] max-h-[60vh]" : "min-h-[28px] max-h-[200px]",
+                !isEditorExpanded && "min-h-[28px]",
                 disabled && "opacity-40 cursor-not-allowed"
               )}
               data-testid="chat-input"
@@ -1052,44 +1025,22 @@ export function RoomChatInput({
                 caretColor: 'hsl(var(--color-primary))',
                 wordBreak: 'break-word',
                 whiteSpace: 'pre-wrap',
+                minHeight: isEditorExpanded ? '200px' : undefined,
+                maxHeight: isEditorExpanded ? '60vh' : 'var(--chat-input-editor-collapsed-max-height)',
               }}
             />
           </div>
 
-          {/* Controls: Attach + @ + GroupSelector left, Send/Stop right */}
-          <div className="flex items-center justify-between px-3 pb-3 pt-2">
-            {/* Attach + @ + Group selector + Supervisor indicator (left) */}
-            <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <FileAttachmentButton
-                onFiles={addFiles}
-                disabled={disabled || sending || processing}
-              />
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={disabled || sending || processing}
-                      className="h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors"
-                      onClick={() => {
-                        if (!editorRef.current) return
-                        editorRef.current.focus()
-                        document.execCommand('insertText', false, '@')
-                        handleInput()
-                      }}
-                    >
-                      <AtSign className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Mention (@)
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+          {/* Controls: GroupSelector left, utility actions + Send/Stop right */}
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-4 pb-3 pt-2 max-[520px]:grid-cols-1"
+            data-testid="composer-controls"
+          >
+            {/* Group selector + mode selector (left) */}
+            <div className="flex min-w-0 items-center gap-3 text-sm text-muted-foreground max-[520px]:w-full max-[520px]:gap-2 max-[520px]:overflow-hidden" data-testid="composer-selectors">
               {showGroupSelector && (
                 <GroupSelector
+                  className="min-w-0 max-w-[11rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   selectedGroup={selectedGroup}
                   onGroupChange={onGroupChange || (() => { })}
                   groups={groups}
@@ -1108,6 +1059,7 @@ export function RoomChatInput({
               )}
               {onChatModeChange && (
                 <ModeSelector
+                  className="min-w-0 max-w-[9rem] max-[520px]:max-w-[calc(50%-0.25rem)]"
                   mode={chatMode ?? DEFAULT_CHAT_MODE}
                   onModeChange={onChatModeChange}
                   disabled={disabled || sending || processing}
@@ -1115,11 +1067,11 @@ export function RoomChatInput({
               )}
             </div>
 
-            {/* Send / Stop button (right) */}
-            <div className="flex items-center gap-1">
+            {/* Upload + @ + Send / Stop button (right) */}
+            <div className="flex items-center justify-self-end" data-testid="composer-actions">
               {isStorageOverLimit && !isDisplayOverLimit && plainTextLength < COUNTER_VISIBLE_THRESHOLD ? (
                 <span
-                  className="text-xs font-medium text-red-600 dark:text-red-400 transition-colors duration-200 mr-1"
+                  className="text-xs font-medium text-red-600 dark:text-red-400 transition-colors duration-200 mr-2"
                   data-testid="char-counter"
                 >
                   Message too large (mentions)
@@ -1127,7 +1079,7 @@ export function RoomChatInput({
               ) : plainTextLength >= COUNTER_VISIBLE_THRESHOLD ? (
                 <span
                   className={cn(
-                    "text-xs font-medium tabular-nums transition-colors duration-200 mr-1",
+                    "text-xs font-medium tabular-nums transition-colors duration-200 mr-2",
                     isOverLimit
                       ? "text-red-600 dark:text-red-400"
                       : plainTextLength >= WARNING_THRESHOLD
@@ -1139,104 +1091,164 @@ export function RoomChatInput({
                   {plainTextLength.toLocaleString()}/{MAX_MESSAGE_LENGTH.toLocaleString()}
                 </span>
               ) : null}
-            {sending ? (
-              <div className="relative">
+              <div className="flex items-center gap-1.5" data-testid="composer-utilities">
+                {(isOverflowing || isEditorExpanded) && (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setIsEditorExpanded(prev => !prev)}
+                          data-testid="expand-editor"
+                          className={cn(
+                            actionButtonClass,
+                            "text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors",
+                          )}
+                        >
+                          {isEditorExpanded ? (
+                            <Minimize2 className="h-3.5 w-3.5" />
+                          ) : (
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {isEditorExpanded ? 'Collapse' : 'Expand'}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+                <FileAttachmentButton
+                  onFiles={addFiles}
+                  disabled={disabled || sending || processing}
+                  className="hover:text-foreground hover:bg-muted/70"
+                />
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span>
-                        <Button
-                          disabled
-                          size="icon"
-                          data-testid="sending-button"
-                          className={cn(
-                          )}
-                        >
-                          <div className="h-4 w-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                        </Button>
-                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Mention an agent"
+                        disabled={disabled || sending || processing}
+                        className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
+                        onClick={() => {
+                          if (!editorRef.current) return
+                          editorRef.current.focus()
+                          document.execCommand('insertText', false, '@')
+                          handleInput()
+                        }}
+                      >
+                        <AtSign className="h-4 w-4" />
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent side="top">
-                      Sending...
+                      Mention (@)
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
-                <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
               </div>
-            ) : cancelling && processing ? (
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span>
-                      <Button
-                        disabled
-                        size="icon"
-                        data-testid="cancelling-button"
-                        className={cn(
-                          "h-8 w-8 rounded-full p-0",
-                          "bg-destructive/60",
-                        )}
-                      >
-                        <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Cancelling...
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : processing ? (
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={onCancel}
-                      size="icon"
-                      className={cn(
-                        "h-8 w-8 rounded-full p-0",
-                        "bg-muted text-muted-foreground",
-                        "hover:scale-105 active:scale-95 transition-all duration-200",
-                      )}
-                      data-testid="stop-processing"
-                    >
-                      <Square className="h-3.5 w-3.5 fill-current" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Stop
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : (
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={handleSubmit}
-                      disabled={!isReadyToSend}
-                      size="icon"
-                      aria-label="Send message"
-                      data-testid="send-button"
-                      className={cn(
-                        "h-8 w-8 rounded-full p-0",
-                        "transition-all duration-300",
-                        "hover:scale-105 active:scale-95",
-                        "disabled:hover:scale-100 disabled:shadow-none disabled:cursor-default",
-                        isReadyToSend
-                          ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40"
-                          : "bg-primary/40 text-primary-foreground/70"
-                      )}
-                    >
-                      <ArrowUp className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    Send (Enter)
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
+              <div className="ml-2" data-testid="composer-primary-action">
+                {sending ? (
+                  <div className="relative">
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>
+                            <Button
+                              disabled
+                              size="icon"
+                              data-testid="sending-button"
+                              className={actionButtonClass}
+                            >
+                              <div className="h-4 w-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                            </Button>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          Sending...
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <span className="absolute inset-0 rounded-[var(--chat-input-radius)] bg-primary/20 animate-ping" />
+                  </div>
+                ) : cancelling && processing ? (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button
+                            disabled
+                            size="icon"
+                            data-testid="cancelling-button"
+                            className={cn(
+                              actionButtonClass,
+                              "bg-destructive/60",
+                            )}
+                          >
+                            <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        Cancelling...
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : processing ? (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          onClick={onCancel}
+                          size="icon"
+                          className={cn(
+                            actionButtonClass,
+                            "bg-muted text-muted-foreground",
+                            "hover:bg-muted/80 transition-colors duration-200",
+                          )}
+                          data-testid="stop-processing"
+                        >
+                          <Square className="h-3.5 w-3.5 fill-current" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        Stop
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          onClick={handleSubmit}
+                          disabled={!isReadyToSend}
+                          size="icon"
+                          aria-label="Send message"
+                          data-testid="send-button"
+                          className={cn(
+                            actionButtonClass,
+                            "transition-all duration-300",
+                            "disabled:shadow-none disabled:cursor-default",
+                            isReadyToSend
+                              ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                              : "bg-primary/40 text-primary-foreground/70"
+                          )}
+                        >
+                          <ArrowUp className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        Send (Enter)
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -1,0 +1,40 @@
+import type { ConversationBlock } from '@/lib/selectors/conversation-types'
+import { AgentCard } from './AgentCard'
+import { AgentContentBlock } from './AgentContentBlock'
+import { UserAnswerCard } from './UserAnswerCard'
+
+interface UnresolvedAgentGroupProps {
+  blocks: ConversationBlock[]
+  selectedAgentMessageId?: string
+  onOpenAgentDetail?: (messageId: string) => void
+}
+
+export function UnresolvedAgentGroup({ blocks, selectedAgentMessageId, onOpenAgentDetail }: UnresolvedAgentGroupProps) {
+  return (
+    <div>
+      <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
+        Unattributed responses
+      </div>
+      <div className="flex flex-col" style={{ gap: 'var(--conversation-gap-block)' }}>
+        {blocks.map((block, i) => {
+          if (block.type === 'agent_card') return <AgentCard key={i} {...block} selected={block.messageId === selectedAgentMessageId} onOpen={onOpenAgentDetail} />
+          if (block.type === 'agent_content') return <AgentContentBlock key={i} {...block} />
+          if (block.type === 'user_answer') return <UserAnswerCard key={i} {...block} />
+          if (block.type === 'agent_divider') {
+            return (
+              <div key={i} style={{ height: 1, backgroundColor: 'var(--conversation-border-subtle)' }} />
+            )
+          }
+          if (block.type === 'unresolved_content') {
+            return (
+              <div key={i} className="text-sm" style={{ color: 'var(--conversation-text-tertiary)' }}>
+                {block.entity.content}
+              </div>
+            )
+          }
+          return null
+        })}
+      </div>
+    </div>
+  )
+}

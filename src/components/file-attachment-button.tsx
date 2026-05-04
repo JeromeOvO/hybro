@@ -1,14 +1,8 @@
 'use client'
 
 import { useRef } from 'react'
-import { Plus, Paperclip } from 'lucide-react'
+import { Paperclip } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import {
   Tooltip,
   TooltipContent,
@@ -56,35 +50,24 @@ export function FileAttachmentButton({
   return (
     <>
       <TooltipProvider delayDuration={200}>
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={disabled}
-                  className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-primary transition-colors', className)}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-                    <TooltipContent side="top">
-                      More options
-                    </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="start" side="top" sideOffset={8} className="min-w-[220px]">
-          <DropdownMenuItem
-            onSelect={() => inputRef.current?.click()}
-            className="gap-2 cursor-pointer"
-          >
-            <Paperclip className="h-4 w-4" />
-            <span>Add photos and files</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-        </DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={disabled}
+              aria-label="Add photos and files"
+              className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-foreground transition-colors', className)}
+              onClick={() => inputRef.current?.click()}
+            >
+              <Paperclip className="h-4 w-4" data-testid="attachment-upload-icon" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            Add photos and files
+          </TooltipContent>
+        </Tooltip>
       </TooltipProvider>
       <input
         ref={inputRef}

@@ -3,7 +3,17 @@ import type { MutableRefObject } from 'react'
 import { inquiryRoomMessagesByRoomId } from '@/lib/api/room'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useMessageStore, detectAndMarkStaleTasks, filterHydrationMessages, convertApiMessageToIncoming } from '@/stores/message-store'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import { overlayPendingHitlRequests } from './overlay-pending-hitl'
+
+function markInitialHydrationComplete(targetRoomId: string): boolean {
+  const store = useMessageStore.getState()
+  if (store.roomId !== targetRoomId) return false
+
+  store.markDbSynced()
+  useRoomUiStore.getState().markInitialHydrated(targetRoomId)
+  return true
+}
 
 export function useRoomHydration(
   roomId: string,
@@ -29,8 +39,7 @@ export function useRoomHydration(
       if (!response.success || !response.message_list) {
         console.error(`❌ Failed to load messages for room ${targetRoomId}`)
         // Mark as hydrated even on failure so we don't stay in loading forever
-        const s = useMessageStore.getState()
-        if (s.roomId === targetRoomId) s.markDbSynced()
+        markInitialHydrationComplete(targetRoomId)
         return
       }
 
@@ -47,7 +56,7 @@ export function useRoomHydration(
       const msgStore = useMessageStore.getState()
       if (msgStore.roomId === targetRoomId) {
         msgStore.upsertMany(filtered, 'db')
-        msgStore.markDbSynced()
+        markInitialHydrationComplete(targetRoomId)
         console.log(
           `[NormalizedStore] DB hydration: ${filtered.length} messages written ` +
           `(${response.message_list.length} raw, ${incomingMessages.length} converted, ` +
@@ -99,8 +108,7 @@ export function useRoomHydration(
     } catch (error) {
       console.error(`❌ Failed to load messages for room ${targetRoomId}:`, error)
       // Mark as hydrated on error to avoid infinite loading
-      const s = useMessageStore.getState()
-      if (s.roomId === targetRoomId) s.markDbSynced()
+      markInitialHydrationComplete(targetRoomId)
     }
   }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
 

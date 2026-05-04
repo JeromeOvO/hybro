@@ -1,11 +1,10 @@
 import { useCallback } from 'react'
 import { SendMessage } from '@/lib/api/room'
 import { banner } from '@/components/ui/banner'
-import type { QuoteData } from '@/components/message-bubble'
+import type { QuoteData } from '@/lib/types/quote'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
 import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
-import { useTurnEventStore } from '@/stores/turn-event-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { clearPendingSseForClientRequest } from './sse-handlers/pending-turn-buffer'
@@ -58,37 +57,36 @@ export function useSendMessage(
       fileName: att.file.name,
       sizeBytes: att.file.size,
     }))
-    const turnStore = useTurnEventStore.getState()
-    turnStore.createOptimisticTurn(clientRequestId, {
-      text: userInput,
-      attachments: optimisticAttachments ?? [],
-    })
-
-    const msgStoreSend = useMessageStore.getState()
-    msgStoreSend.upsertMessage({
-      id: optimisticUserMessageId,
-      roomId,
-      messageType: 'user',
-      content: userInput,
-      senderName: userName,
-      userId,
-      timestamp: currentTime,
-      clientRequestId,
-      attachments: optimisticAttachments,
-    }, 'optimistic')
 
     const processingPlaceholderId = lifecycle.placeholderId(roomId)
-    msgStoreSend.upsertMessage({
-      id: processingPlaceholderId,
-      roomId,
-      messageType: 'agent',
-      content: '',
-      senderName: 'HYBRO AI',
-      taskStatus: TASK_STATE.WORKING,
-      taskContent: 'Processing your request\u2026',
-      timestamp: new Date(Date.now() + 1).toISOString(),
-      isEphemeral: true,
-    }, 'optimistic')
+    const msgStoreSend = useMessageStore.getState()
+    msgStoreSend.upsertMany([
+      {
+        id: optimisticUserMessageId,
+        roomId,
+        messageType: 'user',
+        content: userInput,
+        senderName: userName,
+        userId,
+        timestamp: currentTime,
+        clientRequestId,
+        attachments: optimisticAttachments,
+      },
+      {
+        id: processingPlaceholderId,
+        roomId,
+        messageType: 'agent',
+        content: '',
+        senderName: 'HYBRO AI',
+        taskStatus: TASK_STATE.WORKING,
+        taskContent: 'Processing your request\u2026',
+        timestamp: new Date(Date.now() + 1).toISOString(),
+        isEphemeral: true,
+        clientRequestId,
+      },
+    ], 'optimistic')
+
+    useRoomUiStore.getState().markLocalSend(roomId)
 
     try {
       setSending(true)  // Show spinner during message creation & parsing
@@ -140,7 +138,6 @@ export function useSendMessage(
         const msgStoreNoId = useMessageStore.getState()
         msgStoreNoId.removeMessage(optimisticUserMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
-        useTurnEventStore.getState().removeTurn(clientRequestId)
         clearPendingSseForClientRequest(clientRequestId)
 
         banner.error('Message sent but server returned no ID. Please try again.')
@@ -185,18 +182,6 @@ export function useSendMessage(
         }),
       }, 'optimistic')
       msgStoreSwap.replaceMessageId(optimisticUserMessageId, messageId)
-      turnStore.append(clientRequestId, {
-        eventId: `post_started_${clientRequestId}`,
-        turnId: clientRequestId,
-        seq: 1,
-        ts: new Date(currentTime).getTime() || Date.now(),
-        type: 'turn_started',
-        userInput: {
-          text: userInput,
-          attachments: optimisticAttachments ?? [],
-        },
-        clientRequestId,
-      })
 
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
       if (onPostMessageIdResolved) {
@@ -248,7 +233,6 @@ export function useSendMessage(
       const msgStoreErr = useMessageStore.getState()
       msgStoreErr.removeMessage(optimisticUserMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
-      useTurnEventStore.getState().removeTurn(clientRequestId)
       clearPendingSseForClientRequest(clientRequestId)
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)

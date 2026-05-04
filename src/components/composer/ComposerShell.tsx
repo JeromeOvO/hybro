@@ -1,12 +1,30 @@
 'use client'
 
 import React from 'react'
-import { useTurnEventStore } from '@/stores/turn-event-store'
-import { HitlResponseBar } from './HitlResponseBar'
+import { useMessageStore } from '@/stores/message-store'
+import { selectComposerState } from '@/lib/selectors'
+import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
+import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import { RoomChatInput } from '@/components/room-chat-input'
 
-// Adapter interface for props passed from RoomPageShell
+function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
+  return {
+    hitlId: hitl.hitlId,
+    turnId: hitl.messageId,
+    ts: Date.now(),
+    source: 'agent',
+    agentName: hitl.agentName,
+    prompt: hitl.question,
+    promptType: hitl.promptType,
+    choices: hitl.choices,
+    groupId: hitl.groupId,
+    groupTotal: hitl.groupTotal,
+    groupIndex: hitl.groupIndex,
+  }
+}
+
 export interface ComposerShellAdapter {
+  roomId: string
   onSendMessage: (...args: any[]) => void
   onCancelProcessing: () => void
   onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
@@ -34,7 +52,6 @@ export interface ComposerShellAdapter {
     clearQuote: () => void
   }
   chatMode: any
-  // Prefill support
   externalValue?: string
   onExternalValueConsumed?: () => void
 }
@@ -43,51 +60,68 @@ interface ComposerShellProps {
   adapter: ComposerShellAdapter
 }
 
-export function ComposerShell({ adapter }: ComposerShellProps) {
-  const composerState = useTurnEventStore(s => s.composerState)
-  const isHitlMode = composerState.mode === 'hitl_responding'
+function useComposerState(roomId: string): ComposerState {
+  const prev = React.useRef<ComposerState>({ mode: 'normal', isProcessing: false, pendingHitls: [] })
+  return useMessageStore(s => {
+    const next = selectComposerState(roomId, s.entities, s.orderedIds)
+    if (
+      prev.current.mode === next.mode &&
+      prev.current.isProcessing === next.isProcessing &&
+      prev.current.pendingHitls.length === next.pendingHitls.length &&
+      prev.current.pendingHitls.every((h, i) => h.hitlId === next.pendingHitls[i]?.hitlId && h.isAnswered === next.pendingHitls[i]?.isAnswered)
+    ) {
+      return prev.current
+    }
+    prev.current = next
+    return next
+  })
+}
 
-  // Use turn event store's processing state — it correctly tracks turn_completed
-  // events from both SSE and the message-store sync bridge, unlike the legacy
-  // processing lifecycle which can get stuck when Redis is down.
+export function ComposerShell({ adapter }: ComposerShellProps) {
+  const composerState = useComposerState(adapter.roomId)
+  const isHitlMode = composerState.mode === 'hitl_responding'
   const isProcessing = composerState.isProcessing && adapter.isProcessing
 
   const hitlBar = composerState.pendingHitls.length > 0 ? (
-    <HitlResponseBar
-      hitls={composerState.pendingHitls}
-      onSubmit={adapter.onRespondToHitl}
-    />
+    <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
+      <HitlResponseBar
+        hitls={composerState.pendingHitls.map(toHitlPromptView)}
+        onSubmit={adapter.onRespondToHitl}
+      />
+    </div>
   ) : undefined
 
   return (
-    <RoomChatInput
-      onSubmit={adapter.onSendMessage}
-      disableSend={adapter.isSending || isProcessing || isHitlMode}
-      sending={adapter.isSending}
-      processing={isProcessing}
-      cancelling={adapter.isCancelling && isProcessing}
-      onCancel={adapter.onCancelProcessing}
-      agents={adapter.agents}
-      roomAgentIds={adapter.roomAgentIds}
-      showGroupSelector={!isHitlMode}
-      groups={adapter.groupManagement.groups}
-      loadingGroups={adapter.groupManagement.loadingGroups}
-      selectedGroup={adapter.groupManagement.selectedGroup}
-      onGroupChange={adapter.groupManagement.handleGroupChange}
-      roomAgentCount={adapter.roomAgentIds.length}
-      onCreateGroup={adapter.groupManagement.handleCreateGroup}
-      onEditGroup={adapter.groupManagement.handleEditGroup}
-      onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
-      onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
-      isOverride={adapter.groupManagement.isOverride}
-      onClearOverride={adapter.groupManagement.handleClearOverride}
-      quote={adapter.quoteState.quote}
-      onClearQuote={adapter.quoteState.clearQuote}
-      chatMode={adapter.chatMode}
-      onChatModeChange={adapter.onChatModeChange}
-      topSlot={hitlBar}
-      externalValue={adapter.externalValue}
-      onExternalValueConsumed={adapter.onExternalValueConsumed}
-    />
+    <>
+      {hitlBar}
+      <RoomChatInput
+        onSubmit={adapter.onSendMessage}
+        disableSend={adapter.isSending || isProcessing || isHitlMode}
+        sending={adapter.isSending}
+        processing={isProcessing}
+        cancelling={adapter.isCancelling && isProcessing}
+        onCancel={adapter.onCancelProcessing}
+        agents={adapter.agents}
+        roomAgentIds={adapter.roomAgentIds}
+        showGroupSelector={!isHitlMode}
+        groups={adapter.groupManagement.groups}
+        loadingGroups={adapter.groupManagement.loadingGroups}
+        selectedGroup={adapter.groupManagement.selectedGroup}
+        onGroupChange={adapter.groupManagement.handleGroupChange}
+        roomAgentCount={adapter.roomAgentIds.length}
+        onCreateGroup={adapter.groupManagement.handleCreateGroup}
+        onEditGroup={adapter.groupManagement.handleEditGroup}
+        onDeleteGroup={adapter.groupManagement.handleDeleteGroup}
+        onEditRoomAgents={adapter.groupManagement.onEditRoomAgents}
+        isOverride={adapter.groupManagement.isOverride}
+        onClearOverride={adapter.groupManagement.handleClearOverride}
+        quote={adapter.quoteState.quote}
+        onClearQuote={adapter.quoteState.clearQuote}
+        chatMode={adapter.chatMode}
+        onChatModeChange={adapter.onChatModeChange}
+        externalValue={adapter.externalValue}
+        onExternalValueConsumed={adapter.onExternalValueConsumed}
+      />
+    </>
   )
 }

@@ -1,10 +1,6 @@
-import { useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
 import type { MessageEntity } from '@/stores/message-store'
-import { buildTurnsIncremental } from '@/lib/room-timeline/build-turns'
-import { getEvents } from '@/lib/room-timeline/event-log'
-import type { TurnViewModel } from '@/lib/room-timeline/types'
 
 /**
  * Ordered message IDs only.
@@ -85,61 +81,4 @@ export function useActiveHitlRequests(): MessageEntity[] {
  */
 export function useMessageStoreRoomId(): string | null {
   return useMessageStore(s => s.roomId)
-}
-
-/**
- * Derive conversation turns from the message store.
- * Uses incremental derivation to preserve referential identity.
- */
-export function useConversationTurns(): TurnViewModel[] {
-  const prevTurnsRef = useRef<TurnViewModel[]>([])
-
-  return useMessageStore(
-    useShallow(s => {
-      const events = s.roomId ? getEvents(s.roomId) : []
-      const turns = buildTurnsIncremental(
-        prevTurnsRef.current,
-        s.entities,
-        s.orderedIds,
-        events,
-      )
-      prevTurnsRef.current = turns
-      return turns
-    }),
-  )
-}
-
-export function useActiveTurn(): TurnViewModel | undefined {
-  const turns = useConversationTurns()
-  return turns.length > 0 ? turns[turns.length - 1] : undefined
-}
-
-export function useTurnById(turnId: string): TurnViewModel | undefined {
-  const turns = useConversationTurns()
-  return turns.find(t => t.id === turnId)
-}
-
-export function useHitlTurnContext(hitlMessageId: string | null): {
-  turnId: string
-  turnIndex: number
-  turnLabel: string
-} | null {
-  const turns = useConversationTurns()
-  if (!hitlMessageId) return null
-
-  for (let i = 0; i < turns.length; i++) {
-    const turn = turns[i]
-    const ownsHitl = turn.agentResults.some(r => r.messageId === hitlMessageId)
-    if (ownsHitl) {
-      const preview = turn.userContent
-        ? turn.userContent.slice(0, 40) + (turn.userContent.length > 40 ? '...' : '')
-        : 'System turn'
-      return {
-        turnId: turn.id,
-        turnIndex: i,
-        turnLabel: `Turn ${i + 1}: ${preview}`,
-      }
-    }
-  }
-  return null
 }
