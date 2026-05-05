@@ -32,7 +32,8 @@ from models.hub import (
     HubStatus,
     RelayToHubEvent,
 )
-from services.agent_service import normalize_agent_url
+from pymongo.errors import DuplicateKeyError
+from services.agent_service import is_local_agent_url, normalize_agent_url
 
 if TYPE_CHECKING:
     from database.mongodb import MongoDB
@@ -386,6 +387,17 @@ class RelayService:
             agent_url = ag.agent_card.get("url", "")
             normalized = normalize_agent_url(agent_url) if agent_url else None
 
+            # Local URLs (localhost, 127.x, etc.) are only meaningful on the
+            # hub's machine — two different users can legitimately run agents
+            # on the same local port.  Storing a local URL in the global
+            # normalized_url dedup index would cause a DuplicateKeyError when
+            # a second user syncs an agent at the same port.  Per-hub
+            # deduplication for local agents is handled by (hub_id,
+            # local_agent_id) in upsert_hub_agent, so normalized_url is not
+            # needed here.
+            if normalized and is_local_agent_url(agent_url):
+                normalized = None
+
             # Check if an agent with this URL already exists (e.g. registered
             # via the web UI).  If so, enrich it with hub metadata and mark it
             # as a hub agent so the frontend correctly shows its source.
@@ -439,9 +451,24 @@ class RelayService:
                     "is_public": False,
                     **agent_card_data,
                 }
-                stored_id = await self._mongo.upsert_hub_agent(
-                    hub_id, ag.local_agent_id, agent_data
-                )
+                try:
+                    stored_id = await self._mongo.upsert_hub_agent(
+                        hub_id, ag.local_agent_id, agent_data
+                    )
+                except DuplicateKeyError:
+                    # normalized_url collision with another user's agent
+                    # (should not happen after the is_local_agent_url guard
+                    # above, but defend against edge cases like private IPs).
+                    # Retry without normalized_url so the upsert can proceed.
+                    logger.warning(
+                        "Hub %s: normalized_url collision for agent %s url=%s — "
+                        "storing without normalized_url",
+                        hub_id, ag.local_agent_id, agent_url,
+                    )
+                    agent_data["normalized_url"] = None
+                    stored_id = await self._mongo.upsert_hub_agent(
+                        hub_id, ag.local_agent_id, agent_data
+                    )
 
             # Re-index in Pinecone whenever the description changed or was
             # never successfully indexed.  We store a hash of the last-indexed

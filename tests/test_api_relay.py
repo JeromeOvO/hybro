@@ -261,9 +261,10 @@ class TestRelayServiceAgentSync:
         svc = _make_relay_service(db_service=db_service)
         svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
         svc._mongo.agents_collection = AsyncMock()
-        # First call: URL lookup returns existing agent; second call: hash lookup
+        # First call: URL lookup returns existing agent; second call: hash lookup.
+        # Use a public (non-localhost) URL so the normalized_url lookup fires.
         svc._mongo.agents_collection.find_one = AsyncMock(side_effect=[
-            {"agent_id": "existing-001", "normalized_url": "localhost:8000"},
+            {"agent_id": "existing-001", "normalized_url": "https://agent.example.com"},
             {"indexed_description_hash": desc_hash},
         ])
         svc._mongo.agents_collection.update_one = AsyncMock()
@@ -274,7 +275,7 @@ class TestRelayServiceAgentSync:
                 local_agent_id="local-1",
                 name="Agent A",
                 description="A helpful agent",
-                agent_card=_make_agent_card("Agent A"),
+                agent_card=_make_agent_card("Agent A", url="https://agent.example.com"),
             ),
         ]
         await svc.sync_agents("hub-001", agents, _make_api_key())
@@ -300,9 +301,10 @@ class TestRelayServiceAgentSync:
         svc = _make_relay_service(db_service=db_service)
         svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
         svc._mongo.agents_collection = AsyncMock()
-        # First call: URL lookup returns existing agent; second call: hash lookup
+        # First call: URL lookup returns existing agent; second call: hash lookup.
+        # Use a public URL so the normalized_url lookup fires.
         svc._mongo.agents_collection.find_one = AsyncMock(side_effect=[
-            {"agent_id": "existing-001", "normalized_url": "localhost:8000"},
+            {"agent_id": "existing-001", "normalized_url": "https://agent.example.com"},
             {"indexed_description_hash": old_hash},
         ])
         svc._mongo.agents_collection.update_one = AsyncMock()
@@ -313,7 +315,7 @@ class TestRelayServiceAgentSync:
                 local_agent_id="local-1",
                 name="Agent A",
                 description="A helpful agent",
-                agent_card=_make_agent_card("Agent A"),
+                agent_card=_make_agent_card("Agent A", url="https://agent.example.com"),
             ),
         ]
         await svc.sync_agents("hub-001", agents, _make_api_key())
@@ -490,8 +492,102 @@ class TestRelayServiceAgentSync:
         assert synced[0]["local_agent_id"] == "good-1"
 
     @pytest.mark.asyncio
+    async def test_sync_localhost_agent_sets_normalized_url_to_none(self):
+        """Localhost agents must not write normalized_url to avoid DuplicateKeyError
+        when two users run agents on the same local port."""
+        captured_data: dict = {}
+
+        async def capture_upsert(hub_id, local_id, data):
+            captured_data.update(data)
+            return "new-agent-id"
+
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+        svc._mongo.upsert_hub_agent = AsyncMock(side_effect=capture_upsert)
+
+        for localhost_url in [
+            "http://localhost:10020",
+            "http://127.0.0.1:10020",
+            "http://0.0.0.0:10020",
+        ]:
+            captured_data.clear()
+            agents = [
+                HubAgentSync(
+                    local_agent_id="local-1",
+                    name="Local Agent",
+                    description="Desc",
+                    agent_card=_make_agent_card("Local Agent", url=localhost_url),
+                )
+            ]
+            await svc.sync_agents("hub-001", agents, _make_api_key())
+            assert captured_data.get("normalized_url") is None, (
+                f"Expected normalized_url=None for {localhost_url!r}, "
+                f"got {captured_data.get('normalized_url')!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sync_localhost_agent_skips_url_dedup_lookup(self):
+        """Localhost agents must not trigger a normalized_url find_one lookup."""
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Local Agent",
+                description="Desc",
+                agent_card=_make_agent_card("Local Agent", url="http://localhost:10020"),
+            )
+        ]
+        await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        # find_one should only have been called for the description-hash lookup,
+        # not for a normalized_url dedup check.
+        find_one_calls = svc._mongo.agents_collection.find_one.call_args_list
+        for call in find_one_calls:
+            query = call[0][0] if call[0] else call[1].get("filter", {})
+            assert "normalized_url" not in query, (
+                "find_one was called with normalized_url filter for a localhost agent"
+            )
+
+    @pytest.mark.asyncio
+    async def test_sync_duplicate_key_error_retries_without_normalized_url(self):
+        """DuplicateKeyError on upsert must be caught and retried with normalized_url=None."""
+        from pymongo.errors import DuplicateKeyError
+
+        retry_data: dict = {}
+        call_count = 0
+
+        async def upsert_side_effect(hub_id, local_id, data):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise DuplicateKeyError("E11000 duplicate key error")
+            retry_data.update(data)
+            return "new-agent-id"
+
+        svc = _make_relay_service()
+        svc._mongo.get_hub.return_value = {"hub_id": "hub-001", "user_id": "user-001"}
+        svc._mongo.upsert_hub_agent = AsyncMock(side_effect=upsert_side_effect)
+        # Use a private IP so normalized_url is non-None on the first attempt
+        agents = [
+            HubAgentSync(
+                local_agent_id="local-1",
+                name="Agent A",
+                description="Desc",
+                agent_card=_make_agent_card("Agent A", url="http://192.168.1.10:10020"),
+            )
+        ]
+        synced = await svc.sync_agents("hub-001", agents, _make_api_key())
+
+        assert len(synced) == 1, "Agent should succeed after the DuplicateKeyError retry"
+        assert call_count == 2, "upsert_hub_agent must be called twice (first fail, then retry)"
+        assert retry_data.get("normalized_url") is None, (
+            "Retry must use normalized_url=None to avoid the duplicate key"
+        )
+
+    @pytest.mark.asyncio
     async def test_sync_agents_refreshes_redis_heartbeat_when_streams_enabled(self):
-        """Authenticated sync should bump Redis TTL before activation logic."""
         streams = MagicMock()
         streams.record_heartbeat = AsyncMock()
         streams.is_hub_alive = AsyncMock(return_value=True)
