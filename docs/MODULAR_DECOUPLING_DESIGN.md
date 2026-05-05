@@ -15,11 +15,11 @@ This document proposes restructuring the codebase into **well-defined modules** 
 
 ### Design Principles
 
-1. **纯解耦，不换栈** — 保持 MongoDB + Redis + Pinecone + FastAPI，只改结构
-2. **Protocol 边界** — 模块间只通过 Common 中定义的 Protocol 通信
-3. **统一 DAL** — 数据访问统一封装，模块基于 DAL 构建 Repository
-4. **防腐层** — A2A 协议和 LLM Provider 各有独立 adapter 层，业务模块不直接 import 外部 SDK
-5. **可落地性** — 分阶段迁移，三层防线保证不 break
+1. **Pure Decoupling, No Stack Swap** — Keep MongoDB + Redis + Pinecone + FastAPI, only restructure
+2. **Protocol Boundaries** — Modules communicate only through Protocols defined in Common
+3. **Unified DAL** — Unified data access encapsulation; modules build Repositories on top of DAL
+4. **Anti-Corruption Layer** — A2A protocol and LLM Providers each have independent adapter layers; business modules never directly import external SDKs
+5. **Practical Implementability** — Phased migration with three-layer defense to guarantee no breakage
 
 ---
 
@@ -69,7 +69,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 │   agent / room / execution / delivery / memory / hub / gateway / ...       │
 │   parse request → sub-container → Protocol call → format response          │
 └─────┬──────────────────────────────────────────────────────────────────────┘
-      │ sub-container 注入 Protocol
+      │ sub-container injects Protocol
       ▼
 ┌─────────┐┌─────────┐┌───────────┐┌──────────┐┌──────────┐┌──────────┐┌───────────────┐
 │  Agent  ││  Room   ││ Execution ││ Context  ││ Delivery ││ Platform ││HubRuntime     │
@@ -87,13 +87,13 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
                 │           │           │           │           │
                 ▼           ▼           ▼           ▼           ▼
      ┌────────────────────────────────────────────────────────────────────────┐
-     │                      Adapter Layer (防腐层)                             │
+     │                      Adapter Layer (Anti-Corruption)                    │
      │                                                                        │
      │   ┌─────────────────────────┐    ┌─────────────────────────┐          │
      │   │  A2A Protocol Adapter   │    │      LLM Gateway        │          │
      │   │  AgentTransport         │    │  generate / embed       │          │
      │   │  AgentCardResolver      │    │  model registry         │          │
-     │   │  内部 DTO ↔ a2a-sdk     │    │  routing / fallback     │          │
+     │   │  internal DTO ↔ a2a-sdk │    │  routing / fallback     │          │
      │   └─────────────────────────┘    └─────────────────────────┘          │
      └───────────────────────────┬────────────────────────────────────────────┘
                                  │
@@ -116,7 +116,7 @@ Every layer reaches into any other layer via singleton imports. No enforced boun
 |---|--------|---------------|----------------|
 | 1 | **Common** | Protocols, DTOs, auth, config, utils, errors | `common/`, `models/`, `config/` |
 | 2 | **DAL** | Unified data access clients (split by concern) | `database/`, `infrastructure/redis_service.py`, `services/s3_service.py` |
-| 3 | **A2A Protocol Adapter** | 防腐 a2a-sdk, internal model ↔ A2A types | `services/a2a_service.py`, `common/client/` |
+| 3 | **A2A Protocol Adapter** | Anti-corruption for a2a-sdk, internal model ↔ A2A types | `services/a2a_service.py`, `common/client/` |
 | 4 | **LLM Gateway** | Unified LLM invocation, provider routing, capability registry | `services/openai_service.py`, `services/gemini_service.py`, `services/bedrock_service.py` |
 | 5 | **Agent** | Agent lifecycle, health, matching, discovery | `services/agent_*.py`, `api/agent.py`, `api/discovery.py` |
 | 6 | **Room** | Room CRUD, membership, raw message persistence, message graph | `modules/RoomCenter.py`, `services/room_*.py` |
