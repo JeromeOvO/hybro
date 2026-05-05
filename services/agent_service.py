@@ -25,6 +25,23 @@ logger = get_logger(__name__)
 LOCAL_HOST_ALIASES = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 
+def is_local_agent_url(url: str) -> bool:
+    """Return True if the URL resolves to a local/loopback host.
+
+    Local URLs (localhost, 127.x.x.x, 0.0.0.0, ::1) are only meaningful
+    on the machine that hosts the hub, so storing them in the global
+    ``normalized_url`` dedup index causes spurious conflicts when two
+    different users run agents on the same port locally.
+    """
+    if not url:
+        return False
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return hostname in LOCAL_HOST_ALIASES
+
+
 def normalize_agent_url(url: str) -> str:
     """
     Normalize an agent URL for consistent comparison.
