@@ -53,8 +53,8 @@ export function NavMain({
   }
 
   return (
-    <SidebarGroup className="min-h-0 flex-1 overflow-auto">
-      <SidebarMenu className="gap-2">
+    <SidebarGroup className="min-h-0 flex-1 flex flex-col overflow-hidden pt-0">
+      <SidebarMenu className="gap-2 flex-1 flex flex-col min-h-0 overflow-hidden">
         {items.map((item) => {
           if (item.title === "History" && state === "collapsed") {
             return null
@@ -67,10 +67,10 @@ export function NavMain({
               key={item.title}
               asChild
               defaultOpen={item.isActive || hasActiveChild}
-              className="group/collapsible"
+              className="group/collapsible flex-1 flex flex-col min-h-0 overflow-hidden"
             >
-              <SidebarMenuItem>
-                <div className="flex items-center w-full">
+              <SidebarMenuItem className="flex flex-col min-h-0 flex-1 overflow-hidden">
+                <div className="flex items-center w-full shrink-0">
                   <CollapsibleTrigger asChild className="flex-1">
                     <SidebarMenuButton
                       tooltip={item.title}
@@ -115,40 +115,42 @@ export function NavMain({
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
                 </div>
-                <CollapsibleContent className="animate-in slide-in-from-top-1 duration-200">
-                  <SidebarMenuSub className="gap-0.5 mt-1 ml-3 pl-0">
-                    {item.items?.map((subItem, index) => {
-                      const isActive = isSubItemActive(subItem.url)
+                <CollapsibleContent className="animate-in slide-in-from-top-1 duration-200 flex-1 min-h-0 overflow-hidden">
+                  <div className="overflow-y-auto h-full">
+                    <SidebarMenuSub className="gap-0.5 mt-1 ml-3 pl-0">
+                      {item.items?.map((subItem, index) => {
+                        const isActive = isSubItemActive(subItem.url)
 
-                      return (
-                        <SidebarMenuSubItem key={subItem.id || subItem.title || index}>
-                        <SidebarMenuSubButton
-                          asChild={subItem.url !== "#"}
-                          className={cn(
-                            "h-9 text-[0.9rem] pl-4 relative",
-                            "transition-all duration-150 ease-out",
-                            "hover:bg-black/10 dark:hover:bg-white/15",
-                            isActive
-                              ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-accent-foreground"
-                              : ""
-                          )}
-                        >
-                            {subItem.url !== "#" ? (
-                              <Link href={subItem.url} prefetch={false} scroll={false}>
-                                <span className={`${SIDEBAR_ICON_HIDDEN} truncate`}>
+                        return (
+                          <SidebarMenuSubItem key={subItem.id || subItem.title || index}>
+                          <SidebarMenuSubButton
+                            asChild={subItem.url !== "#"}
+                            className={cn(
+                              "h-9 text-[0.9rem] pl-4 relative",
+                              "transition-all duration-150 ease-out",
+                              "hover:bg-black/10 dark:hover:bg-white/15",
+                              isActive
+                                ? "bg-black/15 dark:bg-white/15 font-medium text-sidebar-accent-foreground"
+                                : ""
+                            )}
+                          >
+                              {subItem.url !== "#" ? (
+                                <Link href={subItem.url} prefetch={false} scroll={false}>
+                                  <span className={`${SIDEBAR_ICON_HIDDEN} truncate`}>
+                                    {subItem.title}
+                                  </span>
+                                </Link>
+                              ) : (
+                                <span className={`text-muted-foreground ${SIDEBAR_ICON_HIDDEN} truncate`}>
                                   {subItem.title}
                                 </span>
-                              </Link>
-                            ) : (
-                              <span className={`text-muted-foreground ${SIDEBAR_ICON_HIDDEN} truncate`}>
-                                {subItem.title}
-                              </span>
-                            )}
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )
-                    })}
-                  </SidebarMenuSub>
+                              )}
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        )
+                      })}
+                    </SidebarMenuSub>
+                  </div>
                 </CollapsibleContent>
               </SidebarMenuItem>
             </Collapsible>

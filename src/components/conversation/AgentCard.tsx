@@ -44,7 +44,7 @@ export function AgentCard({
   rightAction,
 }: AgentCardProps) {
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
-    accent: 'rgb(0, 255, 255)',
+    accent: 'hsl(var(--color-primary))',
     muted: 'var(--conversation-agent-green)',
     danger: 'var(--conversation-danger)',
     warning: 'var(--conversation-agent-yellow)',

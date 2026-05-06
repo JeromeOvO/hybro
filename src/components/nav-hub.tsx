@@ -21,8 +21,7 @@ export function NavHub({ basePath = "" }: { basePath?: string }) {
 
   return (
     <SidebarGroup className="py-0">
-      <div className="mx-3 border-t border-sidebar-border" />
-      <SidebarMenu className="gap-1.5 pt-2">
+      <SidebarMenu className="gap-1.5">
         <SidebarMenuItem>
           <SidebarMenuButton
             asChild
