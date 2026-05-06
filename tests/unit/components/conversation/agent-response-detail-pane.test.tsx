@@ -1,9 +1,16 @@
+import React from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { render, screen, within } from '../../../utils/test-utils'
 import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
 import { AGENT_THEMES, type AgentResponseDetail } from '@/lib/selectors/conversation-types'
 import { TASK_STATE } from '@/lib/types/sse'
+
+vi.mock('next/link', () => ({
+  default: ({ children, href, onClick, ...rest }: { children: React.ReactNode; href: string; onClick?: React.MouseEventHandler; [k: string]: unknown }) => (
+    <a href={href} onClick={onClick} {...rest}>{children}</a>
+  ),
+}))
 
 const detail: AgentResponseDetail = {
   messageId: 'agent-1',
