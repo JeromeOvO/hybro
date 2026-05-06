@@ -68,6 +68,7 @@ export function selectConversationTurns(
       display: mapAgentDisplayProps(agent),
       taskDescription: agent.taskContent ?? agent.taskStatusMessage ?? '',
       theme,
+      agentSource: agent.agentSource,
     })
 
     // Agent content (if non-empty content or has artifacts)

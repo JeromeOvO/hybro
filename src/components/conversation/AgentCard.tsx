@@ -1,7 +1,13 @@
+'use client'
+
+import Link from 'next/link'
+import { useQueryClient } from '@tanstack/react-query'
 import type { AgentDisplayProps, AgentTheme } from '@/lib/selectors/conversation-types'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
+import type { Agent } from '@/lib/types/agent'
 
 interface AgentCardProps {
   messageId?: string
@@ -14,18 +20,41 @@ interface AgentCardProps {
   interactive?: boolean
   onOpen?: (messageId: string) => void
   rightAction?: ReactNode
+  agentSource?: 'cloud' | 'hub'
+}
+
+function useAgentFromCatalog(agentId: string): Agent | undefined {
+  const qc = useQueryClient()
+  const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
+  return agents?.find(a => a.agent_id === agentId)
 }
 
 function AgentAvatar({ agentId, theme }: { agentId: string; theme: AgentTheme }) {
+  const catalogAgent = useAgentFromCatalog(agentId)
+  const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
+
   return (
     <div
-      className="w-8 h-8 overflow-hidden shrink-0"
+      className="w-8 h-8 overflow-hidden shrink-0 relative"
       style={{ backgroundColor: theme.avatarLightBg, borderRadius: 'var(--chat-input-radius)' }}
     >
+      {iconUrl ? (
+        <img
+          src={iconUrl}
+          alt=""
+          className="w-full h-full object-cover"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = 'none'
+            const fallback = (e.currentTarget as HTMLImageElement).nextElementSibling as HTMLImageElement | null
+            if (fallback) fallback.style.display = 'block'
+          }}
+        />
+      ) : null}
       <img
         src={getAgentAvatarUri(agentId)}
         alt=""
         className="w-full h-full"
+        style={{ display: iconUrl ? 'none' : 'block' }}
       />
     </div>
   )
@@ -42,7 +71,11 @@ export function AgentCard({
   interactive = true,
   onOpen,
   rightAction,
+  agentSource,
 }: AgentCardProps) {
+  const catalogAgent = useAgentFromCatalog(agentId)
+  const isHubOnline = catalogAgent?.is_hub_online
+
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
     accent: 'hsl(var(--color-primary))',
     muted: 'var(--conversation-agent-green)',
@@ -70,9 +103,21 @@ export function AgentCard({
     <>
       <div className="flex items-center gap-2.5" style={{ position: 'relative', zIndex: 1 }}>
         <AgentAvatar agentId={agentId} theme={theme} />
-        <span className="text-[13px] font-medium" style={{ color: 'var(--conversation-text-primary)' }}>
+        <Link
+          href={`/c/agents/${agentId}`}
+          className="text-[13px] font-medium hover:underline focus-visible:outline-none"
+          style={{ color: 'var(--conversation-text-primary)' }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {agentName}
-        </span>
+        </Link>
+        {agentSource != null && (
+          <AgentSourceBadge
+            source={agentSource}
+            isHubOnline={isHubOnline}
+            className="h-3.5 w-3.5"
+          />
+        )}
         <span
           className="conversation-agent-status ml-auto font-medium"
           role="status"

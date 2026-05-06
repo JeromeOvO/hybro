@@ -13,6 +13,7 @@ function blocksEqual(a: ConversationBlock, b: ConversationBlock): boolean {
         && a.display.label === bc.display.label
         && a.display.tone === bc.display.tone
         && a.display.isAnimated === bc.display.isAnimated
+        && a.agentSource === bc.agentSource
     }
     case 'agent_content': {
       const bc = b as typeof a
