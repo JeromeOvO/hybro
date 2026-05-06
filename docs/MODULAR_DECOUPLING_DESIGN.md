@@ -2448,7 +2448,42 @@ class DashboardQueryService(Protocol):
 Protocols. It lives in the API layer (or a dedicated `dashboard/` module) and does NOT
 violate module independence — it consumes Protocol interfaces, not internal implementations.
 
-### 18.5 Plugin System
+### 18.5 Future Workflow Engine
+
+> **Clarification:** This is a future generic execution workflow engine (step graphs, parallel
+> branches, conditional routing, mid-execution override). It has NO relation to the deleted
+> legacy Workflow module (`base_tasks` / `meta_tasks` / `task_sessions` / `chat_contexts`)
+> removed in Phase 0d.
+
+```python
+@runtime_checkable
+class WorkflowEngine(Protocol):
+    """Step-graph orchestration — future replacement for linear queue execution."""
+
+    async def start_workflow(self, run_id: str, plan: "WorkflowPlan") -> None: ...
+    async def resume_from_step(
+        self, run_id: str, step_id: str, overrides: dict | None = None
+    ) -> None: ...
+        """Enables step retry and 'edit instruction → partial rerun'."""
+    async def get_step_tree(self, run_id: str) -> "StepTree": ...
+    async def cancel_workflow(self, run_id: str) -> None: ...
+
+
+@runtime_checkable
+class ExecutionEngineV2(Protocol):
+    """Extended ExecutionEngine with mid-execution override support."""
+
+    async def modify_plan(self, run_id: str, instruction: str) -> None: ...
+        """Continuous chat mid-execution override: user sends new instruction
+        while workflow is running; engine re-plans remaining steps."""
+```
+
+**Accommodation check:** `WorkflowEngine` lives inside the Execution module as a new
+orchestration strategy (alongside supervisor/debate/queue). `modify_plan` extends the
+existing `ExecutionEngine` Protocol — additive, no breaking change. Step state stored in
+`run_events` collection (same event-sourcing model as current runs).
+
+### 18.6 Plugin System
 
 ```python
 @runtime_checkable
